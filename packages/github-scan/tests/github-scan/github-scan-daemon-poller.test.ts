@@ -241,6 +241,44 @@ describe("pollOnce parity with Rust fetcher", () => {
     expect(outcome.warnings.length).toBeGreaterThan(0);
   });
 
+  it("surfaces label enrichment warnings while still writing the inbox", async () => {
+    const rawNotification = JSON.stringify([
+      {
+        id: "issue-1",
+        subject: {
+          type: "Issue",
+          title: "Needs labels",
+          url: "https://api.github.com/repos/o/r/issues/9",
+        },
+        repository: { full_name: "o/r" },
+        reason: "mention",
+        updated_at: "2026-04-16T10:00:00Z",
+        unread: true,
+      },
+    ]);
+    const gh = makeStubGh([
+      {
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        stdout: rawNotification,
+      },
+      {
+        match: (argv) => argv[0] === "api" && argv[1] === "graphql",
+        status: 1,
+        stderr: "graphql unavailable",
+      },
+    ]);
+    const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
+    const outcome = await pollOnce({
+      gh,
+      paths,
+      host: "github.com",
+      now: () => Date.parse("2026-04-16T20:00:00Z"),
+    });
+    expect(outcome.total).toBe(1);
+    expect(outcome.warnings.join("\n")).toContain("label enrichment degraded");
+    expect(readFileSync(ctx.inbox, "utf-8")).toContain("Needs labels");
+  });
+
   it("emits null for nullable fields (number, gh_state)", async () => {
     const rawNotification = JSON.stringify([
       {
@@ -383,5 +421,37 @@ describe("runPoller loop", () => {
 
     expect(sleepCalls[0]).toBe(120_000); // rate-limit backoff
     expect(sleepCalls[1]).toBe(1000); // normal interval after recovery
+  });
+
+  it("logs local poll crashes and retries on the regular interval", async () => {
+    const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
+    const controller = new AbortController();
+    const logs: string[] = [];
+    const sleepCalls: number[] = [];
+    const gh = {
+      runChecked() {
+        throw new Error("local setup broke");
+      },
+    } as unknown as GhClient;
+
+    await runPoller({
+      pollIntervalSec: 4,
+      host: "github.com",
+      gh,
+      paths,
+      signal: controller.signal,
+      sleep: async (ms: number) => {
+        sleepCalls.push(ms);
+        controller.abort();
+      },
+      logger: {
+        info: () => {},
+        warn: () => {},
+        error: (line) => logs.push(line),
+      },
+    });
+
+    expect(logs).toEqual(["poll cycle crashed: local setup broke"]);
+    expect(sleepCalls).toEqual([4000]);
   });
 });

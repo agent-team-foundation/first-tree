@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CLAUDE_SETTINGS_PATH,
+  CODEX_CONFIG_PATH,
   CODEX_HOOKS_PATH,
   ensureAgentContextHooks,
+  formatAgentContextHookMessages,
   INJECT_CONTEXT_COMMAND,
 } from "../src/commands/tree/agent-context-hooks.js";
 import { writeTreeState } from "../src/commands/tree/binding-state.js";
@@ -183,6 +185,124 @@ describe("ensureAgentContextHooks legacy migration", () => {
     expect(claudeContent).not.toContain(LEGACY_TREE_FRAGMENT);
     expect(codexContent).toContain(INJECT_CONTEXT_COMMAND);
     expect(codexContent).not.toContain(LEGACY_TREE_FRAGMENT);
+  });
+
+  it("formats hook sync messages for created and updated files", () => {
+    expect(
+      formatAgentContextHookMessages({
+        claudeSettings: "created",
+        codexConfig: "created",
+        codexHooks: "created",
+      }),
+    ).toEqual([
+      "Created `.claude/settings.json` with the first-tree SessionStart hook.",
+      "Created `.codex/config.toml` with `codex_hooks = true`.",
+      "Created `.codex/hooks.json` with the first-tree `SessionStart` hook.",
+    ]);
+
+    expect(
+      formatAgentContextHookMessages({
+        claudeSettings: "updated",
+        codexConfig: "updated",
+        codexHooks: "updated",
+      }),
+    ).toEqual([
+      "Updated `.claude/settings.json` to use the first-tree SessionStart hook.",
+      "Updated `.codex/config.toml` to enable `codex_hooks`.",
+      "Updated `.codex/hooks.json` to use the first-tree `SessionStart` hook.",
+    ]);
+
+    expect(
+      formatAgentContextHookMessages({
+        claudeSettings: "unchanged",
+        codexConfig: "unchanged",
+        codexHooks: "unchanged",
+      }),
+    ).toEqual([]);
+  });
+
+  it("updates existing Codex config and removes stale managed Claude hook scripts", () => {
+    const root = makeTempDir("first-tree-hook-update-existing-");
+    const settingsPath = join(root, CLAUDE_SETTINGS_PATH);
+    const configPath = join(root, CODEX_CONFIG_PATH);
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              "keep-raw-group",
+              {
+                hooks: [
+                  {
+                    type: "command",
+                    command: ".agents/skills/first-tree/assets/framework/helpers/inject-tree-context.sh",
+                  },
+                  { type: "command", command: "echo keep" },
+                  { type: "shell", command: INJECT_CONTEXT_COMMAND },
+                  "keep-raw-hook",
+                ],
+              },
+              {
+                hooks: [
+                  {
+                    type: "command",
+                    command: ".context-tree/scripts/inject-tree-context.sh",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    writeFileSync(configPath, '[features]\ncodex_hooks = false\nother = true\n\n[model]\nname = "gpt"\n');
+
+    const result = ensureAgentContextHooks(root);
+    const settings = readFileSync(settingsPath, "utf-8");
+    const config = readFileSync(configPath, "utf-8");
+
+    expect(result.claudeSettings).toBe("updated");
+    expect(result.codexConfig).toBe("updated");
+    expect(settings).not.toContain("inject-tree-context.sh");
+    expect(settings).toContain("echo keep");
+    expect(settings).toContain("keep-raw-hook");
+    expect(settings).toContain("keep-raw-group");
+    expect(config).toContain("[features]\ncodex_hooks = true\nother = true");
+    expect(config).toContain('[model]\nname = "gpt"');
+  });
+
+  it("appends a Codex features section when config exists without one", () => {
+    const root = makeTempDir("first-tree-hook-config-append-");
+    const configPath = join(root, CODEX_CONFIG_PATH);
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    writeFileSync(configPath, 'model = "gpt"\n');
+
+    const result = ensureAgentContextHooks(root);
+
+    expect(result.codexConfig).toBe("updated");
+    expect(readFileSync(configPath, "utf-8")).toBe('model = "gpt"\n\n[features]\ncodex_hooks = true\n');
+  });
+
+  it("rebuilds malformed JSON hook files", () => {
+    const root = makeTempDir("first-tree-hook-malformed-json-");
+    const settingsPath = join(root, CLAUDE_SETTINGS_PATH);
+    const hooksPath = join(root, CODEX_HOOKS_PATH);
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    writeFileSync(settingsPath, "not json\n");
+    writeFileSync(hooksPath, "not json\n");
+
+    const result = ensureAgentContextHooks(root);
+
+    expect(result.claudeSettings).toBe("updated");
+    expect(result.codexHooks).toBe("updated");
+    expect(readFileSync(settingsPath, "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+    expect(readFileSync(hooksPath, "utf-8")).toContain("Loading First Tree context");
   });
 });
 

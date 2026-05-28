@@ -1,4 +1,15 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const tempRoots: string[] = [];
+
+function makeHome(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `github-scan-start-${prefix}-`));
+  tempRoots.push(dir);
+  return dir;
+}
 
 describe("runStart", () => {
   beforeEach(() => {
@@ -8,6 +19,10 @@ describe("runStart", () => {
   afterEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
+    while (tempRoots.length) {
+      const dir = tempRoots.pop();
+      if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses to start without an explicit repo scope", async () => {
@@ -258,5 +273,229 @@ describe("runStart", () => {
     expect(code).toBe(1);
     const output = lines.join("\n");
     expect(output).toContain("first-tree github scan stop --home /custom/home --profile work");
+  });
+
+  it("reports daemon identity resolution failures", async () => {
+    vi.doMock("../../src/github-scan/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => {
+        throw new Error("gh auth status failed");
+      },
+    }));
+    vi.doMock("../../src/github-scan/engine/runtime/config.js", () => ({
+      loadGitHubScanDaemonConfig: () => ({ host: "github.example.com" }),
+    }));
+
+    const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
+
+    const lines: string[] = [];
+    const code = await runStart(["--allow-repo", "owner/repo"], {
+      runnerHome: makeHome("identity-failure"),
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("gh auth status failed");
+  });
+
+  it("falls back to detached spawn when launchd bootstrap fails", async () => {
+    const spawn = vi.fn(() => ({
+      pid: 2468,
+      unref: vi.fn(),
+    }));
+    const bootstrapLaunchdJob = vi.fn(() => {
+      throw new Error("launchctl unavailable");
+    });
+
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/github-scan/engine/daemon/launchd.js", () => ({
+      supportsLaunchd: () => true,
+      bootstrapLaunchdJob,
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => ({ login: "alice", host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/runtime/config.js", () => ({
+      loadGitHubScanDaemonConfig: () => ({ host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/claim.js", () => ({
+      findServiceLock: () => null,
+      isLockStale: () => false,
+    }));
+
+    const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
+
+    const lines: string[] = [];
+    const code = await runStart(["--allow-repo", "owner/repo"], {
+      runnerHome: makeHome("launchd-fallback"),
+      executable: "/usr/local/bin/first-tree-dev",
+      daemonArgs: ["github", "scan", "daemon", "--backend=ts", "--allow-repo", "owner/repo"],
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(bootstrapLaunchdJob).toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledWith(
+      "/usr/local/bin/first-tree-dev",
+      ["github", "scan", "daemon", "--backend=ts", "--allow-repo", "owner/repo"],
+      expect.objectContaining({
+        detached: true,
+        stdio: expect.arrayContaining(["ignore"]),
+      }),
+    );
+    expect(lines.join("\n")).toContain("launchd bootstrap failed");
+    expect(lines.join("\n")).toContain("github-scan-daemon started via detached spawn");
+  });
+
+  it("reports a detached spawn without a pid", async () => {
+    const spawn = vi.fn(() => ({
+      pid: undefined,
+      unref: vi.fn(),
+    }));
+
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/github-scan/engine/daemon/launchd.js", () => ({
+      supportsLaunchd: () => false,
+      bootstrapLaunchdJob: vi.fn(),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => ({ login: "alice", host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/runtime/config.js", () => ({
+      loadGitHubScanDaemonConfig: () => ({ host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/claim.js", () => ({
+      findServiceLock: () => null,
+      isLockStale: () => false,
+    }));
+
+    const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
+
+    const lines: string[] = [];
+    const code = await runStart(["--allow-repo", "owner/repo"], {
+      runnerHome: makeHome("spawn-no-pid"),
+      executable: "/usr/local/bin/first-tree-dev",
+      daemonArgs: ["github", "scan", "daemon", "--backend=ts"],
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("failed to spawn detached daemon process");
+  });
+
+  it("ignores a stale service lock and starts a replacement daemon", async () => {
+    const spawn = vi.fn(() => ({
+      pid: 8642,
+      unref: vi.fn(),
+    }));
+
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/github-scan/engine/daemon/launchd.js", () => ({
+      supportsLaunchd: () => false,
+      bootstrapLaunchdJob: vi.fn(),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => ({ login: "alice", host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/runtime/config.js", () => ({
+      loadGitHubScanDaemonConfig: () => ({ host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/claim.js", () => ({
+      findServiceLock: () => ({
+        pid: 1357,
+        heartbeat_epoch: 1,
+        active_tasks: 0,
+        note: "old",
+      }),
+      isLockStale: () => true,
+    }));
+
+    const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
+
+    const lines: string[] = [];
+    const code = await runStart(["--allow-repo", "owner/repo"], {
+      runnerHome: makeHome("stale-lock"),
+      executable: "/usr/local/bin/first-tree-dev",
+      daemonArgs: ["github", "scan", "daemon", "--backend=ts"],
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(spawn).toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("pid: 8642");
+  });
+
+  it("quotes stop hints for paths and profiles with shell-sensitive characters", async () => {
+    vi.doMock("../../src/github-scan/engine/daemon/launchd.js", () => ({
+      supportsLaunchd: () => true,
+      bootstrapLaunchdJob: vi.fn(),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => ({ login: "alice", host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/runtime/config.js", () => ({
+      loadGitHubScanDaemonConfig: () => ({ host: "github.com" }),
+    }));
+    vi.doMock("../../src/github-scan/engine/daemon/claim.js", () => ({
+      findServiceLock: () => ({
+        pid: 4242,
+        heartbeat_epoch: Math.floor(Date.now() / 1000),
+        active_tasks: 0,
+        note: "",
+      }),
+      isLockStale: () => false,
+    }));
+
+    const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
+
+    const lines: string[] = [];
+    const code = await runStart(
+      ["--allow-repo", "owner/repo", "--home=/tmp/scan's home", "--profile", "work profile"],
+      {
+        write: (line) => lines.push(line),
+      },
+    );
+
+    expect(code).toBe(1);
+    const output = lines.join("\n");
+    expect(output).toContain("--home '/tmp/scan'\\''s home'");
+    expect(output).toContain("--profile 'work profile'");
+  });
+
+  it("builds daemon argv with prefix args, tree repo binding, and filtered local-only flags", async () => {
+    const { defaultDaemonArgs, resolveSelfCliInvocation } = await import(
+      "../../src/github-scan/engine/commands/start.js"
+    );
+
+    expect(resolveSelfCliInvocation("")).toEqual({
+      executable: process.execPath,
+      prefixArgs: [],
+    });
+    expect(
+      defaultDaemonArgs(
+        [
+          "--home",
+          "/runner",
+          "--profile=work",
+          "",
+          "--allow-repo",
+          "owner/repo",
+          "--home=/ignored",
+          "--profile",
+          "ignored",
+        ],
+        ["/tmp/first-tree/dist/index.js"],
+        { FIRST_TREE_GITHUB_SCAN_TREE_REPO: "owner/tree" },
+      ),
+    ).toEqual([
+      "/tmp/first-tree/dist/index.js",
+      "github",
+      "scan",
+      "daemon",
+      "--backend=ts",
+      "--tree-repo",
+      "owner/tree",
+      "--allow-repo",
+      "owner/repo",
+    ]);
   });
 });

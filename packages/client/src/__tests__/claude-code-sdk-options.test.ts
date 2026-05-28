@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  * and agents silently fell back to Sonnet). This test pins both entries.
  */
 
-const capturedCalls: Array<{ options?: Record<string, unknown> }> = [];
+const capturedCalls: Array<{ options?: Record<string, unknown>; prompt?: AsyncIterable<unknown> }> = [];
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => {
   const fakeQuery = {
@@ -34,8 +34,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
     setModel: async () => {},
   };
   return {
-    query: (args: { options?: Record<string, unknown> }) => {
-      capturedCalls.push({ options: args?.options });
+    query: (args: { options?: Record<string, unknown>; prompt?: AsyncIterable<unknown> }) => {
+      capturedCalls.push({ options: args?.options, prompt: args?.prompt });
       return fakeQuery;
     },
   };
@@ -44,6 +44,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { writeImage } from "../runtime/image-store.js";
+import { markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
@@ -57,6 +59,15 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
+
+async function readPromptMessage(callIndex = 0): Promise<{ message?: { content?: unknown } }> {
+  const prompt = capturedCalls[callIndex]?.prompt;
+  if (!prompt) throw new Error("missing captured prompt");
+  const iterator = prompt[Symbol.asyncIterator]();
+  const next = await iterator.next();
+  if (next.done) throw new Error("prompt iterator ended before receiving a message");
+  return next.value as { message?: { content?: unknown } };
+}
 
 function buildCache() {
   const stubSdk = {
@@ -94,6 +105,251 @@ function buildSessionCtx(chatId: string): SessionContext {
 }
 
 describe("claude-code handler — SDK options", () => {
+  it("converts available image references into Read-tool file prompts", async () => {
+    capturedCalls.length = 0;
+    process.env.FIRST_TREE_HOME = workspaceRoot;
+    const imagePath = await writeImage({
+      chatId: "chat-image",
+      imageId: "image-1",
+      mimeType: "image/png",
+      base64: Buffer.from("fake image").toString("base64"),
+    });
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx = buildSessionCtx("chat-image");
+    await handler.start(
+      {
+        id: "msg-image-ref",
+        chatId: "chat-image",
+        senderId: "user",
+        format: "file",
+        content: { imageId: "image-1", mimeType: "image/png", filename: "diagram.png" },
+        metadata: null,
+      },
+      ctx,
+    );
+
+    const sdkMessage = await readPromptMessage();
+    expect(sdkMessage.message?.content).toContain("Please use the Read tool");
+    expect(sdkMessage.message?.content).toContain("Filename: diagram.png");
+    expect(sdkMessage.message?.content).toContain(`Path: ${imagePath}`);
+
+    await handler.shutdown();
+    delete process.env.FIRST_TREE_HOME;
+  });
+
+  it("falls back cleanly when an image reference is not present on this device", async () => {
+    capturedCalls.length = 0;
+    process.env.FIRST_TREE_HOME = join(workspaceRoot, "missing-image-home");
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx = buildSessionCtx("chat-missing-image");
+    await handler.start(
+      {
+        id: "msg-image-missing",
+        chatId: "chat-missing-image",
+        senderId: "user",
+        format: "file",
+        content: { imageId: "image-missing", mimeType: "image/png", filename: "missing.png" },
+        metadata: null,
+      },
+      ctx,
+    );
+
+    const sdkMessage = await readPromptMessage();
+    expect(sdkMessage.message?.content).toContain('[Image "missing.png" not available on this device]');
+    expect(sdkMessage.message?.content).toContain("[From: user]");
+
+    await handler.shutdown();
+    delete process.env.FIRST_TREE_HOME;
+  });
+
+  it("materializes legacy inline image payloads into temp-file prompts", async () => {
+    capturedCalls.length = 0;
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx = buildSessionCtx("chat-legacy-image");
+    await handler.start(
+      {
+        id: "msg-image-legacy",
+        chatId: "chat-legacy-image",
+        senderId: "user",
+        format: "file",
+        content: {
+          data: Buffer.from("legacy image").toString("base64"),
+          mimeType: "image/png",
+          filename: "legacy.png",
+        },
+        metadata: null,
+      },
+      ctx,
+    );
+
+    const sdkMessage = await readPromptMessage();
+    expect(sdkMessage.message?.content).toContain("Filename: legacy.png");
+    expect(sdkMessage.message?.content).toContain("/first-tree/images/chat-legacy-image/");
+    expect(sdkMessage.message?.content).toContain(".png");
+
+    await handler.shutdown();
+  });
+
+  it("falls back when legacy inline image materialization fails", async () => {
+    capturedCalls.length = 0;
+    const prevTmpdir = process.env.TMPDIR;
+    const notADirectory = join(workspaceRoot, "tmp-is-file");
+    writeFileSync(notADirectory, "not a directory", "utf-8");
+    process.env.TMPDIR = notADirectory;
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const logs: string[] = [];
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx = buildSessionCtx("chat-legacy-image-failure");
+    ctx.log = (line) => logs.push(line);
+    await handler.start(
+      {
+        id: "msg-image-legacy-fail",
+        chatId: "chat-legacy-image-failure",
+        senderId: "user",
+        format: "file",
+        content: {
+          data: Buffer.from("legacy image").toString("base64"),
+          mimeType: "image/png",
+          filename: "broken.png",
+        },
+        metadata: null,
+      },
+      ctx,
+    );
+
+    const sdkMessage = await readPromptMessage();
+    expect(sdkMessage.message?.content).toContain('[Image attachment "broken.png" failed to materialise]');
+    expect(logs.some((line) => line.startsWith("Failed to write image to temp file:"))).toBe(true);
+
+    await handler.shutdown();
+    if (prevTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = prevTmpdir;
+  });
+
+  it("refreshes the actual stable CLAUDE.md from Context Tree files on sentinel fast path", async () => {
+    capturedCalls.length = 0;
+    const treePath = join(workspaceRoot, "context-tree-fixture");
+    mkdirSync(treePath, { recursive: true });
+    writeFileSync(join(treePath, "AGENT.md"), "Read the root NODE.md before cross-domain work.", "utf-8");
+    writeFileSync(join(treePath, "NODE.md"), "# Root Context\n\nShared ownership map.", "utf-8");
+    markWorkspaceInitComplete(workspaceRoot);
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({
+      workspaceRoot,
+      agentConfigCache: cache,
+      contextTreePath: treePath,
+      agentName: "private-helper",
+    });
+    const ctx = buildSessionCtx("chat-context-tree");
+    ctx.agent.displayName = "Private Helper";
+    ctx.agent.visibility = "private";
+    await handler.start(
+      {
+        id: "msg-context",
+        chatId: "chat-context-tree",
+        senderId: "user",
+        format: "text",
+        content: "hi",
+        metadata: null,
+      },
+      ctx,
+    );
+
+    const claudeMd = readFileSync(join(workspaceRoot, "CLAUDE.md"), "utf-8");
+    expect(claudeMd).toContain("You are Private Helper, a personal assistant agent.");
+    expect(claudeMd).toContain("Operating Instructions");
+    expect(claudeMd).toContain("Read the root NODE.md");
+    expect(claudeMd).toContain("Organization Domain Map");
+    expect(claudeMd).toContain("Shared ownership map.");
+    expect(claudeMd).toContain(`The full Context Tree is available at: \`${treePath}\``);
+    expect(claudeMd).toContain("Agent Hub SDK");
+
+    await handler.shutdown();
+  });
+
+  it("resumes from an existing agent-home transcript and handles inject drop/error branches", async () => {
+    capturedCalls.length = 0;
+    const prevHome = process.env.HOME;
+    const fakeHome = join(workspaceRoot, "claude-home");
+    process.env.HOME = fakeHome;
+    const sessionId = "session-existing";
+    const encodedCwd = workspaceRoot.replace(/[^a-zA-Z0-9-]/g, "-");
+    mkdirSync(join(fakeHome, ".claude", "projects", encodedCwd), { recursive: true });
+    writeFileSync(join(fakeHome, ".claude", "projects", encodedCwd, `${sessionId}.jsonl`), "{}", "utf-8");
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const logs: string[] = [];
+    const ctx = buildSessionCtx("chat-resume");
+    ctx.log = (line) => logs.push(line);
+
+    await expect(
+      handler.resume(
+        {
+          id: "msg-resume",
+          chatId: "chat-resume",
+          senderId: "user",
+          format: "text",
+          content: "resume",
+          metadata: null,
+        },
+        sessionId,
+        ctx,
+      ),
+    ).resolves.toBe(sessionId);
+    expect(capturedCalls[0]?.options?.resume).toBe(sessionId);
+    expect(logs).toContain(`Resuming session (${sessionId}), cwd=${workspaceRoot}`);
+    expect(logs).toContain(`Session resumed (${sessionId})`);
+
+    ctx.formatInboundContent = async () => {
+      throw new Error("format failed");
+    };
+    handler.inject({
+      id: "msg-inject-fail",
+      chatId: "chat-resume",
+      senderId: "user",
+      format: "text",
+      content: "bad inject",
+      metadata: null,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(logs).toContain("toSDKUserMessage errored: format failed");
+
+    await handler.shutdown();
+    handler.inject({
+      id: "msg-drop",
+      chatId: "chat-resume",
+      senderId: "user",
+      format: "text",
+      content: "drop",
+      metadata: null,
+    });
+    expect(logs).toContain("inject() called but no active session — dropping message");
+
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+  });
+
   it("passes settingSources=['user','project'] to claudeQuery", async () => {
     capturedCalls.length = 0;
 

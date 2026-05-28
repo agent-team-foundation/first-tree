@@ -95,7 +95,9 @@ describe("parseGithubTimestampEpoch / isRecentGithubTimestamp", () => {
   });
 
   it("isRecentGithubTimestamp compares against now - lookback", () => {
-    const now = parseGithubTimestampEpoch("2026-04-15T12:00:00Z")!;
+    const now = parseGithubTimestampEpoch("2026-04-15T12:00:00Z");
+    expect(now).toBeDefined();
+    if (now === undefined) throw new Error("expected valid timestamp");
     expect(isRecentGithubTimestamp("2026-04-15T11:59:00Z", now, 120)).toBe(true);
     expect(isRecentGithubTimestamp("2026-04-15T11:57:00Z", now, 120)).toBe(false);
   });

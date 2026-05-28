@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
-
-import { installTreeAutomation } from "../src/commands/tree/automation.js";
+import { automationSubcommands, installTreeAutomation } from "../src/commands/tree/automation.js";
 import { autoMergeWorkflowPath, reviewEnforcerWorkflowPath } from "../src/commands/tree/rule-layer.js";
 import { renderAutoMergeWorkflow, renderReviewEnforcerWorkflow } from "../src/commands/tree/tree-templates.js";
 
@@ -37,6 +37,17 @@ function writeTreeFixture(root: string, remoteUrl = "https://github.com/acme/con
 
 function encodeContent(text: string): string {
   return Buffer.from(text, "utf8").toString("base64");
+}
+
+function makeAutomationCommand(args: string[]): Command {
+  const [subcommand] = automationSubcommands;
+  if (!subcommand) throw new Error("missing automation install subcommand");
+
+  const command = new Command("install");
+  command.exitOverride();
+  subcommand.configure?.(command);
+  command.parse(["node", "test", ...args], { from: "node" });
+  return command;
 }
 
 afterEach(() => {
@@ -230,5 +241,220 @@ describe("installTreeAutomation", () => {
     expect(() => installTreeAutomation(root, { dryRun: true, tier: 2 })).toThrow(
       /only has source\/workspace integration installed/i,
     );
+  });
+
+  it("reports dry-run local workflow statuses before the tree is published", () => {
+    const root = makeTempDir("first-tree-automation-dry-local-");
+
+    let summary = installTreeAutomation(root, { dryRun: true, tier: 2 });
+    expect(summary.stage).toBe("write_rule_layer");
+    expect(summary.workflowFiles.map((item) => item.status)).toEqual(["would-write", "would-write"]);
+    expect(summary.warnings.some((warning) => warning.includes("Publish the tree repo"))).toBe(true);
+
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(autoMergeWorkflowPath(root), "name: custom\n");
+    writeFileSync(reviewEnforcerWorkflowPath(root), "# first-tree-template-version: 0\nname: old\n");
+
+    summary = installTreeAutomation(root, { dryRun: true, tier: 2 });
+    expect(summary.workflowFiles).toEqual([
+      expect.objectContaining({ currentVersion: null, status: "custom" }),
+      expect.objectContaining({ currentVersion: 0, status: "needs-upgrade" }),
+    ]);
+  });
+
+  it("keeps local preparation as stage A when GitHub repo metadata is malformed", () => {
+    const root = makeTempDir("first-tree-automation-bad-metadata-");
+    writeTreeFixture(root);
+    const runner = (command: string, args: string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+      if (key === "gh api repos/acme/context-tree") return JSON.stringify({ default_branch: "" });
+      throw new Error(`unexpected command: ${key}`);
+    };
+
+    const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
+
+    expect(summary.stage).toBe("write_rule_layer");
+    expect(summary.repoSlug).toBeUndefined();
+    expect(summary.warnings).toContain("Could not determine the default branch for acme/context-tree.");
+  });
+
+  it("requires follow-up when remote workflows are custom or outdated", () => {
+    const root = makeTempDir("first-tree-automation-remote-custom-");
+    writeTreeFixture(root);
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(autoMergeWorkflowPath(root), renderAutoMergeWorkflow());
+    writeFileSync(reviewEnforcerWorkflowPath(root), renderReviewEnforcerWorkflow());
+
+    const runner = (command: string, args: string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+      switch (key) {
+        case "gh api repos/acme/context-tree":
+          return JSON.stringify({ default_branch: "main" });
+        case "gh api repos/acme/context-tree/installation":
+          return JSON.stringify({ id: 7 });
+        case "gh api repos/acme/context-tree/contents/.github/workflows/auto-merge.yml?ref=main --jq .content":
+          return encodeContent("name: custom\n");
+        case "gh api repos/acme/context-tree/contents/.github/workflows/review-enforcer.yml?ref=main --jq .content":
+          return encodeContent("# first-tree-template-version: 0\nname: old\n");
+        default:
+          throw new Error(`unexpected command: ${key}`);
+      }
+    };
+
+    const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
+
+    expect(summary.stage).toBe("write_rule_layer");
+    expect(summary.warnings).toContain(
+      "Merge `.github/workflows/auto-merge.yml` and `.github/workflows/review-enforcer.yml` onto the default branch before rerunning this command.",
+    );
+  });
+
+  it("treats missing remote workflow content as follow-up work", () => {
+    const root = makeTempDir("first-tree-automation-remote-missing-");
+    writeTreeFixture(root);
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(autoMergeWorkflowPath(root), renderAutoMergeWorkflow());
+    writeFileSync(reviewEnforcerWorkflowPath(root), renderReviewEnforcerWorkflow());
+
+    const runner = (command: string, args: string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+      switch (key) {
+        case "gh api repos/acme/context-tree":
+          return JSON.stringify({ default_branch: "main" });
+        case "gh api repos/acme/context-tree/installation":
+          return JSON.stringify({ id: 7 });
+        case "gh api repos/acme/context-tree/contents/.github/workflows/auto-merge.yml?ref=main --jq .content":
+        case "gh api repos/acme/context-tree/contents/.github/workflows/review-enforcer.yml?ref=main --jq .content":
+          throw new Error("not found");
+        default:
+          throw new Error(`unexpected command: ${key}`);
+      }
+    };
+
+    const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
+
+    expect(summary.stage).toBe("write_rule_layer");
+    expect(summary.warnings.some((warning) => warning.includes("classic branch protection"))).toBe(true);
+  });
+
+  it("prints an activation command with fallback payloads for disabled rulesets", () => {
+    const root = makeTempDir("first-tree-automation-disabled-ruleset-");
+    writeTreeFixture(root);
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(autoMergeWorkflowPath(root), renderAutoMergeWorkflow());
+    writeFileSync(reviewEnforcerWorkflowPath(root), renderReviewEnforcerWorkflow());
+
+    const disabledRuleset = {
+      id: 77,
+      name: "first-tree owners gate",
+      target: "branch",
+      enforcement: "disabled",
+      conditions: null,
+      rules: [],
+    };
+    const runner = (command: string, args: string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+      switch (key) {
+        case "gh api repos/acme/context-tree":
+          return JSON.stringify({ default_branch: "main" });
+        case "gh api repos/acme/context-tree/installation":
+          return JSON.stringify({ id: 7 });
+        case "gh api repos/acme/context-tree/contents/.github/workflows/auto-merge.yml?ref=main --jq .content":
+          return encodeContent(renderAutoMergeWorkflow());
+        case "gh api repos/acme/context-tree/contents/.github/workflows/review-enforcer.yml?ref=main --jq .content":
+          return encodeContent(renderReviewEnforcerWorkflow());
+        case "gh api repos/acme/context-tree/rulesets?includes_parents=false":
+          return JSON.stringify([
+            "ignored",
+            { id: "bad", name: "first-tree owners gate", enforcement: "active" },
+            { id: 99, name: "other", enforcement: "evaluate" },
+            disabledRuleset,
+          ]);
+        default:
+          throw new Error(`unexpected command: ${key}`);
+      }
+    };
+
+    const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
+
+    expect(summary.stage).toBe("activate_ruleset");
+    expect(summary.ruleset).toEqual({ enforcement: "disabled", id: 77, name: "first-tree owners gate" });
+    expect(summary.warnings.some((warning) => warning.includes("enforcement=disabled"))).toBe(true);
+    expect(summary.nextCommands[0]).toContain('"include": [\n        "refs/heads/main"\n      ]');
+    expect(summary.nextCommands[0]).toContain('"required_status_checks"');
+  });
+
+  it("prints a create command when rulesets API returns a non-array payload", () => {
+    const root = makeTempDir("first-tree-automation-ruleset-nonarray-");
+    writeTreeFixture(root);
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(autoMergeWorkflowPath(root), renderAutoMergeWorkflow());
+    writeFileSync(reviewEnforcerWorkflowPath(root), renderReviewEnforcerWorkflow());
+
+    const runner = (command: string, args: string[]) => {
+      const key = `${command} ${args.join(" ")}`;
+      switch (key) {
+        case "gh api repos/acme/context-tree":
+          return JSON.stringify({ default_branch: "main" });
+        case "gh api repos/acme/context-tree/installation":
+          return JSON.stringify({ id: 7 });
+        case "gh api repos/acme/context-tree/contents/.github/workflows/auto-merge.yml?ref=main --jq .content":
+          return encodeContent(renderAutoMergeWorkflow());
+        case "gh api repos/acme/context-tree/contents/.github/workflows/review-enforcer.yml?ref=main --jq .content":
+          return encodeContent(renderReviewEnforcerWorkflow());
+        case "gh api repos/acme/context-tree/rulesets?includes_parents=false":
+          return JSON.stringify({ values: [] });
+        default:
+          throw new Error(`unexpected command: ${key}`);
+      }
+    };
+
+    const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
+
+    expect(summary.stage).toBe("create_ruleset");
+    expect(summary.nextCommands[0]).toContain("repos/acme/context-tree/rulesets");
+  });
+
+  it("runs the exported install action in text and JSON modes", () => {
+    const [subcommand] = automationSubcommands;
+    if (!subcommand) throw new Error("missing automation install subcommand");
+    const root = makeTempDir("first-tree-automation-action-");
+    const originalCwd = process.cwd();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      process.chdir(root);
+      const command = makeAutomationCommand(["--dry-run"]);
+
+      subcommand.action({ command, options: { debug: false, json: false, quiet: false } });
+      expect(logSpy.mock.calls.flat().join("\n")).toContain("Context Tree Automation");
+
+      logSpy.mockClear();
+      subcommand.action({ command, options: { debug: false, json: true, quiet: false } });
+      const json = JSON.parse(String(logSpy.mock.calls[0]?.[0]));
+      expect(json.stage).toBe("write_rule_layer");
+      expect(json.dryRun).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("reports command option errors through the exported install action", () => {
+    const [subcommand] = automationSubcommands;
+    if (!subcommand) throw new Error("missing automation install subcommand");
+    const command = makeAutomationCommand(["--tier", "1"]);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const originalExitCode = process.exitCode;
+
+    try {
+      process.exitCode = undefined;
+      subcommand.action({ command, options: { debug: false, json: false, quiet: false } });
+      expect(errorSpy).toHaveBeenCalledWith("Only `--tier 2` is supported right now.");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
+    }
   });
 });

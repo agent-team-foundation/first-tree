@@ -78,6 +78,16 @@ function makeStubExecutor(): { executor: GhExecutor; ctl: StubExecutor } {
 }
 
 describe("GhClient.recentNotifications", () => {
+  it("exposes the injected executor for broker integrations", () => {
+    const { executor } = makeStubExecutor();
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    expect(client.getExecutor()).toBe(executor);
+  });
+
   it("parses @tsv output and applies repo filter + lookback", async () => {
     const { executor, ctl } = makeStubExecutor();
     // Two tab-separated rows: first passes filter + recent; second is filtered out.
@@ -245,6 +255,24 @@ describe("GhClient.reviewRequests", () => {
       updatedAt: "2026-04-15T12:05:00Z",
     });
   });
+
+  it("reads direct latest-comment activity when a notification carries a comment URL", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([{ stdout: "\ncommenter\tUser\t2026-04-15T12:00:00Z\n" }]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    await expect(client.latestCommentActivity("https://api.github.com/repos/o/r/issues/comments/123")).resolves.toEqual(
+      {
+        login: "commenter",
+        userType: "User",
+        updatedAt: "2026-04-15T12:00:00Z",
+      },
+    );
+    expect(ctl.calls[0].args).toContain("/repos/o/r/issues/comments/123");
+  });
 });
 
 describe("GhClient.collectCandidates", () => {
@@ -334,6 +362,31 @@ describe("GhClient.collectCandidates", () => {
     expect(ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list")).toBe(false);
     expect(ctl.calls.some((call) => call.args[0] === "search" && call.args[1] === "issues")).toBe(false);
   });
+
+  it("sorts by priority, updated_at, and thread key after filtering", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([
+      {
+        stdout: [
+          "o/r\tIssue\tmention\tMiddle\thttps://api.github.com/repos/o/r/issues/2\t\t2026-04-15T12:01:00Z",
+          "o/r\tIssue\tassign\tHigh\thttps://api.github.com/repos/o/r/issues/3\t\t2026-04-15T12:00:00Z",
+          "o/r\tIssue\tmention\tNewer\thttps://api.github.com/repos/o/r/issues/1\t\t2026-04-15T12:02:00Z",
+        ].join("\n"),
+      },
+    ]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.parseCsv("o/r"),
+      executor,
+    });
+    const poll = await client.collectCandidates({
+      limit: 5,
+      includeSearch: false,
+      nowEpoch: Date.UTC(2026, 3, 15, 12, 2, 0) / 1000,
+      lookbackSecs: 3600,
+    });
+    expect(poll.tasks.map((task) => task.title)).toEqual(["Newer", "Middle", "High"]);
+  });
 });
 
 describe("GhClient.writeTaskSnapshot", () => {
@@ -384,11 +437,48 @@ describe("GhClient.writeTaskSnapshot", () => {
       "bound tree repo: agent-team-foundation/first-tree-context",
     );
   });
+
+  it("hydrates issue snapshots and records stderr metadata for partial captures", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponder((spec) => {
+      if (spec.args[0] === "issue" && spec.args[1] === "view") {
+        return { stdout: '{"number":7}', stderr: "issue warning", statusCode: 1 };
+      }
+      return { stdout: "body" };
+    });
+    const client = new GhClient({
+      host: "ghe.example.test",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    const candidate = buildNotificationCandidate({
+      host: "ghe.example.test",
+      repo: "o/r",
+      subjectType: "Issue",
+      reason: "mention",
+      title: "Issue",
+      apiUrl: "https://ghe.example.test/api/v3/repos/o/r/issues/7",
+      latestCommentApiUrl: "https://ghe.example.test/api/v3/repos/o/r/issues/comments/77",
+      updatedAt: "2026-04-15T12:00:00Z",
+    });
+    expect(candidate).toBeDefined();
+    if (candidate === undefined) throw new Error("expected issue candidate");
+    const snapshotDir = await client.writeTaskSnapshot(candidate, makeTempDir("issue-snapshot"));
+    const files = readdirSync(snapshotDir).sort();
+    expect(files).toContain("issue-view.json");
+    expect(files).toContain("issue-comments.json");
+    expect(files).toContain("latest-comment.json");
+    expect(files).toContain("issue-view.json.stderr");
+    expect(readFileSync(join(snapshotDir, "issue-view.json.meta"), "utf8")).toContain("snapshot_status=partial");
+    expect(readFileSync(join(snapshotDir, "issue-view.json.meta"), "utf8")).toContain("stderr_file=");
+    expect(readFileSync(join(snapshotDir, "README.txt"), "utf8")).not.toContain("bound tree repo:");
+  });
 });
 
 describe("pure helpers", () => {
   it("parseThreadActivity handles an empty line", () => {
     expect(parseThreadActivity(undefined)).toBeNull();
+    expect(parseThreadActivity("only\tone")).toBeNull();
     expect(parseThreadActivity("a\tUser\t2026-04-15T00:00:00Z")).toEqual({
       login: "a",
       userType: "User",
@@ -422,7 +512,9 @@ describe("pure helpers", () => {
       apiUrl: "https://api.github.com/repos/o/r/pulls/1",
       latestCommentApiUrl: "",
       updatedAt: "2026-04-15T00:00:00Z",
-    })!;
+    });
+    expect(a).toBeDefined();
+    if (a === undefined) throw new Error("expected notification candidate");
     const b = { ...a, title: "B" };
     expect(deduplicate([a, b])).toHaveLength(1);
     expect(deduplicate([a, b])[0].title).toBe("A");
@@ -431,6 +523,7 @@ describe("pure helpers", () => {
   it("shouldIgnoreSelfAuthored filters comments but not review requests", () => {
     expect(shouldIgnoreSelfAuthored("alice", "alice", "comment")).toBe(true);
     expect(shouldIgnoreSelfAuthored("alice", "alice", "review_request")).toBe(false);
+    expect(shouldIgnoreSelfAuthored("alice", undefined, "comment")).toBe(false);
     expect(shouldIgnoreSelfAuthored("alice", "github-actions[bot]", "mention")).toBe(true);
     expect(shouldIgnoreSelfAuthored("alice", "bob", "comment")).toBe(false);
   });
@@ -443,6 +536,17 @@ describe("pure helpers", () => {
     };
     expect(shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T12:00:00Z")).toBe(true);
     expect(shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T13:00:00Z")).toBe(false);
+    expect(shouldIgnoreLatestSelfActivity("alice", { ...activity, login: " " }, "2026-04-15T12:00:00Z")).toBe(false);
+    expect(
+      shouldIgnoreLatestSelfActivity(
+        "alice",
+        { ...activity, login: "github-actions[bot]", userType: "User" },
+        "2026-04-15T12:00:00Z",
+      ),
+    ).toBe(true);
+    expect(
+      shouldIgnoreLatestSelfActivity("alice", { ...activity, login: "bot", userType: "Bot" }, "2026-04-15T12:00:00Z"),
+    ).toBe(true);
   });
 
   it("isRateLimitError detects secondary/abuse substrings", () => {

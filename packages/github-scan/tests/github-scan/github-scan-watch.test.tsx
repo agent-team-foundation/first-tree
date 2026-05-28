@@ -8,10 +8,13 @@
  * throwing, not that the polling loop runs for N cycles.
  */
 
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
-import { GitHubScanWatch } from "../../src/github-scan/engine/commands/watch.js";
+import { GitHubScanWatch, runWatch } from "../../src/github-scan/engine/commands/watch.js";
 import type { ActivityEvent, Inbox } from "../../src/github-scan/engine/runtime/types.js";
 
 function mkInbox(entries: Inbox["notifications"]): Inbox {
@@ -53,6 +56,10 @@ function strip(s: string | undefined): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape sequences requires matching control chars
   out = out.replace(/\x1b\[[0-9;]*m/gu, "");
   return out;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe("GitHubScanWatch view", () => {
@@ -155,5 +162,151 @@ describe("GitHubScanWatch view", () => {
     // Just assert the feed header is there but the poll event isn't.
     expect(frame).toMatch(/live/u);
     expect(frame).not.toMatch(/poll/u);
+  });
+
+  it("collapses long status groups and truncates long titles", () => {
+    const longTitle =
+      "This pull request title is deliberately long enough to be truncated by the terminal board renderer";
+    const inbox = mkInbox([
+      ...Array.from({ length: 6 }, (_, index) => pr(String(index + 1), "wip", longTitle, "o/repoA")),
+      ...Array.from({ length: 7 }, (_, index) => pr(String(index + 10), "new", `new item ${index}`, "o/repoA")),
+      pr("99", "done", "finished", "o/repoA"),
+    ]);
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={[]} />);
+    const frame = strip(lastFrame());
+    expect(frame).toContain("… and 1 more");
+    expect(frame).toContain("… and 2 more");
+    expect(frame).toContain("This pull request title is deliberately long enough to be t…");
+    expect(frame).toContain("FINISHED (1) — collapsed");
+  });
+
+  it("renders claimed events, invalid timestamps, transition reasons, and non-number links", () => {
+    const events: ActivityEvent[] = [
+      {
+        ts: "bad-time",
+        event: "claimed",
+        id: "c1",
+        type: "PullRequest",
+        repo: "standalone-repo",
+        title: "claimed work",
+        url: "https://github.com/o/r/pull/not-a-number",
+        by: "ada",
+        action: "claim",
+      },
+      {
+        ts: "2026-04-16T20:05:00Z",
+        event: "transition",
+        id: "t1",
+        type: "Issue",
+        repo: "o/r",
+        title: "needs human",
+        url: "https://github.com/o/r/issues/42",
+        from: "wip",
+        to: "human",
+        reason: "blocked on credentials",
+      },
+    ];
+    const { lastFrame } = render(<GitHubScanWatch inbox={null} events={events} />);
+    const frame = strip(lastFrame());
+    expect(frame).toContain("bad-time");
+    expect(frame).toContain("⚡ CLAIM");
+    expect(frame).toContain("↳ by ada");
+    expect(frame).toContain("WIP → HUMAN");
+    expect(frame).toContain("blocked on credentials");
+    expect(frame).toContain("standalone-repo");
+  });
+
+  it("mounts the filesystem-backed WatchApp through runWatch", async () => {
+    const waitUntilExit = async () => {};
+    const renderImpl = (() => ({ waitUntilExit })) as unknown as NonNullable<
+      Parameters<typeof runWatch>[1]
+    >["renderImpl"];
+
+    await expect(
+      runWatch([], {
+        paths: {
+          root: "/tmp/github-scan",
+          inbox: "/tmp/github-scan/inbox.json",
+          activityLog: "/tmp/github-scan/activity.log",
+          claimsDir: "/tmp/github-scan/claims",
+          identityCache: "/tmp/github-scan/identity.json",
+          inboxLock: "/tmp/github-scan/inbox.json.lock",
+        },
+        inboxPollMs: 5,
+        renderImpl,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("runWatch polls inbox, seeds activity history, tails changes, and exits on q", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-scan-watch-"));
+    try {
+      const paths = {
+        root,
+        inbox: join(root, "inbox.json"),
+        activityLog: join(root, "activity.log"),
+        claimsDir: join(root, "claims"),
+        identityCache: join(root, "identity.json"),
+        inboxLock: join(root, "inbox.json.lock"),
+      };
+      writeFileSync(paths.inbox, JSON.stringify(mkInbox([pr("11", "new", "filesystem inbox", "o/fs")])));
+      writeFileSync(
+        paths.activityLog,
+        [
+          JSON.stringify({
+            ts: "2026-04-16T20:05:00Z",
+            event: "new",
+            id: "seed",
+            type: "PullRequest",
+            repo: "o/fs",
+            title: "seeded activity",
+            url: "https://github.com/o/fs/pull/12",
+          }),
+          "not-json",
+          "",
+        ].join("\n"),
+      );
+
+      let frame = "";
+      const renderImpl = ((node: Parameters<typeof render>[0]) => {
+        const instance = render(node);
+        return {
+          ...instance,
+          waitUntilExit: async () => {
+            await wait(25);
+            appendFileSync(
+              paths.activityLog,
+              `${JSON.stringify({
+                ts: "2026-04-16T20:06:00Z",
+                event: "claimed",
+                id: "tail",
+                type: "PullRequest",
+                repo: "o/fs",
+                title: "tailed activity",
+                url: "https://github.com/o/fs/pull/13",
+                by: "ada",
+                action: "claim",
+              })}\n`,
+            );
+            for (let attempt = 0; attempt < 50; attempt++) {
+              await wait(20);
+              frame = strip(instance.lastFrame());
+              if (frame.includes("filesystem inbox") && frame.includes("tailed activity")) break;
+            }
+            instance.unmount();
+          },
+        };
+      }) as unknown as NonNullable<Parameters<typeof runWatch>[1]>["renderImpl"];
+
+      await expect(runWatch([], { paths, inboxPollMs: 10, renderImpl })).resolves.toBe(0);
+      await wait(5);
+
+      expect(frame).toContain("filesystem inbox");
+      expect(frame).toContain("seeded activity");
+      expect(frame).toContain("tailed activity");
+      expect(frame).toContain("↳ by ada");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

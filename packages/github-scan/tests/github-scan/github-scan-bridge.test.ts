@@ -1,11 +1,89 @@
-import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFirstTreePackageRoot, type SpawnFn, spawnInherit } from "../../src/github-scan/engine/bridge.js";
+
+const tempRoots: string[] = [];
+
+afterEach(() => {
+  vi.doUnmock("node:module");
+  vi.resetModules();
+  while (tempRoots.length) {
+    const dir = tempRoots.pop();
+    if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function makeTempTree(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `github-scan-bridge-${prefix}-`));
+  tempRoots.push(dir);
+  return dir;
+}
+
+function tempModuleUrl(root: string): string {
+  const file = join(root, "nested", "deeper", "entry.mjs");
+  mkdirSync(join(root, "nested", "deeper"), { recursive: true });
+  writeFileSync(file, "");
+  return pathToFileURL(file).href;
+}
+
+async function importBridgeWithPackageResolutionFailure(): Promise<
+  typeof import("../../src/github-scan/engine/bridge.js")
+> {
+  vi.resetModules();
+  vi.doMock("node:module", () => ({
+    createRequire: () => ({
+      resolve: () => {
+        throw new Error("package not found");
+      },
+    }),
+  }));
+  return import("../../src/github-scan/engine/bridge.js");
+}
 
 describe("resolveFirstTreePackageRoot", () => {
   it("returns a directory that contains the github-scan package.json", () => {
     const root = resolveFirstTreePackageRoot();
     expect(typeof root).toBe("string");
     expect(root.length).toBeGreaterThan(0);
+  });
+
+  it("walks upward to locate bundled dashboard assets outside a workspace install", async () => {
+    const bridge = await importBridgeWithPackageResolutionFailure();
+    const root = makeTempTree("package-root");
+    mkdirSync(join(root, "assets"), { recursive: true });
+    writeFileSync(join(root, "assets", "dashboard.html"), "<html></html>");
+
+    expect(bridge.resolveFirstTreePackageRoot(tempModuleUrl(root))).toBe(root);
+  });
+
+  it("throws when neither workspace resolution nor bundled assets are available", async () => {
+    const bridge = await importBridgeWithPackageResolutionFailure();
+    const root = makeTempTree("missing-root");
+
+    expect(() => bridge.resolveFirstTreePackageRoot(tempModuleUrl(root))).toThrow(
+      "Could not locate the @first-tree/github-scan package root",
+    );
+  });
+});
+
+describe("resolveStatuslineBundlePath", () => {
+  it("walks upward to locate a bundled statusline script", async () => {
+    const bridge = await importBridgeWithPackageResolutionFailure();
+    const root = makeTempTree("statusline");
+    const bundle = join(root, "github-scan-statusline.js");
+    writeFileSync(bundle, "console.log('ok');");
+
+    expect(bridge.resolveStatuslineBundlePath(tempModuleUrl(root))).toBe(bundle);
+  });
+
+  it("throws when the statusline bundle is absent", async () => {
+    const bridge = await importBridgeWithPackageResolutionFailure();
+    const root = makeTempTree("missing-statusline");
+
+    expect(() => bridge.resolveStatuslineBundlePath(tempModuleUrl(root))).toThrow("run `pnpm build` first");
   });
 });
 

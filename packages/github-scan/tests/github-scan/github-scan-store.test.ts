@@ -55,11 +55,12 @@ describe("readInbox / writeInbox", () => {
     };
     const discussion = onDisk.notifications.find((n) => n.type === "Discussion");
     expect(discussion).toBeDefined();
+    if (discussion === undefined) throw new Error("expected discussion notification");
     // Explicitly confirm these keys exist with null values (not omitted).
-    expect(Object.hasOwn(discussion!, "number")).toBe(true);
-    expect(Object.hasOwn(discussion!, "gh_state")).toBe(true);
-    expect(discussion?.number).toBeNull();
-    expect(discussion?.gh_state).toBeNull();
+    expect(Object.hasOwn(discussion, "number")).toBe(true);
+    expect(Object.hasOwn(discussion, "gh_state")).toBe(true);
+    expect(discussion.number).toBeNull();
+    expect(discussion.gh_state).toBeNull();
   });
 
   it("writes atomically (no .tmp file left after success)", () => {

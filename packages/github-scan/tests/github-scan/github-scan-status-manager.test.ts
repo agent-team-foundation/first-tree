@@ -426,8 +426,13 @@ describe("status-manager: ensure-labels", () => {
     expect(labels).toEqual(["github-scan:done", "github-scan:human", "github-scan:new", "github-scan:wip"]);
     // Colors match spec §7.
     const colorFor = (label: string): string => {
-      const call = calls.find((c) => c[2] === label)!;
-      return call[call.indexOf("--color") + 1];
+      const call = calls.find((c) => c[2] === label);
+      expect(call).toBeDefined();
+      if (call === undefined) throw new Error(`missing label call for ${label}`);
+      const color = call[call.indexOf("--color") + 1];
+      expect(color).toBeDefined();
+      if (color === undefined) throw new Error(`missing color for ${label}`);
+      return color;
     };
     expect(colorFor("github-scan:new")).toBe("0075ca");
     expect(colorFor("github-scan:wip")).toBe("e4e669");

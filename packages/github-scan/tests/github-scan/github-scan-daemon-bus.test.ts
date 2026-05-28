@@ -190,7 +190,10 @@ describe("toSseBus", () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0].kind).toBe("activity");
-    const parsed = JSON.parse(seen[0].line!) as Record<string, unknown>;
+    const completedLine = seen[0].line;
+    expect(completedLine).toBeDefined();
+    if (completedLine === undefined) throw new Error("expected completed activity line");
+    const parsed = JSON.parse(completedLine) as Record<string, unknown>;
     expect(parsed).toEqual({
       event: "task_completed",
       task_id: "task-42",
@@ -214,7 +217,10 @@ describe("toSseBus", () => {
     });
 
     expect(seen).toHaveLength(1);
-    const parsed = JSON.parse(seen[0].line!) as Record<string, unknown>;
+    const dispatchedLine = seen[0].line;
+    expect(dispatchedLine).toBeDefined();
+    if (dispatchedLine === undefined) throw new Error("expected dispatched activity line");
+    const parsed = JSON.parse(dispatchedLine) as Record<string, unknown>;
     expect(parsed).toEqual({
       event: "task_dispatched",
       task_id: "task-7",

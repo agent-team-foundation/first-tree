@@ -331,4 +331,32 @@ describe("runWithTimeout", () => {
     ).rejects.toThrow(/aborted/);
     expect(killed).toBe(true);
   });
+
+  it("rejects and calls kill when aborted after the run has started", async () => {
+    const controller = new AbortController();
+    let killed = false;
+    const pending = runWithTimeout({
+      run: () => new Promise(() => {}),
+      kill: () => {
+        killed = true;
+      },
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/aborted/);
+    expect(killed).toBe(true);
+  });
+
+  it("propagates run rejections before the timeout settles", async () => {
+    await expect(
+      runWithTimeout({
+        run: async () => {
+          throw new Error("runner exploded");
+        },
+        kill: () => {},
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(/runner exploded/);
+  });
 });

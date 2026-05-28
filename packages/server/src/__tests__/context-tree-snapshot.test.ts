@@ -234,6 +234,78 @@ Body`);
     );
   });
 
+  it("resolves unconfigured, missing, and existing local Context Tree bindings", async () => {
+    const missingLocalPath = join(testDir, "missing-local");
+    const configuredMissing = await contextTreeSnapshotTestInternals.resolveContextTreeRoot(
+      null,
+      missingLocalPath,
+      null,
+    );
+    expect(configuredMissing).toEqual({
+      root: null,
+      reason: `Context Tree checkout not found at ${missingLocalPath}.`,
+      staleReason: null,
+    });
+
+    await expect(getContextTreeSnapshot({ localPath: missingLocalPath }, "1d")).resolves.toMatchObject({
+      snapshotStatus: "unavailable",
+      contextStatus: { severity: "error" },
+      usage: { windowDays: 7 },
+    });
+
+    await expect(getContextTreeSnapshot({}, "30d")).resolves.toMatchObject({
+      snapshotStatus: "unavailable",
+      contextStatus: {
+        detail: "Context Tree is not configured.",
+        label: "Team context unavailable",
+      },
+    });
+
+    await mkdir(join(testDir, "local-tree"), { recursive: true });
+    const existing = await contextTreeSnapshotTestInternals.resolveContextTreeRoot(
+      null,
+      `file://${join(testDir, "local-tree")}`,
+      null,
+    );
+    expect(existing).toEqual({ root: join(testDir, "local-tree"), reason: "ok", staleReason: null });
+
+    const missingRepoPath = join(process.cwd(), "relative-missing-tree");
+    const repoMissing = await contextTreeSnapshotTestInternals.resolveContextTreeRoot(
+      "relative-missing-tree",
+      null,
+      null,
+    );
+    expect(repoMissing).toEqual({
+      root: null,
+      reason: `Context Tree checkout not found at ${missingRepoPath}.`,
+      staleReason: null,
+    });
+  });
+
+  it("returns unavailable when a local checkout is on a different branch and reuses active snapshots from cache", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Cached Context\n---\nGuidance\n");
+    const head = await commitAll("docs: add cached context");
+
+    const first = await getContextTreeSnapshot({ localPath: testDir }, "7d");
+    const second = await getContextTreeSnapshot({ localPath: testDir }, "7d");
+
+    expect(first.snapshotStatus).toBe("active");
+    expect(first.headCommit).toBe(head);
+    expect(second.headCommit).toBe(head);
+    expect(second.nodes).toEqual(first.nodes);
+
+    const mismatched = await getContextTreeSnapshot({ localPath: testDir, branch: "release" }, "7d");
+    expect(mismatched).toMatchObject({
+      branch: "main",
+      snapshotStatus: "unavailable",
+      contextStatus: {
+        detail: 'Context Tree checkout is on branch "main", but the configured Context Tree branch is "release".',
+        severity: "error",
+      },
+    });
+  });
+
   it("rejects unsafe branch names before remote sync", async () => {
     const snapshot = await getContextTreeSnapshot(
       { repo: "https://github.com/example/tree", branch: "--upload-pack=evil" },
@@ -264,6 +336,67 @@ Body`);
 
     const cached = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
     expect(cached.staleReason).toBe(second.staleReason);
+  });
+
+  it("refreshes an existing managed checkout and reuses the recent sync result", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const cacheRoot = join(testDir, "managed-cache");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Initial Context\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add initial context");
+
+    const first = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+    await writeFile(join(remoteDir, "next.md"), "---\ntitle: Next Context\n---\nNext guidance\n");
+    await commitAllAt(remoteDir, "docs: add next context");
+
+    contextTreeSnapshotTestInternals.clearRemoteSyncState();
+    const refreshed = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+    expect(refreshed).toEqual({ root: first.root, staleReason: null });
+    await expect(readFile(join(refreshed.root, "next.md"), "utf8")).resolves.toContain("Next Context");
+
+    await writeFile(join(remoteDir, "cached.md"), "---\ntitle: Cached Context\n---\nCached guidance\n");
+    await commitAllAt(remoteDir, "docs: add cached context");
+    const cached = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+    expect(cached).toEqual({ root: first.root, staleReason: null });
+    await expect(readFile(join(cached.root, "cached.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("walks nested markdown files while ignoring oversized markdown and skipped directories", async () => {
+    await initRepo();
+    await mkdir(join(testDir, "product", "runtime"), { recursive: true });
+    await mkdir(join(testDir, "node_modules", "ignored"), { recursive: true });
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nRoot guidance\n");
+    await writeFile(join(testDir, "product", "NODE.md"), "---\ntitle: Product\n---\nProduct guidance\n");
+    await writeFile(
+      join(testDir, "product", "runtime", "api.md"),
+      "---\ntitle: Runtime API\nowners: [ada]\n---\nSee [product](/product/NODE.md).\n",
+    );
+    await writeFile(join(testDir, "node_modules", "ignored", "secret.md"), "---\ntitle: Ignored\n---\nIgnored\n");
+    await writeFile(join(testDir, "large.md"), `---\ntitle: Large\n---\n${"x".repeat(513 * 1024)}\n`);
+    await commitAll("docs: add nested context");
+
+    const snapshot = await getContextTreeSnapshot({ localPath: testDir }, "7d");
+
+    expect(snapshot.snapshotStatus).toBe("active");
+    expect(snapshot.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "dir:product", kind: "domain", title: "Product" }),
+        expect.objectContaining({ id: "dir:product/runtime", kind: "subdomain", title: "Runtime" }),
+        expect.objectContaining({
+          id: "file:product/runtime/api.md",
+          affectedContextArea: "product / runtime / api",
+          owners: ["ada"],
+          title: "Runtime API",
+        }),
+      ]),
+    );
+    expect(snapshot.nodes.some((node) => node.sourcePath === "large.md")).toBe(false);
+    expect(snapshot.nodes.some((node) => node.sourcePath === "node_modules/ignored/secret.md")).toBe(false);
+    expect(snapshot.edges).toContainEqual({
+      source: "file:product/runtime/api.md",
+      target: "dir:product",
+      kind: "markdown_link",
+    });
   });
 
   it("caches first-clone failures briefly to avoid repeated clone attempts", async () => {

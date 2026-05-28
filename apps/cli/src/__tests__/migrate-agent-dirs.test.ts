@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateLocalAgentDirs, type NameResolver } from "../core/migrate-agent-dirs.js";
 
 /**
@@ -63,11 +63,24 @@ describe("migrateLocalAgentDirs", () => {
 
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
+    vi.doUnmock("../core/cli-fetch.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
   });
 
   it("returns scanned=0 when the agents dir doesn't exist (first-run clients)", async () => {
     const res = await migrateLocalAgentDirs({ ...dirs({ root }), resolver: mkResolver({}) });
     expect(res).toEqual({ scanned: 0, renamed: 0, skipped: 0, errors: 0 });
+  });
+
+  it("reports an enumeration error when the agents path is not a directory", async () => {
+    const paths = dirs({ root });
+    mkdirSync(join(root, "config"), { recursive: true });
+    writeFileSync(paths.agentsDir, "not a directory");
+
+    const res = await migrateLocalAgentDirs({ ...paths, resolver: mkResolver({}) });
+
+    expect(res).toEqual({ scanned: 0, renamed: 0, skipped: 0, errors: 1 });
   });
 
   it("is a no-op when every local dir already matches the server name", async () => {
@@ -192,5 +205,100 @@ describe("migrateLocalAgentDirs", () => {
     expect(res.errors).toBe(1);
     // All three dirs still present — broken one left for operator to fix.
     expect(readdirSync(dirs({ root }).agentsDir).sort()).toEqual(["alice", "bob", "broken"]);
+  });
+
+  it("skips yaml files without an agentId and ignores broken directory entries", async () => {
+    writeAgentYaml(root, "alice", "uuid-1");
+    const noAgentIdDir = join(root, "config", "agents", "no-agent-id");
+    mkdirSync(noAgentIdDir, { recursive: true });
+    writeFileSync(join(noAgentIdDir, "agent.yaml"), "runtime: claude-code\n");
+    symlinkSync(join(root, "missing-target"), join(root, "config", "agents", "dangling-link"));
+
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+
+    expect(res.scanned).toBe(1);
+    expect(res.errors).toBe(1);
+    expect(readdirSync(dirs({ root }).agentsDir).sort()).toEqual(["alice", "dangling-link", "no-agent-id"]);
+  });
+
+  it("leaves the old session file when the target session already exists", async () => {
+    writeAgentYaml(root, "old-alias", "uuid-1");
+    writeSessionFile(root, "old-alias");
+    writeSessionFile(root, "alice");
+
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+
+    expect(res.renamed).toBe(1);
+    expect(readdirSync(dirs({ root }).sessionsDir).sort()).toEqual(["alice.json", "old-alias.json"]);
+  });
+
+  it("treats orphan detection failures as informational", async () => {
+    writeAgentYaml(root, "alice", "uuid-1");
+    mkdirSync(join(root, "data"), { recursive: true });
+    writeFileSync(dirs({ root }).workspacesDir, "not a directory");
+
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+
+    expect(res).toEqual({ scanned: 1, renamed: 0, skipped: 0, errors: 0 });
+  });
+});
+
+describe("createApiNameResolver", () => {
+  afterEach(() => {
+    vi.doUnmock("../core/cli-fetch.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("loads managed agent names once and reuses the cache", async () => {
+    const cliFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => [
+        { uuid: "uuid-1", name: "alice" },
+        { uuid: "uuid-2", name: null },
+      ],
+    }));
+    vi.doMock("../core/cli-fetch.js", () => ({ cliFetch }));
+    const { createApiNameResolver } = await import("../core/migrate-agent-dirs.js");
+    const getAccessToken = vi.fn(async () => "token-1");
+
+    const resolver = createApiNameResolver("https://hub.example.test", getAccessToken);
+
+    expect(await resolver.resolveName("uuid-1")).toBe("alice");
+    expect(await resolver.resolveName("uuid-2")).toBeNull();
+    expect(await resolver.resolveName("missing")).toBeNull();
+    expect(cliFetch).toHaveBeenCalledTimes(1);
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+    expect(cliFetch).toHaveBeenCalledWith(
+      "https://hub.example.test/api/v1/me/managed-agents",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer token-1" },
+        method: "GET",
+      }),
+    );
+  });
+
+  it("surfaces non-ok managed-agent responses", async () => {
+    vi.doMock("../core/cli-fetch.js", () => ({
+      cliFetch: vi.fn(async () => ({
+        ok: false,
+        status: 403,
+        json: async () => [],
+      })),
+    }));
+    const { createApiNameResolver } = await import("../core/migrate-agent-dirs.js");
+
+    const resolver = createApiNameResolver("https://hub.example.test", async () => "token-1");
+
+    await expect(resolver.resolveName("uuid-1")).rejects.toThrow("/me/managed-agents returned HTTP 403");
   });
 });

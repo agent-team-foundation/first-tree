@@ -109,6 +109,20 @@ describe("runCleanup", () => {
 });
 
 describe("runInstall", () => {
+  it("prints install help without running preflight checks", () => {
+    const lines: string[] = [];
+    const code = runInstall(["--help"], {
+      write: (line) => lines.push(line),
+      checkCommand: () => {
+        throw new Error("should not check commands for help");
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("usage: first-tree github scan install");
+    expect(lines.join("\n")).toContain("--allow-repo");
+  });
+
   it("refuses to install-start without an explicit repo scope", () => {
     const lines: string[] = [];
     const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
@@ -122,6 +136,40 @@ describe("runInstall", () => {
     expect(code).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
     expect(lines.join("\n")).toContain("missing required --allow-repo");
+  });
+
+  it("reports a missing gh binary before touching config or starting", () => {
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
+
+    const code = runInstall(["--allow-repo", "owner/repo"], {
+      githubScanDir: makeHome("install-missing-gh"),
+      write: (line) => lines.push(line),
+      checkCommand: () => false,
+      checkGhAuth: () => true,
+      spawn,
+    });
+
+    expect(code).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("gh CLI is not installed");
+  });
+
+  it("reports missing gh auth before writing config or starting", () => {
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
+
+    const code = runInstall(["--allow-repo", "owner/repo"], {
+      githubScanDir: makeHome("install-missing-auth"),
+      write: (line) => lines.push(line),
+      checkCommand: () => true,
+      checkGhAuth: () => false,
+      spawn,
+    });
+
+    expect(code).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("gh is not authenticated");
   });
 
   it("re-invokes the current CLI for `github-scan start` instead of shelling to PATH", () => {
@@ -147,10 +195,63 @@ describe("runInstall", () => {
     expect(lines.join("\n")).toContain("Daemon started");
   });
 
+  it("keeps an existing config and still starts the daemon", () => {
+    const home = makeHome("install-existing-config");
+    const configPath = join(home, "config.yaml");
+    writeFileSync(configPath, "custom: true\n");
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
+
+    const code = runInstall(["--allow-repo=owner/repo"], {
+      githubScanDir: home,
+      write: (line) => lines.push(line),
+      checkCommand: () => true,
+      checkGhAuth: () => true,
+      spawn,
+      startCommand: {
+        cmd: "first-tree-dev",
+        args: ["github", "scan", "start"],
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain(`Config already exists at ${configPath}`);
+    expect(spawn).toHaveBeenCalledWith("first-tree-dev", ["github", "scan", "start", "--allow-repo=owner/repo"], {
+      stdio: "inherit",
+    });
+  });
+
+  it("warns when daemon start returns a non-zero status", () => {
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 42 })) as unknown as typeof import("node:child_process").spawnSync;
+
+    const code = runInstall(["--allow-repo", "owner/repo"], {
+      githubScanDir: makeHome("install-start-failed"),
+      write: (line) => lines.push(line),
+      checkCommand: () => true,
+      checkGhAuth: () => true,
+      spawn,
+      startCommand: {
+        cmd: "first-tree",
+        args: ["github", "scan", "start"],
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("WARN: daemon start failed");
+  });
+
   it("resolves the current CLI entrypoint for nested self-starts", () => {
     expect(resolveSelfStartCommand("/tmp/github-scan/dist/cli.mjs")).toEqual({
       cmd: process.execPath,
       args: ["/tmp/github-scan/dist/cli.mjs", "github", "scan", "start"],
+    });
+  });
+
+  it("falls back to PATH when the current entrypoint is empty", () => {
+    expect(resolveSelfStartCommand("")).toEqual({
+      cmd: "first-tree",
+      args: ["github", "scan", "start"],
     });
   });
 });

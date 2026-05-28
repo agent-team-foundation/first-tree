@@ -1,6 +1,6 @@
 import type { ContextTreeNode } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { buildOverviewNodes } from "../context.js";
+import { buildOverviewNodes, layoutTree } from "../context.js";
 
 const node = (
   id: string,
@@ -92,5 +92,18 @@ describe("buildOverviewNodes", () => {
       parentId: "members/yzw",
       title: "Show less",
     });
+  });
+
+  it("lays out visible nodes with parent object references", () => {
+    expect(layoutTree([], null, new Map(), new Set())).toEqual([]);
+
+    const layout = layoutTree(nodes, "members/yzw/notebook", new Map([["members/yzw/notebook", 2]]), new Set());
+    const root = layout.find((layoutNode) => layoutNode.id === "root");
+    const child = layout.find((layoutNode) => layoutNode.id === "members");
+    const selected = layout.find((layoutNode) => layoutNode.id === "members/yzw/notebook");
+
+    expect(root).toMatchObject({ parent: null, x: expect.any(Number), y: expect.any(Number) });
+    expect(child?.parent).toMatchObject({ id: "root", parent: null });
+    expect(selected).toMatchObject({ selected: true, selectedPath: true, updateCount: 2 });
   });
 });

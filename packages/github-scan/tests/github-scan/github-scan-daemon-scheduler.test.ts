@@ -190,6 +190,33 @@ describe("Scheduler.shouldSchedule", () => {
     expect(record.lastResult).toBe("skipped");
     expect(record.lastHandledUpdatedAt).toBe(candidate.updatedAt);
   });
+
+  it("logs latestVisibleActivity failures and still schedules the candidate", async () => {
+    const store = new ThreadStore({ runnerHome: makeHome("selfact-warn") });
+    const warnings: string[] = [];
+    const ghClient = {
+      async latestVisibleActivity() {
+        throw new Error("GitHub unavailable");
+      },
+    } as never;
+    const sched = new Scheduler({
+      store,
+      ghClient,
+      identity: { host: "github.com", login: "alice" },
+      pollIntervalSec: 60,
+      nowSec: () => 1_000,
+      logger: { warn: (line) => warnings.push(line) },
+    });
+    const candidate = buildReviewRequestCandidate({
+      repo: "o/r",
+      number: 6,
+      title: "t",
+      webUrl: "u",
+      updatedAt: "2026-04-15T12:00:00Z",
+    });
+    expect(await sched.shouldSchedule(candidate)).toBe(true);
+    expect(warnings[0]).toContain("latestVisibleActivity failed");
+  });
 });
 
 describe("Scheduler.handleCompletion", () => {
@@ -382,6 +409,73 @@ describe("Scheduler.enqueueRecoverableTasks", () => {
     expect(meta.get("status")).toBe("orphaned");
     expect(meta.get("finished_at")).toBe("99");
   });
+
+  it("sorts recovered tasks by priority, freshness, then thread key", () => {
+    const store = new ThreadStore({ runnerHome: makeHome("recovery-sort") });
+    store.writeTaskMetadata("old", {
+      task_id: "old",
+      status: "running",
+      repo: "o/r",
+      thread_key: "/repos/o/r/issues/1",
+      kind: "mention",
+      updated_at: "2026-04-15T12:00:00Z",
+      source: "notification",
+      title: "Old",
+    });
+    store.writeTaskMetadata("new", {
+      task_id: "new",
+      status: "running",
+      repo: "o/r",
+      thread_key: "/repos/o/r/issues/2",
+      kind: "mention",
+      updated_at: "2026-04-15T12:05:00Z",
+      source: "notification",
+      title: "New",
+    });
+    const sched = new Scheduler({
+      store,
+      identity: { host: "github.com", login: "alice" },
+      pollIntervalSec: 60,
+      nowSec: () => 100,
+    });
+    expect(sched.enqueueRecoverableTasks("github.com").map((c) => c.title)).toEqual(["New", "Old"]);
+  });
+});
+
+describe("Scheduler.writeRunningMetadata", () => {
+  it("records optional workspace, mirror, repo, snapshot, and shim paths", () => {
+    const store = new ThreadStore({ runnerHome: makeHome("running-meta") });
+    const sched = new Scheduler({
+      store,
+      identity: { host: "github.com", login: "alice" },
+      pollIntervalSec: 60,
+      nowSec: () => 123,
+    });
+    const candidate = buildReviewRequestCandidate({
+      repo: "o/r",
+      number: 8,
+      title: "t",
+      webUrl: "u",
+      updatedAt: "2026-04-15T12:00:00Z",
+    });
+    sched.writeRunningMetadata({
+      taskId: "task-running",
+      candidate,
+      agent: "codex",
+      workspacePath: "/work",
+      mirrorDir: "/mirror",
+      repoUrl: "https://github.com/o/r",
+      snapshotDir: "/snapshot",
+      ghShimDir: "/shim/bin",
+    });
+    const meta = store.readTaskMetadata("task-running");
+    expect(meta.get("workspace_path")).toBe("/work");
+    expect(meta.get("mirror_dir")).toBe("/mirror");
+    expect(meta.get("repo_url")).toBe("https://github.com/o/r");
+    expect(meta.get("snapshot_dir")).toBe("/snapshot");
+    expect(meta.get("gh_shim_dir")).toBe("/shim/bin");
+    expect(sched.asDispatcherCandidate(candidate).threadKey).toBe(candidate.threadKey);
+  });
 });
 
 describe("operator-repo routing helpers", () => {
@@ -428,5 +522,31 @@ describe("operator-repo routing helpers", () => {
       snapshotDir: dir,
     });
     expect(routed.workspaceRepo).toBe("bingran-you/bingran-you");
+  });
+
+  it("routeWorkspaceCandidate keeps candidates already on the operator repo and ignores non-matching snapshots", () => {
+    const candidate = buildReviewRequestCandidate({
+      repo: "bingran-you/bingran-you",
+      number: 11,
+      title: "t",
+      webUrl: "u",
+      updatedAt: "2026-04-15T12:00:00Z",
+    });
+    expect(
+      routeWorkspaceCandidate({
+        candidate: { ...candidate, workspaceRepo: "bingran-you/bingran-you" },
+        identityLogin: "bingran-you",
+      }).workspaceRepo,
+    ).toBe("bingran-you/bingran-you");
+
+    const dir = makeHome("route-no");
+    writeFileSync(join(dir, "subject.json"), "please review this unrelated pull request");
+    expect(
+      routeWorkspaceCandidate({
+        candidate,
+        identityLogin: "bingran-you",
+        snapshotDir: dir,
+      }).workspaceRepo,
+    ).toBe(candidate.workspaceRepo);
   });
 });

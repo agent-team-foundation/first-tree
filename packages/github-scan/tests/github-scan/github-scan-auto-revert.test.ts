@@ -386,7 +386,7 @@ describe("fetchHumanLabelAppliedAt — pagination (issue #365)", () => {
       state.calls++;
       const url = args[1] ?? "";
       const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = Number.parseInt(match?.[1] ?? "1", 10);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };
     };
@@ -474,7 +474,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
       state.calls++;
       const url = args[1] ?? "";
       const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = Number.parseInt(match?.[1] ?? "1", 10);
       state.requestedPages.push(page);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };
@@ -529,7 +529,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
       const result = stub.run(args);
       const url = args[1] ?? "";
       const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = Number.parseInt(match?.[1] ?? "1", 10);
       if (page >= 3) throw new Error("page 3 should not be fetched (early-exit failed)");
       return result;
     };
@@ -811,7 +811,7 @@ describe("fetchPrCommits — pagination (issue #383)", () => {
       state.calls++;
       const url = args[1] ?? "";
       const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = Number.parseInt(match?.[1] ?? "1", 10);
       state.requestedPages.push(page);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };
