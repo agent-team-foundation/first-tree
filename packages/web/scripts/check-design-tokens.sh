@@ -76,6 +76,33 @@ if [ -n "$hits" ]; then
   report "Tailwind default text-size class found (use text-eyebrow/caption/label/body/subtitle/title):" "$hits"
 fi
 
+# 7. Undefined token references — every literal `var(--x)` must resolve to a
+#    token defined in index.css (the source of truth) or set inline in a
+#    component style object (e.g. `"--foo": value`). Catches ghost tokens like
+#    `var(--surface-1)` that silently fail at runtime. Dynamic refs such as
+#    `var(--state-${x})` are skipped: the closing-paren match never matches them.
+defined_file=$(mktemp)
+{
+  # tokens declared in index.css (:root / .dark / @theme / .landing-marketing)
+  grep -hoE -e '--[a-zA-Z0-9_-]+[[:space:]]*:' "$SRC/index.css" 2>/dev/null || true
+  # tokens set inline in components, e.g. style={{ "--foo": value }} or the
+  # computed-key form `["--foo" as string]: value` — match any quoted token
+  # literal in source so inline custom properties count as defined.
+  grep -rhoE --include="*.tsx" --include="*.ts" -e '"--[a-zA-Z0-9_-]+"' "$SRC" 2>/dev/null || true
+} | sed -E 's/"//g; s/[[:space:]]*:$//' | sort -u > "$defined_file"
+
+undef=""
+while IFS= read -r ref; do
+  [ -z "$ref" ] && continue
+  grep -qxF -e "$ref" "$defined_file" || undef="${undef}
+  ${ref}"
+done < <(grep -rhoE --include="*.tsx" --include="*.ts" --include="*.css" --exclude-dir=__tests__ \
+  -e 'var\(--[a-zA-Z0-9_-]+\)' "$SRC" 2>/dev/null | sed -E 's/^var\(//; s/\)$//' | sort -u)
+rm -f "$defined_file"
+if [ -n "$undef" ]; then
+  report "Reference to undefined CSS variable(s) — define in index.css or fix the name:" "$undef"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo "✓ design-token guardrails clean"
   exit 0
