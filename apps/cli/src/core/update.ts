@@ -21,13 +21,10 @@ export const PACKAGE_NAME = channelConfig.packageName;
 
 /**
  * Pick the `npm` binary to invoke for self-update. Background service units
- * hard-code a minimal PATH (/usr/local/bin, /opt/homebrew/bin, /usr/bin,
- * /bin) that misses nvm / asdf / Volta toolchain directories — the client
- * launches fine from an absolute path resolved at install time, but a plain
- * `spawn("npm")` then ENOENTs. Node and npm always ship side-by-side, so
- * `dirname(execPath)/npm` is the most reliable fallback across those
- * managers; if the sibling is missing (e.g. corporate custom layout) we
- * fall back to PATH lookup.
+ * prepend the current Node directory to PATH, but also prefer the sibling
+ * npm explicitly so self-update stays aligned with the Node toolchain that
+ * launched the daemon. If that sibling is missing (e.g. corporate custom
+ * layout), fall back to PATH lookup.
  */
 function resolveNpmCommand(): string {
   const binName = process.platform === "win32" ? "npm.cmd" : "npm";
