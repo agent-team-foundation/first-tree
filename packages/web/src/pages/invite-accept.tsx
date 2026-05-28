@@ -20,6 +20,10 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
  * The page is team-centric on purpose — invite links are shareable URLs that
  * may reach the recipient via channels we don't track, so identifying "who
  * invited you" can mislead. The team is the load-bearing identity.
+ *
+ * The page owns data + side effects; the three visual states (skeleton, error,
+ * and the join card) are extracted as exported presentational components so the
+ * DEV onboarding preview can render every state with fixtures.
  */
 export function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
@@ -64,9 +68,24 @@ export function InviteAcceptPage() {
     })();
   }, [isAuthenticated]);
 
-  if (!token) return <ErrorScreen message="Bad invitation URL" />;
-  if (error) return <ErrorScreen message="This invitation is no longer valid" />;
-  if (!preview) return <SkeletonScreen />;
+  if (!token)
+    return (
+      <InviteAcceptShell>
+        <InviteAcceptError message="Bad invitation URL" />
+      </InviteAcceptShell>
+    );
+  if (error)
+    return (
+      <InviteAcceptShell>
+        <InviteAcceptError message="This invitation is no longer valid" />
+      </InviteAcceptShell>
+    );
+  if (!preview)
+    return (
+      <InviteAcceptShell>
+        <InviteAcceptSkeleton />
+      </InviteAcceptShell>
+    );
 
   const handleJoin = async () => {
     setBusy(true);
@@ -88,69 +107,23 @@ export function InviteAcceptPage() {
   };
 
   const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
-  const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
-  const expiresHint = formatExpiresHint(preview.expiresAt);
 
   return (
-    <PageShell>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-title">
-            You're invited to join
-            <br />
-            {preview.organizationDisplayName}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {switchingTeam && (
-            <div
-              className="flex items-start gap-2 rounded-md p-3 text-label"
-              style={{ background: "var(--bg-sunken)", color: "var(--fg-2)" }}
-            >
-              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                You'll switch from <span className="font-medium">{currentTeamName}</span> to{" "}
-                <span className="font-medium">{preview.organizationDisplayName}</span>.
-              </span>
-            </div>
-          )}
-          {isAuthenticated ? (
-            <Button className="w-full" disabled={busy} onClick={handleJoin}>
-              {busy ? "Joining…" : `Join ${preview.organizationDisplayName}`}
-            </Button>
-          ) : (
-            <Button asChild className="w-full">
-              <a href={continueOauthHref}>
-                <Github className="h-4 w-4" />
-                Continue with GitHub to join
-              </a>
-            </Button>
-          )}
-          {expiresHint && (
-            <p
-              className="text-center text-label"
-              style={{ color: expiresHint.urgent ? "var(--destructive)" : "var(--fg-3)" }}
-            >
-              {expiresHint.text}
-            </p>
-          )}
-          <p className="text-center text-label text-muted-foreground">
-            By continuing you agree to our{" "}
-            <a href="/terms" className="underline underline-offset-2 transition-colors hover:text-foreground">
-              Terms
-            </a>{" "}
-            ·{" "}
-            <a href="/privacy" className="underline underline-offset-2 transition-colors hover:text-foreground">
-              Privacy
-            </a>
-          </p>
-        </CardContent>
-      </Card>
-    </PageShell>
+    <InviteAcceptShell>
+      <InviteAcceptCard
+        preview={preview}
+        isAuthenticated={isAuthenticated}
+        currentTeamName={currentTeamName}
+        busy={busy}
+        onJoin={handleJoin}
+        oauthHref={continueOauthHref}
+      />
+    </InviteAcceptShell>
   );
 }
 
-function PageShell({ children }: { children: React.ReactNode }) {
+/** Full-screen chrome for the invite page: a "back to home" header over the centered card. */
+export function InviteAcceptShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <header className="px-4 py-3">
@@ -167,46 +140,120 @@ function PageShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SkeletonScreen() {
+/** The join card. Pure presentational — the page wires `onJoin` / auth state in. */
+export function InviteAcceptCard({
+  preview,
+  isAuthenticated,
+  currentTeamName,
+  busy,
+  onJoin,
+  oauthHref,
+}: {
+  preview: InvitationPreview;
+  isAuthenticated: boolean;
+  currentTeamName: string | null;
+  busy: boolean;
+  onJoin: () => void;
+  oauthHref: string;
+}) {
+  const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
+  const expiresHint = formatExpiresHint(preview.expiresAt);
+
   return (
-    <PageShell>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <div className="mx-auto h-5 w-2/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
-          <div className="mx-auto mt-2 h-5 w-1/2 rounded-md" style={{ background: "var(--bg-sunken)" }} />
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="h-9 w-full rounded-md" style={{ background: "var(--bg-sunken)" }} />
-          <div className="mx-auto h-3 w-1/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
-        </CardContent>
-      </Card>
-    </PageShell>
+    <Card className="w-full max-w-sm">
+      <CardHeader className="text-center">
+        <CardTitle className="text-title">
+          You're invited to join
+          <br />
+          {preview.organizationDisplayName}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {switchingTeam && (
+          <div
+            className="flex items-start gap-2 rounded-md p-3 text-label"
+            style={{ background: "var(--bg-sunken)", color: "var(--fg-2)" }}
+          >
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              You'll switch from <span className="font-medium">{currentTeamName}</span> to{" "}
+              <span className="font-medium">{preview.organizationDisplayName}</span>.
+            </span>
+          </div>
+        )}
+        {isAuthenticated ? (
+          <Button className="w-full" disabled={busy} onClick={onJoin}>
+            {busy ? "Joining…" : `Join ${preview.organizationDisplayName}`}
+          </Button>
+        ) : (
+          <Button asChild className="w-full">
+            <a href={oauthHref}>
+              <Github className="h-4 w-4" />
+              Continue with GitHub to join
+            </a>
+          </Button>
+        )}
+        {expiresHint && (
+          <p
+            className="text-center text-label"
+            style={{ color: expiresHint.urgent ? "var(--destructive)" : "var(--fg-3)" }}
+          >
+            {expiresHint.text}
+          </p>
+        )}
+        <p className="text-center text-label text-muted-foreground">
+          By continuing you agree to our{" "}
+          <a href="/terms" className="underline underline-offset-2 transition-colors hover:text-foreground">
+            Terms
+          </a>{" "}
+          ·{" "}
+          <a href="/privacy" className="underline underline-offset-2 transition-colors hover:text-foreground">
+            Privacy
+          </a>
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
-function ErrorScreen({ message }: { message: string }) {
+/** Loading shimmer shown while the invite preview is fetched. */
+export function InviteAcceptSkeleton() {
   return (
-    <PageShell>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <div className="mb-2 flex justify-center text-fg-3">
-            <TriangleAlert className="h-6 w-6" />
-          </div>
-          <CardTitle className="text-title">{message}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-center text-body text-muted-foreground">
-            It may have expired or been revoked. Ask the team admin for a fresh link.
-          </p>
-          <Button asChild variant="outline" className="w-full">
-            <Link to="/">
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to home
-            </Link>
-          </Button>
-        </CardContent>
-      </Card>
-    </PageShell>
+    <Card className="w-full max-w-sm">
+      <CardHeader className="text-center">
+        <div className="mx-auto h-5 w-2/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        <div className="mx-auto mt-2 h-5 w-1/2 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="h-9 w-full rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        <div className="mx-auto h-3 w-1/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Terminal "invitation invalid" card with a back-to-home action. */
+export function InviteAcceptError({ message }: { message: string }) {
+  return (
+    <Card className="w-full max-w-sm">
+      <CardHeader className="text-center">
+        <div className="mb-2 flex justify-center text-fg-3">
+          <TriangleAlert className="h-6 w-6" />
+        </div>
+        <CardTitle className="text-title">{message}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-center text-body text-muted-foreground">
+          It may have expired or been revoked. Ask the team admin for a fresh link.
+        </p>
+        <Button asChild variant="outline" className="w-full">
+          <Link to="/">
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to home
+          </Link>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -216,7 +263,7 @@ function ErrorScreen({ message }: { message: string }) {
  * Marked `urgent` when under 24 hours so the UI can render it in the
  * destructive color.
  */
-function formatExpiresHint(expiresAt: string | null): { text: string; urgent: boolean } | null {
+export function formatExpiresHint(expiresAt: string | null): { text: string; urgent: boolean } | null {
   if (!expiresAt) return null;
   const target = new Date(expiresAt).getTime();
   if (!Number.isFinite(target)) return null;

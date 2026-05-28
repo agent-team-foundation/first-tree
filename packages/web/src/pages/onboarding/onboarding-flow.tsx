@@ -62,7 +62,11 @@ export type OnboardingFlowValue = {
   finishLater: () => Promise<void>;
 };
 
-const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(null);
+// Exported so the DEV-only onboarding preview page (pages/onboarding-preview.tsx)
+// can inject fixture flow values and render the real step components without the
+// live provider's API-backed hooks. Production code uses OnboardingFlowProvider /
+// useOnboardingFlow below and never touches the raw context.
+export const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(null);
 
 // Remember the active step for the tab's lifetime so a full-page round-trip
 // (notably the GitHub App install redirect to github.com and back) returns
