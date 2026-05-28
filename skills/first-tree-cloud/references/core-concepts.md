@@ -15,7 +15,7 @@ Use this distinction consistently when explaining the system or choosing where a
 
 - `packages/server` — Fastify API server, admin APIs, agent APIs, database access, adapters, notifications. Operated centrally as the SaaS Hub.
 - `packages/client` — Agent SDK, client runtime, WebSocket connection management, workspace/session handling.
-- `apps/cli` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
+- `apps/cli` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
 - `packages/shared` — Zod schemas, TypeScript types, and the schema-driven config system shared across packages.
 - `packages/web` — React admin dashboard served by the server.
 
@@ -47,7 +47,7 @@ The command package depends on the client package; it does not invoke server boo
 
 - Clients sign in once via `first-tree login <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
 - Every subsequent CLI call runs through `ensureFreshAccessToken()`, which auto-refreshes 30s before expiry via `/api/v1/auth/refresh`.
-- Admin actions, agent-owner actions, Feishu binding, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
+- Admin actions, agent-owner actions, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
 - There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` env vars and `agent token bootstrap` command are gone.
 
 ### Messages are immutable and time-ordered
@@ -98,7 +98,7 @@ When a handler starts, the client runtime bootstraps a per-chat workspace and wr
 
 `agent create` is intentionally higher-level than the rest of the CLI.
 
-- It creates the agent via Admin API, optionally creates a personal assistant, optionally binds a Feishu bot, and saves the local alias — all in one step.
+- It creates the agent via Admin API, optionally creates a personal assistant, and saves the local alias — all in one step.
 - It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `login <token>`.
 - `--check` performs a dry-run that surfaces exactly which fields are missing, using the same check logic as the real path.
 

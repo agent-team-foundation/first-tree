@@ -2,11 +2,9 @@ import { z } from "zod";
 
 /**
  * `chats.metadata` is `jsonb` at the DB layer. Without a typed contract every
- * writer was free to invent their own keys, so a GitHub webhook writing
- * `{ source: "github", entityKey: "..." }` and a Feishu adapter writing
- * `{ source: "feishu", externalChannelId: "..." }` could collide on shared
- * keys (`source`, `title`). The discriminated union below pins both writers
- * to a single shape and lets TypeScript narrow on `metadata.source`.
+ * writer was free to invent their own keys, so writers could collide on
+ * shared keys (`source`, `title`). The discriminated union below pins
+ * writers to a single shape and lets TypeScript narrow on `metadata.source`.
  *
  * Add new variants here; do not extend with free-form `Record<string, unknown>`.
  */
@@ -36,13 +34,12 @@ export const githubChatMetadataSchema = z.object({
 });
 export type GithubChatMetadata = z.infer<typeof githubChatMetadataSchema>;
 
-export const feishuChatMetadataSchema = z.object({
-  source: z.literal("feishu"),
-  externalChannelId: z.string().min(1),
-});
-export type FeishuChatMetadata = z.infer<typeof feishuChatMetadataSchema>;
-
-export const chatMetadataSchema = z.discriminatedUnion("source", [githubChatMetadataSchema, feishuChatMetadataSchema]);
+/**
+ * Discriminated union of typed chat-metadata shapes. Currently `github` is
+ * the only variant; the union is kept so future writers can add new
+ * `source` branches without churning the consumer call sites.
+ */
+export const chatMetadataSchema = z.discriminatedUnion("source", [githubChatMetadataSchema]);
 export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
 
 /**
@@ -69,7 +66,6 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
  *    here so the default tab can't accidentally hide a chat.
  *  - `github` — projected from `{ source: "github", entityType: ... }`.
  *    Sub-type lives on `MeChatRow.entityType`.
- *  - `feishu` — projected from `{ source: "feishu", ... }`.
  *
  * The projection itself lives next to the WHERE clause that consumes
  * it (`packages/server/src/services/me-chat.ts::chatSourceSqlExpression`)
@@ -78,6 +74,6 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
  * then extend this enum, then both the SQL CASE and the
  * `sourceFilterSql` switch.
  */
-export const CHAT_SOURCES = ["manual", "github", "feishu"] as const;
+export const CHAT_SOURCES = ["manual", "github"] as const;
 export const chatSourceSchema = z.enum(CHAT_SOURCES);
 export type ChatSource = z.infer<typeof chatSourceSchema>;

@@ -32,7 +32,6 @@
     "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.2.0",
     "@first-tree/shared": "workspace:*",
-    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@opentelemetry/api": "^1.9.0",
     "@pydantic/logfire-node": "^0.14.0",
     "bcrypt": "^6.0.0",

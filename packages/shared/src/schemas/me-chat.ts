@@ -190,9 +190,9 @@ export const meChatRowSchema = z.object({
   type: z.string(),
   membershipKind: meChatMembershipKindSchema,
   /**
-   * Coarse-grained origin — `manual` / `github` / `feishu`. Mirrors the
+   * Coarse-grained origin — `manual` / `github`. Mirrors the
    * projection driven by `chatSourceSqlExpression` in
-   * `services/me-chat.ts`. Drives the rail's filter popover (3-way) and
+   * `services/me-chat.ts`. Drives the rail's filter popover and
    * the Group-by-Source bucket assignment.
    *
    * Defaulted to `"manual"` for parse-side defence-in-depth: this
@@ -209,8 +209,7 @@ export const meChatRowSchema = z.object({
    * in which case it's one of `pull_request | issue | discussion | commit`
    * — drives the per-row leading icon so users still get a PR vs Issue
    * vs Commit glyph even though the filter popover collapses every
-   * GitHub entity into a single "GitHub" origin. Null for `manual` and
-   * `feishu` rows.
+   * GitHub entity into a single "GitHub" origin. Null for `manual` rows.
    *
    * Server projects this straight from `chats.metadata->>'entityType'`
    * (no DB migration). Adding new GitHub entity types means extending

@@ -1202,7 +1202,7 @@ export function ChatView({
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
-    // Slack/Discord/Feishu. This avoids false positives like npm scoped
+    // Slack/Discord. This avoids false positives like npm scoped
     // package names (`@scope/pkg`) or quoted handles in the body. The
     // `enforceGroupMention` constraint (group chat must address at least
     // one member) is reflected via `requiresMention` + `draftMentions`
@@ -2972,7 +2972,7 @@ export function ChatView({
                               // Insert `@` at the cursor (or replace the current selection)
                               // and re-focus. The mention autocomplete will pick it up
                               // from the resulting `value`/`cursor` state — same path as
-                              // typing `@` directly. Mirrors the Feishu / Slack
+                              // typing `@` directly. Mirrors the Slack
                               // explicit-button affordance for users who don't know the
                               // keyboard trick.
                               const el = textareaRef.current;

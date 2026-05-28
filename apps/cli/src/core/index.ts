@@ -42,8 +42,6 @@ export {
   printResults,
   reconcileAgentConfigs,
 } from "./doctor.js";
-// Feishu
-export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";

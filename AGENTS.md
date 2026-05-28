@@ -86,7 +86,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **Agent identity is managed by the server:** Agents are created, updated, suspended, and deleted via the Admin API. Agent profile (markdown self-description) is stored in the `agents.profile` column. Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
 
-**Adapter 1:1 identity binding:** External IM users (Feishu/Slack) map to human agents. Adapter credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
+**Adapter credentials:** Adapter (e.g. Kael) bot credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
 
 **UUID v7 as Message ID:** Time-ordered; messages are immutable after creation.
 

@@ -4,11 +4,11 @@ import { adapterAttrs, agentAttrs, chatAttrs, inboxAttrs, messageAttrs } from ".
 describe("span-attrs helpers", () => {
   describe("messageAttrs", () => {
     it("includes all provided fields with standard attribute names", () => {
-      const out = messageAttrs({ id: "m1", chatId: "c1", source: "feishu", senderAgentId: "a1" });
+      const out = messageAttrs({ id: "m1", chatId: "c1", source: "kael", senderAgentId: "a1" });
       expect(out).toEqual({
         "message.id": "m1",
         "chat.id": "c1",
-        "message.source": "feishu",
+        "message.source": "kael",
         "agent.id": "a1",
       });
     });
@@ -77,10 +77,10 @@ describe("span-attrs helpers", () => {
 
   describe("adapterAttrs", () => {
     it("stringifies numeric adapter ids", () => {
-      const out = adapterAttrs({ id: 7, platform: "feishu", externalChatId: "oc_abc", agentId: "a1" });
+      const out = adapterAttrs({ id: 7, platform: "kael", externalChatId: "oc_abc", agentId: "a1" });
       expect(out).toEqual({
         "adapter.id": "7",
-        "adapter.platform": "feishu",
+        "adapter.platform": "kael",
         "adapter.external_chat_id": "oc_abc",
         "agent.id": "a1",
       });

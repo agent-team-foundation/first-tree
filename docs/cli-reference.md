@@ -215,9 +215,7 @@ first-tree agent config
 
 ```
 first-tree agent bind
-├── client <agentName> --client-id <id>             # first-time bind only; id is immutable once set
-├── bot --platform feishu --app-id <id> --app-secret <s> --agent <name>
-└── user <humanAgentId> --platform feishu --feishu-id <ou_xxx>
+└── client <agentName> --client-id <id>             # first-time bind only; id is immutable once set
 ```
 
 ### agent workspace
@@ -529,13 +527,6 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_OTEL_CAPTURE_CLIENT_IP` | Capture client IP attribute on traces. | `false` |
 
 See [observability.md](observability.md) for the full config reference, backend cheat sheet, and troubleshooting recipes.
-
-### Feishu (used by `agent bind bot`)
-
-| Variable | Purpose |
-|---|---|
-| `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--app-id`). |
-| `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--app-secret`). |
 
 ---
 

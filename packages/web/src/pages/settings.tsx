@@ -32,7 +32,7 @@ import { cn } from "../lib/utils.js";
  *                   entry point — placed first)
  *   Team          — org-scoped Identity / Context Tree / Source repos
  *   GitHub        — admin-only platform integration
- *   Messaging     — IM bridges (Feishu / Slack)
+ *   Messaging     — Kael adapter bindings
  *   Onboarding    — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */

@@ -1,8 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { findOrCreateChatForChannel } from "../services/adapter-mapping.js";
 import { createAgent } from "../services/agent.js";
 import { addParticipant, createChat, ensureParticipant } from "../services/chat.js";
 import { createMeChat } from "../services/me-chat.js";
@@ -166,30 +164,5 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
     await ensureParticipant(app.db, chat.id, late.uuid);
 
     expect(await loadMode(app, chat.id, late.uuid)).toBe("mention_only");
-  });
-
-  it("findOrCreateChatForChannel / IM adapter pair (bot + human sender) → both 'mention_only'", async () => {
-    const app = getApp();
-    const botCtx = await createTestAgent(app, { type: "agent" });
-    const senderUuid = crypto.randomUUID();
-    await app.db.insert(agents).values({
-      uuid: senderUuid,
-      name: `inv-im-sender-${crypto.randomUUID().slice(0, 6)}`,
-      organizationId: botCtx.organizationId,
-      type: "human",
-      displayName: "IM Sender",
-      inboxId: `inbox_${senderUuid}`,
-      managerId: botCtx.memberId,
-    });
-    const chatId = await findOrCreateChatForChannel(app.db, {
-      platform: "feishu",
-      externalChannelId: `oc-inv-${crypto.randomUUID().slice(0, 8)}`,
-      chatType: "p2p",
-      botAgentId: botCtx.agent.uuid,
-      senderAgentId: senderUuid,
-    });
-
-    expect(await loadMode(app, chatId, botCtx.agent.uuid)).toBe("mention_only");
-    expect(await loadMode(app, chatId, senderUuid)).toBe("mention_only");
   });
 });

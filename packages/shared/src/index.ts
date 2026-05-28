@@ -21,36 +21,19 @@ export {
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
-  ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
   ADAPTER_STATUSES,
-  type AdapterBindMethod,
   type AdapterConfig,
   type AdapterPlatform,
   type AdapterStatus,
-  adapterBindMethodSchema,
   adapterConfigSchema,
   adapterPlatformSchema,
   adapterStatusSchema,
   type CreateAdapterConfig,
   createAdapterConfigSchema,
-  type SelfServiceFeishuBot,
-  selfServiceFeishuBotSchema,
   type UpdateAdapterConfig,
   updateAdapterConfigSchema,
 } from "./schemas/adapter.js";
-export {
-  type AdapterMapping,
-  adapterMappingSchema,
-  type CreateAdapterMapping,
-  createAdapterMappingSchema,
-  type DelegateFeishuUser,
-  delegateFeishuUserSchema,
-} from "./schemas/adapter-mapping.js";
-export {
-  type AdapterBotStatus,
-  adapterBotStatusSchema,
-} from "./schemas/adapter-status.js";
 export {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
@@ -219,8 +202,6 @@ export {
   type ChatSource,
   chatMetadataSchema,
   chatSourceSchema,
-  type FeishuChatMetadata,
-  feishuChatMetadataSchema,
   GITHUB_ENTITY_TYPES,
   type GithubChatMetadata,
   type GithubEntityType,

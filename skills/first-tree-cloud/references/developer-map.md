@@ -5,7 +5,7 @@
 - `AGENTS.md` — architecture rules, conventions, package map, development workflow.
 - `README.md` — product framing, quick start, top-level documentation links.
 - `docs/cli-reference.md` — public command and environment variable reference.
-- `docs/onboarding-guide.md` — end-to-end onboarding flow, including agent claim + Feishu binding.
+- `docs/onboarding-guide.md` — end-to-end onboarding flow, including agent claim.
 
 ## CLI Source Map
 
@@ -41,7 +41,6 @@ own file; helpers shared across namespaces live in `commands/_shared/`.
 - `apps/cli/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`, plus the `startClientService` / `stopClientService` / `restartClientService` thin wrappers. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`. The launchd plist / systemd unit templates spawn `daemon start --no-interactive`.
 - `apps/cli/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `daemon start` and `login`'s inline-run fallback. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
 - `apps/cli/src/core/doctor.ts` — readiness checks used by `daemon doctor` and the top-level `doctor`: `checkNodeVersion`, `checkClientConfig`, `checkServerReachable`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`, plus `reconcileAgentConfigs` (server-aware variant).
-- `apps/cli/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
 - `apps/cli/src/core/agent-prune.ts` — `findStaleAliases`, `removeLocalAgent`, `formatStaleReason`. Used by `agent prune` and by `_shared/account-transfer.ts`.
 - `apps/cli/src/core/prompt.ts` — `isInteractive`, `promptAddAgent`, `promptMissingFields` (schema-driven prompting).
 - `apps/cli/src/core/output.ts` — `print.{result, fail, status, check, blank, line}` for consistent stderr / stdout output.

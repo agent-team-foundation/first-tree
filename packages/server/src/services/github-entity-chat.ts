@@ -304,10 +304,8 @@ async function createEntityChat(
   eventType: string,
   action: string,
 ): Promise<{ id: string }> {
-  // Symmetric with the feishu raw-INSERT path in
-  // `services/adapter-mapping.ts::findOrCreateChatForChannel`: parse the
-  // metadata via the shared discriminated union BEFORE handing it to
-  // `createChat`. TS narrowing already catches a malformed literal at
+  // Parse the metadata via the shared discriminated union BEFORE handing
+  // it to `createChat`. TS narrowing already catches a malformed literal at
   // compile time, so the runtime cost here is the defensive bound against
   // a future refactor accidentally widening the inferred type back to
   // `Record<string, unknown>` and letting a colliding key slip through.

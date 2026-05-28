@@ -34,7 +34,7 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - `config show/set/get` to read or write `client.yaml`, instead of hand-editing it
 3. **Read the canonical repo docs when the task becomes specialized.**
    - `docs/cli-reference.md` — every flag and env var in one place
-   - `docs/onboarding-guide.md` — full onboarding walkthrough, including agent claim + Feishu binding
+   - `docs/onboarding-guide.md` — full onboarding walkthrough, including agent claim
 4. **On a fresh machine, verify prerequisites before proposing a flow.**
    - Node.js `>= 22.16`
    - Install: `npm install -g first-tree`
@@ -150,7 +150,7 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 
 - For new or changed CLI behavior, inspect:
   - `apps/cli/src/commands/*.ts` — command registration and argument shape.
-  - `apps/cli/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, Feishu, etc.).
+  - `apps/cli/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, etc.).
   - `packages/shared/src/config/*.ts` — if flags, env vars, or schema change.
   - `docs/cli-reference.md` and `docs/onboarding-guide.md` — whenever user-facing behavior changes.
 - Keep command modules thin. Reusable business logic belongs in `apps/cli/src/core/`. Re-export new reusable functions from `apps/cli/src/core/index.ts` and `apps/cli/src/index.ts` when external callers should be able to import them.

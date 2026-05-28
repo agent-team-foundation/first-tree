@@ -12,14 +12,11 @@ import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
-import { adapterMappingRoutes } from "./api/adapter-mappings.js";
 import { adapterRoutes } from "./api/adapters.js";
 import { agentAttentionRoutes } from "./api/agent/attention.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
-import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
-import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes } from "./api/agent/messages.js";
@@ -42,8 +39,6 @@ import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
-import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
-import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
 import { orgAdapterRoutes } from "./api/orgs/adapters.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
@@ -78,7 +73,6 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
-import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -96,7 +90,6 @@ import "./types.js";
 export type AppContext = {
   notifier: Notifier;
   backgroundTasks: BackgroundTasks;
-  adapterManager: AdapterManager;
   kaelRuntime: KaelRuntime | undefined;
 };
 
@@ -455,8 +448,8 @@ export async function buildApp(config: Config) {
 
   // Root-level health checks for container orchestration (outside /api/v1).
   // `/healthz` checks process + DB reachability (used by Docker HEALTHCHECK).
-  // `/readyz` checks full readiness — all bootstrap stages done + all adapter
-  // bots connected. See docs/server-bootstrap-resilience-design.md §3 (T6).
+  // `/readyz` checks full readiness — all bootstrap stages done.
+  // See docs/server-bootstrap-resilience-design.md §3 (T6).
   await app.register(healthzRoutes);
   await app.register(readyzRoutes);
 
@@ -510,8 +503,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgAgentRoutes, { prefix: "/agents" });
           await scope.register(orgChatRoutes, { prefix: "/chats" });
           await scope.register(orgAdapterRoutes, { prefix: "/adapters" });
-          await scope.register(orgAdapterMappingRoutes, { prefix: "/adapter-mappings" });
-          await scope.register(orgAdapterStatusRoutes, { prefix: "/adapters/status" });
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
@@ -537,7 +528,6 @@ export async function buildApp(config: Config) {
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(adapterRoutes, { prefix: "/adapters" });
-          await scope.register(adapterMappingRoutes, { prefix: "/adapter-mappings" });
           await scope.register(clientRoutes, { prefix: "/clients" });
         }),
         { prefix: "" },
@@ -553,9 +543,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentAttentionRoutes, { prefix: "/attention" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
-
-          await scope.register(agentFeishuBotRoutes);
-          await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });
         }),
         { prefix: "/agent" },
       );
@@ -623,10 +610,6 @@ export async function buildApp(config: Config) {
   });
   app.decorate("configService", configService);
 
-  // Adapter manager — decorated so admin routes can trigger reload
-  const adapterManager = createAdapterManager(db, config.secrets.encryptionKey, app.log, notifier);
-  app.decorate("adapterManager", adapterManager);
-
   // Kael runtime — server-embedded forwarding to Kael API
   const contextTreeDir = join(defaultDataDir(), "context-tree");
   const kaelRuntime = config.kael?.endpoint
@@ -642,7 +625,7 @@ export async function buildApp(config: Config) {
     : undefined;
 
   // Background tasks
-  const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager, kaelRuntime);
+  const backgroundTasks = createBackgroundTasks(app, config.instanceId, kaelRuntime);
 
   // NC1 pulse aggregator — 32-bucket rolling window over runtime state
   // transitions. Broadcasts a per-org `pulse:tick` frame every 5s to admin
@@ -654,7 +637,6 @@ export async function buildApp(config: Config) {
   const hotReloadLog = createLogger("HotReload");
   notifier.onConfigChange((configType) => {
     if (configType === "adapter_configs") {
-      adapterManager.reload().catch((err) => hotReloadLog.error({ err }, "adapter hot-reload failed (PG NOTIFY)"));
       kaelRuntime?.reload().catch((err) => hotReloadLog.error({ err }, "kael hot-reload failed (PG NOTIFY)"));
     }
   });
@@ -670,7 +652,7 @@ export async function buildApp(config: Config) {
   });
 
   // Start notifier and background tasks on server start.
-  // Adapter / kael initial reload happens inside backgroundTasks.start() as a
+  // Kael initial reload happens inside backgroundTasks.start() as a
   // fire-and-forget task so app.listen() is not blocked by remote handshakes —
   // see docs/server-bootstrap-resilience-design.md (T1/T2).
   app.addHook("onReady", async () => {
@@ -687,7 +669,6 @@ export async function buildApp(config: Config) {
     commandVersionPoller.stop();
     pulseAggregator.stop();
     backgroundTasks.stop();
-    adapterManager.shutdown();
     kaelRuntime?.shutdown();
     await notifier.stop();
     await listenClient.end();
