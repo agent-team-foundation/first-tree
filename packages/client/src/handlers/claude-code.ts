@@ -224,6 +224,21 @@ type ResultMessage = {
   total_cost_usd?: number;
   num_turns?: number;
   session_id?: string;
+  // Per-model token usage for this turn. Anthropic's Claude Agent SDK populates
+  // this on every ResultMessage (success and error subtypes). A single turn can
+  // span multiple models (e.g. fast-mode), so we emit one `token_usage` event
+  // per entry. Keys are model identifiers (e.g. "claude-opus-4-7"). Older SDK
+  // versions may omit the field entirely — treat absence as "no usage to emit"
+  // rather than an error.
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
+  >;
 };
 
 function isResultMessage(message: unknown): message is ResultMessage {
@@ -262,6 +277,41 @@ function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | nul
     return { rawMessage: m.error };
   }
   return null;
+}
+
+/**
+ * Emit one `token_usage` event per (model) entry in the result's `modelUsage`.
+ * The SDK lumps cache-creation tokens under their own field, but the wire
+ * schema folds them into `inputTokens` because they bill as input. Best-effort:
+ * a missing/empty `modelUsage` is silently skipped (older SDKs and some error
+ * subtypes don't populate it). Per-entry emit failures are swallowed so token
+ * accounting never blocks the turn close that follows.
+ */
+function emitTokenUsageFromResult(message: ResultMessage, sessionCtx: SessionContext): void {
+  const usage = message.modelUsage;
+  if (!usage) return;
+  for (const [model, m] of Object.entries(usage)) {
+    if (!m) continue;
+    const cacheCreation = m.cacheCreationInputTokens ?? 0;
+    const cachedRead = m.cacheReadInputTokens ?? 0;
+    const inputTokens = (m.inputTokens ?? 0) + cacheCreation;
+    const outputTokens = m.outputTokens ?? 0;
+    if (inputTokens === 0 && cachedRead === 0 && outputTokens === 0) continue;
+    try {
+      sessionCtx.emitEvent({
+        kind: "token_usage",
+        payload: {
+          provider: "claude-code",
+          model,
+          inputTokens,
+          cachedInputTokens: cachedRead,
+          outputTokens,
+        },
+      });
+    } catch (err) {
+      sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 function extractToolResultText(content: unknown): string {
@@ -891,6 +941,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             }
 
             if (isResultMessage(message)) {
+              emitTokenUsageFromResult(message, sessionCtx);
               if (message.subtype === "success") {
                 retryCount = 0;
                 // Auto-bridge: forward result text back to the chat and close
