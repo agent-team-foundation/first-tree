@@ -34,11 +34,13 @@ import { cn } from "../../../lib/utils.js";
  *     "ask my PA something" case is zero-step. Stable across clicks —
  *     no runtime-presence MRU here, see issue 342.
  *
- *   - Textarea carries the message content. For 1:1 (single chip), no
- *     `@` is required — server treats the chat as direct and skips
- *     `enforceGroupMention`. For groups (2+ chips) the body must
- *     explicitly `@` at least one chip to wake `mention_only` agents.
- *     Send is gated client-side to mirror this.
+ *   - Textarea carries the message content. Server's `enforceMention`
+ *     contract requires an explicit recipient on every send — for 1:1
+ *     (single chip) the composer auto-injects the chip's uuid into
+ *     `metadata.mentions` so a bare body still passes; for groups
+ *     (2+ chips) the body must explicitly `@` at least one chip and
+ *     send is gated client-side to mirror that. See
+ *     `services/message.ts` "Routing contract".
  *
  *   - Typing `@` in the textarea opens the autocomplete (candidates =
  *     all org agents). Picking an agent that isn't in the chip row
@@ -50,8 +52,9 @@ import { cn } from "../../../lib/utils.js";
  *     staged through `usePendingImages` (shared with the in-chat
  *     composer). Bytes are read and uploaded only on send, after the
  *     chat exists. An image-only send (empty body) is allowed; a group
- *     (2+ chips) still needs an `@` in the body so the server's per-
- *     message mention guard accepts the file send.
+ *     (2+ chips) still needs an `@` in the body so each file POST
+ *     carries non-empty `metadata.mentions` and clears the server's
+ *     per-message `enforceMention` check.
  *
  * On send: createMeChat({participantIds: chips ∪ body @s}) → for each
  * staged image putImage(IndexedDB) + sendFileMessage → sendChatMessage
@@ -355,9 +358,12 @@ export function NewChatDraft({
       // Send images first (mirrors the in-chat composer ordering), then the
       // text body, so the new chat opens with attachments above the message.
       if (images.length > 0) {
-        // Carry the @-mentions onto each image message so the server's
-        // group-chat mention guard accepts file-format sends (issue 387).
-        // Single-chip (direct) chats have no mentions and skip the check.
+        // Carry the resolved mentions onto each image message so each
+        // POST clears the server's per-message `enforceMention` check.
+        // 1:1 drafts have `mentions` already auto-injected by handleSend
+        // (the single chip's uuid); group drafts carry the body's
+        // `@-mention` set. The server applies `enforceMention` to every
+        // chat shape now, so no path can rely on an empty-mentions skip.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
@@ -380,7 +386,7 @@ export function NewChatDraft({
       }
       const trimmed = text.trim();
       if (trimmed.length > 0) {
-        await sendChatMessage(chatId, trimmed);
+        await sendChatMessage(chatId, trimmed, mentions);
       }
       return chatId;
     },
@@ -403,8 +409,9 @@ export function NewChatDraft({
     // Body OR at least one image — image-only sends are allowed (mirrors the
     // in-chat composer's "text non-empty or has image" rule).
     if (draft.trim().length === 0 && pendingImages.length === 0) return false;
-    // Groups still need an @ even for image-only sends: the server's
-    // group-chat mention guard runs per message regardless of format.
+    // Groups still need an explicit `@` even for image-only sends: the
+    // server's `enforceMention` runs per message regardless of format,
+    // and group chats can't rely on the 1:1 auto-inject path.
     if (chips.length >= 2 && bodyMentions.length === 0) return false;
     return true;
   }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingImages.length]);
@@ -429,10 +436,18 @@ export function NewChatDraft({
     // the server (no such participant). Compute the union here so the
     // committed audience always reflects what the user just typed.
     const participantIds = Array.from(new Set([...chips, ...bodyMentions]));
+    // Explicit-only routing contract (services/message.ts): the server
+    // no longer infers wake targets from content. For 1:1 chats (one
+    // peer), auto-inject the peer's uuid so a bare "hi" still wakes
+    // them — this mirrors the in-chat composer's `effectiveSendMentions`
+    // derivation. For group chats, `canSend` already requires at least
+    // one `bodyMentions` entry.
+    const peerForOneOnOne = participantIds.length === 1 ? participantIds[0] : undefined;
+    const effectiveMentions = peerForOneOnOne ? Array.from(new Set([...bodyMentions, peerForOneOnOne])) : bodyMentions;
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: bodyMentions });
+      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: effectiveMentions });
     } finally {
       setSending(false);
     }

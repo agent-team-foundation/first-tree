@@ -8,22 +8,19 @@ import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Pins v2 chat fan-out semantics:
+ * Chat fan-out semantics post-retire of content extraction.
  *
  *   - `chat_membership.mode` is decision-inert; every freshly-written
- *     speaker row stores the constant `'mention_only'` regardless of chat
- *     type / agent type / chat size (no more `defaultParticipantMode`
- *     derivation).
- *   - `notify=true` is driven by explicit signals — `addressedToAgentIds`,
- *     `metadata.mentions`, or the **1:1 implicit wake** (a chat with
- *     exactly two speakers treats the non-sender peer as implicitly
- *     addressed; covers human↔agent and agent↔agent symmetrically).
- *   - Silent-send and `purpose: "agent-final-text"` still force
- *     notify=false for every row.
- *
- * See proposals/hub-chat-message-v2-simplify-mode.20260520.md.
+ *     speaker row stores the constant `'mention_only'`.
+ *   - `notify=true` is driven entirely by explicit signals —
+ *     `addressedToAgentIds` or `metadata.mentions`. The previous "1:1
+ *     implicit wake" rule was removed when the explicit-only contract
+ *     took its place; web clients inject the peer's uuid on the wire
+ *     in 2-speaker chats so wake-up still fires transparently.
+ *   - `purpose: "agent-final-text"` still forces notify=false for every
+ *     row.
  */
-describe("v2 chat membership + fan-out semantics", () => {
+describe("chat membership + fan-out semantics (explicit-only)", () => {
   const getApp = useTestApp();
 
   async function loadModes(chatId: string) {
@@ -66,9 +63,6 @@ describe("v2 chat membership + fan-out semantics", () => {
     });
 
     it("human + agent (size=2 group) → both `mention_only`", async () => {
-      // v2: no more "human peer → full" derivation. Both rows store the
-      // constant `mention_only`. Fan-out wake decisions read membership
-      // shape (1:1 implicit wake) instead of the column.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `cc-h-${uid}`, type: "human" });
@@ -98,8 +92,8 @@ describe("v2 chat membership + fan-out semantics", () => {
     });
   });
 
-  describe("fan-out semantics under the v2 1:1 implicit wake rule", () => {
-    it("human→agent 1-on-1 without `@` wakes the agent (1:1 implicit wake)", async () => {
+  describe("explicit-only fan-out semantics (no more 1:1 implicit wake)", () => {
+    it("1-on-1 without explicit mentions does NOT wake the peer (regression guard for the retired implicit wake)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `fo-h-${uid}`, type: "human" });
@@ -115,11 +109,30 @@ describe("v2 chat membership + fan-out semantics", () => {
         content: "what's the date?",
       });
 
-      const active = await notifyEntries(chat.id, agent.uuid);
-      expect(active).toHaveLength(1);
+      expect(await notifyEntries(chat.id, agent.uuid)).toHaveLength(0);
     });
 
-    it("agent→human 1-on-1 without `@` STILL wakes the human (symmetric)", async () => {
+    it("human→agent 1-on-1 with explicit mentions wakes the agent (web composer auto-inject pattern)", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const human = await createTestAgent(app, { name: `fo-hw-${uid}`, type: "human" });
+      const { agent } = await createTestAgent(app, { name: `fo-haw-${uid}` });
+
+      const chat = await createChat(app.db, human.agent.uuid, {
+        type: "group",
+        participantIds: [agent.uuid],
+      });
+      await sendMessage(app.db, chat.id, human.agent.uuid, {
+        source: "web",
+        format: "text",
+        content: "what's the date?",
+        metadata: { mentions: [agent.uuid] },
+      });
+
+      expect(await notifyEntries(chat.id, agent.uuid)).toHaveLength(1);
+    });
+
+    it("agent→human 1-on-1 with explicit mentions wakes the human (symmetric)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `fo-h2-${uid}`, type: "human" });
@@ -133,18 +146,13 @@ describe("v2 chat membership + fan-out semantics", () => {
         source: "api",
         format: "text",
         content: "today is 2026-04-29",
+        metadata: { mentions: [human.agent.uuid] },
       });
 
-      const active = await notifyEntries(chat.id, human.agent.uuid);
-      expect(active).toHaveLength(1);
+      expect(await notifyEntries(chat.id, human.agent.uuid)).toHaveLength(1);
     });
 
-    it("agent→agent 1-on-1 without `@` wakes the peer (v2 1:1 implicit wake)", async () => {
-      // v2 behavioural change vs. v1 / migration 0029: a size-2 chat is a
-      // tight pair (think delegated subtask), so an unmentioned send still
-      // wakes the peer. Loop prevention now lives client-side
-      // (silent-turn protocol in `result-sink`) — the v1 mode_only
-      // anti-echo guard is no longer the structural backstop.
+    it("agent→agent 1-on-1 with explicit mentions wakes the peer", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const a1 = await createTestAgent(app, { name: `fo-aa1-${uid}` });
@@ -158,14 +166,13 @@ describe("v2 chat membership + fan-out semantics", () => {
         source: "api",
         format: "text",
         content: "ok thanks",
+        metadata: { mentions: [a2.uuid] },
       });
 
-      const active = await notifyEntries(chat.id, a2.uuid);
-      expect(active).toHaveLength(1);
+      expect(await notifyEntries(chat.id, a2.uuid)).toHaveLength(1);
     });
 
-    it("agent→agent 1-on-1 with `purpose: 'agent-final-text'` still does NOT wake (bypass holds)", async () => {
-      // Force-silent bypass continues to shadow the 1:1 implicit wake.
+    it("agent→agent 1-on-1 with explicit mentions BUT `purpose: 'agent-final-text'` does NOT wake (bypass holds)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const a1 = await createTestAgent(app, { name: `fo-pa1-${uid}` });
@@ -179,14 +186,14 @@ describe("v2 chat membership + fan-out semantics", () => {
         source: "api",
         format: "text",
         content: "final text",
+        metadata: { mentions: [a2.uuid] },
         purpose: "agent-final-text",
       });
 
-      const active = await notifyEntries(chat.id, a2.uuid);
-      expect(active).toHaveLength(0);
+      expect(await notifyEntries(chat.id, a2.uuid)).toHaveLength(0);
     });
 
-    it("3+ speaker group without `@` does NOT wake anyone (only explicit mention / addressed)", async () => {
+    it("3+ speaker group without explicit mentions wakes no one", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `fo-3h-${uid}`, type: "human" });
@@ -200,15 +207,33 @@ describe("v2 chat membership + fan-out semantics", () => {
       await sendMessage(app.db, chat.id, human.agent.uuid, {
         source: "web",
         format: "text",
+        content: "team status?",
+      });
+
+      expect(await notifyEntries(chat.id, a1.uuid)).toHaveLength(0);
+      expect(await notifyEntries(chat.id, a2.uuid)).toHaveLength(0);
+    });
+
+    it("3+ speaker group with explicit mention wakes exactly the named peer", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const human = await createTestAgent(app, { name: `fo-3wh-${uid}`, type: "human" });
+      const { agent: a1 } = await createTestAgent(app, { name: `fo-3wa1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `fo-3wa2-${uid}` });
+
+      const chat = await createChat(app.db, human.agent.uuid, {
+        type: "group",
+        participantIds: [a1.uuid, a2.uuid],
+      });
+      await sendMessage(app.db, chat.id, human.agent.uuid, {
+        source: "web",
+        format: "text",
         content: `hi @${a1.name}`,
-        // Resolve uuid via mentions so server doesn't have to read content.
         metadata: { mentions: [a1.uuid] },
       });
 
-      const a1Active = await notifyEntries(chat.id, a1.uuid);
-      expect(a1Active).toHaveLength(1);
-      const a2Active = await notifyEntries(chat.id, a2.uuid);
-      expect(a2Active).toHaveLength(0);
+      expect(await notifyEntries(chat.id, a1.uuid)).toHaveLength(1);
+      expect(await notifyEntries(chat.id, a2.uuid)).toHaveLength(0);
     });
   });
 });

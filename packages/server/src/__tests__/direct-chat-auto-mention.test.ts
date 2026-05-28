@@ -9,32 +9,35 @@ import { sendMessage } from "../services/message.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Direct-chat auto-mention for the chat-first workspace.
+ * 1:1 chat wake-up + unread badge — explicit-mention contract.
  *
- * Background: `applyAfterFanOut` increments `chat_user_state.unread_mention_count`
- * only when the message names someone via `@<token>` or `metadata.mentions`. In
- * a 1-on-1 the recipient is implicit by chat structure, so `extractMentions`
- * returns [] and the conversation-list badge never rises — DMs would always
- * show zero unread.
+ * Background: pre-retire of content extraction the server had two
+ * implicit 1:1 mechanisms — `isOneOnOne` in fan-out (auto-wake the
+ * peer) and `dmAutoProjection` (auto-bump the unread badge). Both
+ * fired on every 2-speaker send regardless of whether the caller
+ * declared any routing.
  *
- * Fix: when `chat.type === "direct"`, `services/message.ts` builds a
- * `projectionMentions` list that includes every non-sender speaker and passes
- * it to `applyAfterFanOut` for the counter bump. The original `mergedMentions`
- * is untouched so fan-out, `metadata.mentions`, and the `mention_only` anti-
- * loop rule from migration 0029 all behave exactly as before.
+ * Both mechanisms have been retired. In the new world, clients (the
+ * web composer is the main one) inject the peer's uuid into
+ * `metadata.mentions` for 2-speaker chats, and the server treats that
+ * exactly like any other explicit mention — notify=true for the peer,
+ * unread badge +1 for the peer.
  *
  * Invariants this file pins:
- *   1. Human → agent DM bumps the agent's unread counter on plain text.
- *   2. Agent → human DM bumps the human's unread counter on plain text.
- *   3. Agent ↔ agent DM (`mention_only`) bumps the peer's counter BUT
- *      still produces a silent inbox row (no `notify = true` wake) — the
- *      counter is for the UI, the fan-out mute is for the loop-free runtime.
- *   4. Plain-text DMs are NOT rewritten — content stays exactly as sent
- *      (no `@<peer-name>` prepend by `normalizeMentionsInContent`).
- *   5. Group chats keep the explicit-`@` discipline — a plain-text group
- *      message still produces zero counter bumps.
+ *   1. Human → agent DM with explicit mentions wakes the agent and
+ *      bumps the agent's unread counter.
+ *   2. Agent → human DM with explicit mentions wakes the human and
+ *      bumps the human's unread counter.
+ *   3. Agent ↔ agent DM with explicit mentions wakes the peer.
+ *   4. A DM send WITHOUT explicit mentions (would only happen via a
+ *      pre-explicit-contract caller) does NOT wake the peer and does
+ *      NOT bump the badge — this is the regression guard for the
+ *      retired implicit mechanisms.
+ *   5. DM content is never rewritten with a `@<peer-name>` prefix on
+ *      the web path (`normalizeMentionsInContent` is off there).
+ *   6. Group chats with explicit mentions wake exactly the named peers.
  */
-describe("direct-chat auto-mention for chat-list unread counter", () => {
+describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
   const getApp = useTestApp();
 
   async function loadUnread(
@@ -78,7 +81,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     return typeof row?.content === "string" ? row.content : "";
   }
 
-  it("human → agent DM: agent's unread counter bumps on plain text", async () => {
+  it("human → agent DM with explicit mentions wakes the agent and bumps the unread counter", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `dmh2a-${crypto.randomUUID().slice(0, 6)}` });
@@ -89,13 +92,17 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     await sendMessage(app.db, chatId, admin.humanAgentUuid, {
       source: "api",
       format: "text",
-      content: "hi, no explicit @ here",
+      content: "hi",
+      // The web composer auto-injects the peer's uuid for 2-speaker chats;
+      // simulate that here.
+      metadata: { mentions: [peer.agent.uuid] },
     });
 
+    expect(await notifyInboxRows(chatId, peer.agent.uuid)).toHaveLength(1);
     expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBeGreaterThanOrEqual(1);
   });
 
-  it("agent → human DM: human's unread counter bumps on plain text", async () => {
+  it("agent → human DM with explicit mentions wakes the human and bumps the unread counter", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `dma2h-${crypto.randomUUID().slice(0, 6)}` });
@@ -107,18 +114,16 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       source: "api",
       format: "text",
       content: "ack",
+      metadata: { mentions: [admin.humanAgentUuid] },
     });
 
+    expect(await notifyInboxRows(chatId, admin.humanAgentUuid)).toHaveLength(1);
     expect(await loadUnread(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId)).toBeGreaterThanOrEqual(
       1,
     );
   });
 
-  it("agent ↔ agent DM: counter bumps AND inbox wakes the peer (v2 1:1 implicit wake)", async () => {
-    // v2 behavioural change vs. v1 / migration 0029: a 2-speaker chat is a
-    // tight pair, so an unmentioned send wakes the peer. The unread counter
-    // also bumps via the DM auto-mention projection — it always did, this
-    // half of the contract is unchanged.
+  it("agent ↔ agent DM with explicit mentions wakes the peer", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const a1 = await createTestAgent(app, { name: `aa1-${uid}` });
@@ -132,45 +137,22 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       source: "api",
       format: "text",
       content: "ok thanks",
+      metadata: { mentions: [a2.uuid] },
     });
 
-    // Counter side unchanged.
-    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
-
-    // Inbox side: 1:1 implicit wake fires → exactly one notify=true row.
     expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
   });
 
-  it("DM content is never rewritten with `@<peer-name>` prefix", async () => {
+  it("DM without explicit mentions does NOT wake the peer (the retired 1:1 implicit-wake regression guard)", async () => {
+    // The previous server-side `isOneOnOne` branch in fan-out would
+    // have woken the peer here. Under the explicit-only contract it
+    // does not — and the web composer is responsible for injecting the
+    // peer's uuid into `metadata.mentions` on the wire. This pin
+    // protects against accidental re-introduction of the implicit path.
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const peer = await createTestAgent(app, { name: `dmnorw-${crypto.randomUUID().slice(0, 6)}` });
-
-    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
-      participantIds: [peer.agent.uuid],
-    });
-    await sendMessage(
-      app.db,
-      chatId,
-      admin.humanAgentUuid,
-      { source: "api", format: "text", content: "plain hi" },
-      // Match the production agent send path which sets this flag.
-      { normalizeMentionsInContent: true },
-    );
-
-    expect(await loadMessageContent(chatId)).toBe("plain hi");
-  });
-
-  it("silent-send DM (text = '@peer' only) does NOT bump the peer's counter", async () => {
-    // Silent-send invariant (services/message.ts step 2e): a message whose
-    // text is purely `@<name>` tokens with no body is recorded for history
-    // but every fan-out row gets `notify=false`. The badge must respect
-    // the same intent — bumping `unread_mention_count` would contradict
-    // the "no user-visible signal" guarantee that callers (agent runtime
-    // `result-sink`, AskUserQuestion, etc.) rely on for silent turns.
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const peer = await createTestAgent(app, { name: `dmslnt-${crypto.randomUUID().slice(0, 6)}` });
+    const peer = await createTestAgent(app, { name: `dmnowake-${crypto.randomUUID().slice(0, 6)}` });
 
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
@@ -178,13 +160,35 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     await sendMessage(app.db, chatId, admin.humanAgentUuid, {
       source: "api",
       format: "text",
-      content: `@${peer.agent.name}`,
+      content: "hi, no mentions",
     });
 
+    expect(await notifyInboxRows(chatId, peer.agent.uuid)).toHaveLength(0);
     expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBe(0);
   });
 
-  it("group chat: plain text still produces zero counter bumps (no auto-mention)", async () => {
+  it("DM content is never rewritten with `@<peer-name>` prefix on the web path", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `dmnorw-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    // Web endpoint does NOT pass normalizeMentionsInContent; the human
+    // typed what they typed. Even with explicit mentions, content stays
+    // verbatim.
+    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "api",
+      format: "text",
+      content: "plain hi",
+      metadata: { mentions: [peer.agent.uuid] },
+    });
+
+    expect(await loadMessageContent(chatId)).toBe("plain hi");
+  });
+
+  it("group chat with explicit mentions wakes only the named peers", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const a1 = await createTestAgent(app, { name: `g1-${uid}` });
@@ -198,10 +202,13 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     await sendMessage(app.db, chat.id, a1.agent.uuid, {
       source: "api",
       format: "text",
-      content: "anyone around",
+      content: "heads up",
+      metadata: { mentions: [a2.uuid] },
     });
 
-    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBe(0);
+    expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
+    expect(await notifyInboxRows(chat.id, a3.uuid)).toHaveLength(0);
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
     expect(await loadUnread(chat.id, a3.uuid, a1.memberId, a1.organizationId)).toBe(0);
   });
 });

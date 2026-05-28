@@ -19,14 +19,18 @@ describe("Agent Messages API", () => {
 
   it("sends and retrieves messages", async () => {
     const app = getApp();
-    const { a1, chatId } = await setupChat(app);
+    const { a1, a2, chatId } = await setupChat(app);
 
     const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
       content: "Hello!",
+      // Agent endpoint enforces explicit routing — declare the peer's uuid.
+      metadata: { mentions: [a2.agent.uuid] },
     });
     expect(sendRes.statusCode).toBe(201);
-    expect(sendRes.json().content).toBe("Hello!");
+    // normalizeMentionsInContent on the agent endpoint prepends @<name>
+    // since the agent's bare "Hello!" didn't include the mention.
+    expect(sendRes.json().content).toBe(`@${a2.agent.name} Hello!`);
 
     const listRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
     expect(listRes.statusCode).toBe(200);
@@ -37,13 +41,13 @@ describe("Agent Messages API", () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);
 
-    // Agent↔agent direct chat is mention_only on both ends (migration 0029)
-    // so this fan-out test must include an explicit @ to wake the recipient
-    // — without it, the entry would be a silent context row and `pollInbox`
-    // would skip it.
+    // Agent endpoint enforces explicit routing — declare the peer via
+    // either `metadata.mentions` (uuid) or `receiverNames` (name); CLI
+    // uses receiverNames so use that here.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a2.agent.name} Fan-out test`,
+      content: "Fan-out test",
+      receiverNames: [a2.agent.name],
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");

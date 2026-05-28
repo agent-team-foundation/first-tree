@@ -1,4 +1,4 @@
-import { extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
+import { type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -42,63 +42,46 @@ export type SendMessageResult = {
 
 export type SendMessageOptions = {
   /**
-   * When true, reject the send with `BadRequestError` if the chat is a group
-   * and no recipient mention can be resolved (neither from `metadata.mentions`
-   * nor from a `@<name>` token in the content). Used by both agent and
-   * admin/web routes so a group chat message ALWAYS names a receiver — see
-   * proposals/group-chat-ux-improvements §3.
+   * When true, reject the send with `BadRequestError` if no recipient is
+   * declared — neither `metadata.mentions` (uuids), `data.receiverNames`
+   * (names), nor `addressedToAgentIds` (system routing). Used by both the
+   * human web endpoint and the agent SDK endpoint so every message that
+   * reaches the server arrives with an explicit routing intent.
    *
-   * Direct chats are unaffected (the lone peer is unambiguous). Adapter and
-   * webhook paths leave this off so external bridges aren't gated on hub-side
-   * naming conventions.
+   * The only legal way to satisfy this option with empty routing is to
+   * declare `data.purpose === "agent-final-text"`, which marks the send as
+   * a silent history-only write (result-sink's final-text turn).
+   *
+   * Server-internal callers (adapter inbound, github-delivery, attention
+   * echo) leave this off because their routing decisions are owned by the
+   * caller and validated upstream; they pass `metadata.mentions` or
+   * `addressedToAgentIds` directly.
    */
-  enforceGroupMention?: boolean;
+  enforceMention?: boolean;
   /**
    * When true and `data.content` is a string, prepend `@<name>` tokens for
    * any participant in `metadata.mentions` whose name is missing from the
-   * content. Used by the agent path so the rendered message stays in sync
-   * with the routing decision (e.g. `result-sink` reply enrichment puts the
-   * trigger sender in `metadata.mentions` but the agent's text rarely
-   * includes the @). Admin/web path leaves this off — the picker has the
-   * user write the @ themselves; we don't want server to silently mutate
-   * human-typed content.
+   * content. Used by the agent endpoint and the attention echo so the
+   * rendered message stays in sync with the routing decision (e.g.
+   * `result-sink` enrichment puts the trigger sender in
+   * `metadata.mentions` but the agent's text rarely includes the @).
+   * Web endpoint leaves this off — the composer has the user write the @
+   * themselves; we don't want server to silently mutate human-typed
+   * content.
    */
   normalizeMentionsInContent?: boolean;
   /**
    * Agent IDs that this message is **addressed to** by construction — used
-   * for system-routed messages whose recipient is fixed at write time and
-   * not derivable from `@<name>` tokens in the content. Within the
+   * for system-routed messages whose recipient is fixed at write time
+   * (today: `github-delivery.deliverNormalizedEvent`). Within the
    * non-silenced fan-out branch, addressed agents always receive
-   * `notify=true` regardless of their chat membership mode (`mention_only`)
-   * or `metadata.mentions`.
+   * `notify=true` regardless of `metadata.mentions`.
    *
-   * `isSilentSend` and `isAgentFinalText` still take precedence (they force
-   * notify=false for everyone); this only widens the notify set within the
-   * non-silenced branch.
+   * `purpose === "agent-final-text"` still takes precedence (it forces
+   * `notify=false` for everyone); this only widens the notify set within
+   * the non-silenced branch.
    */
   addressedToAgentIds?: readonly string[];
-  /**
-   * When true, parse `@<name>` tokens out of string content as a
-   * **fallback** routing signal. The signal is only consulted when the
-   * caller did NOT declare routing intent via `metadata.mentions` (uuids)
-   * or `data.receiverNames` (names) — those two are explicit-wins, and
-   * presence of either skips content extraction entirely so a narrative
-   * `@<peer-name>` in the body can never silently widen the recipient set.
-   *
-   * Enabled on both the human web endpoint and the agent endpoint today
-   * (the agent runtime's LLM output naturally writes `@<peer>` without a
-   * companion `receiverNames` array, and breaking that mental model
-   * requires a runtime-side parser rewrite that is out of scope for the
-   * current PR). The unresolved-@-token guard is gated on the same flag.
-   *
-   * Default when omitted: ON (`undefined !== false` evaluates to true).
-   * Adapter / webhook / programmatic callers don't need to opt out — they
-   * already declare recipients via `metadata.mentions` or `receiverNames`,
-   * which is explicit-wins and skips content extraction regardless of
-   * this flag. Pass `false` only to forcibly suppress the fallback even
-   * when no explicit declaration was made.
-   */
-  extractMentionsFromContent?: boolean;
   /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
    * uses that key to re-attribute a row to a synthetic "GitHub" sender
@@ -128,28 +111,26 @@ export async function sendMessage(
 }
 
 /**
- * 1:1 implicit wake rule
- * ======================
+ * Routing contract (post-retire of content extraction)
+ * ====================================================
  *
- * A chat with exactly 2 speakers (`participants.length === 2`) treats the
- * non-sender peer as implicitly addressed. Practical UX motivation: in a
- * 1-on-1 human↔agent chat, the human typing "hello" without an explicit
- * `@mention` should still wake the agent — there is no ambiguity about
- * who the message is for.
+ * Every wake-up requires the caller to declare routing intent explicitly,
+ * by one of:
  *
- * This rule is expressed in the fan-out decision (notify=true branch) as:
+ *   - `data.metadata.mentions: string[]` — agent uuids (resolved upstream)
+ *   - `data.receiverNames: string[]` — agent names; resolved here against
+ *     the chat's speaker list
+ *   - `options.addressedToAgentIds` — system-routed override (e.g. github
+ *     delivery)
+ *   - `data.purpose === "agent-final-text"` — silent history-only write
+ *     (the only legal mentions-empty case under `enforceMention`)
  *
- *   isOneOnOne && p.agentId !== senderId
- *
- * It is NOT a `chat_membership.mode`-derived property — `mode` is decision-
- * inert in v2. The rule operates on chat membership shape and applies
- * uniformly regardless of participant types. A 1:1 agent↔agent chat is
- * also covered (the other agent gets notify=true on every message, which
- * is the desired behaviour for a tight pair like a delegated subtask).
- *
- * Silent-send (content empty after stripping leading `@<name>` tokens)
- * and `purpose === "agent-final-text"` both still force notify=false; the
- * implicit wake is shadowed by these profile bypasses.
+ * The server never parses `@<name>` tokens out of content. Clients that
+ * surface IM-style `@-mention` UX (web composer, future mobile) must
+ * resolve mentions client-side and pass uuids on the wire. The 1:1
+ * "implicit wake" rule that previously bypassed the routing check was
+ * removed when the explicit contract took its place — web clients now
+ * auto-inject the peer's uuid into `metadata.mentions` in 2-speaker chats.
  */
 
 async function sendMessageInner(
@@ -210,18 +191,17 @@ async function sendMessageInner(
       }
     }
 
-    // 2. Decide the mention set. Three sources can contribute:
+    // 2. Decide the mention set. Two explicit sources contribute:
     //   - `metadata.mentions: [uuid]` — caller already resolved uuids
-    //     (result-sink / adapter / webhook).
+    //     (web composer, agent runtime / result-sink, attention echo,
+    //     adapter inbound).
     //   - `data.receiverNames: [name]` — caller knows the recipient by name
     //     and wants the server to resolve it against the chat's participant
-    //     list (CLI `chat send <name>` post-Phase-1). An unknown name is a
-    //     400 with a `chat invite` hint — never silently dropped.
-    //   - Content-extracted `@<name>` tokens — opt-in via
-    //     `extractMentionsFromContent`, used only by the human web endpoint
-    //     where the typed message is the sole source of routing intent.
-    //     Agent / programmatic callers leave this off so a narrative
-    //     `@<peer>` in content never silently wakes anyone.
+    //     list (CLI `chat send <name>`). An unknown name is a 400 with a
+    //     `chat invite` hint — never silently dropped.
+    //
+    // The server does NOT parse `@<name>` tokens out of `content` — see the
+    // file-level "Routing contract" comment above.
     const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
@@ -238,7 +218,6 @@ async function sendMessageInner(
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
       : [];
-    const contentText = typeof effectiveContent === "string" ? effectiveContent : "";
 
     // Resolve `receiverNames` against the chat's speaker list.
     const receiverNames = data.receiverNames ?? [];
@@ -263,62 +242,18 @@ async function sendMessageInner(
       );
     }
 
-    // Explicit-wins-with-content-fallback. When the caller declares routing
-    // intent via `metadata.mentions` (uuids) or `data.receiverNames` (names),
-    // we trust that and skip content extraction so a narrative `@<peer>` in
-    // the body never silently adds an extra recipient. With neither
-    // declared, fall back to `@<name>` extraction (default ON) so the IM
-    // mental model (typed `@b` wakes b) still works — this is the path the
-    // agent runtime takes when its LLM output naturally writes `@<peer>`
-    // without a companion `receiverNames` array. Programmatic callers that
-    // never want extraction (adapter / webhook variants that already pass
-    // explicit mentions) can opt out by setting the flag to `false`.
-    const explicitlyDeclared = explicitMentions.length > 0 || resolvedFromNames.length > 0;
-    const contentExtractEnabled = options.extractMentionsFromContent !== false;
-    const contentExtracted =
-      !explicitlyDeclared && contentExtractEnabled && contentText ? extractMentions(contentText, participants) : [];
-    const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames, ...contentExtracted])];
+    const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
-    // 1-on-1 auto-mention for the unread-counter projection (chat-first
-    // workspace). In a two-member chat the recipient is implicit, so the
-    // conversation list should red-dot every DM message — without this,
-    // `extractMentions` returns [] on plain text and `applyAfterFanOut`
-    // short-circuits the counter bump, leaving DM rows at zero unread.
-    //
-    // The 1-on-1 signal is membership shape (participants.length === 2)
-    // rather than `chats.type === "direct"`. Hub no longer writes new
-    // `direct` rows (see first-tree-context PR #281), and any existing
-    // `direct` row by construction has exactly two speakers — so the
-    // derived predicate matches both old and new chats without a column
-    // check.
-    //
-    // This list is **projection-only** — it deliberately does NOT join
-    // `mergedMentions`. Folding it in would make the auto-mention also
-    // drive fan-out (`notify=true` inbox), which would reintroduce the
-    // agent↔agent courtesy loop migration 0029 fixed: A's "ok thanks"
-    // would wake B in `mention_only` mode again. Keep the two lists
-    // separate so unread badges are correct without unmuting agent wakes.
-    //
-    // Silent-send (step 2e) overrides this back to [] so the badge stays
-    // off — a silent turn whose entire text is `@<name>` tokens is meant
-    // to land in history without bothering anyone; bumping unread
-    // contradicts that intent.
-    const isOneOnOne = participants.length === 2;
-    const dmAutoProjection: string[] = isOneOnOne
-      ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
-      : mergedMentions;
-
-    // v2: centralise the bypass contract for `purpose` values. Each flag
+    // Centralise the bypass contract for `purpose` values. Each flag
     // describes what this purpose means for a downstream decision; adding a
     // new `purpose` value means defining its profile here once, not hunting
-    // through the three call sites below.
+    // through the call sites below.
     //
     // `agent-final-text` profile rationale:
-    //   - skip group-mention enforcement (handler-initiated forward, not a
-    //     user-typed broadcast).
-    //   - skip the unresolved-@-token guard (handler text may legitimately
-    //     contain narrative @ tokens that don't resolve to chat members).
+    //   - skip mention enforcement (final-text is the one legal mentions-
+    //     empty case: handler-initiated forward, not a user-typed
+    //     broadcast).
     //   - force every fan-out row to notify=false (final text lands in
     //     chat history for human observers but never wakes another
     //     session). v1 §四 改造 4 (b) bypass channel.
@@ -326,89 +261,47 @@ async function sendMessageInner(
     const purposeProfile = isAgentFinalText
       ? {
           skipMentionEnforcement: true,
-          skipUnresolvedTokenGuard: true,
           forceSilentFanOut: true,
         }
       : {
           skipMentionEnforcement: false,
-          skipUnresolvedTokenGuard: false,
           forceSilentFanOut: false,
         };
 
-    // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
-    //     agent calls `send --chat <id>` against a group without naming who
-    //     should pick it up — every recipient would silently drop the message
-    //     and the sender would assume delivery.
+    // Mention enforcement (explicit-only contract). Reject the send when
+    // the caller opted in via `enforceMention` but declared no routing
+    // intent — `metadata.mentions`, `receiverNames`, and
+    // `addressedToAgentIds` are the three legal declarations.
     //
-    //     Keys on membership shape (`isOneOnOne`, derived from
-    //     `participants.length === 2`) so a size-2 chat keeps the legacy
-    //     "1-on-1 doesn't need an explicit @mention" UX. Three-plus-speaker
-    //     chats stay strict. v2 dropped the `chats.type === "group"` branch
-    //     — chats are structurally always group, so the predicate folds
-    //     down to "must be a real group (≥3 speakers) and not bypassed".
-    if (options.enforceGroupMention && !isOneOnOne && !purposeProfile.skipMentionEnforcement) {
+    // Applies to every chat shape (1:1 included): the previous "1:1
+    // implicit wake" bypass was removed when the explicit contract took
+    // its place; web clients now auto-inject the peer's uuid into
+    // `metadata.mentions` for 2-speaker chats so this check passes
+    // transparently.
+    //
+    // `purpose === "agent-final-text"` bypasses via
+    // `purposeProfile.skipMentionEnforcement` — final-text is silent-by-
+    // construction so it never needs to name a recipient.
+    if (options.enforceMention && !purposeProfile.skipMentionEnforcement) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
-      if (recipientMentions.length === 0) {
+      const hasAddressed = (options.addressedToAgentIds?.length ?? 0) > 0;
+      if (recipientMentions.length === 0 && !hasAddressed) {
         throw new BadRequestError(
-          "Sending to a group chat requires an explicit @mention. " +
-            `Use \`${getServerCliBinding().binName} chat send <name>\` to message a single agent, or @<name> in the content to address one or more group members.`,
+          "Sending a message requires an explicit recipient. " +
+            "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
+            'or set `purpose: "agent-final-text"` for silent history-only sends.',
         );
       }
     }
 
-    // 2b.1. Unresolved-@-token guard. Closes the foot-gun where a caller
-    //   types `@<name>` for someone who is not a speaker of THIS chat —
-    //   `extractMentions` would silently drop it and the message would land
-    //   with `mentions=[]`, never waking the intended recipient.
-    //
-    //   Gated on `enforceGroupMention` (same flag that opts a caller into
-    //   strict routing checks — HTTP endpoints set it; internal / adapter
-    //   paths leave it off and keep the "unknown @ silently drops" legacy
-    //   semantics). Also skipped when the caller declared recipients
-    //   explicitly: their `@<name>` tokens are narrative, not routing.
-    //
-    //   Code-fenced `@` tokens are already stripped by `scanMentionTokens`
-    //   upstream, so legitimate quoted `@<name>` in code blocks is
-    //   unaffected. `purpose === "agent-final-text"` bypasses through
-    //   `purposeProfile.skipUnresolvedTokenGuard` for the same reason it
-    //   bypasses enforceGroupMention.
-    if (
-      options.enforceGroupMention &&
-      !explicitlyDeclared &&
-      contentExtractEnabled &&
-      !purposeProfile.skipUnresolvedTokenGuard &&
-      typeof effectiveContent === "string"
-    ) {
-      const rawTokens = scanMentionTokens(effectiveContent);
-      if (rawTokens.length > 0) {
-        const speakerNames = new Set(
-          participants
-            .map((p) => p.name)
-            .filter((n): n is string => typeof n === "string" && n.length > 0)
-            .map((n) => n.toLowerCase()),
-        );
-        const unresolved = rawTokens.filter((t) => !speakerNames.has(t));
-        if (unresolved.length > 0) {
-          const sample = unresolved[0];
-          throw new BadRequestError(
-            `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
-              "Add them first:\n" +
-              `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-              "Then retry your send. Or ask a human in this chat to add them.",
-          );
-        }
-      }
-    }
-
-    // 2c. Agent-path content normalisation: if the caller declared mentions in
-    //     metadata but didn't write the corresponding `@<name>` in the text,
-    //     prepend the missing tokens. This keeps the visible message in sync
-    //     with the routing decision — most importantly when an agent replies
-    //     in a group: the runtime's `result-sink` already adds the trigger
-    //     sender to `mentions`, but only the content shows up in the UI.
-    //
-    //     Driven by its own opt-in flag (separate from enforceGroupMention) so
-    //     admin/web and adapter paths can validate without mutating content.
+    // Agent-path content normalisation: if the caller declared mentions
+    // in metadata but didn't write the corresponding `@<name>` in the
+    // text, prepend the missing tokens. This keeps the visible message
+    // in sync with the routing decision — most importantly when an agent
+    // replies in a group, or when the attention echo re-routes a human's
+    // answer back to the asking agent. Web composer leaves this off
+    // because the human typed the @ themselves and we don't want server
+    // to silently mutate human-typed content.
     let outboundContent = effectiveContent;
     if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
       const present = new Set(scanMentionTokens(outboundContent));
@@ -425,35 +318,6 @@ async function sendMessageInner(
         outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
       }
     }
-
-    // 2e. L4 silent-send form guard — mirror of the client-side result-sink
-    //     silent-turn (runtime/result-sink.ts). Covers any path that reaches
-    //     sendMessage without going through result-sink: the agent CLI
-    //     `chat send`, external IM adapters, admin/web posts. Form-only
-    //     check on the FINAL outbound text (after normalizeMentionsInContent
-    //     has had its turn): if everything that remains after stripping
-    //     leading `@<name>` tokens is empty, the send becomes silent — the
-    //     message row is still written so chat history stays complete, but
-    //     fan-out emits notify=false for every recipient (silent context
-    //     rows; L3 behavior).
-    //
-    //     NO content language evaluation. Non-empty filler like "." or
-    //     "(待命中)" still wakes the recipient; the agent prompt + silent-
-    //     turn protocol is responsible for those.
-    const isSilentSend =
-      typeof outboundContent === "string" && outboundContent.replace(/^(@\S+\s*)+/, "").trim().length === 0;
-    if (isSilentSend) {
-      log.info(
-        { chatId, senderId, source: data.source },
-        "silent send: empty content after mention strip — no fan-out wake-up",
-      );
-    }
-
-    // Silent-send overrides the direct-chat auto-mention projection: a
-    // silent turn is "this exists in history but nobody needs to know",
-    // so the recipient's red-dot badge stays off too. Mirrors the
-    // fan-out `notify=false` guarantee at step 4 below.
-    const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
     // UUID v7 per the "UUID v7 as Message ID" architecture rule in
@@ -483,18 +347,15 @@ async function sendMessageInner(
     //    - `notify=false` — silent context row, written so a future active
     //      delivery to the same chat can replay it as preceding history.
     //
-    //    v2 rules (membership-shape driven; `chat_membership.mode` is no
-    //    longer read — see file-level "1:1 implicit wake rule" comment and
-    //    proposals/hub-chat-message-v2-simplify-mode.20260520.md):
+    //    Explicit-only contract (see file-level "Routing contract"):
     //    - sender is always filtered out (no self-delivery).
     //    - explicit wake triggers `notify=true`:
     //        * agentId in `addressedToAgentIds` (system-routed override), OR
-    //        * agentId in `metadata.mentions` (mergedMentions, post-resolve), OR
-    //        * 1:1 implicit — `isOneOnOne` and the recipient is not sender.
-    //    - silent-send and `purposeProfile.forceSilentFanOut` (today
-    //      = `purpose === "agent-final-text"`) both force notify=false for
-    //      every row regardless. Inbox entries are still written so history
-    //      replay still works; nobody is woken.
+    //        * agentId in `metadata.mentions` (mergedMentions, post-resolve).
+    //    - `purposeProfile.forceSilentFanOut` (today = `purpose ===
+    //      "agent-final-text"`) forces notify=false for every row regardless.
+    //      Inbox entries are still written so history replay still works;
+    //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
@@ -506,10 +367,7 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify:
-          !isSilentSend &&
-          !purposeProfile.forceSilentFanOut &&
-          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId) || isOneOnOne),
+        notify: !purposeProfile.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {
@@ -542,7 +400,7 @@ async function sendMessageInner(
       chatId,
       messageId: msg.id,
       senderId,
-      mentionedAgentIds: projectionMentions,
+      mentionedAgentIds: mergedMentions,
       contentPreview: previewText,
       messageCreatedAt: msg.createdAt,
     });
@@ -584,8 +442,8 @@ async function sendMessageInner(
   // wake-up otherwise). Failure is dropped; web reconnect refetches.
   fireChatMessageKick(chatId, txResult.message.id);
 
-  // L4 echo-loop observation: scan the just-tail of this chat for the
-  // ping-pong pattern that L1 (mention_only) + L4 (silent-turn) are meant
+  // Echo-loop observation: scan the just-tail of this chat for the
+  // ping-pong pattern that the client-side silent-turn protocol is meant
   // to prevent. We emit a structured warn-log only — `notify` is never
   // mutated here. Frequent triggers signal client-side prompt drift and
   // a need to revisit the agent template. Fire-and-forget so the hot send

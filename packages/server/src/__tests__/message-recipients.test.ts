@@ -50,13 +50,11 @@ describe("sendMessage returns recipients", () => {
     expect(result.recipients).toHaveLength(0);
   });
 
-  it("returns multiple recipients in group chat", async () => {
+  it("returns multiple recipients in group chat when both are explicitly mentioned", async () => {
     const app = getApp();
-    // Phase 1 (chat-participant-mode-fix-design.md §2.1) seeds every
-    // non-human agent in a group chat as `mention_only`, so an unmentioned
-    // message produces 0 notifying recipients. Make a1 a `human` sender so
-    // group humans (none here) and `@`-mentioned agents wake; explicitly
-    // mention a2 and a3 in the body to get both into the notify=true set.
+    // Under the explicit-only contract a group send wakes only the agents
+    // declared in `metadata.mentions` (or `receiverNames`); declare both
+    // peers to get both into the notify=true set.
     const uid = crypto.randomUUID().slice(0, 6);
     const name1 = `recip-g1-${uid}`;
     const name2 = `recip-g2-${uid}`;
@@ -74,6 +72,7 @@ describe("sendMessage returns recipients", () => {
       source: "api",
       format: "text",
       content: `group msg @${name2} @${name3}`,
+      metadata: { mentions: [a2.uuid, a3.uuid] },
     });
 
     expect(result.recipients).toHaveLength(2);

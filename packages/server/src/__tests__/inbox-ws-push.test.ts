@@ -28,12 +28,12 @@ describe("inbox WS data-plane claim helpers", () => {
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
-    // Agent↔agent direct seeds both as mention_only (migration 0029); the
-    // claim helpers operate on `pending` rows with `notify=true`, so the
-    // seed message must @-mention a2 to land an active row.
+    // Agent endpoint enforces explicit routing; the claim helpers
+    // operate on `pending` notify=true rows, so declare a2 explicitly.
     const msgRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a2.agent.name} WS push test`,
+      content: "WS push test",
+      receiverNames: [a2.agent.name],
     });
     return { a2, messageId: msgRes.json().id, chatId };
   }
@@ -107,14 +107,16 @@ describe("inbox WS data-plane claim helpers", () => {
       .set({ mode: "mention_only" })
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, observer.uuid)));
 
-    // Three silent messages, then a trigger that @mentions observer.
+    // Three silent messages (no mentions → silent context rows), then a
+    // trigger that explicitly mentions observer.
     await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "first silent" });
     await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent" });
     await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "third silent" });
     const trigger = await sendMessage(app.db, chat.id, human.uuid, {
       source: "api",
       format: "text",
-      content: `@wsp-si-obs-${uid} please weigh in`,
+      content: "please weigh in",
+      metadata: { mentions: [observer.uuid] },
     });
 
     // Push-path claim must bundle the same silent context the poll path would.
@@ -155,12 +157,13 @@ describe("inbox WS data-plane claim helpers", () => {
     });
     const chatId = chatRes.json().id;
 
-    // mention_only direct (migration 0029): each backlog message must @ a2
-    // to land as a notify=true pending row that the backlog claim drains.
+    // Each backlog message must declare a2 explicitly so it lands as a
+    // notify=true pending row that the backlog claim drains.
     for (let i = 0; i < 3; i++) {
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
-        content: `@${a2.agent.name} msg ${i}`,
+        content: `msg ${i}`,
+        receiverNames: [a2.agent.name],
       });
     }
 

@@ -15,11 +15,12 @@ describe("Agent Inbox API", () => {
     });
     const chatId = chatRes.json().id;
 
-    // Agent↔agent direct seeds both as mention_only (migration 0029); add
-    // the @ so the recipient is woken rather than silently parked.
+    // Agent endpoint enforces explicit routing — declare the recipient
+    // by name so the message wakes a2 rather than being silently parked.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a2.agent.name} Inbox test`,
+      content: "Inbox test",
+      receiverNames: [a2.agent.name],
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
