@@ -126,7 +126,7 @@ first-tree attention raise \
   --meta-json @options.json
 ```
 
-`--meta key=value` writes a single metadata field; `--meta-json @file.json` merges a JSON object into metadata (this is how you pass `options` / `questions`). Pass body via stdin or `@file.md` for multi-line markdown — never inline-escape newlines.
+`--meta key=value` writes a single metadata field; `--meta-json @file.json` merges a JSON object into metadata (this is how you pass `options` / `questions`). For multi-line markdown body, prefer `--body @-` with the content piped on stdin (or `--body @path/to/file.md` to load from disk) — never inline-escape newlines. Stdin is capped at 5 MB.
 
 If the target is not yet a member of `--chat`, the server rejects the raise with a 409. Run `first-tree chat invite <human>` first, then raise. This is deliberate — NHA must not be a back-door for pulling people into chats.
 

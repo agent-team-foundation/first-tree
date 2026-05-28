@@ -10,11 +10,11 @@ import { readStdin } from "../../chat/_shared/io.js";
  */
 export async function resolveBody(raw: string | undefined): Promise<string> {
   if (raw === undefined) {
-    const piped = await readStdin();
+    const piped = await readStdinOrFail();
     return piped ?? "";
   }
   if (raw === "@-") {
-    const piped = await readStdin();
+    const piped = await readStdinOrFail();
     if (piped === null) {
       fail("BODY_READ_FAILED", "`--body @-` requires piped stdin (no TTY).", 2);
     }
@@ -30,4 +30,13 @@ export async function resolveBody(raw: string | undefined): Promise<string> {
     }
   }
   return raw;
+}
+
+async function readStdinOrFail(): Promise<string | null> {
+  try {
+    return await readStdin();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    fail("BODY_READ_FAILED", `Failed to read --body from stdin: ${msg}`, 2);
+  }
 }
