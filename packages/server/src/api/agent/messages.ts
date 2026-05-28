@@ -72,16 +72,18 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
         identity.uuid,
         prepared,
         {
-          enforceGroupMention: true,
+          // Explicit-only contract: agent SDK callers (CLI `chat send`,
+          // result-sink, etc.) declare routing via `receiverNames` or
+          // `metadata.mentions`, or set `purpose: "agent-final-text"` for
+          // silent history-only sends. The server no longer parses
+          // `@<name>` out of content — see `services/message.ts`
+          // Routing contract.
+          enforceMention: true,
+          // Auto-prepend `@<name>` for declared mentions missing from the
+          // body so the rendered message matches the routing decision
+          // (mainly: result-sink puts the trigger sender in `mentions` but
+          // the agent's text rarely includes the @).
           normalizeMentionsInContent: true,
-          // Agent endpoint preserves content `@<name>` extraction as a
-          // **fallback** — when the caller does not declare routing intent
-          // via `metadata.mentions` or `receiverNames`, the IM-natural
-          // "typed `@b` wakes b" path still works. Declaring either field
-          // makes the call explicit-wins and skips content extraction (see
-          // `sendMessage`). The full retire of content extraction on agent
-          // path is deferred to a follow-up PR.
-          extractMentionsFromContent: true,
         },
       );
 

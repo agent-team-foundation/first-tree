@@ -26,6 +26,7 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     const sendRes = await sender.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
       content: `@${receiver.agent.name} Hello from sender`,
+      receiverNames: [receiver.agent.name],
     });
     expect(sendRes.statusCode).toBe(201);
     const sentMessage = sendRes.json();
@@ -53,6 +54,7 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     const replyRes = await receiver.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
       content: `@${sender.agent.name} Hello back!`,
+      receiverNames: [sender.agent.name],
     });
     expect(replyRes.statusCode).toBe(201);
     expect(replyRes.json().senderId).toBe(receiver.agent.uuid);
@@ -75,9 +77,11 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
         participantIds: [target.uuid],
       });
       const chatId = chatRes.json().id as string;
+      if (!target.name) throw new Error("target name missing");
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
         content: `@${target.name} hi`,
+        receiverNames: [target.name],
       });
     }
 
@@ -104,10 +108,12 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     });
     const chatId = chatRes.json().id as string;
 
+    if (!a2.name) throw new Error("a2 name missing");
     for (const text of ["msg-1", "msg-2", "msg-3"]) {
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
         content: `@${a2.name} ${text}`,
+        receiverNames: [a2.name],
       });
     }
 
@@ -133,9 +139,11 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
       participantIds: [a2.uuid],
     });
     const chatId = chatRes.json().id as string;
+    if (!a2.name) throw new Error("a2 name missing");
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
       content: `@${a2.name} private`,
+      receiverNames: [a2.name],
     });
 
     const historyRes = await a3.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
@@ -153,9 +161,11 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     });
     const chatId = chatRes.json().id as string;
 
+    if (!a2.name) throw new Error("a2 name missing");
     const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "markdown",
       content: `@${a2.name} ## Hello\n\nThis is **bold**`,
+      receiverNames: [a2.name],
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().format).toBe("markdown");
@@ -173,10 +183,12 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     });
     const chatId = chatRes.json().id as string;
 
+    if (!a2.name) throw new Error("a2 name missing");
     const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
       content: `@${a2.name} approval needed`,
       metadata: { intent: "approval", urgency: "high" },
+      receiverNames: [a2.name],
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();

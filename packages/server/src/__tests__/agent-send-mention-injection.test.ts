@@ -7,34 +7,41 @@ import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Group-chat mention enforcement and content normalisation are core hub
- * routing logic — the agent runtime, web UI, and adapter bridges all depend
- * on the invariants this file pins. Each behavioural axis is covered at the
- * service layer (so failures localise to the rule, not the HTTP layer) plus
- * one HTTP-level integration test per endpoint to guard the wiring.
+ * Mention enforcement + content normalisation are core hub routing
+ * logic. The agent runtime, web UI, and adapter bridges all depend on
+ * the invariants this file pins. Each behavioural axis is covered at
+ * the service layer (so failures localise to the rule, not the HTTP
+ * layer) plus one HTTP-level integration test per endpoint to guard the
+ * wiring.
  *
- * Spec (proposals/group-chat-ux-improvements §3, then refined to two flags):
+ * Spec (post-retire of content extraction — see services/message.ts
+ * "Routing contract"):
  *
- *   `enforceGroupMention` — reject group-chat sends where no recipient (other
- *     than the sender) is named, in either `metadata.mentions` or as a
- *     `@<name>` token in the content. Agent + admin paths opt-in; adapters
- *     and webhooks do not.
+ *   `enforceMention` — reject sends where no recipient (other than the
+ *     sender) is declared via `metadata.mentions` (uuids),
+ *     `receiverNames` (names, resolved by the server), or
+ *     `addressedToAgentIds` (system-routed). The web and agent SDK
+ *     endpoints opt-in; adapters and webhooks do not.
+ *     `purpose: "agent-final-text"` bypasses the check unconditionally.
+ *     The server NEVER parses `@<name>` tokens out of content — clients
+ *     must resolve mentions themselves and declare routing explicitly.
  *
- *   `normalizeMentionsInContent` — when content is a string, prepend any
- *     `@<name>` tokens that `metadata.mentions` declares but the text omits.
- *     Agent path opts-in; admin/web does not (the picker writes the @
- *     directly; we don't mutate human-typed content).
+ *   `normalizeMentionsInContent` — when content is a string, prepend
+ *     any `@<name>` tokens that `metadata.mentions` declares but the
+ *     text omits. Agent endpoint and attention echo opt-in; web does
+ *     not (the composer writes the @ directly; we don't mutate
+ *     human-typed content).
  *
- * If you tweak step 2b/2c semantics, expect to update this file.
+ * If you tweak the enforce / normalise semantics, expect to update this file.
  */
 
-describe("group-chat mention enforcement + content normalisation", () => {
+describe("mention enforcement + content normalisation", () => {
   const getApp = useTestApp();
 
   /**
-   * Build a 3-agent group chat in `group` mode. Returns the sender plus two
-   * other agents whose `name` slug is known so tests can write `@<name>`
-   * tokens or push uuids into `metadata.mentions` interchangeably.
+   * Build a 3-agent group chat. Returns the sender plus two other
+   * agents whose `name` slug is known so tests can push uuids into
+   * `metadata.mentions` and assert the rendered `@<name>` content.
    */
   async function setupGroup(uid: string) {
     const app = getApp();
@@ -59,10 +66,10 @@ describe("group-chat mention enforcement + content normalisation", () => {
     return { sender, peer, chat };
   }
 
-  // ─── Step 2b: enforceGroupMention ──────────────────────────────────────
+  // ─── enforceMention ────────────────────────────────────────────────────
 
-  describe("step 2b — enforceGroupMention rejects no-recipient group sends", () => {
-    it("rejects when neither content nor metadata names a recipient", async () => {
+  describe("enforceMention rejects sends with no declared recipient", () => {
+    it("rejects when no routing is declared at all", async () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       await expect(
@@ -71,9 +78,9 @@ describe("group-chat mention enforcement + content normalisation", () => {
           chat.id,
           sender.agent.uuid,
           { source: "api", format: "text", content: "broadcast" },
-          { enforceGroupMention: true },
+          { enforceMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/explicit recipient/i);
     });
 
     it("rejects when only the sender is named (self-mention doesn't count)", async () => {
@@ -85,28 +92,16 @@ describe("group-chat mention enforcement + content normalisation", () => {
           chat.id,
           sender.agent.uuid,
           { source: "api", format: "text", content: "talking to myself", metadata: { mentions: [sender.agent.uuid] } },
-          { enforceGroupMention: true },
+          { enforceMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/explicit recipient/i);
     });
 
-    it("rejects when @token doesn't resolve to any participant", async () => {
-      const app = getApp();
-      const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
-      await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: "@nobody-by-this-name hi" },
-          { enforceGroupMention: true },
-        ),
-      ).rejects.toThrow(/explicit @mention/i);
-    });
-
-    it("rejects when the only @<name> sits inside a fenced code block", async () => {
-      // Mirrors the gate-1 behaviour of extractMentions: code-fenced @ tokens
-      // do not resolve to a real mention.
+    it("rejects when content contains an `@<name>` token but no explicit mentions are declared", async () => {
+      // Regression guard for the explicit-only contract: the server no
+      // longer parses content. An `@<peer>` written by a human or agent
+      // without a companion `metadata.mentions` / `receiverNames` is
+      // narrative text, not a wake-up declaration.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
@@ -115,24 +110,10 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { source: "api", format: "text", content: `look:\n\`\`\`\n@${peerA.name} in code\n\`\`\`` },
-          { enforceGroupMention: true },
+          { source: "api", format: "text", content: `@${peerA.name} status?` },
+          { enforceMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
-    });
-
-    it("accepts when content has a resolvable @<name>", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const { sender, peerA, chat } = await setupGroup(uid);
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: `@${peerA.name} status?` },
-        { enforceGroupMention: true },
-      );
-      expect(result.message).toBeDefined();
+      ).rejects.toThrow(/explicit recipient/i);
     });
 
     it("accepts when metadata.mentions names a non-sender participant", async () => {
@@ -144,17 +125,48 @@ describe("group-chat mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "ping", metadata: { mentions: [peerA.uuid] } },
-        { enforceGroupMention: true },
+        { enforceMention: true },
       );
       expect(result.message).toBeDefined();
     });
 
-    it("explicit metadata.mentions overrides content-extracted mentions (explicit-wins)", async () => {
-      // When the caller declares `metadata.mentions`, the server trusts
-      // that list and skips content `@<name>` extraction so a narrative
-      // `@<peer>` in the body can never silently widen the recipient set.
-      // To wake both peers, the caller must list both uuids in
-      // `metadata.mentions` (or declare via `receiverNames`).
+    it("accepts when receiverNames names a participant (server resolves to uuid)", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const { sender, peerA, chat } = await setupGroup(uid);
+      if (!peerA.name) throw new Error("peerA name missing");
+      const result = await sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        { source: "api", format: "text", content: "ping", receiverNames: [peerA.name] },
+        { enforceMention: true },
+      );
+      expect(result.message).toBeDefined();
+      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
+      expect(meta.mentions).toEqual([peerA.uuid]);
+    });
+
+    it("accepts when addressedToAgentIds declares a system-routed recipient (no metadata required)", async () => {
+      // github-delivery's shape: no metadata.mentions, but
+      // addressedToAgentIds is the routing declaration.
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const { sender, peerA, chat } = await setupGroup(uid);
+      const result = await sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        { source: "api", format: "text", content: "system event" },
+        { enforceMention: true, addressedToAgentIds: [peerA.uuid] },
+      );
+      expect(result.message).toBeDefined();
+    });
+
+    it("explicit metadata.mentions is the single source of truth (content @<name> ignored)", async () => {
+      // The server treats `@<peer>` in content as narrative text. Only
+      // declared mentions land in `message.metadata.mentions` — even
+      // when content names a different peer entirely.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, peerB, chat } = await setupGroup(uid);
@@ -163,23 +175,40 @@ describe("group-chat mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: `@${peerA.name} ping`, metadata: { mentions: [peerB.uuid] } },
-        { enforceGroupMention: true },
+        { enforceMention: true },
       );
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
       expect(meta.mentions).toEqual([peerB.uuid]);
     });
 
-    it("does NOT enforce on direct chats even when the flag is on", async () => {
-      // Direct chats have a single, unambiguous peer; users routinely send
-      // unaddressed text and the routing is still correct.
+    it("enforces on direct (2-speaker) chats too — the legacy 1:1 implicit-wake bypass is gone", async () => {
+      // The previous `enforceGroupMention` skipped 2-speaker chats and
+      // the fan-out auto-woke the peer. Under the explicit-only
+      // contract, web clients are expected to inject the peer's uuid
+      // into `metadata.mentions` for 1:1 chats; a bare send without
+      // mentions is now a 400.
       const app = getApp();
       const { sender, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
+      await expect(
+        sendMessage(
+          app.db,
+          chat.id,
+          sender.agent.uuid,
+          { source: "api", format: "text", content: "hi" },
+          { enforceMention: true },
+        ),
+      ).rejects.toThrow(/explicit recipient/i);
+    });
+
+    it("accepts a 1:1 send when the peer is declared in metadata.mentions (web composer pattern)", async () => {
+      const app = getApp();
+      const { sender, peer, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
       const result = await sendMessage(
         app.db,
         chat.id,
         sender.agent.uuid,
-        { source: "api", format: "text", content: "hi" },
-        { enforceGroupMention: true },
+        { source: "api", format: "text", content: "hi", metadata: { mentions: [peer.uuid] } },
+        { enforceMention: true },
       );
       expect(result.message).toBeDefined();
     });
@@ -196,9 +225,9 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
   });
 
-  // ─── Step 2c: normalizeMentionsInContent ───────────────────────────────
+  // ─── normalizeMentionsInContent ────────────────────────────────────────
 
-  describe("step 2c — normalizeMentionsInContent prepends missing @<name>", () => {
+  describe("normalizeMentionsInContent prepends missing @<name>", () => {
     it("prepends @<name> when metadata.mentions has someone the text doesn't address", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
@@ -228,8 +257,6 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
 
     it("treats existing tokens case-insensitively (no double-stamp)", async () => {
-      // `peerA.name` is e.g. "mt-a-xxxx"; the agent typed it uppercase but it
-      // still counts as already-present.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
@@ -293,13 +320,9 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
 
     it("ignores mentions whose participant has no `name` slug", async () => {
-      // Defensive: agents are seeded with names today, but if a participant
-      // ever lacks one (e.g. mid-rename, soft-deleted) we should silently
-      // skip rather than emit `@undefined`.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, peerB, chat } = await setupGroup(uid);
-      // Force peerA's name to null at the DB level.
       await app.db.update(agents).set({ name: null }).where(eq(agents.uuid, peerA.uuid));
       const result = await sendMessage(
         app.db,
@@ -330,8 +353,6 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
-      // `enforceGroupMention` is off so empty-content edge case isn't blocked
-      // by the receiver-required check; we're isolating the normalisation step.
       const result = await sendMessage(
         app.db,
         chat.id,
@@ -371,9 +392,6 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
 
     it("ignores @<name> tokens hidden in code fences (still prepends real ones)", async () => {
-      // The agent's text only mentions peerA inside a code block, which
-      // doesn't count as a real @ — the normaliser should still prepend the
-      // missing token from metadata.mentions.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
@@ -391,8 +409,8 @@ describe("group-chat mention enforcement + content normalisation", () => {
 
   // ─── Combined: enforce + normalise on the same call ────────────────────
 
-  describe("step 2b + 2c together (the agent endpoint configuration)", () => {
-    it("rejects bare unaddressed group sends even when normalisation is on", async () => {
+  describe("enforceMention + normalizeMentionsInContent together (the agent endpoint configuration)", () => {
+    it("rejects unaddressed sends even when normalisation is on", async () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       await expect(
@@ -401,14 +419,14 @@ describe("group-chat mention enforcement + content normalisation", () => {
           chat.id,
           sender.agent.uuid,
           { source: "api", format: "text", content: "hi" },
-          { enforceGroupMention: true, normalizeMentionsInContent: true },
+          { enforceMention: true, normalizeMentionsInContent: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/explicit recipient/i);
     });
 
     it("normalises a reply (mentions in metadata, no @ in text) and stores @<name> in DB", async () => {
-      // The end-to-end shape of the result-sink reply path: trigger-sender is
-      // in metadata.mentions but the agent's text is bare.
+      // result-sink reply shape: trigger-sender is in metadata.mentions
+      // but the agent's text is bare.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
@@ -417,11 +435,10 @@ describe("group-chat mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
-        { enforceGroupMention: true, normalizeMentionsInContent: true },
+        { enforceMention: true, normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} 今天是 2026-04-27。`);
 
-      // Persisted row also reflects normalised content + merged mentions.
       const [row] = await app.db.select().from(messages).where(eq(messages.id, result.message.id)).limit(1);
       if (!row) throw new Error("message row missing");
       expect(row.content).toBe(`@${peerA.name} 今天是 2026-04-27。`);
@@ -446,14 +463,14 @@ describe("group-chat mention enforcement + content normalisation", () => {
       return { sender, peerA, peerB, chatId: chatRes.json().id as string };
     }
 
-    it("rejects no-mention group sends with 400", async () => {
+    it("rejects no-mention sends with 400", async () => {
       const { sender, chatId } = await setupViaApi(crypto.randomUUID().slice(0, 6));
       const res = await sender.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
         content: "everyone, status?",
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toMatch(/explicit @mention/i);
+      expect(res.json().error).toMatch(/explicit recipient/i);
     });
 
     it("normalises reply content (mentions in metadata, no @ in text)", async () => {
@@ -468,21 +485,23 @@ describe("group-chat mention enforcement + content normalisation", () => {
       expect(res.json().content).toBe(`@${peerA.agent.name} done`);
     });
 
-    it("accepts content with explicit @<name> verbatim", async () => {
+    it("accepts content with explicit @<name> when mentions are also declared", async () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chatId } = await setupViaApi(uid);
       const res = await sender.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
         content: `@${peerA.agent.name} status?`,
+        metadata: { mentions: [peerA.agent.uuid] },
       });
       expect(res.statusCode).toBe(201);
+      // normalize is idempotent: the @<name> is already present.
       expect(res.json().content).toBe(`@${peerA.agent.name} status?`);
     });
   });
 
-  // ─── Integration: admin endpoint (POST /admin/chats/:id/messages) ──────
+  // ─── Integration: web endpoint (POST /chats/:id/messages) ──────────────
 
-  describe("integration — admin endpoint POST /admin/chats/:id/messages", () => {
+  describe("integration — web endpoint POST /chats/:id/messages", () => {
     async function setupViaApi(uid: string) {
       const app = getApp();
       const sender = await createTestAgent(app, { name: `adm-s-${uid}` });
@@ -496,19 +515,20 @@ describe("group-chat mention enforcement + content normalisation", () => {
       return { sender, peerA, peerB, chatId: chatRes.json().id as string };
     }
 
-    it("rejects bypass attempts (no @ + no metadata.mentions) with 400", async () => {
+    it("rejects bypass attempts (no mentions declared) with 400", async () => {
       const { sender, chatId } = await setupViaApi(crypto.randomUUID().slice(0, 6));
       const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
         format: "text",
         content: "broadcast — no @",
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toMatch(/explicit @mention/i);
+      expect(res.json().error).toMatch(/explicit recipient/i);
     });
 
     it("does NOT normalise content even when metadata.mentions is provided", async () => {
-      // Web users typed exactly what they typed; the picker is responsible for
-      // inserting @ tokens. Server must not silently rewrite human-typed text.
+      // Web users typed exactly what they typed; the composer is responsible
+      // for inserting @ tokens. Server must not silently rewrite human-typed
+      // text.
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chatId } = await setupViaApi(uid);
       const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
@@ -520,23 +540,18 @@ describe("group-chat mention enforcement + content normalisation", () => {
       expect(res.json().content).toBe("team status update");
     });
 
-    it("accepts a real picker-style send (content already has @<name>)", async () => {
+    it("accepts a real picker-style send (content already has @<name>, mentions declared)", async () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chatId } = await setupViaApi(uid);
       const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
         format: "text",
         content: `@${peerA.agent.name} how's it going?`,
+        metadata: { mentions: [peerA.agent.uuid] },
       });
       expect(res.statusCode).toBe(201);
       expect(res.json().content).toBe(`@${peerA.agent.name} how's it going?`);
     });
   });
-
-  // sendToAgent is gone — the by-name routing primitive has been retired
-  // (see first-tree-context PR #281). CLI `chat send <name>` now goes
-  // through `POST /api/v1/agent/chats/:chatId/messages` with the
-  // recipient name declared in `receiverNames`. Mention injection on the
-  // sendMessage path is exercised by the group/direct-chat suites above.
 
   // ─── Cross-cutting: persisted state matches API response ───────────────
 
@@ -550,7 +565,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "ok", metadata: { mentions: [peerA.uuid] } },
-        { enforceGroupMention: true, normalizeMentionsInContent: true },
+        { enforceMention: true, normalizeMentionsInContent: true },
       );
       const [row] = await app.db.select().from(messages).where(eq(messages.id, result.message.id)).limit(1);
       if (!row) throw new Error("message row missing");
@@ -560,8 +575,6 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
 
     it("rejected sends do not persist a row", async () => {
-      // 400 on enforce must roll back the transaction — no half-written
-      // message, no orphan inbox entries.
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       const beforeCount = await app.db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chat.id));
@@ -571,7 +584,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           chat.id,
           sender.agent.uuid,
           { source: "api", format: "text", content: "broadcast" },
-          { enforceGroupMention: true },
+          { enforceMention: true },
         ),
       ).rejects.toThrow();
       const afterCount = await app.db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chat.id));

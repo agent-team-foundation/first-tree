@@ -277,19 +277,16 @@ export async function respondAttention(
   // is a side effect of `respond`; failure to write the message is
   // swallowed (the canonical answer is on `attentions.response`).
   //
-  // Routing: prefix the echo content with `@<originAgent>` and let
-  // sendMessage's standard `@<name>` extraction wake them. The asking
-  // agent is already a speaker of origin_chat_id (raise invariant), so
-  // the mention always resolves. Visible-in-thread is the goal — readers
-  // of the chat history see the reply is directed at the asker, not just
-  // a free-floating message.
-  const [originAgentRow] = await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(eq(agents.uuid, row.originAgentId))
-    .limit(1);
-  const mentionPrefix = originAgentRow?.name ? `@${originAgentRow.name} ` : "";
-  const echoContent = `${mentionPrefix}${responseText}`;
+  // Routing: declare the asker via explicit `metadata.mentions` (the
+  // raise invariant guarantees they're a speaker of `origin_chat_id`).
+  // `normalizeMentionsInContent: true` lets sendMessage prepend the
+  // `@<name>` prefix automatically by resolving the uuid against the
+  // chat's participant list — so the rendered message reads
+  // "@<asker> …" and the asker is woken via the explicit mention. We
+  // therefore don't need to look up the asker's name here ourselves,
+  // which also removes the post-update DB call that previously could
+  // throw between the attention close and the chat echo (PR #615
+  // atomicity follow-up).
   try {
     await sendMessage(
       db,
@@ -297,18 +294,15 @@ export async function respondAttention(
       callerHumanId,
       {
         format: "text",
-        content: echoContent,
+        content: responseText,
         // Tag the message so consumers can attribute it to the NHA flow
         // (web rendering may opt to chip-decorate "answer to <subject>",
-        // exports / search may filter on it). The bag also carries the
-        // attention id so the linkage is explicit, not inferred.
-        metadata: { attentionResponseFor: attentionId },
+        // exports / search may filter on it). `mentions` is the routing
+        // intent that wakes the asking agent.
+        metadata: { attentionResponseFor: attentionId, mentions: [row.originAgentId] },
         source: "api",
       },
-      // Content extraction ON so the `@<originAgent>` prefix above resolves
-      // and wakes the asker. Any narrative `@peer` the human quoted in the
-      // reply may also resolve — acceptable: the human typed it, and the
-      // standard chat-send path treats typed `@peer` the same way.
+      { normalizeMentionsInContent: true },
     );
   } catch (err) {
     log.warn(

@@ -486,6 +486,40 @@ async function processInboundMessage(
       ? (event.content as { text: string }).text
       : JSON.stringify(event.content);
 
+  // Resolve routing intent explicitly — the server no longer parses
+  // `@<name>` tokens out of content (see services/message.ts Routing
+  // contract). For Feishu inbound:
+  //   - The bot agent is always the bridge recipient. First-tree feishu
+  //     chats are constructed with exactly bot + sender as speakers
+  //     (`findOrCreateChatForChannel`), so the bot is the natural wake
+  //     target on every inbound message — equivalent to the old 1:1
+  //     implicit-wake behaviour the server used to apply unconditionally.
+  //   - Any structured `event.mentions` (Feishu's @-mention list with
+  //     `openId`) is resolved against the bound-agent mapping; resolved
+  //     ids that point at first-tree agents are included. Unresolved
+  //     open_ids are dropped + warn-logged (Feishu users who haven't
+  //     completed `/bind` yet, or @-mentions of feishu groups/bots that
+  //     don't map to a first-tree agent).
+  //   - The sender's own agentId is excluded from `mentions` — wake-up
+  //     fan-out already filters out the sender, but keeping it out of
+  //     the persisted set prevents downstream consumers from rendering
+  //     "you mentioned yourself".
+  const mentionSet = new Set<string>();
+  mentionSet.add(bot.agentId);
+  for (const m of event.mentions ?? []) {
+    const mapping = await mappingService.findAgentByExternalUser(db, "feishu", m.openId);
+    if (mapping?.agentId) {
+      mentionSet.add(mapping.agentId);
+    } else {
+      log.warn(
+        { openId: m.openId, name: m.name, appId: bot.appId, chatId },
+        "feishu mention dropped: open_id is not bound to a first-tree agent",
+      );
+    }
+  }
+  mentionSet.delete(senderAgentId);
+  const mentions = [...mentionSet];
+
   const { message: msg, recipients } = await sendMessage(db, chatId, senderAgentId, {
     format: event.messageType === "text" ? "text" : "card",
     content: event.messageType === "text" ? content : event.content,
@@ -495,6 +529,7 @@ async function processInboundMessage(
       externalMessageId: event.messageId,
       externalChannelId: event.externalChannelId,
       messageType: event.messageType,
+      ...(mentions.length > 0 ? { mentions } : {}),
     },
   });
 
