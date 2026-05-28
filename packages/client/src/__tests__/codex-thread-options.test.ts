@@ -12,7 +12,9 @@ import { buildCodexThreadOptions } from "../handlers/codex.js";
  * regression here would silently break ChatGPT-auth users at first turn
  * (the symptom we hit before this fix: "turn completed with no message").
  */
-function basePayload(overrides: Partial<AgentRuntimeConfigPayload> = {}): AgentRuntimeConfigPayload {
+function basePayload(
+  overrides: Partial<Extract<AgentRuntimeConfigPayload, { kind: "codex" }>> = {},
+): AgentRuntimeConfigPayload {
   return {
     kind: "codex",
     prompt: { append: "" },
@@ -20,6 +22,7 @@ function basePayload(overrides: Partial<AgentRuntimeConfigPayload> = {}): AgentR
     mcpServers: [],
     env: [],
     gitRepos: [],
+    reasoningEffort: "high",
     ...overrides,
   };
 }
@@ -41,9 +44,19 @@ describe("buildCodexThreadOptions", () => {
     expect(opts.skipGitRepoCheck).toBe(true);
     expect(opts.sandboxMode).toBe("workspace-write");
     expect(opts.approvalPolicy).toBe("never");
-    // Footgun F3: minimal reasoning is incompatible with default tools.
+    // Default reasoning effort for codex agents is "high" (footgun F3: minimal
+    // reasoning is incompatible with default tools and is excluded entirely).
     expect(opts.modelReasoningEffort).toBe("high");
     expect(opts.webSearchEnabled).toBe(false);
+  });
+
+  it("passes the operator-configured reasoning effort through to the SDK", () => {
+    expect(buildCodexThreadOptions(basePayload({ reasoningEffort: "medium" }), "/tmp/wsk").modelReasoningEffort).toBe(
+      "medium",
+    );
+    expect(buildCodexThreadOptions(basePayload({ reasoningEffort: "xhigh" }), "/tmp/wsk").modelReasoningEffort).toBe(
+      "xhigh",
+    );
   });
 
   it("derives additionalDirectories from gitRepos (with deriveRepoLocalPath fallback)", () => {

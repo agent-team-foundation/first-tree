@@ -30,6 +30,7 @@ export type SaveBarProps = {
 const SECTION_LABELS: Record<DraftSectionName, string> = {
   prompt: "Prompt",
   model: "Model",
+  effort: "Reasoning effort",
   mcp: "MCP",
   env: "Env",
   git: "Git",

@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   CanUseTool,
+  EffortLevel,
   McpServerConfig,
   PermissionMode,
   PermissionResult,
@@ -506,6 +507,41 @@ export function mapMcpServers(payload: AgentRuntimeConfigPayload): Record<string
   return out;
 }
 
+/** Payload-derived slice of the Claude Code SDK query options. */
+export type ClaudeQueryConfigOptions = {
+  model?: string;
+  systemPrompt?: { type: "preset"; preset: "claude_code"; append: string };
+  mcpServers?: Record<string, McpServerConfig>;
+  effort?: EffortLevel;
+};
+
+/**
+ * Build the config-derived slice of the SDK query options (model, systemPrompt
+ * append, MCP servers, reasoning effort). Kept pure and exported so these
+ * mappings are unit-testable; the session-bound options (env, canUseTool,
+ * abortController, sessionId/resume) stay inline in `buildQuery`.
+ *
+ * Reasoning effort: the claude variant's `""` is an inherit sentinel — when
+ * set we omit the `effort` option so the SDK falls back to the operator's local
+ * `~/.claude/settings.json` effortLevel (preserving pre-feature behavior). A
+ * non-empty value is passed explicitly and overrides that local setting.
+ */
+export function buildClaudeQueryOptions(
+  payload: AgentRuntimeConfigPayload | undefined,
+  combinedAppend: string,
+): ClaudeQueryConfigOptions {
+  const options: ClaudeQueryConfigOptions = {};
+  if (payload?.model) options.model = payload.model;
+  if (combinedAppend.length > 0) {
+    options.systemPrompt = { type: "preset", preset: "claude_code", append: combinedAppend };
+  }
+  if (payload?.mcpServers.length) options.mcpServers = mapMcpServers(payload);
+  if (payload?.kind === "claude-code" && payload.reasoningEffort) {
+    options.effort = payload.reasoningEffort;
+  }
+  return options;
+}
+
 /**
  * Decide whether a model swap can use `query.setModel()` (in-flight, ~0ms)
  * vs needing a `resume` restart (~5–10s cold start).
@@ -837,11 +873,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // other tools auto-allow. See buildAskUserCanUseTool.
         canUseTool: buildAskUserCanUseTool(sessionCtx),
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
-        ...(payload?.model ? { model: payload.model } : {}),
-        ...(combinedAppend.length > 0
-          ? { systemPrompt: { type: "preset", preset: "claude_code", append: combinedAppend } }
-          : {}),
-        ...(payload?.mcpServers.length ? { mcpServers: mapMcpServers(payload) } : {}),
+        // model / systemPrompt / mcpServers / effort — the config-derived slice.
+        // `effort: ""` (inherit) is omitted so the SDK uses the local effortLevel.
+        ...buildClaudeQueryOptions(payload, combinedAppend),
       },
     });
   }

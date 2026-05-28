@@ -255,7 +255,11 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
     skipGitRepoCheck: true,
     sandboxMode: "workspace-write",
     approvalPolicy: "never",
-    modelReasoningEffort: "high",
+    // Operator-configured reasoning effort. Defaults to "high" (the value this
+    // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
+    // is a subset of the SDK's ModelReasoningEffort and deliberately omits
+    // "minimal", which is incompatible with the default tool set (footgun F3).
+    modelReasoningEffort: payload.kind === "codex" ? payload.reasoningEffort : "high",
     webSearchEnabled: false,
     additionalDirectories,
   };
@@ -1052,6 +1056,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "high",
         };
       }
 
@@ -1099,6 +1104,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "high",
         };
       }
 

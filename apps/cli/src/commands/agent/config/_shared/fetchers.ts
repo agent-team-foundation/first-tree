@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig, AgentRuntimeConfigPayload } from "@first-tree/shared";
+import type { AgentRuntimeConfig, AgentRuntimeConfigPatch } from "@first-tree/shared";
 import { fail } from "../../../../cli/output.js";
 import { cliFetch } from "../../../../core/cli-fetch.js";
 import { type ResolvedAgent, resolveAgent } from "../../../_shared/resolve-agent.js";
@@ -54,7 +54,7 @@ export async function patchConfig(
   adminToken: string,
   agentId: string,
   expectedVersion: number,
-  patch: Partial<AgentRuntimeConfigPayload>,
+  patch: AgentRuntimeConfigPatch,
 ): Promise<AgentRuntimeConfig> {
   return adminFetch<AgentRuntimeConfig>(`${serverUrl}/api/v1/agents/${agentId}/config`, {
     method: "PATCH",
@@ -67,6 +67,7 @@ export function printConfig(cfg: AgentRuntimeConfig): void {
   process.stdout.write(`Agent: ${cfg.agentId}\n`);
   process.stdout.write(`Version: ${cfg.version} (updated ${cfg.updatedAt} by ${cfg.updatedBy})\n`);
   process.stdout.write(`\nModel:    ${cfg.payload.model || "(unset)"}\n`);
+  process.stdout.write(`Reasoning effort: ${cfg.payload.reasoningEffort || "(unset — inherits local effortLevel)"}\n`);
   process.stdout.write(`Prompt append: ${cfg.payload.prompt.append ? "(set)" : "(empty)"}\n`);
   if (cfg.payload.prompt.append) process.stdout.write(`  > ${cfg.payload.prompt.append.replace(/\n/g, "\n  > ")}\n`);
   process.stdout.write(`\nMCP servers (${cfg.payload.mcpServers.length}):\n`);
