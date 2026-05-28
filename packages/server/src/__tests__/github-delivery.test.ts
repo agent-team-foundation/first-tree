@@ -51,17 +51,20 @@ function makeEvent(opts: {
   entityKey: string;
   involves?: NormalizedEvent["involves"];
   body?: string;
+  rawEventType?: string;
+  rawAction?: string;
+  title?: string;
 }): NormalizedEvent {
   return {
     source: { kind: "github-app-installation", installationId: 1, organizationId: opts.orgId },
     deliveryId: "delivery-1",
-    rawEventType: "pull_request",
-    rawAction: "opened",
+    rawEventType: opts.rawEventType ?? "pull_request",
+    rawAction: opts.rawAction ?? "opened",
     entity: {
       type: opts.entityType,
       repo: "owner/repo",
       key: opts.entityKey,
-      title: "Refactor inbox",
+      title: opts.title ?? "Refactor inbox",
       url: `https://github.com/owner/repo/pull/1`,
     },
     actor: { githubLogin: "alice", isBot: false },
@@ -129,6 +132,225 @@ describe("deliverNormalizedEvent", () => {
     const content = sent[0]?.content as { type: string; reason: string };
     expect(content.type).toBe("github_event");
     expect(content.reason).toBe("subscribed");
+  });
+
+  it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+
+    // Seed an existing github-bound chat with a stale topic (e.g. PR title
+    // was different when the chat was minted).
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      topic: "PR repo#200: Old title from creation",
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#200",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#200",
+    });
+    await deliverNormalizedEvent(app, event, [target]);
+
+    const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(row?.topic).toBe("PR repo#200: Refactor inbox");
+  });
+
+  it("preserves the original prefix on a review-flow event (no PR → PR Review drift)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+
+    // Chat was minted from `pull_request.opened` → head is the plain "PR"
+    // prefix. A later review event must update the title but keep "PR" — it
+    // must NOT promote the head to "PR Review".
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      topic: "PR repo#200: Old title",
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#200",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#200",
+      rawEventType: "pull_request_review",
+      rawAction: "submitted",
+      title: "Renamed title",
+    });
+    await deliverNormalizedEvent(app, event, [target]);
+
+    const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(row?.topic).toBe("PR repo#200: Renamed title");
+  });
+
+  it("does NOT overwrite the owning topic when a linked (fixes_link) entity's event arrives", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+
+    // Chat was minted for issue#42 (its direct anchor + topic). A PR#99 that
+    // `Fixes #42` later got a `fixes_link` mapping row pointing at the same
+    // chat. An event for PR#99 must NOT hijack the chat's issue topic.
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      topic: "Issue repo#42: Login bug",
+    });
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "issue",
+        entityKey: "owner/repo#42",
+        chatId,
+        boundVia: "direct",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#99",
+        chatId,
+        boundVia: "fixes_link",
+      },
+    ]);
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#99",
+      title: "Fix the login bug",
+    });
+    await deliverNormalizedEvent(app, event, [target]);
+
+    const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(row?.topic).toBe("Issue repo#42: Login bug");
+  });
+
+  it("does NOT touch chats.topic for chats without a github entity mapping (manual / agent-set topic is preserved)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+
+    // A chat that the agent renamed to a custom label — no mapping row.
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      topic: "agent-chosen label",
+    });
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#999",
+    });
+    await deliverNormalizedEvent(app, event, [target]);
+
+    const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(row?.topic).toBe("agent-chosen label");
   });
 
   it("creates a fresh chat + mapping for a `new` target, card.reason matches involveReason, mentionedUser populated", async () => {

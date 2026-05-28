@@ -324,6 +324,22 @@ export class FirstTreeHubSDK {
   }
 
   /**
+   * Update chat metadata. Currently the only mutable field is `topic` — the
+   * human-readable label rendered by `resolveChatTitle` and shown in the
+   * workspace chat list. Pass `topic: null` to clear it (the title then
+   * falls back to first-message preview / participant names).
+   *
+   * Auth: caller must be a speaker in the chat (server-side
+   * `assertParticipant` gate).
+   */
+  async updateChat(chatId: string, body: { topic: string | null }): Promise<Chat> {
+    return this.requestJson<Chat>(`/api/v1/agent/chats/${chatId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
    * Add a participant to a chat by uuid or by name. Names resolve within the
    * chat's organization. Idempotent: re-adding an existing speaker returns
    * the chat's current participant list (the server treats it as a conflict

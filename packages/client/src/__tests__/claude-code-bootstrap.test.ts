@@ -309,7 +309,9 @@ describe("CLAUDE.md generation", () => {
     });
     expect(md).toContain("## Current Chat Context");
     expect(md).toContain("Chat ID: chat-cc");
-    expect(md).toContain("Title: ship v1");
+    // Topic is the canonical label line; Title (auto-derived) is suppressed
+    // when it equals topic. See chat-context-section.ts.
+    expect(md).toContain("Topic: ship v1");
     expect(md).toContain("@alice (Alice, type=human)");
     expect(md).toContain("@bob-bot (Bob Bot, type=agent)");
     expect(md).not.toContain("Your owner:");

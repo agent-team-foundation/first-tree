@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
 import type { AudienceTarget } from "./github-audience.js";
-import { resolveTargetChat } from "./github-entity-chat.js";
+import { refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 
@@ -68,6 +68,22 @@ export async function deliverNormalizedEvent(
         continue;
       }
       if (resolved.created) stats.newChats += 1;
+
+      // Existing github-sourced chats: refresh the topic so PR / issue
+      // title edits on GitHub propagate into the workspace chat list. The
+      // helper only touches a chat whose own `direct` anchor entity matches
+      // this event (never a linked fixes_link entity), preserves the original
+      // prefix, and no-ops when the payload carries no title — keeping the
+      // refresh scoped to chats Hub originally minted from this entity.
+      if (!resolved.created) {
+        const entity: GithubEntity = {
+          type: event.entity.type,
+          key: event.entity.key,
+          title: event.entity.title,
+          url: event.entity.url,
+        };
+        await refreshGithubChatTopic(app.db, resolved.chatId, entity);
+      }
 
       const card = buildCard(event, target);
       const mentionedUser = card.mentionedUser ?? undefined;
