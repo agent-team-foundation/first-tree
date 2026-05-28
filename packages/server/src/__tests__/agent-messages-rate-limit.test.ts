@@ -31,6 +31,7 @@ describe("Agent Messages — per-agent rate limit", () => {
       sender.request("POST", `/api/v1/agent/chats/${chat.id}/messages`, {
         format: "text",
         content: `@${target.agent.name} msg ${i}`,
+        receiverNames: [target.agent.name],
       });
 
     expect((await send(1)).statusCode).toBe(201);
@@ -63,6 +64,7 @@ describe("Agent Messages — per-agent rate limit", () => {
         await a1.request("POST", `/api/v1/agent/chats/${chat1.id}/messages`, {
           format: "text",
           content: `@${target.agent.name} 1`,
+          receiverNames: [target.agent.name],
         })
       ).statusCode,
     ).toBe(201);
@@ -71,6 +73,7 @@ describe("Agent Messages — per-agent rate limit", () => {
         await a1.request("POST", `/api/v1/agent/chats/${chat1.id}/messages`, {
           format: "text",
           content: `@${target.agent.name} 2`,
+          receiverNames: [target.agent.name],
         })
       ).statusCode,
     ).toBe(201);
@@ -79,6 +82,7 @@ describe("Agent Messages — per-agent rate limit", () => {
         await a1.request("POST", `/api/v1/agent/chats/${chat1.id}/messages`, {
           format: "text",
           content: `@${target.agent.name} 3`,
+          receiverNames: [target.agent.name],
         })
       ).statusCode,
     ).toBe(429);
@@ -91,6 +95,7 @@ describe("Agent Messages — per-agent rate limit", () => {
         await a3.request("POST", `/api/v1/agent/chats/${chat3.id}/messages`, {
           format: "text",
           content: `@${target.agent.name} 1`,
+          receiverNames: [target.agent.name],
         })
       ).statusCode,
     ).toBe(201);

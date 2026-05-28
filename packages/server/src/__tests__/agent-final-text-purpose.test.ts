@@ -6,28 +6,29 @@ import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * v1 §四 改造 4 (b) — `purpose: "agent-final-text"` bypass channel.
+ * `purpose: "agent-final-text"` bypass channel.
  *
  * `result-sink.forwardResult` and `AskUserQuestion.canUseTool` (claude-code
- * handler) both call `sdk.sendMessage` with this tag set. Without the bypass,
- * the server's `enforceGroupMention` guard rejects every group-chat write
- * that has no explicit `@<name>` — and改造 4 deleted the auto-mention
- * injection that previously fed it. These tests pin:
+ * handler) both call `sdk.sendMessage` with this tag set. Without the
+ * bypass, the server's `enforceMention` guard rejects every write that
+ * has no explicit `metadata.mentions` / `receiverNames` / `addressedTo`.
+ * These tests pin:
  *
- *   1. group chat + no @ + `purpose` tag → message stored, every fan-out row
- *      is `notify=false`, no recipients are woken;
- *   2. group chat + no @ + NO `purpose` tag → still 400 (regression guard);
- *   3. direct chat: bypass also flips fan-out to silent so peer agents don't
- *      get woken by a stray final text;
- *   4. group chat WITH @ + `purpose` tag → still silent (the bypass also
- *      mutes wakeups it would otherwise produce — final text never wakes,
- *      even if it incidentally names someone).
+ *   1. chat + no mentions + `purpose` tag → message stored, every fan-out
+ *      row is `notify=false`, no recipients are woken;
+ *   2. chat + no mentions + NO `purpose` tag → still 400 (regression
+ *      guard);
+ *   3. direct chat: bypass also flips fan-out to silent so peer agents
+ *      don't get woken by a stray final text;
+ *   4. chat WITH explicit mentions + `purpose` tag → still silent (the
+ *      bypass also mutes wakeups it would otherwise produce — final text
+ *      never wakes, even if it incidentally names someone).
  */
 
 describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => {
   const getApp = useTestApp();
 
-  it("accepts a group-chat send with no @ when purpose='agent-final-text' (no 400)", async () => {
+  it("accepts a send with no mentions when purpose='agent-final-text' (no 400)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
     const peerA = await createTestAgent(app, { type: "agent" });
@@ -48,7 +49,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
         content: "i am done — turn ended",
         purpose: "agent-final-text",
       },
-      { enforceGroupMention: true },
+      { enforceMention: true },
     );
 
     expect(result.message).toBeDefined();
@@ -78,7 +79,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
         content: "final text broadcast",
         purpose: "agent-final-text",
       },
-      { enforceGroupMention: true },
+      { enforceMention: true },
     );
 
     // Every fan-out row for this message must be notify=false.
@@ -92,7 +93,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     }
   });
 
-  it("still 400s when purpose is absent (regression guard for the enforce rule)", async () => {
+  it("still 400s when purpose is absent and no mentions declared (regression guard for the enforce rule)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
     const peerA = await createTestAgent(app, { type: "agent" });
@@ -109,9 +110,9 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
         chat.id,
         peerA.agent.uuid,
         { source: "api", format: "text", content: "i am done — turn ended" },
-        { enforceGroupMention: true },
+        { enforceMention: true },
       ),
-    ).rejects.toThrow(/explicit @mention/i);
+    ).rejects.toThrow(/explicit recipient/i);
   });
 
   it("direct chat: bypass forces fan-out notify=false even when peer would normally wake on mention", async () => {
@@ -165,9 +166,10 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     expect(res.statusCode).toBe(201);
   });
 
-  it("API integration: same endpoint without `purpose` still rejects no-@ group sends with 400 (regression)", async () => {
-    // Use a real group (>=3 speakers); two-speaker chats are treated as
-    // 1-on-1s by `enforceGroupMention` and bypass the @-required guard.
+  it("API integration: same endpoint without `purpose` still rejects no-mention sends with 400 (regression)", async () => {
+    // `enforceMention` now applies to every chat shape (no more 1:1
+    // bypass); pick a real group here for parity with the original
+    // regression scenario.
     const app = getApp();
     const sender = await createTestAgent(app, { type: "agent" });
     const peer1 = await createTestAgent(app, { type: "agent" });
@@ -184,6 +186,6 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       content: "this is my final text",
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/explicit @mention/i);
+    expect(res.json().error).toMatch(/explicit recipient/i);
   });
 });

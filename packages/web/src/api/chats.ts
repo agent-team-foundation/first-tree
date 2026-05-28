@@ -52,10 +52,25 @@ export function patchChatEngagement(
   return api.post(`/chats/${encodeURIComponent(chatId)}/engagement`, { status });
 }
 
-export function sendChatMessage(chatId: string, content: string): Promise<Message> {
+/**
+ * Send a text message to a chat.
+ *
+ * `mentions` carries the routing intent. The server enforces explicit
+ * declaration (see services/message.ts "Routing contract"): empty
+ * mentions are rejected with 400, unless this is a final-text send (the
+ * web composer never sends those — that's an agent-runtime path).
+ *
+ * Callers must derive `mentions` from the composer's chip state
+ * (`extractMentions(draft, participants)` returns agent uuids) and
+ * auto-inject the peer's uuid in 2-speaker chats so a bare "hi" with
+ * no `@` still reaches the recipient. Passing `[]` will reach the
+ * server and 400.
+ */
+export function sendChatMessage(chatId: string, content: string, mentions: string[]): Promise<Message> {
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
     content,
+    ...(mentions.length > 0 ? { metadata: { mentions } } : {}),
   });
 }
 

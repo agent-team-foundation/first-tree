@@ -144,11 +144,13 @@ describe("listMeChats: Phase 1 needs-attention scoping", () => {
   // R2 — explicit @me in unread window
   // ---------------------------------------------------------------------------
 
-  it("R2.a (痛点 t7): 1v1 agent → human plain final message → chatHasExplicitMentionToMe = false", async () => {
-    // The v1 1-on-1 auto-mention still bumps `unread_mention_count` (red
-    // dot stays correct), but `metadata.mentions` is empty, so
-    // `chatHasExplicitMentionToMe` is false → the chat does NOT pin into
-    // Needs attention. This is the original user-reported false positive.
+  it("R2.a (痛点 t7): 1v1 agent → human plain message without explicit mention → chatHasExplicitMentionToMe = false", async () => {
+    // Post-retire of content extraction + the 1:1 implicit-wake bypass, a
+    // bare agent send to a human peer with no `metadata.mentions` neither
+    // bumps the red-dot counter nor flags the chat as Needs-attention.
+    // The original "痛点 t7" false positive (plain reply pinning the
+    // chat) cannot recur because nothing about the send claims the
+    // human's attention any more.
     const app = getApp();
     const me = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `r2a-${crypto.randomUUID().slice(0, 6)}` });
@@ -161,9 +163,8 @@ describe("listMeChats: Phase 1 needs-attention scoping", () => {
       content: "ack",
     });
     const row = await rowFor(chatId, me);
-    // v1 red-dot contract preserved.
-    expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
-    // R2 not fired — chat must not pin.
+    // Without explicit mention, neither counter fires.
+    expect(row?.unreadMentionCount ?? 0).toBe(0);
     expect(row?.chatHasExplicitMentionToMe).toBe(false);
   });
 

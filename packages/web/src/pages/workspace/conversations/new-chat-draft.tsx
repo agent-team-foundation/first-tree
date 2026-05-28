@@ -380,7 +380,7 @@ export function NewChatDraft({
       }
       const trimmed = text.trim();
       if (trimmed.length > 0) {
-        await sendChatMessage(chatId, trimmed);
+        await sendChatMessage(chatId, trimmed, mentions);
       }
       return chatId;
     },
@@ -429,10 +429,18 @@ export function NewChatDraft({
     // the server (no such participant). Compute the union here so the
     // committed audience always reflects what the user just typed.
     const participantIds = Array.from(new Set([...chips, ...bodyMentions]));
+    // Explicit-only routing contract (services/message.ts): the server
+    // no longer infers wake targets from content. For 1:1 chats (one
+    // peer), auto-inject the peer's uuid so a bare "hi" still wakes
+    // them — this mirrors the in-chat composer's `effectiveSendMentions`
+    // derivation. For group chats, `canSend` already requires at least
+    // one `bodyMentions` entry.
+    const peerForOneOnOne = participantIds.length === 1 ? participantIds[0] : undefined;
+    const effectiveMentions = peerForOneOnOne ? Array.from(new Set([...bodyMentions, peerForOneOnOne])) : bodyMentions;
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: bodyMentions });
+      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: effectiveMentions });
     } finally {
       setSending(false);
     }
