@@ -111,7 +111,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         alignItems: "flex-start",
         gap: "var(--sp-2)",
         padding: "var(--sp-3) var(--sp-3_5)",
-        background: "var(--surface-1)",
+        background: "var(--bg-raised)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-input)",
         boxShadow: "var(--shadow-md)",

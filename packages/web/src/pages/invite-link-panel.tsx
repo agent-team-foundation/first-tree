@@ -70,13 +70,15 @@ export function InviteLinkPanel() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {error && <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>}
+        {error && (
+          <div className="rounded-[var(--radius-panel)] bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+        )}
         {invite ? (
           <>
             <div className="flex gap-2">
               <input
                 readOnly
-                className="flex-1 rounded-md border bg-muted px-2 py-1 text-label font-mono"
+                className="flex-1 rounded-[var(--radius-panel)] border bg-muted px-2 py-1 text-label font-mono"
                 value={invite.inviteUrl}
               />
               <Button

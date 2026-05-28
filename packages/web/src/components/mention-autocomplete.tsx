@@ -451,7 +451,7 @@ export function MentionAutocompletePopover({
       ref={popoverRef}
       role="listbox"
       aria-label="Mention suggestions"
-      className={cn("absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg")}
+      className={cn("absolute z-20 max-h-56 overflow-auto rounded-[var(--radius-panel)] border shadow-lg")}
       style={{
         bottom: "calc(100% + var(--sp-1))",
         left: 0,

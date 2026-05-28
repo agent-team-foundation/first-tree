@@ -681,7 +681,7 @@ function TabsNav({
               aria-selected={active}
               onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
               className={cn(
-                "bg-transparent border-0 cursor-pointer transition-colors",
+                "bg-transparent border-0 cursor-pointer transition-colors text-body",
                 "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 !active && "hover:bg-accent",
               )}
@@ -690,7 +690,6 @@ function TabsNav({
                 borderBottom: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
                 color: active ? "var(--fg)" : "var(--fg-3)",
                 fontWeight: active ? 500 : 400,
-                fontSize: "var(--text-body-size)",
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "var(--sp-1_5)",

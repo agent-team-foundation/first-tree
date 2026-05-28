@@ -107,7 +107,7 @@ export function UserMenu() {
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-30 mt-2 rounded-md border bg-popover shadow-md"
+            className="absolute right-0 z-30 mt-2 rounded-[var(--radius-panel)] border bg-popover shadow-md"
             style={{ width: 280 }}
           >
             {/* User header */}

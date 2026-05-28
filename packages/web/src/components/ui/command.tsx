@@ -9,7 +9,7 @@ const Command = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof Comma
     <CommandPrimitive
       ref={ref}
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground",
+        "flex h-full w-full flex-col overflow-hidden rounded-[var(--radius-panel)] bg-popover text-popover-foreground",
         className,
       )}
       {...props}
@@ -45,7 +45,7 @@ const CommandInput = forwardRef<HTMLInputElement, ComponentPropsWithoutRef<typeo
       <CommandPrimitive.Input
         ref={ref}
         className={cn(
-          "flex h-11 w-full rounded-md bg-transparent py-3 text-body outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-11 w-full rounded-[var(--radius-panel)] bg-transparent py-3 text-body outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -97,7 +97,7 @@ const CommandItem = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
     <CommandPrimitive.Item
       ref={ref}
       className={cn(
-        "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-body outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-default select-none items-center rounded-[var(--radius-input)] px-2 py-1.5 text-body outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className,
       )}
       {...props}

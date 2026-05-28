@@ -86,7 +86,7 @@ export function AttentionsSection({ chatId }: { chatId: string }) {
           <span
             className="mono"
             style={{
-              padding: "var(--sp-0_25) var(--sp-1)",
+              padding: "var(--sp-px) var(--sp-1)",
               borderRadius: "var(--radius-chip)",
               background: "var(--fg-error-strong)",
               color: "var(--fg-on-vivid)",
@@ -164,7 +164,7 @@ function AttentionRow({
         <span
           className="mono text-caption"
           style={{
-            padding: "var(--sp-0_25) var(--sp-1)",
+            padding: "var(--sp-px) var(--sp-1)",
             borderRadius: "var(--radius-chip)",
             background: isOpenAsk ? "var(--bg-error-soft)" : "var(--bg-sunken)",
             color: tagColor,
@@ -262,7 +262,7 @@ function AttentionPopover({
         background: "var(--bg-raised)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-panel)",
-        boxShadow: "var(--shadow-lg)",
+        boxShadow: "var(--shadow-md)",
         padding: "var(--sp-2_5) var(--sp-3) var(--sp-3)",
         zIndex: 1000,
       }}

@@ -171,7 +171,7 @@ export function InviteAcceptCard({
       <CardContent className="space-y-4">
         {switchingTeam && (
           <div
-            className="flex items-start gap-2 rounded-md p-3 text-label"
+            className="flex items-start gap-2 rounded-[var(--radius-panel)] p-3 text-label"
             style={{ background: "var(--bg-sunken)", color: "var(--fg-2)" }}
           >
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -196,7 +196,7 @@ export function InviteAcceptCard({
         {expiresHint && (
           <p
             className="text-center text-label"
-            style={{ color: expiresHint.urgent ? "var(--destructive)" : "var(--fg-3)" }}
+            style={{ color: expiresHint.urgent ? "var(--state-error)" : "var(--fg-3)" }}
           >
             {expiresHint.text}
           </p>
@@ -221,12 +221,12 @@ export function InviteAcceptSkeleton() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader className="text-center">
-        <div className="mx-auto h-5 w-2/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
-        <div className="mx-auto mt-2 h-5 w-1/2 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        <div className="mx-auto h-5 w-2/3 rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
+        <div className="mx-auto mt-2 h-5 w-1/2 rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="h-9 w-full rounded-md" style={{ background: "var(--bg-sunken)" }} />
-        <div className="mx-auto h-3 w-1/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        <div className="h-9 w-full rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
+        <div className="mx-auto h-3 w-1/3 rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
       </CardContent>
     </Card>
   );
