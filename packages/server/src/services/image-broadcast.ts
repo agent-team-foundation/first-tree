@@ -11,7 +11,22 @@ import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { BadRequestError } from "../errors.js";
 import type { Notifier } from "./notifier.js";
+
+/**
+ * A `format: "file"` content that carries an `attachments` array is a batch
+ * send. We use this loose shape check (not the full schema) to tell "the
+ * caller meant to send a batch" from "this is a single-image / non-image
+ * file message" — so an over-limit or malformed batch is REJECTED rather
+ * than silently falling through to the single-image parse (which also fails)
+ * and persisting the raw inline payload verbatim into `messages.content`.
+ */
+function looksLikeBatchContent(content: unknown): boolean {
+  return (
+    typeof content === "object" && content !== null && Array.isArray((content as { attachments?: unknown }).attachments)
+  );
+}
 
 /**
  * Intercepts outbound image messages. If `data.content` carries an inline
@@ -88,6 +103,18 @@ export async function prepareImageOutbound(
       ...data,
       content: batchRef,
     };
+  }
+
+  // The content looked like a batch (has an `attachments` array) but failed
+  // the batch schema above — too many attachments (> MAX_BATCH_ATTACHMENTS)
+  // or a malformed entry. Reject it: without this guard the parse falls
+  // through to the single-image branch (which also fails) and `return data`
+  // would persist the raw inline base64 (up to the route bodyLimit) verbatim
+  // into the immutable `messages.content`, push no `image_payload` frames,
+  // and render as a broken JSON blob on every client. The `.max()` schema cap
+  // is only a real defence if exceeding it is a 400, not a silent passthrough.
+  if (looksLikeBatchContent(data.content)) {
+    throw new BadRequestError(`Invalid image batch: ${batchParsed.error.issues[0]?.message ?? "failed validation"}`);
   }
 
   // Legacy single-image path: kept for clients that still send the
