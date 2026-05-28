@@ -202,6 +202,127 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
+  it("does NOT re-ack a dedup-hit while the entry is still in-flight (handler hasn't markCompleted yet)", async () => {
+    // The first dispatch creates the in-flight slot; the second dispatch
+    // (same chatId+messageId, same entryId — what `agent:bind` reset +
+    // drainBacklog produces while a turn is still mid-flight) must NOT
+    // ack — that would defuse inflight-message-recovery if this process
+    // crashed mid-turn. The eventual `markCompleted` is the only thing
+    // that should ack while the turn is open.
+    const ackEntry = mockAckEntry();
+    const handler = createMockHandler();
+    const sm = createSessionManager({ ackEntry, handler });
+
+    await sm.dispatch(mockEntry({ id: 50, chatId: "chat-mid", messageId: "msg-mid" }));
+    await sm.dispatch(mockEntry({ id: 50, chatId: "chat-mid", messageId: "msg-mid" }));
+
+    // Second dispatch is a dedup-hit, but the entry is still in inFlightEntries
+    // (handler never called markCompleted in this test), so re-ack must be skipped.
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(handler.start).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("does NOT re-ack a dedup-hit whose chat was LRU-evicted — the bind-reset recovery path must stay open", async () => {
+    // R5 boundary: LRU eviction removes the entry from `inFlightEntries`
+    // WITHOUT acking it (no handler will ever fire markCompleted). The
+    // recovery contract documented in `evictIfNeeded` is "server's
+    // bind-reset redelivers against a fresh session." Pre-this-PR the
+    // dispatch dedup short-circuit silently returned, the evicted chat's
+    // dedup key kept the redelivery from being mis-classified as a fresh
+    // message at process restart, and recovery worked. After adding the
+    // dedup-hit re-ack the path would have been broken: dedup-hit + entry
+    // not in-flight → re-ack → server marks acked → no redelivery → loss.
+    // The fix synchronously drops the evicted chat's dedup keys, so the
+    // redelivery is no longer a dedup hit at all and goes through the
+    // normal `startNewSession` (with evictedMappings → handler.resume)
+    // path. Verifies (1) ack is NOT called for the evicted entry on
+    // redelivery, and (2) the handler runs again (fresh session pickup).
+    const ackEntry = mockAckEntry();
+    const startSpy = vi.fn(async (_msg: unknown, _ctx: SessionContext) => "session-id-mock");
+    const resumeSpy = vi.fn(async (_msg: unknown, _sid: string, _ctx: SessionContext) => "session-id-mock");
+    const handler = createMockHandler({ start: startSpy, resume: resumeSpy });
+    const sm = createSessionManager({
+      ackEntry,
+      handler,
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    // Fill the session pool: chat-a then chat-b. chat-a becomes LRU.
+    await sm.dispatch(mockEntry({ id: 70, chatId: "chat-a", messageId: "msg-a" }));
+    await sm.dispatch(mockEntry({ id: 71, chatId: "chat-b", messageId: "msg-b" }));
+    expect(startSpy).toHaveBeenCalledTimes(2);
+
+    // chat-c trips evictIfNeeded — sessions.size (2) >= max_sessions (2),
+    // chat-a is the LRU candidate and gets evicted (chat-a:msg-a should
+    // come out of the dedup set as part of eviction).
+    await sm.dispatch(mockEntry({ id: 72, chatId: "chat-c", messageId: "msg-c" }));
+    expect(startSpy).toHaveBeenCalledTimes(3);
+    // Nothing has been acked yet — none of the mock handlers call markCompleted.
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    // Simulate server-side bind-reset redelivery of the SAME entry for
+    // the LRU-evicted chat. If the dedup key were still around this
+    // would dedup-hit and (post-#1-fix) get re-acked, shortcutting
+    // recovery. With the dedup key dropped at eviction time, the entry
+    // routes normally through startNewSession → handler.resume against
+    // the saved evictedMappings.
+    await sm.dispatch(mockEntry({ id: 70, chatId: "chat-a", messageId: "msg-a" }));
+
+    // Recovery path: handler.resume invoked once for chat-a (it was
+    // evicted, so the new dispatch resumes from evictedMappings).
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    // Critically: NO ack for the evicted entry. The fresh session will
+    // ack it when its handler calls markCompleted at turn end.
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("re-acks a dedup-hit when the entry is no longer in-flight (turn already markCompleted, prior ack lost)", async () => {
+    // Repro of the bug behind "agent re-outputs after client restart":
+    //   1. dispatch entry N, handler runs the turn, markCompleted shifts
+    //      N out of inFlightEntries and fires `ackEntry(N)`.
+    //   2. The ack frame never lands server-side (fire-and-forget WS / TCP
+    //      half-open / reaper-race against `ackEntryByIdForBoundAgents`'s
+    //      `status='delivered'` filter).
+    //   3. The next `agent:bind` resets the entry from delivered → pending
+    //      and `drainBacklogForAgent` redelivers the same entryId.
+    //   4. dispatch sees the same (chatId, messageId) in dedup → short-
+    //      circuits. Pre-fix: silent return, entry stays delivered, loop
+    //      until process restart. Post-fix: re-ack the entry so the server
+    //      marks it acked and stops redelivering.
+    const ackEntry = mockAckEntry();
+    let capturedCtx: SessionContext | undefined;
+    const startSpy = vi.fn(async (_msg: unknown, ctx: SessionContext) => {
+      capturedCtx = ctx;
+      return "session-id-mock";
+    });
+    const handler = createMockHandler({ start: startSpy });
+    const sm = createSessionManager({ ackEntry, handler });
+
+    // Turn 1: original delivery.
+    await sm.dispatch(mockEntry({ id: 60, chatId: "chat-redeliver", messageId: "msg-redeliver" }));
+    capturedCtx?.markCompleted();
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenLastCalledWith(60);
+
+    // Simulate server-side bind-reset redelivery of the same entryId after
+    // the original ack went missing. Entry is no longer in inFlightEntries.
+    await sm.dispatch(mockEntry({ id: 60, chatId: "chat-redeliver", messageId: "msg-redeliver" }));
+
+    // Handler did NOT re-run (dedup still suppresses processing).
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    // But the re-ack DID fire so the server can mark the entry acked and
+    // stop the redelivery loop.
+    expect(ackEntry).toHaveBeenCalledTimes(2);
+    expect(ackEntry).toHaveBeenLastCalledWith(60);
+
+    await sm.shutdown();
+  });
+
   it("injects message into active session", async () => {
     const handler = createMockHandler();
     const sm = createSessionManager({ handler });

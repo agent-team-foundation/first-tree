@@ -362,9 +362,40 @@ export class SessionManager {
     // we've already processed this messageId in-memory the dedup short-
     // circuits before we re-enqueue an entry that the previous turn will
     // ack on its own.
+    //
+    // Re-ack on dedup hit (post inflight-message-recovery). Three paths
+    // remove an entryId from `inFlightEntries`:
+    //   (a) `markCompleted` via `ackInFlightEntries`  — entry was acked.
+    //   (b) `drainAllInFlightEntries` (terminate / permanent error)
+    //                                                — entry was acked.
+    //   (c) `evictIfNeeded` LRU eviction              — entry was NOT
+    //       acked, and the recovery contract is "server's bind-reset
+    //       redelivers against a fresh session." The LRU path synchronously
+    //       drops this chat's dedup keys (see `evictIfNeeded`), so by the
+    //       time the redelivery reaches dispatch the messageId is NOT in
+    //       the dedup set and we don't land in this branch at all.
+    // That leaves (a) and (b) as the only ways to arrive here with the
+    // entry already off the in-flight queue. Both mean the ack frame was
+    // already sent — and since the server is still redelivering this
+    // entryId, that ack didn't land (fire-and-forget WS / TCP half-open /
+    // reaper race against `ackEntryByIdForBoundAgents`'s `status='delivered'`
+    // filter). Re-ack closes the "reset on bind → redeliver → dedup-hit →
+    // never ack" loop that otherwise persists until process restart (at
+    // which point the dedup is empty, the redelivered entry is mis-
+    // classified as a fresh message, and the agent re-runs the turn).
+    // If the entry IS still in `inFlightEntries` we leave it alone — the
+    // turn's eventual `markCompleted` will ack it, and acking early would
+    // prematurely defuse the recovery path if the client crashes mid-turn.
     const dedupKey = `${chatId}:${messageId}`;
     if (this.deduplicator.isDuplicate(dedupKey)) {
-      this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
+      const queue = this.inFlightEntries.get(chatId);
+      const stillInFlight = queue ? queue.includes(entry.id) : false;
+      this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message, skipping");
+      if (!stillInFlight) {
+        this.config.ackEntry(entry.id).catch((err) => {
+          this.config.log.warn({ chatId, messageId, entryId: entry.id, err }, "dedup-hit re-ack failed");
+        });
+      }
       return;
     }
 
@@ -1142,6 +1173,15 @@ export class SessionManager {
       // `delivered`; the next `agent:bind` resets them back to `pending`
       // for redelivery against a fresh session.
       this.inFlightEntries.delete(candidate.key);
+      // Synchronously drop the same chat's dedup keys. Without this, the
+      // `dispatch()` dedup-hit short-circuit (post-fix: ack-on-dedup-hit
+      // when the entry isn't in-flight) would treat the bind-reset
+      // redelivery as "already handled" and ack it — shortcutting the
+      // recovery path the comment above describes. The invariant we want
+      // to preserve: a dedup hit means "this entryId was acked or will be
+      // acked by an in-flight turn"; LRU eviction breaks neither half, so
+      // the key must come out with the entry.
+      this.deduplicator.dropByPrefix(`${candidate.key}:`);
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
