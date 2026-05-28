@@ -75,11 +75,22 @@ const BORDER_COLORS: SwatchDef[] = [
   { name: "--border-strong", token: "var(--border-strong)", note: "emphasis" },
 ];
 
-const ACCENT_COLORS: SwatchDef[] = [
-  { name: "--accent", token: "var(--accent)", note: "brand green" },
-  { name: "--accent-dim", token: "var(--accent-dim)", note: "pressed" },
-  { name: "--accent-bg", token: "var(--accent-bg)", note: "tinted fill" },
-  { name: "--accent-ring", token: "var(--accent-ring)", note: "focus ring" },
+// Primary = the neutral action color (near-black ink in light, near-white in
+// dark). Drives buttons, active tabs/rows, selection, links. Inverts by theme.
+const PRIMARY_COLORS: SwatchDef[] = [
+  { name: "--primary", token: "var(--primary)", note: "action ink" },
+  { name: "--primary-hover", token: "var(--primary-hover)", note: "hover" },
+  { name: "--primary-on", token: "var(--primary-on)", note: "text on primary" },
+  { name: "--ring", token: "var(--ring)", note: "focus ring" },
+];
+
+// Brand = the signature green. Reserved for logo / tree nodes / mentions /
+// success — never the generic button color.
+const BRAND_COLORS: SwatchDef[] = [
+  { name: "--brand", token: "var(--brand)", note: "signature green" },
+  { name: "--brand-dim", token: "var(--brand-dim)", note: "pressed" },
+  { name: "--brand-bg", token: "var(--brand-bg)", note: "tinted fill" },
+  { name: "--brand-ring", token: "var(--brand-ring)", note: "selection band" },
 ];
 
 const STATE_COLORS: SwatchDef[] = [
@@ -92,7 +103,7 @@ const STATE_COLORS: SwatchDef[] = [
 
 // Feedback / severity vocabulary — distinct names, aliased to shared base hues.
 const FEEDBACK_COLORS: SwatchDef[] = [
-  { name: "--success", token: "var(--success)", note: "= accent green" },
+  { name: "--success", token: "var(--success)", note: "= brand green" },
   { name: "--warning", token: "var(--warning)", note: "= blocked amber" },
   { name: "--danger", token: "var(--danger)", note: "= error red" },
 ];
@@ -387,8 +398,10 @@ export function StyleguidePreviewPage() {
           <SwatchGrid items={SURFACE_COLORS} />
           <Subhead>Border</Subhead>
           <SwatchGrid items={BORDER_COLORS} />
-          <Subhead>Accent</Subhead>
-          <SwatchGrid items={ACCENT_COLORS} />
+          <Subhead>Primary (neutral action)</Subhead>
+          <SwatchGrid items={PRIMARY_COLORS} />
+          <Subhead>Brand (signature green)</Subhead>
+          <SwatchGrid items={BRAND_COLORS} />
           <Subhead>State (agent vocabulary)</Subhead>
           <SwatchGrid items={STATE_COLORS} />
           <Subhead>Feedback / severity</Subhead>
@@ -426,7 +439,7 @@ export function StyleguidePreviewPage() {
                 <div className="mono text-caption shrink-0" style={{ color: "var(--fg-3)", width: "6rem" }}>
                   {s.name}
                 </div>
-                <div style={{ height: 12, width: `var(${s.name})`, background: "var(--accent)", borderRadius: 2 }} />
+                <div style={{ height: 12, width: `var(${s.name})`, background: "var(--primary)", borderRadius: 2 }} />
                 <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                   {s.rem}
                 </div>
@@ -513,7 +526,7 @@ export function StyleguidePreviewPage() {
           <Subhead>DenseBadge</Subhead>
           <Row>
             <DenseBadge tone="neutral">Neutral</DenseBadge>
-            <DenseBadge tone="accent">Accent</DenseBadge>
+            <DenseBadge tone="accent">Brand</DenseBadge>
             <DenseBadge tone="warn">Warn</DenseBadge>
             <DenseBadge tone="error">Error</DenseBadge>
             <DenseBadge tone="outline">Outline</DenseBadge>
@@ -625,7 +638,7 @@ export function StyleguidePreviewPage() {
           <Subhead>Tile</Subhead>
           <Row>
             <Tile label="Agents" value="12" />
-            <Tile label="Online" value="8" accent="var(--accent-dim)" />
+            <Tile label="Online" value="8" accent="var(--brand-dim)" />
             <Tile label="Failed" value="1" accent="var(--state-error)" />
           </Row>
         </Section>
@@ -716,7 +729,7 @@ export function StyleguidePreviewPage() {
               border: "var(--hairline) solid var(--border)",
             }}
           >
-            <div className="text-eyebrow uppercase" style={{ color: "var(--accent)", marginBottom: "var(--sp-1)" }}>
+            <div className="text-eyebrow uppercase" style={{ color: "var(--brand)", marginBottom: "var(--sp-1)" }}>
               First Tree
             </div>
             <div className="text-headline" style={{ color: "var(--fg)" }}>
@@ -724,7 +737,7 @@ export function StyleguidePreviewPage() {
             </div>
             <p className="text-body" style={{ color: "var(--fg-2)", marginTop: "var(--sp-2)", maxWidth: "32rem" }}>
               Same variable names as the dashboard, so every component utility inherits the brand palette inside this
-              scope. The green accent is shared across all three palettes.
+              scope. The green brand is shared across all three palettes.
             </p>
             <div style={{ marginTop: "var(--sp-4)" }}>
               <Button size="sm">Get started</Button>

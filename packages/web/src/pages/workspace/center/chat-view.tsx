@@ -150,7 +150,7 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
   const status = msg.deliveryStatus ?? "sent";
   if (status === "acked") {
     return (
-      <span className="mono text-caption" style={{ color: "var(--accent)" }} title="Agent has started processing">
+      <span className="mono text-caption" style={{ color: "var(--primary)" }} title="Agent has started processing">
         ✓✓ read
       </span>
     );
@@ -208,7 +208,7 @@ function AssistantTextRow({
       />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
+          <span className="mono text-label font-semibold" style={{ color: "var(--primary)" }}>
             {senderName}
           </span>
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
@@ -519,7 +519,7 @@ function TextRow({
           <span
             className="mono text-body font-semibold"
             style={{
-              color: isSelf ? "var(--fg)" : "var(--accent)",
+              color: isSelf ? "var(--fg)" : "var(--primary)",
             }}
           >
             {senderName}
@@ -2406,7 +2406,7 @@ export function ChatView({
                       disabled={renameMut.isPending}
                       title="Save"
                       className="inline-flex items-center"
-                      style={{ color: "var(--accent)", padding: 2 }}
+                      style={{ color: "var(--primary)", padding: 2 }}
                     >
                       <Check className="h-3.5 w-3.5" />
                     </button>
@@ -3032,7 +3032,7 @@ export function ChatView({
                         </span>
                         <span className="flex items-center" style={{ gap: 8 }}>
                           {uploading && (
-                            <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                            <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                               uploading…
                             </span>
                           )}

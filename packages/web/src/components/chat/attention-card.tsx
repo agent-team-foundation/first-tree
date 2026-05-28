@@ -551,7 +551,7 @@ function CompactRows({
           style={{
             background: "transparent",
             border: 0,
-            color: "var(--accent)",
+            color: "var(--primary)",
             cursor: "pointer",
             padding: 0,
             textDecoration: "underline",
@@ -653,8 +653,8 @@ function OptionsList({
                 alignItems: "flex-start",
                 gap: "var(--sp-2)",
                 padding: "var(--sp-1_75) var(--sp-2_5)",
-                border: `var(--hairline) solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-                background: isSelected ? "var(--accent-bg)" : "var(--bg-raised)",
+                border: `var(--hairline) solid ${isSelected ? "var(--primary)" : "var(--border)"}`,
+                background: isSelected ? "var(--bg-active)" : "var(--bg-raised)",
                 borderRadius: "var(--radius-input)",
                 cursor: disabled ? "not-allowed" : "pointer",
                 opacity: disabled ? 0.6 : 1,
@@ -696,12 +696,12 @@ function OptionIndicator({ isMulti, isSelected }: { isMulti: boolean; isSelected
         height: "var(--sp-3_5)",
         marginTop: "var(--sp-0_75)",
         flexShrink: 0,
-        border: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "var(--fg-4)"}`,
+        border: `var(--hairline-bold) solid ${isSelected ? "var(--primary)" : "var(--fg-4)"}`,
         borderRadius: isMulti ? "var(--radius-chip)" : "50%",
         background: isSelected
           ? isMulti
-            ? "var(--accent)"
-            : "radial-gradient(circle at center, var(--accent) 0 40%, var(--bg-raised) 50%)"
+            ? "var(--primary)"
+            : "radial-gradient(circle at center, var(--primary) 0 40%, var(--bg-raised) 50%)"
           : "var(--bg-raised)",
         position: "relative",
       }}
@@ -715,7 +715,7 @@ function OptionIndicator({ isMulti, isSelected }: { isMulti: boolean; isSelected
             top: 0,
             width: "var(--sp-1)",
             height: "var(--sp-2)",
-            border: "solid var(--fg-on-vivid)",
+            border: "solid var(--primary-on)",
             borderWidth: "0 var(--hairline-bold) var(--hairline-bold) 0",
             transform: "rotate(45deg)",
           }}

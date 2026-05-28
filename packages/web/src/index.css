@@ -160,19 +160,26 @@
   --color-card-foreground: var(--fg);
   --color-popover: var(--bg-raised);
   --color-popover-foreground: var(--fg);
-  --color-primary: var(--accent);
-  --color-primary-foreground: oklch(0.14 0.01 150);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-on);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--bg-hover);
   --color-secondary-foreground: var(--fg);
   --color-muted: var(--bg-sunken);
   --color-muted-foreground: var(--fg-3);
+  /* shadcn "accent" = the NEUTRAL hover/active surface (bg-accent / hover:bg-accent /
+     aria-selected:bg-accent). Unrelated to the retired brand-green token — the brand
+     color is now --brand / --color-brand. Keep this name for shadcn-primitive compat. */
   --color-accent: var(--bg-hover);
   --color-accent-foreground: var(--fg);
+  /* Brand green — signature surfaces only (logo / tree nodes / mentions / success). */
+  --color-brand: var(--brand);
+  --color-brand-dim: var(--brand-dim);
   --color-destructive: var(--state-error);
   --color-destructive-foreground: oklch(0.985 0 0);
   --color-border: var(--border);
   --color-input: var(--border);
-  --color-ring: var(--accent-ring);
+  --color-ring: var(--ring);
 
   --color-fg-2: var(--fg-2);
   --color-fg-3: var(--fg-3);
@@ -219,10 +226,25 @@
   --font-mono-stack:
     "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Code", "Liberation Mono", monospace;
 
-  --accent: oklch(0.72 0.17 150);
-  --accent-dim: oklch(0.62 0.14 150);
-  --accent-bg: oklch(0.72 0.17 150 / 0.12);
-  --accent-ring: oklch(0.72 0.17 150 / 0.3);
+  /* Brand green — the cross-product signature color (leaf logo, Live-context
+     tree nodes, @mention chips, success). Identical in light + dark; NOT used
+     as the generic button / active-state color (see --primary). */
+  --brand: oklch(0.72 0.17 150);
+  --brand-dim: oklch(0.62 0.14 150);
+  --brand-bg: oklch(0.72 0.17 150 / 0.12);
+  --brand-ring: oklch(0.72 0.17 150 / 0.3);
+
+  /* Primary — the neutral action/active color. Near-black ink in light mode,
+     near-white in dark (inverts in .dark below). Drives primary buttons,
+     active tabs/rows, selection borders, links. Strategy A: the UI is
+     near-monochrome, so "the active thing" reads as ink, not as a hue. */
+  --primary: oklch(0.21 0 0);
+  --primary-hover: oklch(0.32 0 0);
+  --primary-on: oklch(0.99 0 0);
+
+  /* Neutral focus ring (keyboard / focus-visible). Tracks --primary at ~40%
+     alpha so it reads in both themes without introducing a hue. */
+  --ring: oklch(0.21 0 0 / 0.4);
 
   /* idle = neutral cool "standby" tone. Deliberately NOT the brand/success
      green (see --success) and distinct from --state-offline's dim gray, so an
@@ -242,7 +264,7 @@
      shared base hues so there is ONE value per color — distinct *names* from the
      agent-state vocabulary (--state-*), same underlying tones. Replaces the old
      --ok / --warn / --danger raw duplicates. */
-  --success: var(--accent);
+  --success: var(--brand);
   --warning: var(--state-blocked);
   --danger: var(--state-error);
 
@@ -270,22 +292,25 @@
 
   --radius: 0.5rem;
 
-  /* Light theme (default when .dark class is absent) */
-  --bg: oklch(0.985 0.005 150);
+  /* Light theme (default when .dark class is absent).
+     Pure-neutral gray ramp (chroma 0) — Strategy A decision 1. The former
+     hue-150 tint was dropped so neutrals never read as faintly green next to
+     the brand color. */
+  --bg: oklch(0.985 0 0);
   --bg-raised: oklch(1 0 0);
-  --bg-sunken: oklch(0.965 0.006 150);
+  --bg-sunken: oklch(0.965 0 0);
   --bg-card: oklch(1 0 0);
-  --bg-hover: oklch(0.95 0.008 150);
-  --bg-active: oklch(0.92 0.01 150);
+  --bg-hover: oklch(0.95 0 0);
+  --bg-active: oklch(0.92 0 0);
 
-  --fg: oklch(0.18 0.01 150);
-  --fg-2: oklch(0.36 0.01 150);
-  --fg-3: oklch(0.52 0.008 150);
-  --fg-4: oklch(0.68 0.005 150);
+  --fg: oklch(0.18 0 0);
+  --fg-2: oklch(0.36 0 0);
+  --fg-3: oklch(0.52 0 0);
+  --fg-4: oklch(0.68 0 0);
 
-  --border: oklch(0.9 0.006 150);
-  --border-strong: oklch(0.82 0.008 150);
-  --border-faint: oklch(0.94 0.005 150);
+  --border: oklch(0.9 0 0);
+  --border-strong: oklch(0.82 0 0);
+  --border-faint: oklch(0.94 0 0);
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
@@ -365,7 +390,7 @@
    palette regardless of the dashboard's light/dark toggle. The cloud /
    collaboration layer (formerly first-tree-hub) is part of First Tree, so
    the marketing entry point should always read as the parent brand:
-   near-black canvas + cool-light text + the shared green accent. Scoped to
+   near-black canvas + cool-light text + the shared green brand. Scoped to
    `.landing-marketing` so the dashboard chrome (when an authenticated user
    happens to land on a marketing-styled route) is untouched. Same `--bg`
    / `--fg` variable names — every component utility (bg-background,
@@ -390,27 +415,44 @@
   --border-strong: oklch(0.3 0.005 240);
   --border-faint: oklch(0.13 0.005 240);
 
-  /* Accent green stays identical — it's the cross-product brand color. */
+  /* Brand green stays identical — it's the cross-product signature color. */
+
+  /* Marketing is a brand-forward surface (not the dashboard's neutral language):
+     the primary CTA is the brand green, not near-black ink. The dashboard's
+     --primary would resolve to the :root light value here (near-black on a
+     near-black canvas = invisible), so it is re-pointed at --brand for this scope. */
+  --primary: var(--brand);
+  --primary-hover: var(--brand-dim);
+  --primary-on: var(--fg-on-vivid);
+  --ring: var(--brand-ring);
 
   color-scheme: dark;
 }
 
 .dark {
-  --bg: oklch(0.145 0.005 150);
-  --bg-raised: oklch(0.175 0.005 150);
-  --bg-sunken: oklch(0.115 0.005 150);
-  --bg-card: oklch(0.175 0.005 150);
-  --bg-hover: oklch(0.22 0.008 150);
-  --bg-active: oklch(0.26 0.012 150);
+  /* Pure-neutral gray ramp (chroma 0) — see light-mode note above. */
+  --bg: oklch(0.145 0 0);
+  --bg-raised: oklch(0.175 0 0);
+  --bg-sunken: oklch(0.115 0 0);
+  --bg-card: oklch(0.175 0 0);
+  --bg-hover: oklch(0.22 0 0);
+  --bg-active: oklch(0.26 0 0);
 
-  --fg: oklch(0.96 0.005 150);
-  --fg-2: oklch(0.78 0.006 150);
-  --fg-3: oklch(0.58 0.006 150);
-  --fg-4: oklch(0.42 0.005 150);
+  --fg: oklch(0.96 0 0);
+  --fg-2: oklch(0.78 0 0);
+  --fg-3: oklch(0.58 0 0);
+  --fg-4: oklch(0.42 0 0);
 
-  --border: oklch(0.26 0.008 150);
-  --border-strong: oklch(0.34 0.01 150);
-  --border-faint: oklch(0.2 0.006 150);
+  --border: oklch(0.26 0 0);
+  --border-strong: oklch(0.34 0 0);
+  --border-faint: oklch(0.2 0 0);
+
+  /* Primary inverts to near-white ink on dark surfaces (brand green stays
+     constant, so it is NOT redefined here). */
+  --primary: oklch(0.93 0 0);
+  --primary-hover: oklch(0.85 0 0);
+  --primary-on: oklch(0.17 0 0);
+  --ring: oklch(0.93 0 0 / 0.4);
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.4);
@@ -450,7 +492,7 @@
     font-synthesis: none;
   }
   ::selection {
-    background: var(--accent-bg);
+    background: var(--brand-bg);
     color: var(--fg);
   }
   ::-webkit-scrollbar {
@@ -1253,7 +1295,7 @@
  * next to its input. Rest state is just the outline so the row stays
  * light; hover lifts ink + fills with the sunken bg so the active state
  * reads as clearly clickable. Focus-visible swaps the border for the
- * accent ring (subtle but unmistakable for keyboard users).
+ * neutral focus ring (subtle but unmistakable for keyboard users).
  */
 .settings-save-button:hover:not(:disabled) {
   color: var(--fg);
@@ -1262,7 +1304,7 @@
 }
 
 .settings-save-button:focus-visible {
-  outline: var(--hairline-bold) solid var(--accent-ring);
+  outline: var(--hairline-bold) solid var(--ring);
   outline-offset: var(--sp-0_5);
 }
 
@@ -1283,8 +1325,8 @@
 }
 
 .onboarding-runtime-option:focus-within {
-  color: color-mix(in oklch, var(--accent) 30%, var(--fg));
-  outline-color: var(--accent-ring);
+  color: color-mix(in oklch, var(--primary) 30%, var(--fg));
+  outline-color: var(--ring);
 }
 
 .onboarding-name-input::placeholder {
@@ -1346,7 +1388,7 @@ tr[data-interactive]:hover {
    a surrogate box; without this, keyboard focus lands on an invisible
    control. Surface a visible ring on the label when its input is focused. */
 .onboarding-choice:focus-within {
-  outline: var(--hairline) solid var(--accent-ring);
+  outline: var(--hairline) solid var(--ring);
   outline-offset: var(--sp-0_5);
 }
 
@@ -1396,7 +1438,7 @@ tr[data-interactive]:hover {
  * shape without touching the shared chip radius. */
 .mention-chip {
   display: inline;
-  background: var(--accent);
+  background: var(--brand);
   color: var(--fg-on-vivid);
   padding: 0 6px;
   border-radius: 999px;
@@ -1415,7 +1457,7 @@ tr[data-interactive]:hover {
  * bug this class was created to fix. `color` is the only property
  * that's metric-neutral, so it's the only differentiator we use. */
 .mention-text {
-  color: var(--accent);
+  color: var(--brand);
 }
 
 /* Selection inside the mention composer: textarea text is rendered
@@ -1426,11 +1468,11 @@ tr[data-interactive]:hover {
  * overlay's chips/text underneath, the textarea's selected text on
  * top). Holding the textarea's selection color transparent keeps the
  * overlay's chips legible while the selection band still shows. The
- * `accent-ring` (30% alpha) band tints chips slightly darker but the
+ * `brand-ring` (30% alpha) band tints chips slightly darker but the
  * chip's foreground glyphs in the overlay layer below stay readable —
  * the overlay is `pointer-events: none` and not part of the textarea's
  * selection range, so no chip-scoped `::selection` rule is needed. */
 .mention-composer-textarea::selection {
-  background: var(--accent-ring);
+  background: var(--brand-ring);
   color: transparent;
 }

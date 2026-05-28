@@ -141,7 +141,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               padding: 0,
               background: "transparent",
               border: "none",
-              color: "var(--accent)",
+              color: "var(--primary)",
               cursor: "pointer",
             }}
           >

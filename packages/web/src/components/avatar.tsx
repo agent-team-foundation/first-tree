@@ -5,7 +5,7 @@
  * upload). Falls back to a colored circle + initial. The fill color is
  * resolved from `colorToken` when provided (manager-selected agent
  * override), otherwise from the deterministic hash on `seed`. When
- * neither is supplied, falls back to a neutral accent.
+ * neither is supplied, falls back to the brand color.
  */
 
 import { resolveAvatarHue } from "./chat/chat-row-avatar.js";
@@ -24,7 +24,7 @@ type AvatarProps = {
   /**
    * Manager-selected color token (e.g. an agent's `avatarColorToken`).
    * When omitted the fallback color is resolved from `seed`, then from
-   * `--accent` if neither is provided.
+   * `--brand` if neither is provided.
    */
   colorToken?: string | null;
   /**
@@ -55,7 +55,7 @@ export function Avatar({ src, name, size = 28, className, colorToken, seed }: Av
     );
   }
   const hasHueInput = (typeof colorToken === "string" && colorToken.length > 0) || (seed && seed.length > 0);
-  const background = hasHueInput ? resolveAvatarHue(colorToken, seed ?? "") : "var(--accent)";
+  const background = hasHueInput ? resolveAvatarHue(colorToken, seed ?? "") : "var(--brand)";
   const color = hasHueInput ? "var(--fg-on-vivid)" : "var(--bg-raised)";
   return (
     <span

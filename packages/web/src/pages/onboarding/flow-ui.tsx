@@ -24,17 +24,17 @@ export function StepHeading({ title, why }: { title: string; why?: string | null
   );
 }
 
-/** Error / warning note. Tone "error" (red) or "info" (neutral accent). */
+/** Error / warning note. Tone "error" (red) or "info" (neutral ink). */
 export function FlowNote({ children, tone = "error" }: { children: ReactNode; tone?: "error" | "info" }) {
   const color = tone === "error" ? "var(--state-error)" : "var(--fg-2)";
   const bg =
     tone === "error"
       ? "color-mix(in oklch, var(--state-error) 12%, transparent)"
-      : "color-mix(in oklch, var(--accent) 8%, transparent)";
+      : "color-mix(in oklch, var(--primary) 8%, transparent)";
   const border =
     tone === "error"
       ? "color-mix(in oklch, var(--state-error) 28%, transparent)"
-      : "color-mix(in oklch, var(--accent) 22%, transparent)";
+      : "color-mix(in oklch, var(--primary) 22%, transparent)";
   const Icon = tone === "error" ? CircleAlert : Info;
   return (
     <div
@@ -73,7 +73,7 @@ export function WorkingState({ label, hint }: { label: string; hint?: string }) 
               width: "var(--sp-2)",
               height: "var(--sp-2)",
               borderRadius: "50%",
-              background: "var(--accent)",
+              background: "var(--state-working)",
               animationDelay: `${delay}ms`,
             }}
           />
@@ -100,20 +100,20 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
       aria-live="polite"
       style={{
         gap: "var(--sp-2)",
-        color: state === "ok" ? "color-mix(in oklch, var(--accent) 28%, var(--fg))" : "var(--fg-3)",
+        color: state === "ok" ? "var(--success)" : "var(--fg-3)",
       }}
     >
       {state === "ok" ? (
         <Check className="h-3.5 w-3.5" />
       ) : (
         <span aria-hidden="true" style={{ position: "relative", display: "inline-block", width: 8, height: 8 }}>
-          <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "var(--accent)" }} />
+          <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "var(--state-working)" }} />
           <span
             style={{
               position: "absolute",
               inset: -3,
               borderRadius: "50%",
-              border: "var(--hairline) solid var(--accent)",
+              border: "var(--hairline) solid var(--state-working)",
               animation: "ring-pulse 1.8s infinite",
               opacity: 0.55,
             }}
@@ -276,7 +276,7 @@ export function RepoPicker({
               padding: "var(--sp-2) var(--sp-2_5)",
               borderRadius: "var(--radius-input)",
               cursor: "pointer",
-              background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+              background: active ? "color-mix(in oklch, var(--primary) 8%, transparent)" : "transparent",
               color: active ? "var(--fg)" : "var(--fg-2)",
             }}
           >
@@ -289,9 +289,9 @@ export function RepoPicker({
                 height: "var(--sp-4)",
                 flexShrink: 0,
                 borderRadius: "var(--radius-input)",
-                border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
-                background: active ? "var(--accent)" : "transparent",
-                color: "var(--bg)",
+                border: active ? "var(--hairline) solid var(--primary)" : "var(--hairline) solid var(--border-strong)",
+                background: active ? "var(--primary)" : "transparent",
+                color: "var(--primary-on)",
               }}
             >
               {active && <Check className="h-3 w-3" />}

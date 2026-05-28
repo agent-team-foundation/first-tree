@@ -242,7 +242,7 @@ export function StepConnectCode() {
             <a
               href="/api/v1/auth/github/start?next=/onboarding"
               className="font-medium"
-              style={{ color: "var(--accent)" }}
+              style={{ color: "var(--primary)" }}
             >
               {COPY.connectCode.reconnect}
             </a>

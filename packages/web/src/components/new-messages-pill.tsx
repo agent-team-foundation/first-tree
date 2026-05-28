@@ -35,9 +35,9 @@ export function NewMessagesPill({ count, onClick }: { count: number; onClick: ()
         height: "var(--sp-7)",
         padding: "0 var(--sp-3)",
         borderRadius: 999,
-        border: "var(--hairline) solid var(--accent)",
+        border: "var(--hairline) solid var(--primary)",
         background: "var(--bg-raised)",
-        color: "var(--accent)",
+        color: "var(--primary)",
         cursor: "pointer",
         zIndex: 5,
       }}

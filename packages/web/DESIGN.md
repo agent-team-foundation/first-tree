@@ -277,12 +277,12 @@ Class-based: `.dark` on `<html>`, persisted to `localStorage`, falling back to
 
 Three palettes share the **same variable names** (so every utility inherits
 automatically):
-1. **Light** (`:root`) — near-white green-tinted canvas, dark ink.
-2. **Dark** (`.dark`) — green-tinted near-black, light ink; deeper shadows;
+1. **Light** (`:root`) — near-white pure-neutral canvas (chroma 0), dark ink.
+2. **Dark** (`.dark`) — pure-neutral near-black, light ink; deeper shadows;
    higher-lightness callout text for contrast.
 3. **Marketing** (`.landing-marketing`) — pinned to the first-tree.ai brand:
    near-black `#040404` canvas + cool-tinted light text, regardless of the
-   dashboard toggle. `color-scheme: dark`. Same green accent.
+   dashboard toggle. `color-scheme: dark`. Same green brand.
 
 ---
 
