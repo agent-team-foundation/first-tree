@@ -1,3 +1,4 @@
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -41,34 +42,76 @@ function installContextSyncMocks(overrides: Partial<MockState> = {}): MockState 
     ...overrides,
   };
 
+  // Shared git mock body — both the sync and async exec paths route through
+  // this so test expectations on `state.calls` stay agnostic to which one
+  // production code chose to call. The async wrapper exposes the Node
+  // callback shape (`(err, stdout, stderr)`) that `util.promisify(execFile)`
+  // requires.
+  const runGit = (command: string, args: string[], options?: Record<string, unknown>): string => {
+    state.calls.push({ command, args, options });
+    if (command !== "git") throw new Error(`unexpected command ${command}`);
+    const subcommand = args[0];
+    if (subcommand === "--version") {
+      if (!state.gitAvailable) throw new Error("git missing");
+      return "git version 2.0.0\n";
+    }
+    if (subcommand === "rev-parse") {
+      return `${state.currentBranch}\n`;
+    }
+    if (subcommand === "checkout") {
+      state.currentBranch = args[1] ?? state.currentBranch;
+      return "";
+    }
+    if (subcommand === "pull") {
+      if (state.pullError !== undefined) throw state.pullError;
+      return "";
+    }
+    if (subcommand === "clone") {
+      const outcome = state.cloneOutcomes.shift();
+      if (outcome !== undefined) throw outcome;
+      state.gitExists = true;
+      return "";
+    }
+    throw new Error(`unexpected git subcommand ${String(subcommand)}`);
+  };
+
+  // util.promisify(execFile) reads the `[util.promisify.custom]` symbol off
+  // the real Node implementation and returns its async form (resolves to
+  // `{ stdout, stderr }`). Replicate the same shape on the mock so production
+  // code that does `promisify(execFile)` at module-load time gets a working
+  // promise wrapper that routes through `runGit`.
+  const execFileMock = vi.fn(
+    (
+      command: string,
+      args: string[],
+      optionsOrCallback?: Record<string, unknown> | ((err: Error | null, stdout?: string, stderr?: string) => void),
+      maybeCallback?: (err: Error | null, stdout?: string, stderr?: string) => void,
+    ) => {
+      const options = typeof optionsOrCallback === "function" ? undefined : optionsOrCallback;
+      const callback = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+      try {
+        const stdout = runGit(command, args, options);
+        callback?.(null, stdout, "");
+      } catch (err) {
+        callback?.(err as Error);
+      }
+    },
+  );
+  Object.defineProperty(execFileMock, promisify.custom, {
+    value: (command: string, args: string[], options?: Record<string, unknown>) =>
+      new Promise<{ stdout: string; stderr: string }>((resolveExec, rejectExec) => {
+        try {
+          const stdout = runGit(command, args, options);
+          resolveExec({ stdout, stderr: "" });
+        } catch (err) {
+          rejectExec(err);
+        }
+      }),
+  });
+
   vi.doMock("node:child_process", () => ({
-    execFileSync: vi.fn((command: string, args: string[], options?: Record<string, unknown>) => {
-      state.calls.push({ command, args, options });
-      if (command !== "git") throw new Error(`unexpected command ${command}`);
-      const subcommand = args[0];
-      if (subcommand === "--version") {
-        if (!state.gitAvailable) throw new Error("git missing");
-        return "git version 2.0.0\n";
-      }
-      if (subcommand === "rev-parse") {
-        return `${state.currentBranch}\n`;
-      }
-      if (subcommand === "checkout") {
-        state.currentBranch = args[1] ?? state.currentBranch;
-        return "";
-      }
-      if (subcommand === "pull") {
-        if (state.pullError !== undefined) throw state.pullError;
-        return "";
-      }
-      if (subcommand === "clone") {
-        const outcome = state.cloneOutcomes.shift();
-        if (outcome !== undefined) throw outcome;
-        state.gitExists = true;
-        return "";
-      }
-      throw new Error(`unexpected git subcommand ${String(subcommand)}`);
-    }),
+    execFileSync: vi.fn(runGit),
+    execFile: execFileMock,
   }));
   vi.doMock("node:fs", () => ({
     copyFileSync: vi.fn(),
