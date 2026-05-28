@@ -104,13 +104,13 @@ export function BindingsPage() {
 
   function handleBotSubmit(payload: BindingFormSubmit) {
     if (!botDialog) return;
-    if (payload.kind === "bot-create") {
+    if (payload.kind === "create") {
       createAdapterMutation.mutate({
         agentId: botDialog.agentId,
         status: payload.draft.status,
         credentials: payload.draft.credentials,
       });
-    } else if (payload.kind === "bot-update") {
+    } else if (payload.kind === "update") {
       if (!botDialog.editingId) return;
       updateAdapterMutation.mutate({
         id: botDialog.editingId,

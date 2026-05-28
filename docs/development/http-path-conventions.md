@@ -73,7 +73,7 @@ Example: `GET /api/v1/agent/me`, `POST /api/v1/agent/chats/:chatId/messages`, `W
 
 | Rule | Example |
 |---|---|
-| Resource collections: plural + kebab-case | `agents`, `adapter-mappings`, `system-config` |
+| Resource collections: plural + kebab-case | `agents`, `adapters`, `system-config` |
 | First-person self: singular | `me`, `agent` (only these two) |
 | Path params: `:orgId`, `:uuid` (agents), `:chatId`, `:id`, `:token` | |
 | WebSocket: `/ws` suffix under owning scope | `/orgs/:orgId/ws`, `/agent/ws` |

@@ -17,8 +17,8 @@ export type BotBindingDraft = {
 };
 
 export type BindingFormSubmit =
-  | { kind: "bot-create"; draft: Required<BotBindingDraft> }
-  | { kind: "bot-update"; status: "active" | "inactive"; credentials?: Record<string, unknown> };
+  | { kind: "create"; draft: Required<BotBindingDraft> }
+  | { kind: "update"; status: "active" | "inactive"; credentials?: Record<string, unknown> };
 
 export type BindingFormProps = {
   open: boolean;
@@ -66,7 +66,7 @@ export function BindingFormDialog(props: BindingFormProps) {
 
     if (props.editingId) {
       props.onSubmit({
-        kind: "bot-update",
+        kind: "update",
         status: form.status,
         ...(credentials ? { credentials } : {}),
       });
@@ -75,7 +75,7 @@ export function BindingFormDialog(props: BindingFormProps) {
 
     if (!credentials) return;
     props.onSubmit({
-      kind: "bot-create",
+      kind: "create",
       draft: {
         platform: "kael",
         status: form.status,

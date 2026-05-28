@@ -4,11 +4,11 @@ import { adapterAttrs, agentAttrs, chatAttrs, inboxAttrs, messageAttrs } from ".
 describe("span-attrs helpers", () => {
   describe("messageAttrs", () => {
     it("includes all provided fields with standard attribute names", () => {
-      const out = messageAttrs({ id: "m1", chatId: "c1", source: "kael", senderAgentId: "a1" });
+      const out = messageAttrs({ id: "m1", chatId: "c1", source: "github", senderAgentId: "a1" });
       expect(out).toEqual({
         "message.id": "m1",
         "chat.id": "c1",
-        "message.source": "kael",
+        "message.source": "github",
         "agent.id": "a1",
       });
     });
