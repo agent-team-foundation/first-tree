@@ -98,7 +98,7 @@ export function RowActionsMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 rounded-[var(--radius-panel)] border bg-popover shadow-md"
+          className="absolute right-0 z-30 rounded-[var(--radius-panel)] border bg-popover shadow-[var(--shadow-md)]"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
           style={{
