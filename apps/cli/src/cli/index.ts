@@ -1,16 +1,13 @@
 #!/usr/bin/env node
 
 // MUST be the first import: this side-effect module sets
-// `process.env.FIRST_TREE_HOME` from the channel default before any
-// other module loads `@first-tree/shared/config`. Re-ordering this line
-// after a config-touching import re-introduces the multi-env footgun
-// where staging/dev binaries silently fall back to the prod home.
+// `process.env.FIRST_TREE_HOME` from the channel default AND installs the
+// channel-resolved CLI binding into `@first-tree/client`, before any other
+// module loads `@first-tree/shared/config` or instantiates ClientRuntime.
+// Re-ordering this line after a config-touching or runtime-instantiating
+// import re-introduces the multi-env footgun where staging/dev binaries
+// silently fall back to the prod home and prod CLI name.
 import "../core/channel-env.js";
-// Install the channel-resolved CLI binding into `@first-tree/client` before
-// any runtime code runs. Must come BEFORE any import that may end up
-// instantiating ClientRuntime (login, daemon, …) so handlers always see a
-// populated binding when they call `generateToolsDoc` / `installFirstTreeIntegration`.
-import "../core/cli-binding-init.js";
 import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";

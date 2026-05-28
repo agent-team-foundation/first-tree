@@ -2,7 +2,7 @@
 // that reaches `bootstrap.ts` (directly via `bootstrapWorkspace` /
 // `installFirstTreeIntegration` or indirectly through a handler's
 // `start()`) sees a populated binding. The CLI entrypoint
-// (`apps/cli/src/core/cli-binding-init.ts`) installs this in production
+// (`apps/cli/src/core/channel-env.ts`) installs this in production
 // from `channelConfig`; tests don't go through that entry, so we pin a
 // prod-shaped default here.
 //
