@@ -27,7 +27,10 @@ export function registerAttentionRaiseCommand(parent: Command): void {
       "Target human's agent uuid OR agent name (resolved in --chat's org; uuid wins on collision). Must be a member of --chat.",
     )
     .requiredOption("--subject <text>", "Short subject line (max 500 chars)")
-    .option("--body <text|@file>", "Body text, or `@path/to/file.md` to load from disk")
+    .option(
+      "--body <text|@file|@->",
+      "Body text, `@path/to/file.md` to load from disk, or `@-` (or omit --body when piping) to read from stdin",
+    )
     .option("--requires-response", "Treat as a request (the human must reply). Default: notification.")
     .option(
       "--meta <key=value>",
@@ -39,7 +42,7 @@ export function registerAttentionRaiseCommand(parent: Command): void {
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (options: RaiseOptions) => {
       try {
-        const body = resolveBody(options.body);
+        const body = await resolveBody(options.body);
         const merged = mergeMetaJson(parseMetaFlags(options.meta), options.metaJson);
         const metadataResult = attentionMetadataSchema.safeParse(merged);
         if (!metadataResult.success) {

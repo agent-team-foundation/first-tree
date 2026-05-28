@@ -1,6 +1,6 @@
 import { fail } from "../../../cli/output.js";
 
-const MAX_STDIN_BYTES = 10 * 1024 * 1024;
+const MAX_STDIN_BYTES = 5 * 1024 * 1024;
 
 /** Buffer stdin (text only). Returns null when stdin is a TTY (no pipe). */
 export function readStdin(): Promise<string | null> {
