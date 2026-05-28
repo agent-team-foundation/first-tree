@@ -1,3 +1,4 @@
+import { extractCaption, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
 import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
@@ -824,8 +825,36 @@ async function ackEntry(db: Database, entryId: number): Promise<void> {
   await db.update(inboxEntries).set({ status: "acked", ackedAt: new Date() }).where(eq(inboxEntries.id, entryId));
 }
 
-/** Convert internal message format to Feishu msg_type + content string. */
-function formatForFeishu(format: string, content: unknown): { msgType: string; content: string } {
+/**
+ * Render a `format: "file"` payload (single image ref or batched
+ * caption + N image refs) into a short text the external user can read.
+ * Returns null when the content isn't a recognised image shape — caller
+ * falls back to JSON.stringify like other formats. External Feishu users
+ * have no Hub session, so we surface the caption + filenames rather than
+ * any internal download link.
+ */
+function renderFileMessageForFeishu(content: unknown): string | null {
+  // Batch shape: caption + N image refs.
+  if (isImageBatchRefContent(content)) {
+    const { attachments } = content;
+    const caption = extractCaption(content).trim();
+    const list = attachments.map((a) => `• ${a.filename}`).join("\n");
+    return caption.length > 0
+      ? `${caption}\n\n📎 ${attachments.length} image(s):\n${list}`
+      : `📎 ${attachments.length} image(s):\n${list}`;
+  }
+  // Single image ref shape.
+  if (isImageRefContent(content)) {
+    return `📎 ${content.filename}`;
+  }
+  return null;
+}
+
+/** Convert internal message format to Feishu msg_type + content string.
+ *
+ * Exported for unit tests covering the file/image branches. The outbound
+ * pipeline calls this internally — external callers don't need it. */
+export function formatForFeishu(format: string, content: unknown): { msgType: string; content: string } {
   if (format === "text") {
     const text = typeof content === "string" ? content : JSON.stringify(content);
     return { msgType: "text", content: JSON.stringify({ text }) };
@@ -842,6 +871,13 @@ function formatForFeishu(format: string, content: unknown): { msgType: string; c
 
   if (format === "card" && typeof content === "object") {
     return { msgType: "interactive", content: JSON.stringify(content) };
+  }
+
+  if (format === "file") {
+    const rendered = renderFileMessageForFeishu(content);
+    if (rendered !== null) {
+      return { msgType: "text", content: JSON.stringify({ text: rendered }) };
+    }
   }
 
   const text = typeof content === "string" ? content : JSON.stringify(content);

@@ -2,7 +2,7 @@ import { type Agent, extractMentions, type MentionParticipant } from "@first-tre
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
+import { readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -56,9 +56,9 @@ import { cn } from "../../../lib/utils.js";
  *     carries non-empty `metadata.mentions` and clears the server's
  *     per-message `enforceMention` check.
  *
- * On send: createMeChat({participantIds: chips ∪ body @s}) → for each
- * staged image putImage(IndexedDB) + sendFileMessage → sendChatMessage
- * with the verbatim body. Empty body is allowed when there's ≥1 chip and
+ * On send: createMeChat({participantIds: chips ∪ body @s}) → stage each
+ * image into IndexedDB → single `sendFileMessageBatch` carrying caption +
+ * all attachments. Empty body is allowed when there's ≥1 chip and
  * (a non-empty body or ≥1 image).
  */
 
@@ -337,37 +337,42 @@ export function NewChatDraft({
     }) => {
       const created = await createMeChat({ participantIds });
       const chatId = created.chatId;
-      // Send images first (mirrors the in-chat composer ordering), then the
-      // text body, so the new chat opens with attachments above the message.
+      const trimmed = text.trim();
+      // Collapse "N images + optional caption" into a single batched
+      // `format: "file"` message — one bubble, no N+1 split. Pure-text
+      // sends still go through `sendChatMessage` below.
       if (images.length > 0) {
-        // Carry the resolved mentions onto each image message so each
-        // POST clears the server's per-message `enforceMention` check.
-        // 1:1 drafts have `mentions` already auto-injected by handleSend
-        // (the single chip's uuid); group drafts carry the body's
-        // `@-mention` set. The server applies `enforceMention` to every
-        // chat shape now, so no path can rely on an empty-mentions skip.
+        // Carry the resolved mentions onto the batched file send so the
+        // single POST clears the server's `enforceMention` check. 1:1
+        // drafts have `mentions` already auto-injected by handleSend (the
+        // single chip's uuid); group drafts carry the body's `@-mention`
+        // set. The server applies `enforceMention` to every chat shape now,
+        // so no path can rely on an empty-mentions skip.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
+        const attachments: { data: string; mimeType: string; filename: string; size: number; imageId: string }[] = [];
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
           // Write to IndexedDB before the POST so the sending tab can render
           // the image from its imageRef immediately on refetch.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(
-            chatId,
-            {
-              data,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-              imageId,
-            },
-            imageMetadata,
-          );
+          attachments.push({
+            data,
+            mimeType: img.file.type,
+            filename: img.file.name,
+            size: img.file.size,
+            imageId,
+          });
         }
-      }
-      const trimmed = text.trim();
-      if (trimmed.length > 0) {
+        await sendFileMessageBatch(
+          chatId,
+          {
+            ...(trimmed.length > 0 ? { caption: trimmed } : {}),
+            attachments,
+          },
+          imageMetadata,
+        );
+      } else if (trimmed.length > 0) {
         await sendChatMessage(chatId, trimmed, mentions);
       }
       return chatId;

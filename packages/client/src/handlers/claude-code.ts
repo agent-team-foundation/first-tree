@@ -13,7 +13,12 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
-import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -136,27 +141,6 @@ const MIME_TO_EXT: Record<SupportedImageMime, string> = {
   "image/gif": "gif",
   "image/webp": "webp",
 };
-
-/** Post-refactor image message shape in `messages.content`: a reference only.
- * The bytes arrive via the separate `image_payload` WS push and live on
- * this client's local disk under `<dataDir>/chats/<chatId>/images/`. */
-type ImageRefContent = {
-  imageId: string;
-  mimeType: SupportedImageMime;
-  filename: string;
-  size?: number;
-};
-
-function isImageRefContent(content: unknown): content is ImageRefContent {
-  if (!content || typeof content !== "object") return false;
-  const c = content as Record<string, unknown>;
-  return (
-    typeof c.imageId === "string" &&
-    typeof c.mimeType === "string" &&
-    typeof c.filename === "string" &&
-    SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
-  );
-}
 
 /** Legacy pre-refactor image content with base64 inlined into the message.
  * Only exercised by messages that pre-date the image-out-of-messages PR —
@@ -564,6 +548,36 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // emit the same `[From: <name>]` header as the default text path.
       const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
       const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
+
+      // Batched send (caption + N images in one message). Resolve every
+      // imageId to a local path the Read tool can open; missing-byte cases
+      // surface a per-attachment "not available on this device" placeholder
+      // so the session keeps moving and a partial-delivery doesn't strand
+      // the whole turn.
+      if (isImageBatchRefContent(message.content)) {
+        const caption = message.content.caption?.trim() ?? "";
+        const lines: string[] = [];
+        if (caption.length > 0) lines.push(caption);
+        lines.push(
+          message.content.attachments.length === 1
+            ? "An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see."
+            : `${message.content.attachments.length} images were shared in this chat. Please use the Read tool to read each one, then respond based on what you see.`,
+        );
+        for (const att of message.content.attachments) {
+          const imagePath = findImagePath(message.chatId, att.imageId, att.mimeType);
+          if (imagePath) {
+            lines.push(`\nFilename: ${att.filename}\nPath: ${imagePath}`);
+          } else {
+            lines.push(`\n[Image "${att.filename}" not available on this device]`);
+          }
+        }
+        return {
+          type: "user",
+          message: { role: "user", content: `${prefix}${lines.join("\n")}` },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      }
 
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
