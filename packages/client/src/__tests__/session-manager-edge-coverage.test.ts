@@ -33,11 +33,14 @@ type SessionRecord = {
 type SessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
   evictedMappings: Map<string, { claudeSessionId: string; lastActivity: number }>;
-  pendingQueue: Array<{ message: SessionMessage; chatId: string; entryId: number }>;
+  // entryId tracking moved out of PendingMessage and into a per-chat
+  // FIFO (`inFlightEntries`) per the in-flight message recovery PR.
+  pendingQueue: Array<{ message: SessionMessage; chatId: string }>;
+  inFlightEntries: Map<string, number[]>;
   _activeCount: number;
-  acquireActiveSlot(chatId: string, message: SessionMessage, entryId?: number): boolean;
-  routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void>;
-  resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined, entryId?: number): Promise<void>;
+  acquireActiveSlot(chatId: string, message: SessionMessage): boolean;
+  routeMessage(chatId: string, message: SessionMessage): Promise<void>;
+  resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined): Promise<void>;
   runRetry(chatId: string): Promise<void>;
   triggerImmediateRetry(chatId: string): void;
   drainPendingQueue(): void;
@@ -45,6 +48,8 @@ type SessionManagerInternals = {
   notifySessionState(chatId: string, state: SessionState): void;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
+  ackInFlightEntries(chatId: string, count: number): void;
+  drainAllInFlightEntries(chatId: string): void;
 };
 
 type TestRuntimeState = RuntimeState;
@@ -262,9 +267,14 @@ describe("SessionManager edge coverage", () => {
     await sm.handleCommand("missing", "session:terminate");
     await sm.handleCommand("chat-active", "session:suspend");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-active" }));
-    expect(ackEntry).toHaveBeenCalledWith(2);
+    // Post inflight-message-recovery: dispatch defers ack until the
+    // handler calls `ctx.markCompleted()` (or session-manager drains on
+    // terminate / permanent failure). The entry sits in the per-chat
+    // FIFO `inFlightEntries`. Verify that's where it lands.
+    expect(internals(sm).inFlightEntries.get("chat-active")).toContain(2);
+    expect(ackEntry).not.toHaveBeenCalledWith(2);
 
-    internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued"), entryId: 3 });
+    internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });
     internals(sm).evictedMappings.set("chat-queued", { claudeSessionId: "queued-session", lastActivity: 1 });
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
 
@@ -471,7 +481,7 @@ describe("SessionManager edge coverage", () => {
     const sm = makeManager();
     internals(sm).sessions.set("chat-admin-resume", record);
 
-    await internals(sm).resumeSession(record, null, undefined);
+    await internals(sm).resumeSession(record, null);
 
     expect(resume).toHaveBeenCalledWith(undefined, "old-session", expect.anything());
     expect(sm.activeCount).toBe(1);
@@ -484,7 +494,7 @@ describe("SessionManager edge coverage", () => {
     internals(sm).sessions.set("chat-queued-resume", record);
     internals(sm)._activeCount = 1;
 
-    await internals(sm).resumeSession(record, null, 9);
+    await internals(sm).resumeSession(record, null);
 
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued-resume")).toBe(true);
     await sm.shutdown();
@@ -733,14 +743,14 @@ describe("SessionManager edge coverage", () => {
     const sm = makeManager({ concurrency: 1 });
 
     internals(sm)._activeCount = 1;
-    await internals(sm).routeMessage("chat-start-queued", makeMessage("chat-start-queued"), 10);
+    await internals(sm).routeMessage("chat-start-queued", makeMessage("chat-start-queued"));
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-start-queued")).toBe(true);
 
     internals(sm).pendingQueue.length = 0;
     const active = makeSessionRecord("chat-same", { status: "active" });
     internals(sm).sessions.set("chat-same", active);
     internals(sm)._activeCount = 1;
-    expect(internals(sm).acquireActiveSlot("chat-same", makeMessage("chat-same"), 11)).toBe(false);
+    expect(internals(sm).acquireActiveSlot("chat-same", makeMessage("chat-same"))).toBe(false);
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-same")).toBe(true);
 
     await sm.shutdown();
@@ -749,7 +759,7 @@ describe("SessionManager edge coverage", () => {
   it("covers drainPendingQueue return and edge branches", async () => {
     const sm = makeManager({ concurrency: 1, handlers: [handler()] });
 
-    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held"), entryId: 12 });
+    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held") });
     internals(sm)._activeCount = 1;
     internals(sm).drainPendingQueue();
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-held")).toBe(true);
@@ -760,7 +770,7 @@ describe("SessionManager edge coverage", () => {
     expect(internals(sm).sessions.has("chat-held")).toBe(true);
 
     const emptyShift = internals(makeManager());
-    emptyShift.pendingQueue.push({ chatId: "chat-empty-shift", message: makeMessage("chat-empty-shift"), entryId: 1 });
+    emptyShift.pendingQueue.push({ chatId: "chat-empty-shift", message: makeMessage("chat-empty-shift") });
     emptyShift.pendingQueue.shift = () => undefined;
     emptyShift.drainPendingQueue();
     await (emptyShift as unknown as SessionManager).shutdown();
@@ -774,7 +784,7 @@ describe("SessionManager edge coverage", () => {
         throw new Error("factory failed during drain");
       },
     });
-    internals(sm).pendingQueue.push({ chatId: "chat-drain", message: makeMessage("chat-drain"), entryId: -1 });
+    internals(sm).pendingQueue.push({ chatId: "chat-drain", message: makeMessage("chat-drain") });
     internals(sm).drainPendingQueue();
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
 

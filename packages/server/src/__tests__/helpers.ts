@@ -130,8 +130,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },
     runtime: {
-      inboxTimeoutSeconds: 300,
-      maxRetryCount: 3,
       pollingIntervalSeconds: 5,
       presenceCleanupSeconds: 60,
       // Disabled by default in tests — suites that exercise the sweeper

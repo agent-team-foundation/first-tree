@@ -51,8 +51,6 @@ const config = {
   },
   observability: { logging: { level: "info", format: "pretty", bridgeToSpanLevel: "off" } },
   runtime: {
-    inboxTimeoutSeconds: 300,
-    maxRetryCount: 3,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
     notificationWebhookUrl: undefined,

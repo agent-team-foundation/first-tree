@@ -1,0 +1,162 @@
+import { and, eq, inArray } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
+import * as inboxService from "../services/inbox.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
+
+/**
+ * `resetDeliveredForInboxes` underpins the in-flight recovery path: at every
+ * `agent:bind` we flip every still-`delivered` row back to `pending` so the
+ * subsequent `claimBacklogForPush` re-includes them. The function MUST
+ * touch only `delivered` rows in the supplied inbox set — bumping `pending`
+ * to `pending` is a no-op SQL-wise but conceptually wrong, and overwriting
+ * `acked` would re-deliver completed messages.
+ *
+ * See docs/inflight-message-recovery-design.md §4.
+ */
+describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
+  const getApp = useTestApp();
+
+  it("resets only delivered rows in the supplied inbox set", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `bind-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `bind-a2-${uid}` });
+    const a3 = await createTestAgent(app, { name: `bind-a3-${uid}` });
+
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid, a3.agent.uuid],
+    });
+    const chatId = chatRes.json().id;
+
+    // Three @mentions to a2 → three notify=true entries on a2's inbox.
+    for (let i = 0; i < 3; i++) {
+      await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+        format: "text",
+        content: `@${a2.agent.name} msg ${i}`,
+      });
+    }
+    // One @mention to a3 → one notify=true entry on a3's inbox. This row
+    // must NOT be touched when we only ask to reset a2's inbox.
+    await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: `@${a3.agent.name} sibling message`,
+    });
+
+    // Claim → delivered. We need a mix of states in a2's inbox: pick the
+    // first two via the WS-push claim helper (becomes `delivered`), leave
+    // the third as `pending`, and force-set one row to `acked` to confirm
+    // the WHERE filter actually short-circuits on status. Filter to
+    // notify=true so the silent fan-out row (from the @a3 message) doesn't
+    // skew the assertion — silent rows are bulk-acked by the trigger's
+    // bundling pass and are not part of the recovery contract.
+    const rows = await app.db
+      .select({ id: inboxEntries.id, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)));
+    expect(rows.length).toBe(3);
+    const claimedFirst = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, rows[0]!.messageId);
+    const claimedSecond = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, rows[1]!.messageId);
+    expect(claimedFirst).toHaveLength(1);
+    expect(claimedSecond).toHaveLength(1);
+
+    // Mark `claimedSecond` as acked so we have all three statuses represented
+    // for a2's inbox at the point of the reset call.
+    await app.db.update(inboxEntries).set({ status: "acked" }).where(eq(inboxEntries.id, claimedSecond[0]!.id));
+
+    // Drive the reset for a2's inbox only.
+    const resetCount = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
+    // Only the still-delivered row (claimedFirst) should have flipped.
+    expect(resetCount).toBe(1);
+
+    const a2Final = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)));
+    const byId = new Map(a2Final.map((r) => [r.id, r.status]));
+    expect(byId.get(claimedFirst[0]!.id)).toBe("pending"); // was delivered → reset
+    expect(byId.get(claimedSecond[0]!.id)).toBe("acked"); // untouched
+    expect(byId.get(rows[2]!.id)).toBe("pending"); // was already pending
+
+    // a3's mention row must be untouched by a reset that targeted only a2.
+    // a3 received the dedicated @mention plus three silent fan-out rows from
+    // the @a2 messages above (notify=false). The dedicated @mention is the
+    // only notify=true row — all should be pending and unchanged.
+    const a3Notify = await app.db
+      .select({ status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a3.agent.inboxId), eq(inboxEntries.notify, true)));
+    expect(a3Notify.length).toBe(1);
+    expect(a3Notify[0]?.status).toBe("pending");
+  });
+
+  it("returns 0 on empty inbox list without hitting the DB", async () => {
+    const app = getApp();
+    const reset = await inboxService.resetDeliveredForInboxes(app.db, []);
+    expect(reset).toBe(0);
+  });
+
+  it("returns 0 when no delivered rows match", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `bindnop-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `bindnop-a2-${uid}` });
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chatId = chatRes.json().id;
+    await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: `@${a2.agent.name} no-op test`,
+    });
+    // Entry exists but is `pending`, not `delivered`.
+    const reset = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
+    expect(reset).toBe(0);
+
+    // Drain still picks the row up — proves reset is non-destructive.
+    const drained = await inboxService.claimBacklogForPush(app.db, a2.agent.inboxId, 10);
+    expect(drained.length).toBe(1);
+  });
+
+  it("retryCount stays unchanged across a reset — a crash is not a delivery attempt", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `bindrc-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `bindrc-a2-${uid}` });
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chatId = chatRes.json().id;
+    const msgRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: `@${a2.agent.name} keep-retry`,
+    });
+    const messageId = msgRes.json().id;
+
+    // Claim → delivered (retryCount stays 0 per the claim path).
+    const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
+    expect(claimed).toHaveLength(1);
+
+    const before = await app.db
+      .select({ retryCount: inboxEntries.retryCount })
+      .from(inboxEntries)
+      .where(inArray(inboxEntries.id, [claimed[0]!.id]));
+    expect(before[0]?.retryCount).toBe(0);
+
+    const reset = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
+    expect(reset).toBe(1);
+
+    const after = await app.db
+      .select({ retryCount: inboxEntries.retryCount, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(inArray(inboxEntries.id, [claimed[0]!.id]));
+    expect(after[0]?.status).toBe("pending");
+    // Critical invariant: bind-time reset is NOT a retry bump. A flaky client
+    // that crashes mid-turn must not push genuinely-stuck messages into
+    // `failed` just because the recovery path ran.
+    expect(after[0]?.retryCount).toBe(0);
+  });
+});
