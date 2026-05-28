@@ -1,0 +1,168 @@
+import { Command } from "commander";
+import { describe, expect, it } from "vitest";
+import { registerAgentCommands } from "../commands/agent/index.js";
+import { registerAttentionCommands } from "../commands/attention/index.js";
+import { registerChatCommands } from "../commands/chat/index.js";
+import { registerConfigCommands } from "../commands/config/index.js";
+import { registerDaemonCommands } from "../commands/daemon/index.js";
+import { registerDoctorCommand } from "../commands/doctor.js";
+import { registerGithubCommands } from "../commands/github/index.js";
+import { registerLoginCommand } from "../commands/login.js";
+import { registerLogoutCommand } from "../commands/logout.js";
+import { registerOrgCommands } from "../commands/org/index.js";
+import { registerStatusCommand } from "../commands/status.js";
+import { registerTreeCommands } from "../commands/tree/index.js";
+import { registerUpgradeCommand } from "../commands/upgrade.js";
+
+function command(root: Command, name: string): Command {
+  const found = root.commands.find((entry) => entry.name() === name);
+  if (!found) throw new Error(`Missing command ${name}`);
+  return found;
+}
+
+function subcommands(root: Command, name: string): string[] {
+  return command(root, name)
+    .commands.map((entry) => entry.name())
+    .sort();
+}
+
+describe("CLI command registration", () => {
+  it("registers the top-level command surface", () => {
+    const root = new Command();
+
+    registerLoginCommand(root);
+    registerLogoutCommand(root);
+    registerStatusCommand(root);
+    registerDoctorCommand(root);
+    registerUpgradeCommand(root);
+    registerAgentCommands(root);
+    registerAttentionCommands(root);
+    registerChatCommands(root);
+    registerOrgCommands(root);
+    registerDaemonCommands(root);
+    registerConfigCommands(root);
+    registerTreeCommands(root);
+    registerGithubCommands(root);
+
+    expect(root.commands.map((entry) => entry.name()).sort()).toEqual([
+      "agent",
+      "attention",
+      "chat",
+      "config",
+      "daemon",
+      "doctor",
+      "github",
+      "login",
+      "logout",
+      "org",
+      "status",
+      "tree",
+      "upgrade",
+    ]);
+  });
+
+  it("registers agent, chat, attention, daemon, config, and org subcommands", () => {
+    const root = new Command();
+    registerAgentCommands(root);
+    registerAttentionCommands(root);
+    registerChatCommands(root);
+    registerDaemonCommands(root);
+    registerConfigCommands(root);
+    registerOrgCommands(root);
+
+    expect(subcommands(root, "agent")).toEqual([
+      "add",
+      "bind",
+      "claim",
+      "config",
+      "create",
+      "debug",
+      "list",
+      "prune",
+      "remove",
+      "reset",
+      "session",
+      "status",
+      "workspace",
+    ]);
+    expect(subcommands(root, "attention")).toEqual(["cancel", "list", "raise", "respond", "show"]);
+    expect(subcommands(root, "chat")).toEqual(["history", "invite", "list", "open", "send"]);
+    expect(subcommands(root, "daemon")).toEqual([
+      "doctor",
+      "home-info",
+      "refresh-unit",
+      "restart",
+      "start",
+      "status",
+      "stop",
+    ]);
+    expect(subcommands(root, "config")).toEqual(["get", "set", "show"]);
+    expect(subcommands(root, "org")).toEqual(["bind-tree"]);
+  });
+
+  it("registers nested agent and tree command groups", () => {
+    const root = new Command();
+    registerAgentCommands(root);
+    registerTreeCommands(root);
+    registerGithubCommands(root);
+
+    const agent = command(root, "agent");
+    expect(subcommands(agent, "bind")).toEqual(["bot", "client", "user"]);
+    expect(subcommands(agent, "session")).toEqual(["list", "suspend", "terminate"]);
+    expect(subcommands(agent, "workspace")).toEqual(["clean"]);
+
+    const tree = command(root, "tree");
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
+      "automation",
+      "bind",
+      "bootstrap",
+      "claude-hook",
+      "codeowners",
+      "help",
+      "init",
+      "inject",
+      "inspect",
+      "integrate",
+      "publish",
+      "review",
+      "skill",
+      "status",
+      "upgrade",
+      "verify",
+      "workspace",
+    ]);
+    expect(subcommands(tree, "workspace")).toEqual(["sync"]);
+    expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "link", "list", "upgrade"]);
+    expect(subcommands(root, "github")).toEqual(["scan"]);
+  });
+
+  it("keeps important options on high-risk commands", () => {
+    const root = new Command();
+    registerLoginCommand(root);
+    registerAgentCommands(root);
+    registerDaemonCommands(root);
+    registerTreeCommands(root);
+
+    const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
+
+    expect(optionNames(command(root, "login"))).toEqual(["--no-start", "--override"]);
+    expect(optionNames(command(command(root, "agent"), "create"))).toEqual([
+      "--client-id",
+      "--display-name",
+      "--org",
+      "--runtime",
+      "--server",
+      "--type",
+    ]);
+    expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
+    expect(optionNames(command(command(root, "tree"), "bind"))).toEqual([
+      "--entrypoint",
+      "--mode",
+      "--tree-mode",
+      "--tree-path",
+      "--tree-url",
+      "--workspace-id",
+      "--workspace-root",
+    ]);
+  });
+});

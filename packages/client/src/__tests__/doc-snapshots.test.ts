@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -883,7 +883,7 @@ describe("buildMessageDocumentSnapshots — wide self-fence over agent home", ()
       const rejected = join(rootScoped, "query?x", "note.md");
       await mkdir(join(rootScoped, "query?x"), { recursive: true });
       await writeFile(rejected, "# rejected\n", "utf8");
-      const relativeToRoot = abs.startsWith("/") ? abs.slice(1) : abs;
+      const relativeToRoot = (await realpath(abs)).replace(/^\/+/, "");
 
       const absoluteOut = await buildMessageDocumentSnapshots(`see ${abs}`, "/");
       const relativeOut = await buildMessageDocumentSnapshots(`see ${relativeToRoot}`, "/");
