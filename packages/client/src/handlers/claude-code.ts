@@ -602,6 +602,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * must be redesigned per-consumer or the retry must own its own
    * captured copy — otherwise an inject from chat N can overwrite a
    * stash that chat M's retry is about to replay.
+   *
+   * Tolerated same-chat race — inject mid-retry: an inject()'s
+   * `toSDKUserMessage` await can interleave with a consumer-triggered
+   * transient retry. Sequence: consumer sniff-hit → respawn replays
+   * the PRIOR stash into the new query → inject's await resolves →
+   * inject overwrites stash and pushes the new prompt. The rebuilt
+   * query then sees `[replayed_prior_prompt, injected_new_prompt]`
+   * as two consecutive user messages. The replayed prompt is already
+   * in the resumed conversation history, so the model perceives a
+   * one-message duplicate before processing the inject — recoverable,
+   * not a correctness break. Avoiding this would require either
+   * draining inject through a queue gated on the consumer's catch
+   * state or making the retry path async — both have larger blast
+   * radius than the duplicate-message symptom. Documented per PR #648
+   * reviewer observation #1.
    */
   let stashedSdkMessage: SDKUserMessage | null = null;
 
