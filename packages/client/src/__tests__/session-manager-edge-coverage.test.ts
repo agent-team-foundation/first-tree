@@ -98,6 +98,7 @@ function runtimeConfig(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntim
       mcpServers: [],
       env: [],
       gitRepos: [],
+      reasoningEffort: "",
     },
     ...overrides,
   };
@@ -346,6 +347,7 @@ describe("SessionManager edge coverage", () => {
         mcpServers: [],
         env: [],
         gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "src/project" }],
+        reasoningEffort: "",
       },
     });
     const cache = makeCache({
@@ -833,6 +835,7 @@ describe("SessionManager edge coverage", () => {
           mcpServers: [],
           env: [],
           gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "project" }],
+          reasoningEffort: "",
         },
       }),
     });

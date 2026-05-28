@@ -44,6 +44,7 @@ import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redire
 const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   prompt: "prompt",
   model: "setup",
+  effort: "setup",
   mcp: "tools",
   env: "resources",
   git: "resources",

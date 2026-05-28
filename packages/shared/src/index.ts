@@ -91,6 +91,7 @@ export {
 export {
   type AgentRuntimeConfig,
   type AgentRuntimeConfigDryRunResult,
+  type AgentRuntimeConfigPatch,
   type AgentRuntimeConfigPayload,
   agentRuntimeConfigDryRunResultSchema,
   agentRuntimeConfigPayloadSchema,

@@ -144,9 +144,21 @@ export const agentRuntimeConfigPayloadShape = z.object({
  */
 const claudeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("claude-code"),
+  // Maps to claude-agent-sdk Options.effort (the `--effort` flag). The empty
+  // string is an "inherit" sentinel: when set, the handler omits the effort
+  // option so the SDK falls back to the operator's local
+  // `~/.claude/settings.json` effortLevel (the pre-feature behavior). A
+  // non-empty value is passed explicitly and overrides that local setting —
+  // verified against cli.js, which resolves `effort ?? settings.effortLevel`.
+  reasoningEffort: z.enum(["", "low", "medium", "high", "max"]).default(""),
 });
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
+  // Maps to codex-sdk ThreadOptions.modelReasoningEffort. Default "high"
+  // preserves the value the handler previously hardcoded. "minimal" is
+  // intentionally excluded — it is incompatible with the default tool set and
+  // breaks tool calls (see the codex handler's footgun notes).
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).default("high"),
 });
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
@@ -227,6 +239,7 @@ export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   mcpServers: [],
   env: [],
   gitRepos: [],
+  reasoningEffort: "",
 };
 
 /**
@@ -242,6 +255,7 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   mcpServers: [],
   env: [],
   gitRepos: [],
+  reasoningEffort: "high",
 };
 
 /**
@@ -292,6 +306,12 @@ const agentRuntimeConfigPatchShape = z
     mcpServers: z.array(mcpServerSchema),
     env: z.array(envEntrySchema),
     gitRepos: z.array(gitRepoSchema),
+    // Loose `z.string()` here (like `model`), not a per-provider enum: the
+    // patch shape is flat and provider-agnostic, while the allowed values
+    // differ per provider. Validity is enforced when the merged payload is
+    // re-parsed against the tagged union in `commitWrite` — an out-of-range
+    // value (e.g. "max" for codex, "xhigh" for claude) is rejected there.
+    reasoningEffort: z.string(),
   })
   .partial();
 
@@ -306,6 +326,15 @@ export const updateAgentRuntimeConfigSchema = z.object({
   payload: agentRuntimeConfigPatchShape,
 });
 export type UpdateAgentRuntimeConfig = z.infer<typeof updateAgentRuntimeConfigSchema>;
+
+/**
+ * The patch half of an update — every payload field optional, and
+ * `reasoningEffort` typed as a loose `string` (not the per-provider enum). Use
+ * this for merge helpers instead of `Partial<AgentRuntimeConfigPayload>`: the
+ * latter is a partial of the tagged union, so its `reasoningEffort` narrows to
+ * each variant's enum and a flat patch string fails to assign.
+ */
+export type AgentRuntimeConfigPatch = UpdateAgentRuntimeConfig["payload"];
 
 export const dryRunAgentRuntimeConfigSchema = z.object({
   payload: agentRuntimeConfigPatchShape,

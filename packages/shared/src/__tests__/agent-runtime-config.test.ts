@@ -101,6 +101,65 @@ describe("agent runtime config — codex defaults", () => {
   });
 });
 
+describe("agent runtime config — reasoning effort", () => {
+  it("claude default is '' (inherit local effortLevel); codex default is 'high'", () => {
+    expect(DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD.reasoningEffort).toBe("");
+    expect(DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD.reasoningEffort).toBe("high");
+  });
+
+  it("schema backfills the per-provider default when reasoningEffort is absent", () => {
+    // Mirrors how legacy rows (written before this field existed) parse.
+    expect(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code" }).reasoningEffort).toBe("");
+    expect(agentRuntimeConfigPayloadSchema.parse({ kind: "codex" }).reasoningEffort).toBe("high");
+  });
+
+  it("a legacy row with neither kind nor reasoningEffort parses as claude-code with ''", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({ model: "opus" });
+    expect(parsed.kind).toBe("claude-code");
+    expect(parsed.reasoningEffort).toBe("");
+  });
+
+  it("claude accepts low/medium/high/max and the '' inherit sentinel", () => {
+    for (const v of ["", "low", "medium", "high", "max"]) {
+      expect(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code", reasoningEffort: v }).reasoningEffort).toBe(
+        v,
+      );
+    }
+  });
+
+  it("claude rejects codex-only values (xhigh) and unknown values", () => {
+    expect(agentRuntimeConfigPayloadSchema.safeParse({ kind: "claude-code", reasoningEffort: "xhigh" }).success).toBe(
+      false,
+    );
+    expect(agentRuntimeConfigPayloadSchema.safeParse({ kind: "claude-code", reasoningEffort: "banana" }).success).toBe(
+      false,
+    );
+  });
+
+  it("codex accepts low/medium/high/xhigh", () => {
+    for (const v of ["low", "medium", "high", "xhigh"]) {
+      expect(agentRuntimeConfigPayloadSchema.parse({ kind: "codex", reasoningEffort: v }).reasoningEffort).toBe(v);
+    }
+  });
+
+  it("codex rejects minimal (breaks tools), claude-only max, and the '' sentinel", () => {
+    for (const v of ["minimal", "max", ""]) {
+      expect(agentRuntimeConfigPayloadSchema.safeParse({ kind: "codex", reasoningEffort: v }).success).toBe(false);
+    }
+  });
+
+  it("patch shape accepts reasoningEffort as a loose string (validity enforced on merge)", () => {
+    expect(updateAgentRuntimeConfigSchema.parse({ expectedVersion: 1, payload: { reasoningEffort: "low" } })).toEqual({
+      expectedVersion: 1,
+      payload: { reasoningEffort: "low" },
+    });
+    // Omitted → absent from the parsed patch (merge leaves the field untouched).
+    expect(
+      updateAgentRuntimeConfigSchema.parse({ expectedVersion: 1, payload: { model: "sonnet" } }).payload,
+    ).not.toHaveProperty("reasoningEffort");
+  });
+});
+
 describe("agent runtime config — git repo localPath safety", () => {
   it("accepts safe relative local paths", () => {
     expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
