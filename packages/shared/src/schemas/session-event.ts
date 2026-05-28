@@ -7,6 +7,7 @@ export const sessionEventKind = z.enum([
   "thinking",
   "turn_end",
   "context_tree_usage",
+  "token_usage",
 ]);
 export type SessionEventKind = z.infer<typeof sessionEventKind>;
 
@@ -77,6 +78,30 @@ export const contextTreeUsageEventPayload = z.object({
 });
 export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventPayload>;
 
+/**
+ * Token usage for one (provider, model) within a single turn. Emitted by the
+ * handler right before `turn_end`. A turn may produce multiple `token_usage`
+ * events when the underlying SDK runs more than one model in a single turn
+ * (e.g. Claude Agent SDK fast-mode). Codex always emits exactly one.
+ *
+ * Field semantics:
+ *   - `inputTokens`: prompt tokens NOT served from cache. For Anthropic this
+ *     includes cache-creation tokens (they bill as input). For OpenAI/Codex
+ *     this is `usage.input_tokens` straight from the SDK.
+ *   - `cachedInputTokens`: prompt tokens served from cache (Anthropic
+ *     `cache_read_input_tokens` / OpenAI `cached_input_tokens`).
+ *   - `outputTokens`: completion tokens (includes reasoning tokens for o-series
+ *     models — we deliberately do not split them out in this minimal schema).
+ */
+export const tokenUsageEventPayload = z.object({
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: z.number().int().nonnegative(),
+  cachedInputTokens: z.number().int().nonnegative().default(0),
+  outputTokens: z.number().int().nonnegative(),
+});
+export type TokenUsageEventPayload = z.infer<typeof tokenUsageEventPayload>;
+
 export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tool_call"), payload: toolCallEventPayload }),
   z.object({ kind: z.literal("error"), payload: errorEventPayload }),
@@ -84,6 +109,7 @@ export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thinking"), payload: thinkingEventPayload }),
   z.object({ kind: z.literal("turn_end"), payload: turnEndEventPayload }),
   z.object({ kind: z.literal("context_tree_usage"), payload: contextTreeUsageEventPayload }),
+  z.object({ kind: z.literal("token_usage"), payload: tokenUsageEventPayload }),
 ]);
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
@@ -101,6 +127,7 @@ export const sessionEventRowSchema = z.object({
     thinkingEventPayload,
     turnEndEventPayload,
     contextTreeUsageEventPayload,
+    tokenUsageEventPayload,
   ]),
   createdAt: z.string(),
 });

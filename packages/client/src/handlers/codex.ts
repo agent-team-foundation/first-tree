@@ -293,6 +293,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let codex: Codex | null = null;
   let thread: Thread | null = null;
   let threadId: string | null = null;
+  // Best-effort label for the current Codex thread's model — recorded from the
+  // last `buildCodexThreadOptions` call so `token_usage` events can carry a
+  // model name. The SDK does not echo back the actual model used (the CLI may
+  // pick a default when `payload.model` is empty), so this is whatever the
+  // operator configured; absence is surfaced as the placeholder below.
+  let currentModel = "";
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
@@ -796,6 +802,29 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
 
     const succeeded = !turnFailed && !forwardFailed;
+    // Emit `token_usage` just before `turn_end` so the wire-order matches the
+    // claude-code handler (consumers can group all usage events for a turn
+    // between the previous and current `turn_end`). `usage` is null when the
+    // turn never reached `turn.completed` (abort / unrecoverable failure) —
+    // in that case the SDK has no totals to share and we skip the emit
+    // rather than ship zeros.
+    const usageForEvent = usageBox.value;
+    if (usageForEvent) {
+      try {
+        sessionCtx.emitEvent({
+          kind: "token_usage",
+          payload: {
+            provider: "codex",
+            model: currentModel || "codex-default",
+            inputTokens: usageForEvent.input_tokens,
+            cachedInputTokens: usageForEvent.cached_input_tokens,
+            outputTokens: usageForEvent.output_tokens,
+          },
+        });
+      } catch (err) {
+        sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     sessionCtx.emitEvent({
       kind: "turn_end",
       payload: { status: succeeded ? "success" : "error" },
@@ -1038,6 +1067,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
+      currentModel = payload.model || "";
 
       const input = await toCodexInput(message, sessionCtx);
       await runTurn(input, sessionCtx, 1);
@@ -1088,6 +1118,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
       threadId = sessionId;
+      currentModel = payload.model || "";
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);

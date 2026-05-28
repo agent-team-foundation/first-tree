@@ -596,9 +596,11 @@ export {
   sessionEventRowSchema,
   sessionEventSchema,
   type ThinkingEventPayload,
+  type TokenUsageEventPayload,
   type ToolCallEventPayload,
   type TurnEndEventPayload,
   thinkingEventPayload,
+  tokenUsageEventPayload,
   toolCallEventPayload,
   turnEndEventPayload,
 } from "./schemas/session-event.js";
