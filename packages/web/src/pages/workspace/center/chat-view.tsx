@@ -1714,14 +1714,26 @@ export function ChatView({
           const rootBounds = entry.rootBounds;
           if (!rootBounds) continue;
           if (entry.boundingClientRect.bottom < rootBounds.top) {
-            // Snapshot the current tip as the new anchor BEFORE
-            // clearing `dividerDismissed`. The render that drops the
-            // divider then has `firstNewItemIdx < 0` (everything in
-            // the list is <= the new anchor), so no jitter / flash.
-            // Any subsequent remote message will be strictly newer
-            // and re-show the divider at the right slot.
-            const tip = mergedMessages.length > 0 ? (mergedMessages[mergedMessages.length - 1]?.id ?? null) : null;
-            setDividerAnchorMessageId(tip);
+            // Advance the anchor to what the user has ACTUALLY
+            // reached (live bottom-visible), NOT the chat tip. When
+            // a batch of remote messages is taller than the
+            // viewport, the divider can scroll past the top while
+            // the user has only reached part-way down the batch —
+            // anchoring at the tip would mark the still-below-the-
+            // fold messages as already seen, suppressing both the
+            // divider and `pillCount` for them. The live bottom-
+            // visible message id is the boundary between "I have
+            // seen this" and "still below the fold" at the moment
+            // of dismissal. Codex P2 review on PR 652.
+            //
+            // Fallback to the chat tip only when the live tracker
+            // has not yet emitted a bottom-visible (very first
+            // paint, rare). `firstNewItemIdx` will then transiently
+            // be -1 until the tracker catches up; no harmful flash.
+            const reached =
+              liveBottomVisibleId ??
+              (mergedMessages.length > 0 ? (mergedMessages[mergedMessages.length - 1]?.id ?? null) : null);
+            setDividerAnchorMessageId(reached);
             setDividerDismissed(false);
             return;
           }
@@ -1731,7 +1743,7 @@ export function ChatView({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [firstNewItemIdx, dividerDismissed, mergedMessages]);
+  }, [firstNewItemIdx, dividerDismissed, mergedMessages, liveBottomVisibleId]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
