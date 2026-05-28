@@ -86,6 +86,67 @@ export class AgentSlot {
   }
 
   async start(): Promise<RegisterResult> {
+    // Attach listeners BEFORE `bindAgent` so the server's bind-time
+    // reset+drain push (which fires within ~1ms of the `agent:bound`
+    // response on the server side) never lands on a listener-less
+    // emitter. Pre-PR the listeners were attached AFTER `bindAgent` +
+    // `sdk.register` + `agentConfigCache.refresh` + `syncContextTree`
+    // (50ms-15s window depending on Context Tree), and any
+    // `inbox:deliver` frame arriving in that window was silently
+    // dropped by Node's EventEmitter — the entry then stayed
+    // `delivered` server-side and the in-process Deduplicator collapsed
+    // every subsequent bind-reset replay (see
+    // docs/inflight-message-recovery-design.md §4). The
+    // `expectedInboxId` follows the agent-inbox naming convention from
+    // `server/services/agent.ts:380` (`inbox_${uuid}`); the live
+    // `this.inboxId` from `sdk.register()` overrides once available.
+    const expectedInboxId = `inbox_${this.config.agentId}`;
+    const earlyDeliverBuffer: InboxDeliverFrame[] = [];
+
+    const onInboxDeliver = (inboxId: string, frame: InboxDeliverFrame) => {
+      // Pre-`sdk.register` we don't yet have the authoritative inboxId,
+      // so fall back to the convention. Once `this.inboxId` is set, the
+      // strict check resumes.
+      const ownInboxId = this.inboxId ?? expectedInboxId;
+      if (inboxId !== ownInboxId) return;
+      if (!this.sessionManager) {
+        // SessionManager isn't built yet — buffer the frame; we'll
+        // flush below once the manager is alive.
+        earlyDeliverBuffer.push(frame);
+        return;
+      }
+      this.dispatchPushedFrame(frame).catch((err) => {
+        this.logger.warn({ err, entryId: frame.entryId }, "inbox:deliver dispatch error");
+      });
+    };
+    const onBound = (boundAgent: { agentId: string }) => {
+      if (boundAgent.agentId === this.config.agentId) {
+        // `fullStateSync` short-circuits when `sessionManager` is null,
+        // so it's safe to fire on the FIRST `agent:bound` (which now
+        // reaches this listener because we attached it pre-bind) — the
+        // explicit `fullStateSync()` after sessionManager construction
+        // covers the initial-startup case, and this listener handles
+        // reconnects.
+        this.fullStateSync();
+        // One-shot post-bind reconcile catches operator-terminates that
+        // landed while this client was offline; a duplicate tick is harmless.
+        setTimeout(() => this.reconcileNow(), 5000);
+      }
+    };
+    const onReconcileResult = (result: SessionReconcileResult) => {
+      if (result.agentId === this.config.agentId && this.sessionManager) {
+        this.sessionManager.applyStaleChatIds(result.staleChatIds);
+      }
+    };
+    this.clientConnection.on("inbox:deliver", onInboxDeliver);
+    this.clientConnection.on("agent:bound", onBound);
+    this.clientConnection.on("session:reconcile:result", onReconcileResult);
+    this.listeners.push(
+      { event: "inbox:deliver", fn: onInboxDeliver },
+      { event: "agent:bound", fn: onBound },
+      { event: "session:reconcile:result", fn: onReconcileResult },
+    );
+
     const bound = await this.clientConnection.bindAgent(
       this.config.agentId,
       this.config.runtimeType ?? this.config.type,
@@ -116,34 +177,6 @@ export class AgentSlot {
     if (!contextTreeBinding) {
       this.logger.info("context tree not configured or sync skipped — agent will start without organizational context");
     }
-
-    const onInboxDeliver = (inboxId: string, frame: InboxDeliverFrame) => {
-      if (inboxId !== this.inboxId) return;
-      this.dispatchPushedFrame(frame).catch((err) => {
-        this.logger.warn({ err, entryId: frame.entryId }, "inbox:deliver dispatch error");
-      });
-    };
-    const onBound = (boundAgent: { agentId: string }) => {
-      if (boundAgent.agentId === this.config.agentId) {
-        this.fullStateSync();
-        // One-shot post-bind reconcile catches operator-terminates that
-        // landed while this client was offline; a duplicate tick is harmless.
-        setTimeout(() => this.reconcileNow(), 5000);
-      }
-    };
-    const onReconcileResult = (result: SessionReconcileResult) => {
-      if (result.agentId === this.config.agentId && this.sessionManager) {
-        this.sessionManager.applyStaleChatIds(result.staleChatIds);
-      }
-    };
-    this.clientConnection.on("inbox:deliver", onInboxDeliver);
-    this.clientConnection.on("agent:bound", onBound);
-    this.clientConnection.on("session:reconcile:result", onReconcileResult);
-    this.listeners.push(
-      { event: "inbox:deliver", fn: onInboxDeliver },
-      { event: "agent:bound", fn: onBound },
-      { event: "session:reconcile:result", fn: onReconcileResult },
-    );
 
     const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
 
@@ -203,15 +236,34 @@ export class AgentSlot {
     this.clientConnection.on("session:command", onCommand);
     this.listeners.push({ event: "session:command", fn: onCommand });
 
+    // Flush any `inbox:deliver` frames the early listener captured
+    // during init. With the bind-time reset+drain path (see design §4)
+    // the server pushes pending entries the instant it processes the
+    // `agent:bind` frame, but the surrounding `sdk.register` +
+    // `agentConfigCache.refresh` + `syncAgentContextTree` chain above
+    // can take anywhere from ~100ms (no Context Tree) to 15s
+    // (cold-clone Context Tree). Without this flush every restart with
+    // an un-acked in-flight message lost the recovery push and the
+    // server row stayed `delivered` indefinitely — the in-process
+    // Deduplicator absorbed every subsequent bind-reset replay so the
+    // entry never re-dispatched and never acked.
+    if (earlyDeliverBuffer.length > 0) {
+      this.logger.info(
+        { buffered: earlyDeliverBuffer.length },
+        "flushing early inbox:deliver buffer — frames received during init window",
+      );
+      for (const frame of earlyDeliverBuffer.splice(0)) {
+        this.dispatchPushedFrame(frame).catch((err) => {
+          this.logger.warn({ err, entryId: frame.entryId }, "buffered inbox:deliver dispatch error");
+        });
+      }
+    }
+
     // Initial-startup fullStateSync. The `on("agent:bound", onBound)`
-    // listener above only catches RECONNECT agent:bound frames — the
-    // first-time bind already resolved inside `await bindAgent` before
-    // this listener was attached, so its emit was lost. Without an
-    // explicit sync here, after a process restart the server's
-    // `agent_chat_sessions.state` keeps the pre-shutdown snapshot (often
-    // `suspended` from the previous shutdown's notify) forever, and the
-    // web UI shows "pause" on every chat with a persisted session
-    // until the user manually triggers a state-changing event.
+    // listener above also fires here now that it's attached pre-bind,
+    // but `sessionManager` was null inside its callback — so its
+    // `fullStateSync()` call was a no-op. Run it explicitly now that
+    // the manager exists.
     this.fullStateSync();
 
     this.startReconcileLoop();
