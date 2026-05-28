@@ -41,6 +41,17 @@ function makeAbortError(): Error {
 }
 
 /**
+ * Node 22+ shape for `AbortSignal.timeout()` firings: a `DOMException` whose
+ * `name` is `"TimeoutError"` (Web spec), NOT `AbortError`. The previous
+ * `isTransientNetworkError` matched only on `AbortError`, so real production
+ * timeouts skipped the retry layer entirely. This factory captures the
+ * actual runtime shape (verified against a v0.5.x bind-aborted log).
+ */
+function makeTimeoutError(): DOMException {
+  return new DOMException("The operation was aborted due to timeout", "TimeoutError");
+}
+
+/**
  * Schedules a body returning the `n`-th item of `results` per call. Each item
  * is either a `Response` (resolved) or an `Error` (rejected).
  */
@@ -161,5 +172,27 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
       flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" })),
     ).rejects.toHaveProperty("name", "AbortError");
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats TimeoutError (real AbortSignal.timeout shape) as transient and retries up to three times", async () => {
+    const fetchMock = buildFetchMock([makeTimeoutError(), makeTimeoutError(), makeTimeoutError()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sdk = makeSdk();
+    await expect(
+      flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" })),
+    ).rejects.toHaveProperty("name", "TimeoutError");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries through two TimeoutErrors and succeeds on the third attempt (the prod bind-aborted scenario)", async () => {
+    const fetchMock = buildFetchMock([makeTimeoutError(), makeTimeoutError(), makeOkResponse()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sdk = makeSdk();
+    const result = await flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ id: "m-1" });
   });
 });
