@@ -518,7 +518,29 @@ export type InstallCoreSkillsOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
+/**
+ * Test-mode override for `defaultInstallExec`. Set via {@link __setTestInstallExec}
+ * from `vitest.setup.ts` to a no-op so handler-level tests that go through
+ * `handler.start()` do not actually shell out to the channel binary or `npx`
+ * for `installCoreSkills` / `installFirstTreeIntegration`. Production leaves
+ * this `null` and `defaultInstallExec` runs `execFileSync` normally.
+ */
+let testInstallExecOverride: InstallFirstTreeIntegrationExec | null = null;
+
+/**
+ * Install (or clear) a global test override for the install-exec backend.
+ * Only call this from test setup files — the override is process-wide and
+ * persists until cleared with `null`.
+ */
+export function __setTestInstallExec(exec: InstallFirstTreeIntegrationExec | null): void {
+  testInstallExecOverride = exec;
+}
+
 function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
+  if (testInstallExecOverride) {
+    testInstallExecOverride(command, args, options);
+    return;
+  }
   execFileSync(command, args, {
     cwd: options.cwd,
     stdio: "pipe",
