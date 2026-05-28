@@ -324,42 +324,58 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
 export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
 
 /**
- * Walk up from the current module to find the closest `package.json` with
- * a `version` field.
+ * Resolve a stable identifier for the bundled CLI that the handler can
+ * compare against the cached `.agent/cli-version` to detect upgrades.
  *
- * - **Published / `dev-install.sh` bundle** (the path that actually matters
- *   for the drift trigger): `bootstrap.ts` is inlined into an `apps/cli/
- *   dist/<chunk>.mjs` chunk, so the walk goes `dist/<chunk>.mjs` → `dist/`
- *   → the CLI manifest. CI publish rewrites that manifest's `name`/`bin`
- *   to the channel before `pnpm build`, so the version we read is the
- *   consumer-facing CLI version (`first-tree` / `first-tree-staging` /
- *   `first-tree-dev`). This is what `first-tree upgrade` bumps.
- * - **Source-tree `tsx` / vitest runs**: there is no bundle; the walk
- *   from `packages/client/src/runtime/bootstrap.ts` hits the
- *   `@first-tree/client` manifest first. That package is `private`
- *   (no published release bumps it), so the pin doesn't track CLI
- *   versions in dev mode. Drift detection still works correctly because
- *   each invocation reads the same value; the dev-mode pin just won't
- *   tick when the operator runs a real `pnpm install -g first-tree@...`.
- *   Acceptable: dev iteration is the wrong place to validate CLI-upgrade
- *   refresh semantics anyway.
+ * Behaviour by channel:
+ *
+ *   - **prod / staging** — returns the bare `<pkgVersion>` from the
+ *     closest ancestor `package.json`. CI bumps that manifest's `version`
+ *     on every release, so version alone is the unique build identifier.
+ *   - **dev** — returns `<pkgVersion>+build.<mtime>`, where `<mtime>` is
+ *     the integer `mtimeMs` of the file backing `moduleUrl`. Dev iteration
+ *     never bumps `apps/cli/package.json` (CLAUDE.md forbids touching
+ *     `version` fields), so a bare version would be constant across every
+ *     `scripts/dev-install.sh` cycle and `cliDrifted` would never fire.
+ *     `pnpm build` rewrites `dist/cli/index.mjs` and updates its mtime,
+ *     so the appended suffix changes on every build → handler triggers
+ *     a full re-bootstrap and the agent home picks up the new
+ *     CLAUDE.md / tools.md / shipped skills payload.
+ *
+ * Channel is read from `getCliBinding().packageName`: `null` is the dev
+ * channel (dev binaries are not published — see
+ * `runtime/cli-binding.ts`), everything else is a published channel.
+ *
+ * If `getCliBinding()` has not been initialised yet (e.g. an early
+ * bootstrap call before `apps/cli` wired the binding), we fall through
+ * to the bare-version path so the caller still gets something
+ * drift-comparable.
+ *
+ * Walk source: the closest ancestor `package.json` with a non-empty
+ * `version`. For the **published bundle**, `bootstrap.ts` is inlined
+ * into `apps/cli/dist/<chunk>.mjs`, so the walk lands on the CLI
+ * manifest. For **source-tree `tsx` / vitest runs** it lands on the
+ * private `@first-tree/client` manifest — that version is constant in
+ * dev too, which is exactly why dev needs the mtime suffix.
  *
  * Imported from here (not from `apps/cli`) to keep the client → CLI
  * dependency direction one-way.
  *
- * Returns `null` if the walk exhausts every parent — we treat that as
- * "version unknown" and fall back to the sentinel-only path, never as
- * "drifted".
+ * Returns `null` only when the walk exhausts every parent without
+ * finding any `version` — drift detection then falls back to "unknown",
+ * never to "drifted".
  */
 export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): string | null {
   let dir = dirname(fileURLToPath(moduleUrl));
+  let version: string | null = null;
   for (let i = 0; i < 10; i += 1) {
     const candidate = resolve(dir, "package.json");
     if (existsSync(candidate)) {
       try {
         const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown };
         if (typeof parsed.version === "string" && parsed.version.length > 0) {
-          return parsed.version;
+          version = parsed.version;
+          break;
         }
       } catch {
         // Corrupt or unreadable — keep walking; finding *some* version is
@@ -370,7 +386,33 @@ export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): s
     if (parent === dir) break;
     dir = parent;
   }
-  return null;
+  if (version === null) return null;
+
+  // Channel gate: only the dev channel needs the build fingerprint.
+  // packageName === null is the published-channel-absent marker (see
+  // CliBinding's docblock). Anywhere else (prod / staging / uninitialised)
+  // we keep the bare version — staging/prod have a release-bumped
+  // version that already changes per build, so a fingerprint would just
+  // be noise in the `.agent/cli-version` pin.
+  let isDevChannel = false;
+  try {
+    isDevChannel = getCliBinding().packageName === null;
+  } catch {
+    // Binding not initialised — treat as non-dev. Safer default: skip
+    // the suffix rather than emit a fingerprint into a sentinel that a
+    // later boot (with binding set) would reject as drifted.
+  }
+  if (!isDevChannel) return version;
+
+  // Wrapped in try/catch so a synthetic `moduleUrl` pointing at a
+  // non-existent path still produces a usable version string for callers
+  // (and tests) that hand in dummy URLs.
+  try {
+    const mtimeMs = Math.floor(statSync(fileURLToPath(moduleUrl)).mtimeMs);
+    return `${version}+build.${mtimeMs}`;
+  } catch {
+    return version;
+  }
 }
 
 /** Read the cached CLI version that last ran bootstrap, if any. */
