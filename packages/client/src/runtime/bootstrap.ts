@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
@@ -11,6 +12,35 @@ import { renderChatContextSection } from "./chat-context-section.js";
 import { getCliBinding } from "./cli-binding.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
+
+/**
+ * Promisified `execFile` used by the Context Tree sync path. The sync path
+ * runs at startup while N agents are concurrently issuing `agent:bind` and
+ * `/api/v1/agent/config` requests; `execFileSync` froze the event loop for the
+ * full duration of `git pull` (~7s on a typical home connection), which made
+ * `AbortSignal.timeout(5_000)` on those in-flight HTTP calls fire spuriously —
+ * server-side traces showed the requests completing in <10ms — and stretched
+ * boot to ≈7s × N because each blocking pull also stalled the dedup window in
+ * {@link withContextTreeSyncLock}: only the very first slot to reach the lock
+ * collapsed onto the leader's promise, every later slot arrived after the
+ * leader's pull had already resolved and acquired a fresh lock of its own.
+ * Async exec lets the event loop keep servicing HTTP responses, lets all N
+ * slots reach the lock during the leader's pull, and collapses startup to a
+ * single shared sync (~10s total instead of ~7s × N).
+ */
+const execFileAsync = promisify(execFile);
+
+/**
+ * `execFile` defaults `maxBuffer` to 1MB; once child output exceeds that it
+ * rejects with `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` and the whole sync path
+ * falls through. `git clone` of a small Context Tree is typically harmless,
+ * but the verbose / progress lines of an unusually large or slow clone (or a
+ * future debug flag) can creep past the default. Reserve 10MB on the three
+ * clone call sites — cheap defence against a rare but high-blast-radius
+ * failure mode, since hitting it cascades into the SSH-fallback and
+ * re-clone branches and finally leaves the agent with no Context Tree.
+ */
+const GIT_CLONE_MAX_BUFFER = 10 * 1024 * 1024;
 
 // Function rather than top-level const: see CLI's `channel-env.ts`
 // history note — locking a path at module load re-introduces the bundle
@@ -90,7 +120,7 @@ async function resolveContextTreeBinding(
 ): Promise<ContextTreeBinding | null> {
   // 1. Check git is available
   try {
-    execFileSync("git", ["--version"], { stdio: "ignore" });
+    await execFileAsync("git", ["--version"]);
   } catch {
     log("Context Tree sync skipped: git is not installed");
     return null;
@@ -127,33 +157,31 @@ async function syncContextTreeRepo(
   try {
     if (existsSync(join(cloneDir, ".git"))) {
       // Ensure we're on the expected branch before pulling
-      const currentBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      const { stdout: headRef } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
         cwd: cloneDir,
         encoding: "utf-8",
         timeout: 5_000,
-      }).trim();
-      if (currentBranch !== branch) {
-        execFileSync("git", ["checkout", branch], {
+      });
+      if (headRef.trim() !== branch) {
+        await execFileAsync("git", ["checkout", branch], {
           cwd: cloneDir,
-          stdio: "pipe",
           timeout: 10_000,
         });
         log(`Context Tree switched to branch ${branch}`);
       }
 
       // Pull latest changes
-      execFileSync("git", ["pull", "--ff-only"], {
+      await execFileAsync("git", ["pull", "--ff-only"], {
         cwd: cloneDir,
-        stdio: "pipe",
         timeout: 30_000,
       });
       log(`Context Tree updated (pull)`);
     } else {
       // First clone
       mkdirSync(cloneDir, { recursive: true });
-      execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-        stdio: "pipe",
+      await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
         timeout: 60_000,
+        maxBuffer: GIT_CLONE_MAX_BUFFER,
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
@@ -177,9 +205,9 @@ async function syncContextTreeRepo(
       try {
         rmSync(cloneDir, { recursive: true, force: true });
         mkdirSync(cloneDir, { recursive: true });
-        execFileSync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
-          stdio: "pipe",
+        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
           timeout: 60_000,
+          maxBuffer: GIT_CLONE_MAX_BUFFER,
         });
         log("Context Tree cloned via SSH fallback");
         // Report the SSH URL as ground truth — `git remote get-url origin`
@@ -204,9 +232,9 @@ async function syncContextTreeRepo(
       try {
         rmSync(cloneDir, { recursive: true, force: true });
         mkdirSync(cloneDir, { recursive: true });
-        execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-          stdio: "pipe",
+        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
           timeout: 60_000,
+          maxBuffer: GIT_CLONE_MAX_BUFFER,
         });
         log("Context Tree re-cloned successfully");
         return { path: cloneDir, repoUrl: repo, branch };
@@ -550,6 +578,12 @@ export type InstallFirstTreeIntegrationOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
+// Kept synchronous (cf. the `execFileAsync` migration in this file): runs on
+// the per-session bootstrap path inside the handler, not the per-agent-bind
+// boot hot path, so even if `npx -y <package>@latest` stalls (cold download
+// can be 10s+) it cannot pile up across the 6-slot startup window the way
+// `syncContextTreeRepo` did. Re-evaluate if `installFirstTreeIntegration` is
+// ever moved to a code path that runs N times in parallel at process start.
 function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
   execFileSync(command, args, {
     cwd: options.cwd,
