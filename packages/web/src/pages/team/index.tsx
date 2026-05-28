@@ -14,6 +14,7 @@ import {
   updateAgent,
 } from "../../api/agents.js";
 import { deleteMember, listMembers, updateMember } from "../../api/members.js";
+import { getOrgUsageByAgent, type UsageWindow } from "../../api/usage.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { NewAgentDialog } from "../../components/new-agent-dialog.js";
 import { Button } from "../../components/ui/button.js";
@@ -106,11 +107,38 @@ export function TeamPage() {
   const [delegateTarget, setDelegateTarget] = useState<DelegateTarget | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
+  // 7d / 30d window for the Usage column. Default 30d — matches the
+  // settled-on default in the design doc; the column header exposes a
+  // segmented control so 7d switching costs one click.
+  const [usageWindow, setUsageWindow] = useState<UsageWindow>("30d");
 
   const membersQuery = useQuery({
     queryKey: ["members"],
     queryFn: listMembers,
   });
+
+  /**
+   * Org-wide per-agent usage for the current `usageWindow`. One request
+   * powers the entire Team table's Usage column; the table looks up by
+   * `agent.uuid`. Agents missing from the response are rendered as "—"
+   * (zero usage) by `UsageCell`.
+   */
+  const usageQuery = useQuery({
+    queryKey: ["usage", "by-agent", usageWindow],
+    queryFn: () => getOrgUsageByAgent(usageWindow),
+    // Token usage is monotone-rising during the window; a tight refetch
+    // would burn API calls for a number that moves rarely on the human
+    // timescale of "looking at the Team page". 60s is the same cadence
+    // ledger-style sociocurrency surfaces typically refresh at.
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const usageByAgentId = useMemo(() => {
+    if (!usageQuery.data) return null;
+    const m = new Map<string, (typeof usageQuery.data.rows)[number]>();
+    for (const r of usageQuery.data.rows) m.set(r.agentId, r);
+    return m;
+  }, [usageQuery.data]);
 
   // Admins read the superset; members read the visibility-filtered view.
   // Both produce the same `Agent[]` shape so downstream code branches only
@@ -373,6 +401,10 @@ export function TeamPage() {
             onAgentClick={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
             getHumanActions={getHumanActions}
             getAgentActions={getAgentActions}
+            usageByAgentId={usageByAgentId}
+            usageWindow={usageWindow}
+            onUsageWindowChange={setUsageWindow}
+            usageLoading={usageQuery.isLoading}
           />
         )}
       </div>
