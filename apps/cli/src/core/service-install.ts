@@ -81,6 +81,7 @@ const LAUNCHD_LABEL = channelConfig.launchdLabel;
 // reuse it for both.
 const SYSLOG_IDENT = channelConfig.launchdLabel;
 const SYSTEMD_BASE_PATH = ["/usr/local/bin", "/usr/bin", "/bin"];
+const LAUNCHD_BASE_PATH = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"];
 
 // Function rather than const: see `channel-env.ts` history note. A
 // top-level `const = join(defaultHome(), ...)` would lock at module
@@ -90,9 +91,22 @@ function logDir(): string {
   return join(defaultHome(), "logs");
 }
 
+function servicePathEnv(basePaths: readonly string[]): string {
+  const seen = new Set<string>();
+  const paths = [dirname(process.execPath), ...basePaths].filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+  return paths.join(":");
+}
+
 function systemdPathEnv(): string {
-  const nodeBinDir = dirname(process.execPath);
-  return [nodeBinDir, ...SYSTEMD_BASE_PATH].filter((value, index, values) => values.indexOf(value) === index).join(":");
+  return servicePathEnv(SYSTEMD_BASE_PATH);
+}
+
+function launchdPathEnv(): string {
+  return servicePathEnv(LAUNCHD_BASE_PATH);
 }
 
 const PROXY_ENV_KEYS = [
@@ -237,6 +251,10 @@ export function renderPlist(invocation: ResolvedBinary, proxyEnv: Record<string,
   const proxyEnvXml = Object.entries(proxyEnv)
     .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
     .join("");
+  // launchd does not inherit the operator's interactive shell PATH. Put the
+  // current Node directory first so npm-installed CLI shims and self-update
+  // run under the same Node toolchain that installed/refreshed the service.
+  const pathEnvXml = escapeXml(launchdPathEnv());
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
@@ -251,7 +269,7 @@ ${argsXml}
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <string>${pathEnvXml}</string>
     <key>FIRST_TREE_SERVICE_MODE</key>
     <string>1</string>${homeEnvXml}${proxyEnvXml}
   </dict>
@@ -448,8 +466,8 @@ export function renderSystemdUnit(
   // gets installed. Embedding the resolved home eliminates that drift.
   const homeEnv = `Environment=FIRST_TREE_HOME=${shellQuote(defaultHome())}\n`;
   // `systemd --user` does not inherit the operator's interactive shell PATH.
-  // Include this CLI's Node directory so npm/nvm-installed shebangs that use
-  // `#!/usr/bin/env node` keep working when supervised.
+  // Put this CLI's Node directory first so npm/nvm-installed shebangs and
+  // self-update use the same Node toolchain when supervised.
   const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv())}\n`;
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
