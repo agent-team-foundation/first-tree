@@ -35,7 +35,8 @@
     "dev": "tsx src/cli/index.ts",
     "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ./scripts/copy-github-scan-assets.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "coverage": "pnpm run build && vitest run --coverage --passWithNoTests"
   },
   "license": "MIT",
   "repository": {

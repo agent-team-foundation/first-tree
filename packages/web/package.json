@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit && pnpm run lint:tokens",
     "lint:tokens": "bash scripts/check-design-tokens.sh",
     "preview": "vite preview",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
     "@first-tree/shared": "workspace:*",

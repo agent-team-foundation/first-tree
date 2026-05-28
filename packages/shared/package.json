@@ -31,7 +31,8 @@
   "scripts": {
     "build": "tsdown src/index.ts src/config/index.ts src/channel/index.ts src/observability/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "coverage": "vitest run --coverage --passWithNoTests"
   },
   "devDependencies": {
     "@types/node": "^22.16.0",

@@ -1,9 +1,10 @@
-import { coverageConfigDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
+import { unitCoverageConfig } from "../../scripts/vitest-coverage.js";
 
 export default defineConfig({
   test: {
-    coverage: {
-      exclude: [...coverageConfigDefaults.exclude, "src/config/types.ts"],
-    },
+    coverage: unitCoverageConfig({
+      exclude: ["src/config/types.ts"],
+    }),
   },
 });

@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsdown src/index.ts src/observability/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests"
   },
   "engines": {
     "node": ">=22.16.0"
