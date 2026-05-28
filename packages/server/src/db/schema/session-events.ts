@@ -32,5 +32,13 @@ export const sessionEvents = pgTable(
     index("idx_session_events_context_tree_usage_recent")
       .on(table.createdAt.desc())
       .where(sql`${table.kind} = 'context_tree_usage'`),
+    // Partial index for the agent-scoped token-usage aggregation (Team page
+    // Usage column, agent profile Usage tab). The general
+    // `(agent_id, chat_id, created_at)` index forces a scan over every event
+    // kind for an agent; this one only indexes `token_usage` rows so
+    // per-agent SUM / COUNT stays bounded as session_events grows.
+    index("idx_session_events_token_usage_agent_recent")
+      .on(table.agentId, table.createdAt.desc())
+      .where(sql`${table.kind} = 'token_usage'`),
   ],
 );
