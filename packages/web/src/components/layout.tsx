@@ -42,13 +42,27 @@ export function Layout() {
   // own width.
   const isSettings = location.pathname.startsWith("/settings");
 
-  // Top-bar progressive collapse: at `md` (768–1279) drop the right controls
-  // (cmdk / theme / user); at `narrow` (<768) also drop the brand cluster.
-  // The four nav tabs always survive — that's the minimum viable header.
+  // Top-bar progressive collapse, tuned so the user menu (sign-out, org-switch)
+  // is reachable at EVERY width — dropping it below `xl` previously stranded
+  // every phone / tablet / sub-1280 desktop window with no way to log out.
+  //   - `xl`     : brand | tabs | [Jump to…] [theme] [avatar]
+  //   - `md`     : brand | tabs | [theme] [avatar]   (Jump to… too wide)
+  //   - `narrow` : tabs | [avatar]                   (also drops brand)
+  // On `narrow` the theme toggle drops too: four full tabs + theme + avatar
+  // overflow a phone-width row and would clip the avatar off the right edge.
+  // Phones
+  // fall back to the OS `prefers-color-scheme` (honoured at boot in index.html);
+  // the toggle returns at `md`. The avatar is the one control that never drops.
   const viewport = useWorkspaceViewport();
-  const dropControls = viewport !== "xl";
+  const showJumpButton = viewport === "xl";
   const dropBrand = viewport === "narrow";
-  const headerColumns = dropBrand ? "1fr" : dropControls ? "1fr auto" : "1fr auto 1fr";
+  const showThemeToggle = viewport !== "narrow";
+  // Brand present → brand | tabs(center) | controls(end). Brand collapsed
+  // (narrow) → tabs(start) | controls(end). The narrow tabs track is
+  // `minmax(0, 1fr)` (not the default `minmax(auto, 1fr)`) so it can shrink
+  // below the tabs' intrinsic width and let them scroll, instead of pushing
+  // the avatar past the right edge.
+  const headerColumns = dropBrand ? "minmax(0, 1fr) auto" : "1fr auto 1fr";
 
   return (
     <div
@@ -98,11 +112,18 @@ export function Layout() {
           className="flex"
           style={{
             gap: 2,
-            pointerEvents: "none",
-            // On `narrow` the header has a single column and tabs become
-            // its sole content — anchor to the start so they don't push
-            // off the right edge.
+            // `pointerEvents: none` lets the centred (xl/md) nav's empty flanks
+            // pass clicks through; on `narrow` the nav is a real scroll
+            // container in a shrunk track, so it needs to receive touch.
+            pointerEvents: dropBrand ? "auto" : "none",
+            // On `narrow` the brand collapses and the tabs share the row with
+            // the compact controls — anchor the tabs to the start so they sit
+            // at the left edge rather than centring against the avatar.
             justifySelf: dropBrand ? "start" : "center",
+            // Narrow track is `minmax(0, 1fr)`: let the row scroll horizontally
+            // if the tabs can't all fit (tiny phones / long i18n labels) rather
+            // than overflow and clip the avatar. No-op when the tabs fit.
+            ...(dropBrand ? { minWidth: 0, overflowX: "auto" } : null),
           }}
         >
           {navTabs.map((tab) => (
@@ -112,7 +133,9 @@ export function Layout() {
               end={tab.end}
               style={{ pointerEvents: "auto" }}
               className={({ isActive }) =>
-                cn("inline-flex items-center transition-colors", isActive ? "" : "hover:text-[var(--fg)]")
+                // `shrink-0` keeps each tab its natural width inside the narrow
+                // scrollable nav, so labels never compress or wrap.
+                cn("inline-flex shrink-0 items-center transition-colors", isActive ? "" : "hover:text-[var(--fg)]")
               }
             >
               {({ isActive }) => (
@@ -133,66 +156,75 @@ export function Layout() {
           ))}
         </nav>
 
-        {/* Right controls — collapse at `md` and below. */}
-        {dropControls ? null : (
-          <div className="flex items-center" style={{ gap: 6, justifySelf: "end" }}>
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(true)}
-              aria-label="Open command palette"
-              className="inline-flex items-center transition-colors text-body"
-              style={{
-                gap: 8,
-                padding: "var(--sp-1) var(--sp-3)",
-                minWidth: 200,
-                color: "var(--fg-3)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-input)",
-                background: "var(--bg-sunken)",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = "var(--fg)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--fg-3)";
-              }}
-            >
-              <Search className="h-4 w-4" />
-              <span className="flex-1 text-left">Jump to…</span>
-              <span
-                aria-hidden
-                className="text-caption font-mono"
+        {/* Right controls. The user menu (avatar) renders at every breakpoint
+            so sign-out / org-switch stay reachable on phones and tablets; the
+            theme toggle drops on `narrow` and the wide "Jump to…" button is
+            xl-only (see the collapse comment above). */}
+        <div className="flex items-center shrink-0" style={{ gap: 6, justifySelf: "end" }}>
+          {showJumpButton ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                aria-label="Open command palette"
+                className="inline-flex items-center transition-colors text-body"
                 style={{
-                  padding: "var(--sp-0_5) var(--sp-1_5)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--sp-1)",
+                  gap: 8,
+                  padding: "var(--sp-1) var(--sp-3)",
+                  minWidth: 200,
                   color: "var(--fg-3)",
-                  background: "var(--bg-raised)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  background: "var(--bg-sunken)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--fg)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--fg-3)";
                 }}
               >
-                ⌘K
-              </span>
-            </button>
-            <span
-              style={{
-                width: 1,
-                height: 18,
-                background: "var(--border)",
-                margin: "0 var(--sp-1)",
-              }}
-            />
-            <ThemeToggle />
-            <span
-              style={{
-                width: 1,
-                height: 18,
-                background: "var(--border)",
-                margin: "0 var(--sp-1)",
-              }}
-            />
-            <UserMenu />
-          </div>
-        )}
+                <Search className="h-4 w-4" />
+                <span className="flex-1 text-left">Jump to…</span>
+                <span
+                  aria-hidden
+                  className="text-caption font-mono"
+                  style={{
+                    padding: "var(--sp-0_5) var(--sp-1_5)",
+                    border: "var(--hairline) solid var(--border)",
+                    borderRadius: "var(--sp-1)",
+                    color: "var(--fg-3)",
+                    background: "var(--bg-raised)",
+                  }}
+                >
+                  ⌘K
+                </span>
+              </button>
+              <span
+                style={{
+                  width: 1,
+                  height: 18,
+                  background: "var(--border)",
+                  margin: "0 var(--sp-1)",
+                }}
+              />
+            </>
+          ) : null}
+          {showThemeToggle ? (
+            <>
+              <ThemeToggle />
+              <span
+                style={{
+                  width: 1,
+                  height: 18,
+                  background: "var(--border)",
+                  margin: "0 var(--sp-1)",
+                }}
+              />
+            </>
+          ) : null}
+          <UserMenu />
+        </div>
       </header>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

@@ -2445,7 +2445,9 @@ export function ChatView({
                       // sized by the input element's intrinsic width.
                       style={{
                         fieldSizing: "content",
-                        minWidth: 200,
+                        // Narrower floor on phones — the desktop minimum plus
+                        // the ✓/× buttons overflow a phone-width header row.
+                        minWidth: narrow ? 120 : 200,
                         maxWidth: 480,
                         color: "var(--fg)",
                         background: "var(--bg-sunken)",
