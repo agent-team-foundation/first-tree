@@ -41,6 +41,7 @@ const member = (id: string, agentId: string, displayName: string, role = "member
   displayName,
   role,
   createdAt: "2026-01-01T00:00:00.000Z",
+  lastActiveAt: null,
 });
 
 describe("fetchAllAgents", () => {
@@ -86,6 +87,22 @@ describe("buildTeamData", () => {
     expect(row.delegate).toEqual({ uuid: "assistant-1", name: "ada-helper", displayName: "Ada Assistant" });
     // Only the user themselves can edit their own delegate (admins cannot).
     expect(row.canEditDelegate).toBe(true);
+  });
+
+  it("derives lastActiveLabel from member.lastActiveAt (null → no label)", () => {
+    const { humans } = buildTeamData({
+      ...base,
+      members: [
+        { ...member("member-1", "human-1", "Active"), lastActiveAt: "2026-05-01T00:00:00.000Z" },
+        { ...member("member-2", "human-2", "Never"), lastActiveAt: null },
+      ],
+      agents: [],
+      agentByUuid: new Map(),
+    });
+    const active = humans.find((h) => h.id === "member-1");
+    const never = humans.find((h) => h.id === "member-2");
+    expect(active?.lastActiveLabel).toBeTruthy();
+    expect(never?.lastActiveLabel).toBeNull();
   });
 
   it("partitions agents into Public/Private with own agents pinned first", () => {

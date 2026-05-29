@@ -62,6 +62,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
         activeSessions: a.activeSessions ?? null,
+        lastSeenAt: a.lastSeenAt?.toISOString() ?? null,
         avatarImageUrl: resolveAvatarImageUrl({
           uuid: a.uuid,
           type: a.type,
@@ -96,6 +97,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
         activeSessions: a.activeSessions ?? null,
+        lastSeenAt: a.lastSeenAt?.toISOString() ?? null,
         avatarImageUrl: resolveAvatarImageUrl({
           uuid: a.uuid,
           type: a.type,

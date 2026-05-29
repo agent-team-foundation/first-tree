@@ -1,16 +1,41 @@
 import { randomBytes } from "node:crypto";
 import type { CreateMember, UpdateMember } from "@first-tree/shared";
 import bcrypt from "bcrypt";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, max, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { createAgent } from "./agent.js";
 
 const SALT_ROUNDS = 10;
+
+/**
+ * Derive each member's "last active" timestamp from the most recent message
+ * sent by their human agent — `MAX(messages.created_at)` grouped by sender.
+ * Intentionally column-free (no `users.last_active_at`); this is口径 B
+ * ("most recent message"). Returns a Map keyed by agentId → ISO string.
+ *
+ * Cost note: `messages` has no `sender_id` index, so this is a grouped scan.
+ * Acceptable for the occasionally-loaded member list at current scale; a
+ * `(sender_id, created_at)` index would be the lever if it ever gets hot.
+ */
+async function lastActiveByAgent(db: Database, agentIds: string[]): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (agentIds.length === 0) return result;
+  const rows = await db
+    .select({ senderId: messages.senderId, last: max(messages.createdAt) })
+    .from(messages)
+    .where(inArray(messages.senderId, agentIds))
+    .groupBy(messages.senderId);
+  for (const r of rows) {
+    if (r.last) result.set(r.senderId, r.last.toISOString());
+  }
+  return result;
+}
 
 /**
  * Create a member in an organization.
@@ -84,6 +109,8 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       agentId: member.agentId,
       role: member.role,
       createdAt: member.createdAt.toISOString(),
+      // Freshly created — no messages yet, so no derived activity.
+      lastActiveAt: null,
       username: data.username,
       displayName: data.displayName,
       // Only return password for new users
@@ -109,9 +136,14 @@ export async function listMembers(db: Database, orgId: string) {
     .where(eq(members.organizationId, orgId))
     .orderBy(desc(members.createdAt));
 
+  const lastActive = await lastActiveByAgent(
+    db,
+    rows.map((r) => r.agentId),
+  );
   return rows.map((r) => ({
     ...r,
     createdAt: r.createdAt.toISOString(),
+    lastActiveAt: lastActive.get(r.agentId) ?? null,
   }));
 }
 
@@ -133,7 +165,8 @@ export async function getMember(db: Database, id: string) {
     .limit(1);
 
   if (!row) throw new NotFoundError(`Member "${id}" not found`);
-  return { ...row, createdAt: row.createdAt.toISOString() };
+  const lastActive = await lastActiveByAgent(db, [row.agentId]);
+  return { ...row, createdAt: row.createdAt.toISOString(), lastActiveAt: lastActive.get(row.agentId) ?? null };
 }
 
 export async function updateMember(db: Database, id: string, data: UpdateMember, callerOrgId?: string) {
@@ -171,6 +204,24 @@ export async function updateMember(db: Database, id: string, data: UpdateMember,
   });
 
   return getMember(db, id);
+}
+
+/**
+ * Self-service display-name edit. Updates the authoritative `users.display_name`
+ * and mirrors it onto every human agent backing this user's memberships (the
+ * member list + agent-detail views both read from these, so they must not
+ * drift). Role is never touched here — self-promotion is impossible by
+ * construction. Returns the updated `{ id, displayName }`.
+ */
+export async function updateOwnProfile(db: Database, userId: string, displayName: string) {
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ displayName }).where(eq(users.id, userId));
+    const memberRows = await tx.select({ agentId: members.agentId }).from(members).where(eq(members.userId, userId));
+    for (const m of memberRows) {
+      await tx.update(agents).set({ displayName }).where(eq(agents.uuid, m.agentId));
+    }
+  });
+  return { id: userId, displayName };
 }
 
 export async function deleteMember(db: Database, id: string) {

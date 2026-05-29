@@ -13,7 +13,7 @@ import {
   suspendAgent,
   updateAgent,
 } from "../../api/agents.js";
-import { deleteMember, listMembers, updateMember } from "../../api/members.js";
+import { deleteMember, listMembers, updateMember, updateMyProfile } from "../../api/members.js";
 import { getOrgUsageByAgent, type UsageWindow } from "../../api/usage.js";
 import { useAuth } from "../../auth/auth-context.js";
 import {
@@ -27,6 +27,7 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
+import { formatRelative } from "../../lib/utils.js";
 import { InviteLinkPanel } from "../invite-link-panel.js";
 import { type AgentRow, type HumanRow, type RowAction, TeamTable } from "./team-table.js";
 
@@ -52,6 +53,8 @@ type MemberListItem = {
   displayName: string;
   role: string;
   createdAt: string;
+  /** Derived from the member's most recent message; null = never active. */
+  lastActiveAt: string | null;
 };
 
 type MemberEditTarget = {
@@ -152,6 +155,17 @@ export function TeamPage() {
     mutationFn: async (vars: { id: string; patch: { displayName?: string; role?: "admin" | "member" } }) =>
       updateMember(vars.id, vars.patch),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+  });
+  // Self-service display-name edit (PATCH /me/profile). Routed here instead of
+  // the admin member route so a non-admin can rename themselves; the server
+  // strips role, so this can never change the caller's own role. The human
+  // agent's displayName changes too, so refresh agents alongside members.
+  const updateMyProfileMut = useMutation({
+    mutationFn: async (displayName: string) => updateMyProfile({ displayName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
   });
   const deleteMemberMut = useMutation({
     mutationFn: deleteMember,
@@ -343,11 +357,19 @@ export function TeamPage() {
       <MemberDetailsDialog
         target={editTarget}
         isAdmin={isAdmin}
-        isSaving={updateMemberMut.isPending}
+        isSelf={editTarget !== null && editTarget.id === memberId}
+        isSaving={updateMemberMut.isPending || updateMyProfileMut.isPending}
         onClose={() => setEditTarget(null)}
         onSave={async (patch) => {
           if (!editTarget) return;
-          await updateMemberMut.mutateAsync({ id: editTarget.id, patch });
+          // Self renaming (no role change) goes through /me/profile so it works
+          // for non-admins; everything else (admin editing others, any role
+          // change) uses the admin member route.
+          if (editTarget.id === memberId && patch.role === undefined && patch.displayName !== undefined) {
+            await updateMyProfileMut.mutateAsync(patch.displayName);
+          } else {
+            await updateMemberMut.mutateAsync({ id: editTarget.id, patch });
+          }
           setEditTarget(null);
         }}
       />
@@ -480,8 +502,8 @@ export function buildTeamData(args: {
         delegate: resolveDelegate(m.agentId),
         // Per spec only the user themselves sets their own delegate (admins don't).
         canEditDelegate: isSelf,
-        // Phase 2 wires the real timestamp; null renders "—" for now.
-        lastActiveLabel: null,
+        // Derived from the member's most recent message (口径 B). Null → "—".
+        lastActiveLabel: m.lastActiveAt ? formatRelative(m.lastActiveAt) : null,
       };
     })
     // Pin (you) to the top of the Humans section.
@@ -502,19 +524,23 @@ export function selectDelegateCandidates(agents: Agent[], managerId: string | nu
 const roleValues = Object.values(MEMBER_ROLES);
 
 /**
- * Member profile dialog. Opened by the row "Details" action. Admins can edit
- * (display name + role); non-admins see a read-only profile for now. Self-edit
- * of one's own profile lands in Phase 2 via `PATCH /me/profile`.
+ * Member profile dialog. Opened by the row "Details" action.
+ *   - Admin: edit anyone's display name + role.
+ *   - Self (any role): edit own display name via `PATCH /me/profile`; the role
+ *     selector stays admin-only, so a member can never self-promote.
+ *   - Otherwise: read-only profile.
  */
 function MemberDetailsDialog({
   target,
   isAdmin,
+  isSelf,
   isSaving,
   onClose,
   onSave,
 }: {
   target: MemberEditTarget | null;
   isAdmin: boolean;
+  isSelf: boolean;
   isSaving: boolean;
   onClose: () => void;
   onSave: (patch: { displayName?: string; role?: "admin" | "member" }) => Promise<void>;
@@ -553,7 +579,8 @@ function MemberDetailsDialog({
   }
 
   const open = target !== null;
-  const readOnly = !isAdmin;
+  // Admins edit anyone; a member can edit their own name (role stays admin-only).
+  const readOnly = !isAdmin && !isSelf;
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>

@@ -4,6 +4,7 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
+  updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
 import { and, eq, isNull, ne } from "drizzle-orm";
@@ -23,6 +24,7 @@ import { decryptValue, encryptValue } from "../services/crypto.js";
 import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
+import { updateOwnProfile } from "../services/member.js";
 import {
   countActiveMembersByOrgs,
   ensureMembership,
@@ -109,6 +111,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       },
       inviteUrl,
     };
+  });
+
+  /**
+   * PATCH /me/profile — self-service display-name edit. The caller can rename
+   * themselves (mirrored to `users.display_name` + every human agent backing
+   * their memberships) but cannot change their own role: the schema has no
+   * `role` field, so self-promotion is impossible by construction. Admin role
+   * changes still go through `PATCH /orgs/:orgId/members/:id`.
+   */
+  app.patch("/me/profile", async (request) => {
+    const { userId } = requireUser(request);
+    const { displayName } = updateMyProfileSchema.parse(request.body);
+    return updateOwnProfile(app.db, userId, displayName);
   });
 
   /**

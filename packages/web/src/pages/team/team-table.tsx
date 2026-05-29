@@ -8,7 +8,7 @@ import { Popover } from "../../components/ui/popover.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { SegmentedControl } from "../../components/ui/segmented-control.js";
-import { formatCompactCount } from "../../lib/utils.js";
+import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 
 export type { RowAction };
 
@@ -84,6 +84,37 @@ const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
+
+/**
+ * Per-section collapse state, persisted to localStorage so a member's
+ * expand/collapse choices survive across visits (default: expanded — a missing
+ * key reads as not-collapsed). One key per section (`team.collapse.<id>`).
+ */
+function useCollapsed(storageKey: string): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(storageKey) === "1";
+  });
+  const toggle = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") window.localStorage.setItem(storageKey, next ? "1" : "0");
+      return next;
+    });
+  };
+  return [collapsed, toggle];
+}
+
+/** Disclosure caret for a collapsible section header — points down when open, right when collapsed. */
+function CollapseCaret({ collapsed }: { collapsed: boolean }) {
+  return (
+    <ChevronDown
+      className="h-3.5 w-3.5 shrink-0 transition-transform"
+      aria-hidden
+      style={{ color: "var(--fg-4)", transform: collapsed ? "rotate(-90deg)" : "none" }}
+    />
+  );
+}
 
 /** Collapse the multi-column layout below 64rem. matchMedia keeps lint clean. */
 function useIsCompact(): boolean {
@@ -182,8 +213,22 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
         <AgentColumnHeader usageWindow={usageWindow} onUsageWindow={onUsageWindowChange} />
       )}
 
-      <AgentGroup icon={Bot} title="Public" rows={publicAgents} dimOwner={false} {...props} />
-      <AgentGroup icon={Lock} title="Private" rows={privateAgents} dimOwner={props.dimPrivateOwner} {...props} />
+      <AgentGroup
+        icon={Bot}
+        title="Public"
+        rows={publicAgents}
+        dimOwner={false}
+        collapseKey="team.collapse.agents.public"
+        {...props}
+      />
+      <AgentGroup
+        icon={Lock}
+        title="Private"
+        rows={privateAgents}
+        dimOwner={props.dimPrivateOwner}
+        collapseKey="team.collapse.agents.private"
+        {...props}
+      />
     </section>
   );
 }
@@ -312,22 +357,34 @@ function AgentGroup(
     title: string;
     rows: AgentRow[];
     dimOwner: boolean;
+    collapseKey: string;
   },
 ) {
-  const { icon: Icon, title, rows, searchActive } = props;
+  const { icon: Icon, title, rows, searchActive, collapseKey } = props;
+  const [collapsed, toggle] = useCollapsed(collapseKey);
   return (
     <div>
-      <div
-        className="flex items-center"
-        style={{ gap: "var(--sp-2)", padding: "var(--sp-3_5) var(--sp-2) var(--sp-1_5)" }}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-3_5) var(--sp-2) var(--sp-1_5)",
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+        }}
       >
+        <CollapseCaret collapsed={collapsed} />
         <Icon className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--fg-4)" }} />
         <span className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
           {title}
         </span>
         <DenseBadge tone="outline">{rows.length}</DenseBadge>
-      </div>
-      {rows.length === 0 ? (
+      </button>
+      {collapsed ? null : rows.length === 0 ? (
         <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
           {searchActive ? "No agents match this search." : "No agents here."}
         </div>
@@ -403,7 +460,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         <RunsOnCell provider={agent.runtimeProvider} host={clientHost} />
         <UsageCell usage={usage} loading={usageLoading} />
       </div>
-      <StatusCell status={runtimeStateToPresence(agent.runtimeState)} />
+      <StatusCell status={runtimeStateToPresence(agent.runtimeState)} lastSeenAt={agent.lastSeenAt} />
       <ActionsCell ariaLabel={`Actions for ${agent.displayName}`} menuActions={kebabActions} />
     </div>
   );
@@ -417,9 +474,10 @@ function OwnerCell({ managerLabel, isSelf, dim }: { managerLabel: string | null;
       </span>
     );
   }
+  // Name only — the Owner chip intentionally drops the avatar (the leftmost
+  // Name column keeps its avatar). Keeps the middle band lean.
   return (
-    <div className="flex items-center min-w-0" style={{ gap: "var(--sp-1_5)", opacity: dim ? 0.5 : 1 }}>
-      <Avatar name={managerLabel} seed={managerLabel} size={18} />
+    <div className="flex items-center min-w-0" style={{ opacity: dim ? 0.5 : 1 }}>
       {isSelf ? (
         <span className="text-body font-semibold truncate" style={{ color: "var(--fg)" }}>
           You
@@ -477,9 +535,12 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
 
 // Right-aligned within its track so it forms a tidy right-hand cluster with
 // the (also right-aligned) Usage column, clear of the columns on the left.
-function StatusCell({ status }: { status: PresenceStatus }) {
+// `lastSeenAt` (from agent_presence) surfaces an "active X ago" hover — free
+// signal, no extra storage.
+function StatusCell({ status, lastSeenAt }: { status: PresenceStatus; lastSeenAt?: string | null }) {
+  const title = lastSeenAt ? `Active ${formatRelative(lastSeenAt)}` : undefined;
   return (
-    <div style={{ justifySelf: "end" }}>
+    <div style={{ justifySelf: "end" }} title={title}>
       <PresenceChip status={status} />
     </div>
   );
@@ -491,9 +552,23 @@ function StatusCell({ status }: { status: PresenceStatus }) {
 
 function HumanSection(props: TeamTableProps & { compact: boolean }) {
   const { humans, compact, searchActive } = props;
+  const [collapsed, toggle] = useCollapsed("team.collapse.humans");
   return (
     <section style={{ marginTop: "var(--sp-6)" }}>
-      <div className="flex items-center" style={{ gap: "var(--sp-2)", padding: "var(--sp-5) var(--sp-1) var(--sp-3)" }}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-5) var(--sp-1) var(--sp-3)",
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+        }}
+      >
+        <CollapseCaret collapsed={collapsed} />
         <User className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
         <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
           Human teammates
@@ -501,16 +576,19 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
         <span className="text-label" style={{ color: "var(--fg-4)" }}>
           {humans.length}
         </span>
-      </div>
+      </button>
 
-      {compact ? null : <HumanColumnHeader />}
-
-      {humans.length === 0 ? (
-        <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
-          {searchActive ? "No humans match this search." : "No members yet."}
-        </div>
-      ) : (
-        humans.map((row) => <HumanRowView key={row.id} row={row} {...props} />)
+      {collapsed ? null : (
+        <>
+          {compact ? null : <HumanColumnHeader />}
+          {humans.length === 0 ? (
+            <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
+              {searchActive ? "No humans match this search." : "No members yet."}
+            </div>
+          ) : (
+            humans.map((row) => <HumanRowView key={row.id} row={row} {...props} />)
+          )}
+        </>
       )}
     </section>
   );
@@ -684,9 +762,9 @@ function DelegateCell({
 }
 
 function DelegateChip({ delegate }: { delegate: { uuid: string; name: string | null; displayName: string } }) {
+  // Name only — the Delegate chip drops the avatar (parallels the Owner chip).
   return (
-    <span className="inline-flex items-center min-w-0" style={{ gap: "var(--sp-1_5)" }}>
-      <Avatar name={delegate.displayName} seed={delegate.uuid} size={18} />
+    <span className="inline-flex items-center min-w-0">
       <span className="text-body truncate" style={{ color: "var(--fg-2)" }} title={delegate.displayName}>
         {delegate.displayName}
       </span>
