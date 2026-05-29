@@ -55,8 +55,28 @@ export type AgentRow = {
 // Context / Settings / Agent-detail), NOT the 1280 of the early prototype.
 // Lower Name min + trimmer Status/Actions tracks keep the middle band
 // (Owner · Runs on · Usage) un-cramped at ~872 usable px.
-const ROW_GRID =
-  "minmax(var(--sp-60), 1.6fr) minmax(0, 2.2fr) calc(var(--sp-20) + var(--sp-4)) calc(var(--sp-20) + var(--sp-12))";
+const ROW_GRID = "minmax(var(--sp-60), 1.6fr) minmax(0, 2.2fr) calc(var(--sp-20) + var(--sp-4)) var(--sp-12)";
+
+/**
+ * Make a whole row clickable → open its detail target (the original Team table
+ * behaviour; `DenseTableRow` ships the same `interactive` affordance). Inner
+ * controls (kebab menu, delegate popover) stopPropagation so they don't also
+ * navigate. role+tabIndex+key handler keep it keyboard-accessible.
+ */
+function rowOpenProps(onOpen: () => void, label: string) {
+  return {
+    role: "button",
+    tabIndex: 0,
+    "aria-label": label,
+    onClick: onOpen,
+    onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onOpen();
+      }
+    },
+  } as const;
+}
 const ROW_GAP = "var(--sp-5)";
 // Agent middle band sub-grid: Owner | Runs on | Usage. Usage carries a min wide
 // enough for its "Usage 7d 30d" header control so it never crowds Status.
@@ -196,7 +216,9 @@ function AgentColumnHeader({
           <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
         </span>
       </div>
-      <HeaderLabel>Status</HeaderLabel>
+      <span className="text-eyebrow" style={{ color: "var(--fg-4)", justifySelf: "end" }}>
+        Status
+      </span>
       <span />
     </div>
   );
@@ -331,14 +353,15 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
   const { agent, managerLabel, isOwnedBySelf } = row;
   const clientHost = agent.clientId ? (clientHostMap.get(agent.clientId) ?? null) : null;
   const usage = usageByAgentId ? (usageByAgentId.get(agent.uuid) ?? null) : null;
-  const menuActions = getAgentMenuActions(row);
+  // Row-click opens Details, so "Details" leaves the menu; the kebab holds the
+  // remaining actions (Chat, plus owner/admin Suspend/Delete).
+  const open = () => onAgentDetails(agent.uuid);
+  const kebabActions: RowAction[] = [
+    { key: "chat", label: "Chat", onSelect: () => onChat(agent.uuid) },
+    ...getAgentMenuActions(row),
+  ];
 
   if (compact) {
-    const actions: RowAction[] = [
-      { key: "chat", label: "Chat", onSelect: () => onChat(agent.uuid) },
-      { key: "details", label: "Details", onSelect: () => onAgentDetails(agent.uuid) },
-      ...menuActions,
-    ];
     return (
       <CompactRow
         displayName={agent.displayName}
@@ -349,19 +372,22 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         colorToken={agent.avatarColorToken}
         meta={agentMetaLine(managerLabel, isOwnedBySelf, agent.runtimeProvider, usage)}
         status={runtimeStateToPresence(agent.runtimeState)}
-        actions={actions}
+        actions={kebabActions}
+        onOpen={open}
       />
     );
   }
 
   return (
     <div
+      {...rowOpenProps(open, `Open ${agent.displayName}`)}
       className="group grid items-center transition-colors hover:bg-[var(--bg-hover)]"
       style={{
         gridTemplateColumns: ROW_GRID,
         gap: ROW_GAP,
         padding: "var(--sp-2) var(--sp-2)",
         borderBottom: "var(--hairline) solid var(--border-faint)",
+        cursor: "pointer",
       }}
     >
       <NameCell
@@ -378,10 +404,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         <UsageCell usage={usage} loading={usageLoading} />
       </div>
       <StatusCell status={runtimeStateToPresence(agent.runtimeState)} />
-      <ActionsCell ariaLabel={`Actions for ${agent.displayName}`} menuActions={menuActions}>
-        <InlineAction label="Chat" onClick={() => onChat(agent.uuid)} />
-        <InlineAction label="Details" onClick={() => onAgentDetails(agent.uuid)} />
-      </ActionsCell>
+      <ActionsCell ariaLabel={`Actions for ${agent.displayName}`} menuActions={kebabActions} />
     </div>
   );
 }
@@ -452,8 +475,14 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
   );
 }
 
+// Right-aligned within its track so it forms a tidy right-hand cluster with
+// the (also right-aligned) Usage column, clear of the columns on the left.
 function StatusCell({ status }: { status: PresenceStatus }) {
-  return <PresenceChip status={status} />;
+  return (
+    <div style={{ justifySelf: "end" }}>
+      <PresenceChip status={status} />
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -500,7 +529,9 @@ function HumanColumnHeader() {
     >
       <HeaderLabel>Name</HeaderLabel>
       <HeaderLabel>Delegate</HeaderLabel>
-      <HeaderLabel>Last active</HeaderLabel>
+      <span className="text-eyebrow" style={{ color: "var(--fg-4)", justifySelf: "end" }}>
+        Last active
+      </span>
       <span />
     </div>
   );
@@ -510,13 +541,12 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
   const { row, compact, onHumanDetails, getHumanMenuActions, delegateCandidates, onSetDelegate } = props;
   const menuActions = getHumanMenuActions(row);
   const lastActive = row.lastActiveLabel ?? "—";
+  // Row-click opens the profile dialog (Details); the kebab holds the rest
+  // (admin "Remove from org"). Non-admins get no kebab.
+  const open = () => onHumanDetails(row);
 
   if (compact) {
     const delegateText = row.delegate ? `Delegate: ${row.delegate.displayName}` : "No delegate";
-    const actions: RowAction[] = [
-      { key: "details", label: "Details", onSelect: () => onHumanDetails(row) },
-      ...menuActions,
-    ];
     return (
       <CompactRow
         displayName={row.displayName}
@@ -527,19 +557,22 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
         selfTag={row.isSelf}
         adminBadge={row.role === "admin"}
         meta={`${delegateText} · ${lastActive}`}
-        actions={actions}
+        actions={menuActions}
+        onOpen={open}
       />
     );
   }
 
   return (
     <div
+      {...rowOpenProps(open, `Open ${row.displayName}`)}
       className="group grid items-center transition-colors hover:bg-[var(--bg-hover)]"
       style={{
         gridTemplateColumns: ROW_GRID,
         gap: ROW_GAP,
         padding: "var(--sp-2) var(--sp-2)",
         borderBottom: "var(--hairline) solid var(--border-faint)",
+        cursor: "pointer",
       }}
     >
       <NameCell
@@ -553,12 +586,13 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
         hasTaglineSlot={false}
       />
       <DelegateCell row={row} candidates={delegateCandidates} onSetDelegate={onSetDelegate} />
-      <span className="text-caption" style={{ color: row.lastActiveLabel ? "var(--fg-3)" : "var(--fg-4)" }}>
+      <span
+        className="text-caption"
+        style={{ color: row.lastActiveLabel ? "var(--fg-3)" : "var(--fg-4)", justifySelf: "end" }}
+      >
         {lastActive}
       </span>
-      <ActionsCell ariaLabel={`Actions for ${row.displayName}`} menuActions={menuActions}>
-        <InlineAction label="Details" onClick={() => onHumanDetails(row)} />
-      </ActionsCell>
+      <ActionsCell ariaLabel={`Actions for ${row.displayName}`} menuActions={menuActions} />
     </div>
   );
 }
@@ -583,7 +617,11 @@ function DelegateCell({
         trigger={({ open, toggle }) => (
           <button
             type="button"
-            onClick={toggle}
+            onClick={(e) => {
+              // Don't let the row's open-details click fire when editing delegate.
+              e.stopPropagation();
+              toggle();
+            }}
             aria-haspopup="menu"
             aria-expanded={open}
             className="inline-flex items-center min-w-0 transition-colors hover:bg-[var(--bg-hover)]"
@@ -798,6 +836,7 @@ function CompactRow({
   actions,
   selfTag,
   adminBadge,
+  onOpen,
 }: {
   displayName: string;
   handle: string | null;
@@ -810,15 +849,18 @@ function CompactRow({
   actions: RowAction[];
   selfTag?: boolean;
   adminBadge?: boolean;
+  onOpen: () => void;
 }) {
   return (
     <div
+      {...rowOpenProps(onOpen, `Open ${displayName}`)}
       className="grid items-start"
       style={{
         gridTemplateColumns: COMPACT_GRID,
         gap: "var(--sp-2)",
         padding: "var(--sp-2_5) var(--sp-2)",
         borderBottom: "var(--hairline) solid var(--border-faint)",
+        cursor: "pointer",
       }}
     >
       <NameCell
@@ -838,43 +880,14 @@ function CompactRow({
   );
 }
 
-function ActionsCell({
-  ariaLabel,
-  menuActions,
-  children,
-}: {
-  ariaLabel: string;
-  menuActions: RowAction[];
-  children?: ReactNode;
-}) {
+// Always-visible right-aligned kebab (no hover-reveal). The trigger + menu
+// items stopPropagation (in RowActionsMenu) so they don't fire the row's
+// open-details click. Returns null when there are no actions.
+function ActionsCell({ ariaLabel, menuActions }: { ariaLabel: string; menuActions: RowAction[] }) {
   return (
-    <div
-      className="flex items-center justify-end opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-      style={{ gap: "var(--sp-1)" }}
-    >
-      {children}
+    <div className="flex items-center justify-end">
       <RowActionsMenu actions={menuActions} ariaLabel={ariaLabel} />
     </div>
-  );
-}
-
-function InlineAction({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-caption transition-colors hover:bg-[var(--bg-hover)]"
-      style={{
-        padding: "var(--sp-0_5) var(--sp-1_5)",
-        borderRadius: "var(--radius-chip)",
-        border: 0,
-        background: "transparent",
-        color: "var(--fg-2)",
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
   );
 }
 
