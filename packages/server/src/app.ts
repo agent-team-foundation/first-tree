@@ -25,6 +25,7 @@ import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
+import { attachmentRoutes } from "./api/attachments.js";
 import { attentionRoutes } from "./api/attention.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -329,6 +330,16 @@ export async function buildApp(config: Config) {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
   });
 
+  // Body parser for `application/octet-stream` — needed by the attachment
+  // upload route. Fastify's built-in parsers cover json / text only; without
+  // this registration `request.body` would be undefined on an octet-stream
+  // POST and the route would 415. Registered globally because Fastify only
+  // supports global content-type parsers; the route still owns its own
+  // `bodyLimit` so the byte cap is route-local.
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
+
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
   const isDev = process.env.NODE_ENV !== "production";
@@ -496,6 +507,16 @@ export async function buildApp(config: Config) {
           await scope.register(attentionRoutes);
         }),
         { prefix: "/attention" },
+      );
+
+      // Object-storage primitive (Class B, user-JWT). Generic binary blob
+      // upload + download; not bound to any business surface. See
+      // api/attachments.ts for the upload protocol and download auth.
+      await api.register(
+        userScope("attachmentRoutesScope", async (scope) => {
+          await scope.register(attachmentRoutes);
+        }),
+        { prefix: "/attachments" },
       );
 
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────

@@ -3,6 +3,8 @@ import {
   type Agent,
   type AgentRuntimeConfig,
   type AgentVisibility,
+  ATTACHMENT_FILENAME_HEADER,
+  ATTACHMENT_MIME_HEADER,
   type Attention,
   attentionRecordSchema,
   type CancelAttentionInput,
@@ -15,6 +17,8 @@ import {
   type RaiseAttentionInput,
   type RuntimeProvider,
   type SendMessage,
+  type UploadAttachmentResponse,
+  uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
 import { z } from "zod";
 
@@ -379,6 +383,58 @@ export class FirstTreeHubSDK {
     },
   };
 
+  /**
+   * Upload bytes to the server's object-storage primitive. Returns the
+   * stored attachment's metadata; the `id` is what upstream consumers
+   * (image messages, future bookmarks / attention attachments) reference.
+   *
+   * Pass `orgId` when the caller user is a member of multiple organizations
+   * — the server rejects ambiguous uploads with 400 to keep `uploaded_by`
+   * deterministic. Single-org users may omit it.
+   */
+  public async uploadAttachment(opts: {
+    bytes: Uint8Array | Buffer;
+    mimeType: string;
+    filename: string;
+    orgId?: string;
+  }): Promise<UploadAttachmentResponse> {
+    const qs = opts.orgId ? `?orgId=${encodeURIComponent(opts.orgId)}` : "";
+    const json = await this.requestJson<unknown>(`/api/v1/attachments${qs}`, {
+      method: "POST",
+      body: opts.bytes,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        [ATTACHMENT_MIME_HEADER]: opts.mimeType,
+        [ATTACHMENT_FILENAME_HEADER]: opts.filename,
+      },
+    });
+    return uploadAttachmentResponseSchema.parse(json);
+  }
+
+  /**
+   * Fetch attachment bytes. Pass `chatId` when the caller is not the
+   * uploader (or the manager of the uploader's agent) — the server will
+   * verify chat membership in that case.
+   */
+  public async fetchAttachment(opts: {
+    id: string;
+    chatId?: string;
+  }): Promise<{ bytes: Buffer; mimeType: string; filename: string; size: number }> {
+    const qs = opts.chatId ? `?chatId=${encodeURIComponent(opts.chatId)}` : "";
+    const response = await this.doFetch(`/api/v1/attachments/${encodeURIComponent(opts.id)}${qs}`);
+    if (!response.ok) {
+      throw await this.toSdkError(response);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = Buffer.from(arrayBuffer);
+    return {
+      bytes,
+      mimeType: response.headers.get("content-type") ?? "application/octet-stream",
+      filename: parseContentDispositionFilename(response.headers.get("content-disposition")) ?? "blob",
+      size: bytes.byteLength,
+    };
+  }
+
   private attentionQueryString(filter?: Partial<ListAttentionsQuery>): string {
     if (!filter) return "";
     const params = new URLSearchParams();
@@ -480,6 +536,14 @@ export class FirstTreeHubSDK {
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }
+    // Merge caller-supplied headers last so attachment uploads can set
+    // Content-Type: application/octet-stream and the X-Attachment-* metadata
+    // headers without the default JSON Content-Type clobbering them. No
+    // existing SDK call path passes init.headers, so this is backwards
+    // compatible.
+    if (init?.headers) {
+      Object.assign(headers, init.headers as Record<string, string>);
+    }
     const timeout = AbortSignal.timeout(opts?.timeoutMs ?? FETCH_TIMEOUT_MS);
     const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     return fetch(url, { ...init, headers, signal });
@@ -505,5 +569,25 @@ export class SdkError extends Error {
   ) {
     super(message);
     this.name = "SdkError";
+  }
+}
+
+/**
+ * Parse the `filename="..."` directive from a `Content-Disposition` header.
+ * Returns `null` when the header is absent or has no filename. Handles only
+ * the quoted-string form the attachment route emits — the unquoted /
+ * RFC 5987 `filename*=UTF-8''...` forms are outside our wire contract.
+ */
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename="([^"]*)"/.exec(header);
+  if (!match || !match[1]) return null;
+  // The server percent-encodes the limited set { CR, LF, ", \ } — reverse it
+  // so callers get a clean filename. decodeURIComponent throws on malformed
+  // sequences; fall back to the raw match in that case.
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
   }
 }
