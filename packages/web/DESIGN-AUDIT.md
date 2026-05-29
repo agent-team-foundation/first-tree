@@ -194,9 +194,12 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   should become dark-aware.
 - [ ] **Spacing rhythm.** Half-steps (`--sp-1_25`=5px, `--sp-1_75`=7px) are used 12× / 23×, signalling
   pixel-nudging off a 4/8 rhythm. Converge to 4/8; mark half-steps as explicit exceptions.
-- [ ] **Prune dead `--sp-*`.** Defined but unused in components: `--sp-2_75`, `--sp-3_25`, `--sp-3_75`,
-  `--sp-4_5`, `--sp-8_5`, `--sp-15`, `--sp-16`, `--sp-20`, `--sp-45`, `--sp-60`, `--sp-80`, `--sp-90`
-  (verify against index.css's own usage before removing).
+- [x] **Prune dead `--sp-*`.** **DONE:** removed the 9 genuinely-unused tokens (verified 0 `var()`
+  refs across `src/`, incl. index.css's own rules and the styleguide's dynamic swatch refs):
+  `--sp-15`, `--sp-240`, `--sp-2_75`, `--sp-3_25`, `--sp-3_75`, `--sp-4_5`, `--sp-80`, `--sp-8_5`,
+  `--sp-90`. (The earlier candidate list was stale — `--sp-16/20/45/60` are now in use; `--sp-0` kept as
+  the ladder's zero anchor.) The half-step **rhythm normalization** (5px/7px → 4/8) is a *visual* change
+  and stays open — it needs a by-eye pass.
 
 ---
 
