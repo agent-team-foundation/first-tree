@@ -29,6 +29,7 @@ import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
+import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
@@ -78,6 +79,11 @@ export function AgentDetailPage() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const { memberId, role } = useAuth();
+  // On phones the header drops its secondary metadata line (type · visibility,
+  // offline-since) — those are all repeated on the Profile tab — so the
+  // avatar, name, presence chip, and action buttons keep their natural size
+  // instead of being shoved off the row.
+  const isNarrow = useWorkspaceViewport() === "narrow";
   useLegacyAnchorRedirect();
 
   const agentQuery = useQuery({
@@ -485,10 +491,12 @@ export function AgentDetailPage() {
             <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
               @{agent.name ?? shortId}
             </span>
-            <span className="text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-              · {humanizeAgentType(agent.type)} · {humanizeVisibility(agent.visibility)}
-            </span>
-            {clientStatus?.offlineSince && (
+            {!isNarrow && (
+              <span className="text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                · {humanizeAgentType(agent.type)} · {humanizeVisibility(agent.visibility)}
+              </span>
+            )}
+            {!isNarrow && clientStatus?.offlineSince && (
               <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                 offline since {formatDate(clientStatus.offlineSince)}
               </span>
@@ -679,6 +687,12 @@ function TabsNav({
         className="flex items-end gap-1"
         style={{
           padding: "0 var(--sp-5)",
+          // The full tab set (up to 6) overflows a phone-width row. Let the
+          // row scroll horizontally instead of clipping / wrapping; on
+          // desktop everything fits so no scrollbar appears. Pairs with
+          // `flexShrink: 0` + `whiteSpace: nowrap` on each tab below so the
+          // labels keep their natural width and stay swipeable.
+          overflowX: "auto",
         }}
       >
         {tabs.map((t) => {
@@ -704,6 +718,10 @@ function TabsNav({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "var(--sp-1_5)",
+                // Keep natural width inside the horizontally-scrollable row
+                // (see tablist `overflowX`) so labels never wrap or squish.
+                flexShrink: 0,
+                whiteSpace: "nowrap",
               }}
             >
               <span>{t.label}</span>

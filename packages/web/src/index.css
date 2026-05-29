@@ -1277,6 +1277,12 @@
 
   .context-map-frame {
     min-height: 320px;
+    /* The SVG below keeps a 760px floor so its foreignObject cards stay
+       legible rather than shrinking to unreadable on a phone. The base rule
+       clips overflow (`overflow: hidden`); on narrow viewports that would
+       cut the right half of the map off entirely, so switch to a horizontal
+       scroll — the whole map stays reachable by swiping. */
+    overflow-x: auto;
   }
 
   .context-network-svg {

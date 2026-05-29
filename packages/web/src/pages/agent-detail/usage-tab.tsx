@@ -82,7 +82,14 @@ function SummaryBlock({
         <ErrorRow message="Failed to load usage summary." />
       ) : (
         <>
-          <div className="grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "var(--sp-4)" }}>
+          {/* `auto-fit` + an 8rem floor keeps all four KPIs on one row on
+              desktop but folds to 2×2 on a phone, where four columns would
+              crush the large mono values into cells too narrow to read. No
+              breakpoint / JS needed — the track count follows the width. */}
+          <div
+            className="grid"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(8rem, 1fr))", gap: "var(--sp-4)" }}
+          >
             <Kpi label={`Tokens (${window})`} value={formatCompactCount(totalTokens)} loading={isLoading} />
             <Kpi label="Turns" value={formatCompactCount(totals?.turns ?? null)} loading={isLoading} />
             <Kpi label="Chats" value={formatCompactCount(totals?.chats ?? null)} loading={isLoading} />

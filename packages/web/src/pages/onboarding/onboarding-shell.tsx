@@ -89,7 +89,18 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
           paddingInline: "var(--sp-5)",
         }}
       >
-        <div className="flex flex-col md:flex-row md:items-start" style={{ gap: "var(--sp-8)", flexShrink: 0 }}>
+        {/* `maxWidth: 100%` caps this wrapper to the body's content box. Without
+            it the wrapper sizes to its content (the 34rem `main`) and, centred in
+            a phone-width body under the shell's `overflow-hidden`, both ends of
+            every step get clipped (the title and inputs lose ~80 logical units
+            on each side at phone widths). Capped here, the `main` below resolves
+            its own `maxWidth: 100%` against a viewport-bound width and shrinks to
+            fit. On desktop the wrapper is far narrower than the viewport, so this
+            is a no-op. */}
+        <div
+          className="flex flex-col md:flex-row md:items-start"
+          style={{ gap: "var(--sp-8)", flexShrink: 0, maxWidth: "100%" }}
+        >
           {/* Left rail — full step labels, top-aligned with the content. */}
           <aside className="hidden md:block" style={{ width: "13rem", flexShrink: 0, paddingTop: "var(--sp-1)" }}>
             {rail}
