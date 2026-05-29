@@ -901,9 +901,13 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
     lines.push("");
     lines.push(
       "The following repositories are pre-checked-out at the top level of your",
-      "working directory. Treat them as **read-only / browse-only baselines** —",
-      "they are shared with every chat of this agent, so do **not** modify them",
-      "in place or switch their branches:",
+      "working directory. They sit on a long-lived hub-session branch that is",
+      "**not** refreshed during this chat — the code may be many commits behind",
+      "`origin/main`. Use them only for read-only orientation (grep, file layout,",
+      "`git log`); for anything that must reflect current `main` (review, analysis,",
+      "code changes), do not reuse this checkout — create a fresh worktree off",
+      "`origin/<base>` (see below). Shared across every chat of this agent; do",
+      "not modify them in place or switch their branches.",
     );
     lines.push("");
     for (const repo of sourceRepos) {
@@ -926,21 +930,22 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
   worktreeBlock.push("## Creating Worktrees On Demand");
   worktreeBlock.push("");
   worktreeBlock.push(
-    "**No worktrees are pre-created.** When you need to modify code, branch off",
-    `into a new worktree under \`${agentHome}/worktrees/<task-name>/\` and work there:`,
+    "**No worktrees are pre-created.** Every new task starts by branching a",
+    `fresh worktree under \`${agentHome}/worktrees/<task-name>/\` off a freshly-`,
+    "fetched `origin/<base>` — do not reuse the pre-checked-out path above.",
   );
   worktreeBlock.push("");
   worktreeBlock.push(
     "```bash",
     `# from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}`,
-    `git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch>`,
+    "git fetch origin",
+    `git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main`,
     "```",
   );
   worktreeBlock.push("");
   worktreeBlock.push(
-    "Replace `<task-name>` with something descriptive (e.g. `<repo>-<short-task-id>`)",
-    "and `<new-branch>` with a real branch name. When finished, the operator can",
-    "clean up worktrees with `git worktree remove`.",
+    "Replace `<task-name>`, `<new-branch>`, and `origin/main` to fit. When",
+    "finished, the operator cleans up with `git worktree remove`.",
   );
   sections.push(worktreeBlock.join("\n"));
 
