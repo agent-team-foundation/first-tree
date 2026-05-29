@@ -191,14 +191,7 @@ function AgentColumnHeader({
         <HeaderLabel>Runs on</HeaderLabel>
         <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)" }}>
           <HeaderLabel>Usage</HeaderLabel>
-          <SegmentedControl
-            value={usageWindow}
-            onChange={onUsageWindow}
-            options={[
-              { value: "7d", label: "7d" },
-              { value: "30d", label: "30d" },
-            ]}
-          />
+          <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
         </span>
       </div>
       <HeaderLabel>Status</HeaderLabel>
@@ -222,15 +215,69 @@ function UsageWindowBar({
       <span className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
         Usage
       </span>
-      <SegmentedControl
-        value={usageWindow}
-        onChange={onUsageWindow}
-        options={[
-          { value: "7d", label: "7d" },
-          { value: "30d", label: "30d" },
-        ]}
-      />
+      <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
     </div>
+  );
+}
+
+/**
+ * Compact window picker for the Usage column header. Shows the current window
+ * (7d / 30d) with a caret and opens a small popover to switch — narrower and
+ * quieter than a two-button segmented control, which crowded the column header.
+ */
+function UsageWindowSelect({ value, onChange }: { value: UsageWindow; onChange: (next: UsageWindow) => void }) {
+  const options: { value: UsageWindow; label: string; short: string }[] = [
+    { value: "7d", label: "Last 7 days", short: "7d" },
+    { value: "30d", label: "Last 30 days", short: "30d" },
+  ];
+  const current = value === "7d" ? { short: "7d", label: "Last 7 days" } : { short: "30d", label: "Last 30 days" };
+  return (
+    <Popover
+      align="end"
+      panelStyle={{ minWidth: "var(--sp-45)" }}
+      trigger={({ open, toggle }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`Usage window: ${current.label}`}
+          className="inline-flex items-center transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            gap: "var(--sp-1)",
+            padding: "var(--sp-0_5) var(--sp-1_5)",
+            borderRadius: "var(--radius-chip)",
+            border: 0,
+            background: open ? "var(--bg-hover)" : "transparent",
+            cursor: "pointer",
+            color: "var(--fg-2)",
+          }}
+        >
+          <span className="mono text-caption">{current.short}</span>
+          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden style={{ color: "var(--fg-4)" }} />
+        </button>
+      )}
+    >
+      {({ close }) => (
+        <div style={{ padding: "var(--sp-1)" }}>
+          {options.map((o) => (
+            <DelegateOption
+              key={o.value}
+              active={o.value === value}
+              onClick={() => {
+                onChange(o.value);
+                close();
+              }}
+              primary={
+                <span className="text-body" style={{ color: "var(--fg)" }}>
+                  {o.label}
+                </span>
+              }
+            />
+          ))}
+        </div>
+      )}
+    </Popover>
   );
 }
 
