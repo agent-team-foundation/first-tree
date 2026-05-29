@@ -27,10 +27,7 @@ export function StepHeading({ title, why }: { title: string; why?: string | null
 /** Error / warning note. Tone "error" (red) or "info" (neutral ink). */
 export function FlowNote({ children, tone = "error" }: { children: ReactNode; tone?: "error" | "info" }) {
   const color = tone === "error" ? "var(--state-error)" : "var(--fg-2)";
-  const bg =
-    tone === "error"
-      ? "color-mix(in oklch, var(--state-error) 12%, transparent)"
-      : "color-mix(in oklch, var(--primary) 8%, transparent)";
+  const bg = tone === "error" ? "var(--state-error-soft)" : "color-mix(in oklch, var(--primary) 8%, transparent)";
   const border =
     tone === "error"
       ? "color-mix(in oklch, var(--state-error) 28%, transparent)"
