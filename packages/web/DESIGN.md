@@ -334,9 +334,12 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 - `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
 - Every animation respects `prefers-reduced-motion: reduce`.
 - Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
-- Focus is visible: `focus-visible:ring-2 ring-ring ring-offset-2` on interactive controls;
+- Focus is visible: the shared primitives (Button / Badge / Input / Dialog-close /
+  Toast / settings-field) use `focus-visible:ring-2 ring-ring ring-offset-2`;
   custom radio/checkbox cards surface a ring on `:focus-within` (the real input
-  is `sr-only`).
+  is `sr-only`). *(Some page-level form controls still carry the older `ring-1` —
+  extending the `ring-2` recipe to the remaining primitives is a tracked
+  follow-up; see DESIGN-AUDIT.md.)*
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---
