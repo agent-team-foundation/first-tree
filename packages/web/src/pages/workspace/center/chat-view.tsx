@@ -306,8 +306,12 @@ function TextRow({
   // chip styling the composer's mirror overlay uses. Code blocks and
   // link text are skipped by the plugin itself, so a message containing
   // `\`@param\`` or a quoted handle inside a markdown link keeps its
-  // original rendering.
-  const messageRehypePlugins = useMemo(() => [rehypeMentions(mentionParticipants)], [mentionParticipants]);
+  // original rendering. `selfAgentId` flips chips that target the viewer
+  // into a higher-priority tone — see `.mention-chip-self` in index.css.
+  const messageRehypePlugins = useMemo(
+    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
+    [mentionParticipants, myAgentId],
+  );
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
