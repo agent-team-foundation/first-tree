@@ -30,11 +30,15 @@ const CODEX_EFFORT_OPTIONS: SelectOption[] = [
 
 const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
   "claude-code": CLAUDE_EFFORT_OPTIONS,
+  // claude-code-tui drives the same `claude` CLI as claude-code, so it shares
+  // the identical effort options + inherit sentinel.
+  "claude-code-tui": CLAUDE_EFFORT_OPTIONS,
   codex: CODEX_EFFORT_OPTIONS,
 };
 
 const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
+  "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   codex: "Applies to new sessions. Higher means more reasoning per turn.",
 };
 

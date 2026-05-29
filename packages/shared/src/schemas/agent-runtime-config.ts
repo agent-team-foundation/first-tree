@@ -154,6 +154,10 @@ const claudeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
 });
 const claudeCodeTuiRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("claude-code-tui"),
+  // Same `reasoningEffort` contract as claude-code — the TUI runtime drives the
+  // identical `claude` CLI, just through tmux instead of the SDK. The empty
+  // string is the same "inherit local settings.json effortLevel" sentinel.
+  reasoningEffort: z.enum(["", "low", "medium", "high", "max"]).default(""),
 });
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
@@ -263,9 +267,10 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
 };
 
 /**
- * Default payload for a fresh claude-code-tui agent. Same 5 fields as claude-code
- * since both drive the same `claude` CLI; the provider differs only in how the
- * client runtime communicates with that CLI (TUI through tmux vs SDK).
+ * Default payload for a fresh claude-code-tui agent. Same fields as claude-code
+ * (including the reasoningEffort inherit sentinel) since both drive the same
+ * `claude` CLI; the provider differs only in how the client runtime
+ * communicates with that CLI (TUI through tmux vs SDK).
  */
 export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   kind: "claude-code-tui",
@@ -274,6 +279,7 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
   mcpServers: [],
   env: [],
   gitRepos: [],
+  reasoningEffort: "",
 };
 
 /**
