@@ -10,7 +10,17 @@
  * Adding a new tone? Define it here once and all consumers pick it up.
  */
 
-export type Tone = "neutral" | "accent" | "warn" | "error" | "outline" | "idle" | "working" | "blocked" | "offline";
+export type Tone =
+  | "neutral"
+  | "accent"
+  | "warn"
+  | "error"
+  | "outline"
+  | "idle"
+  | "working"
+  | "needs-you"
+  | "blocked"
+  | "offline";
 
 export type ToneStyle = {
   /** Background color. */
@@ -62,6 +72,11 @@ export const TONE_STYLES: Record<Tone, ToneStyle> = {
     bg: "color-mix(in oklch, var(--state-working) 14%, transparent)",
     fg: "var(--state-working)",
     bd: "color-mix(in oklch, var(--state-working) 30%, transparent)",
+  },
+  "needs-you": {
+    bg: "color-mix(in oklch, var(--state-needs-you) 14%, transparent)",
+    fg: "color-mix(in oklch, var(--state-needs-you) 50%, var(--fg))",
+    bd: "color-mix(in oklch, var(--state-needs-you) 30%, transparent)",
   },
   blocked: {
     bg: "color-mix(in oklch, var(--state-blocked) 14%, transparent)",

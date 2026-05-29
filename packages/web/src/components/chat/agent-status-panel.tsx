@@ -203,7 +203,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
           anchored={isJumpable(mounted, "needs_you", status.agentId)}
           ariaLabel="Jump to this agent's question in the timeline"
         >
-          <StatePill tone="blocked" label="Needs reply" />
+          <StatePill tone="needs-you" label="Needs reply" />
         </TimelineJumpButton>
       </div>
     );
@@ -240,7 +240,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
  * sans (not mono): the status word is natural language. Geometry mirrors
  * DenseBadge; tone colours come from the shared `tones` map.
  */
-function StatePill({ tone, label }: { tone: "blocked" | "error"; label: string }) {
+function StatePill({ tone, label }: { tone: "blocked" | "error" | "needs-you"; label: string }) {
   const t = toneOf(tone);
   return (
     <span

@@ -264,7 +264,7 @@ function RailRow({
             background: "transparent",
             padding: 0,
             cursor: "pointer",
-            color: "var(--state-blocked)",
+            color: "var(--state-needs-you)",
           }}
         >
           Reply
