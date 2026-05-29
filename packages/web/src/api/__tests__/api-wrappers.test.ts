@@ -1,0 +1,328 @@
+// @vitest-environment happy-dom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const apiMock = vi.hoisted(() => ({
+  delete: vi.fn(),
+  get: vi.fn(),
+  patch: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn(),
+}));
+
+vi.mock("../client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../client.js")>();
+  return {
+    ...actual,
+    api: apiMock,
+    withOrg: (path: string) => `/orgs/current${path}`,
+    withOrgAt: (orgId: string, path: string) => `/orgs/${encodeURIComponent(orgId)}${path}`,
+  };
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  apiMock.get.mockResolvedValue({});
+  apiMock.post.mockResolvedValue({});
+  apiMock.patch.mockResolvedValue({});
+  apiMock.put.mockResolvedValue({});
+  apiMock.delete.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("api wrapper paths", () => {
+  it("formats activity, adapter, org setting, organization, and overview requests", async () => {
+    const activity = await import("../activity.js");
+    const adapterMappings = await import("../adapter-mappings.js");
+    const adapterStatus = await import("../adapter-status.js");
+    const adapters = await import("../adapters.js");
+    const contextTree = await import("../context-tree.js");
+    const orgSettings = await import("../org-settings.js");
+    const organizations = await import("../organizations.js");
+    const overview = await import("../overview.js");
+
+    await activity.retireClient("client/id");
+    await activity.getActivityOverview();
+    await activity.listClients();
+    await activity.listOrgClients();
+    await activity.getClient("client-1");
+    await activity.getClientCapabilities("client-2");
+    await activity.disconnectClient("client-3");
+    await activity.resetAgentActivity("agent/id");
+    await activity.generateConnectToken();
+
+    await adapterMappings.listAdapterMappings();
+    await adapterMappings.createAdapterMapping({
+      platform: "feishu",
+      agentId: "agent-1",
+      externalUserId: "ou_1",
+      boundVia: "manual",
+    });
+    await adapterMappings.deleteAdapterMapping(7);
+    await adapterStatus.getAdapterStatuses();
+    await adapters.listAdapters();
+    await adapters.getAdapter(8);
+    await adapters.createAdapter({ platform: "feishu", agentId: "agent-1", credentials: {}, status: "active" });
+    await adapters.updateAdapter(9, { agentId: "agent-2" });
+    await adapters.deleteAdapter(10);
+
+    await contextTree.getContextTreeSnapshot("org/id", "7d");
+    await orgSettings.getContextTreeSetting("org/id");
+    await orgSettings.putContextTreeSetting("org/id", { repo: "https://github.com/acme/tree", branch: "main" });
+    await orgSettings.deleteContextTreeSetting("org/id");
+    await orgSettings.getSourceReposSetting("org/id");
+    await orgSettings.putSourceReposSetting("org/id", { repos: [{ url: "https://github.com/acme/web.git" }] });
+    await orgSettings.deleteSourceReposSetting("org/id");
+    await organizations.getOrganization("org/id");
+    await organizations.updateOrganization("org/id", { displayName: "Acme" });
+    await overview.getOverview();
+
+    expect(apiMock.delete).toHaveBeenCalledWith("/clients/client%2Fid");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/activity");
+    expect(apiMock.get).toHaveBeenCalledWith("/me/clients");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/clients");
+    expect(apiMock.get).toHaveBeenCalledWith("/clients/client-1");
+    expect(apiMock.post).toHaveBeenCalledWith("/clients/client-3/disconnect");
+    expect(apiMock.post).toHaveBeenCalledWith("/agents/agent%2Fid/reset-activity");
+    expect(apiMock.post).toHaveBeenCalledWith("/me/connect-tokens");
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/adapter-mappings", {
+      platform: "feishu",
+      agentId: "agent-1",
+      externalUserId: "ou_1",
+      boundVia: "manual",
+    });
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/adapters/status");
+    expect(apiMock.patch).toHaveBeenCalledWith("/adapters/9", { agentId: "agent-2" });
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/snapshot?window=7d");
+    expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {
+      repo: "https://github.com/acme/tree",
+      branch: "main",
+    });
+    expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/source_repos", {
+      repos: [{ url: "https://github.com/acme/web.git" }],
+    });
+    expect(apiMock.patch).toHaveBeenCalledWith("/orgs/org%2Fid", { displayName: "Acme" });
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
+  });
+
+  it("formats agent, attention, chat, member, and session requests", async () => {
+    const agentConfig = await import("../agent-config.js");
+    const agentStatus = await import("../agent-status.js");
+    const agents = await import("../agents.js");
+    const attention = await import("../attention.js");
+    const chats = await import("../chats.js");
+    const meChats = await import("../me-chats.js");
+    const meDocs = await import("../me-docs.js");
+    const members = await import("../members.js");
+    const sessions = await import("../sessions.js");
+
+    await agentConfig.getAgentConfig("agent/id");
+    await agentConfig.updateAgentConfig("agent/id", { expectedVersion: 3, payload: { model: "sonnet" } });
+    await agentConfig.dryRunAgentConfig("agent/id", { gitRepos: [] });
+    await agentConfig.getAgentClientStatus("agent/id");
+    await agentStatus.fetchChatAgentStatuses("chat/id");
+
+    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "kael" });
+    await agents.listAllAgents({ limit: 5, cursor: "older" });
+    await agents.listManagedAgents();
+    await agents.getAgent("agent/id");
+    await agents.getAgentSkills("agent/id");
+    await agents.createAgent({ name: "kael", type: "agent", displayName: "Kael" });
+    await agents.checkAgentNameAvailability("name with spaces");
+    await agents.updateAgent("agent/id", { displayName: "New" });
+    await agents.rebindAgent("agent/id", { clientId: "client-2", runtimeProvider: "claude-code" });
+    await agents.deleteAgent("agent/id");
+    await agents.deleteAgentAvatar("agent/id");
+    await agents.suspendAgent("agent/id");
+    await agents.reactivateAgent("agent/id");
+    await agents.testAgentConnection("agent/id");
+
+    expect(attention.attentionsInChatQueryKey("chat-1")).toEqual(["attentions", "chat", "chat-1"]);
+    expect(attention.respondAttentionMutationKey("att-1")).toEqual(["attentions", "respond", "att-1"]);
+    await attention.respondAttention("att/id", { text: "yes" });
+    await attention.listAttentionsInChat("chat/id");
+    await attention.listMyAttentions();
+
+    await chats.listChats({ limit: 3, cursor: "next" });
+    await chats.getChat("chat/id");
+    await chats.listChatGithubEntities("chat/id");
+    await chats.renameChat("chat/id", "Topic");
+    await chats.patchChatEngagement("chat/id", "archived");
+    await chats.sendChatMessage("chat/id", "hello", ["agent-1"]);
+    await chats.sendChatMessage("chat/id", "no route", []);
+    await chats.sendFileMessageBatch(
+      "chat/id",
+      { attachments: [{ data: "a", mimeType: "image/png", filename: "a.png", size: 1 }] },
+      {
+        mentions: ["agent-1"],
+      },
+    );
+    await chats.sendFileMessageBatch("chat/id", { attachments: [] }, { mentions: [] });
+    await chats.createAgentChat("agent/id");
+    await chats.listChatMessages("chat/id", { limit: 20, cursor: "older" });
+
+    await meChats.listMeChats({
+      limit: 10,
+      cursor: "next",
+      filter: "unread",
+      engagement: "active",
+      origin: ["manual", "github"],
+      with: ["agent-1", "agent-2"],
+      watching: true,
+    });
+    await meChats.listMeChatSourceCounts({ engagement: "archived" });
+    await meChats.createMeChat({ participantIds: ["agent-1"] });
+    await meChats.markMeChatRead("chat/id");
+    await meChats.markMeChatUnread("chat/id");
+    await meChats.addMeChatParticipants("chat/id", { participantIds: ["agent-2"] });
+    await meChats.joinMeChat("chat/id");
+    await meChats.leaveMeChat("chat/id");
+
+    await meDocs.getMeDoc("chat/id", { agentId: "agent/id", path: "docs/plan.md", basePath: "/workspace" });
+    await members.listMembers();
+    await members.updateMember("member/id", { role: "admin" });
+    await members.deleteMember("member/id");
+
+    expect(sessions.sessionQueryKey("agent-1", "chat-1")).toEqual(["session", "agent-1", "chat-1"]);
+    expect(sessions.agentSessionsQueryKey("agent-1")).toEqual(["agent-sessions", "agent-1"]);
+    expect(sessions.asToolCallPayload({ toolUseId: "tool-1", name: "Bash", args: {}, status: "ok" })).toEqual({
+      toolUseId: "tool-1",
+      name: "Bash",
+      args: {},
+      status: "ok",
+      durationMs: undefined,
+      resultPreview: undefined,
+    });
+    expect(sessions.asToolCallPayload({ toolUseId: "tool-1", status: "ok" })).toBeNull();
+    expect(sessions.asErrorPayload({ source: "runtime", message: "failed" })).toEqual({
+      source: "runtime",
+      message: "failed",
+    });
+    expect(sessions.asErrorPayload({ source: "other", message: "failed" })).toBeNull();
+    expect(sessions.asAssistantTextPayload({ text: "partial" })).toEqual({ text: "partial" });
+    expect(sessions.asTurnEndPayload({ status: "success" })).toEqual({ status: "success" });
+    await sessions.listSessions({ limit: 10, cursor: "c", state: "active", agentId: "agent-1" });
+    await sessions.listAgentSessions("agent/id", { state: "active", runtimeState: "working" });
+    await sessions.getSession("agent/id", "chat/id");
+    await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
+    await sessions.suspendSession("agent/id", "chat/id");
+    await sessions.terminateSession("agent/id", "chat/id");
+
+    expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
+    expect(apiMock.post).toHaveBeenCalledWith("/agents/agent/id/config/dry-run", { payload: { gitRepos: [] } });
+    expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents?limit=10&cursor=next&type=agent&query=kael");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
+    expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");
+    expect(apiMock.patch).toHaveBeenCalledWith("/agents/agent%2Fid/rebind", {
+      clientId: "client-2",
+      runtimeProvider: "claude-code",
+    });
+    expect(apiMock.post).toHaveBeenCalledWith("/attention/att%2Fid/respond", { text: "yes" });
+    expect(apiMock.get).toHaveBeenCalledWith("/attention?chat=chat%2Fid&state=all");
+    expect(apiMock.get).toHaveBeenCalledWith("/attention?state=open&limit=200");
+    expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
+      format: "text",
+      content: "hello",
+      metadata: { mentions: ["agent-1"] },
+    });
+    expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
+      format: "text",
+      content: "no route",
+    });
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub&with=agent-1%2Cagent-2&watching=1",
+    );
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/chats/chat%2Fid/docs/preview?agentId=agent%2Fid&path=docs%2Fplan.md&basePath=%2Fworkspace",
+    );
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/agents/agent/id/sessions/chat/id/events?limit=30&cursor=5&direction=asc",
+    );
+  });
+
+  it("handles GitHub App helpers, legacy auth, file reading, and swallowed onboarding events", async () => {
+    const { ApiError } = await import("../client.js");
+    const githubApp = await import("../github-app.js");
+    const github = await import("../github.js");
+    const auth = await import("../auth.js");
+    const chats = await import("../chats.js");
+    const onboarding = await import("../onboarding-events.js");
+
+    apiMock.get.mockRejectedValueOnce(new ApiError(404, "missing"));
+    await expect(githubApp.getGithubAppInstallation("org-1")).resolves.toBeNull();
+    apiMock.get.mockRejectedValueOnce(new ApiError(500, "boom"));
+    await expect(githubApp.getGithubAppInstallation("org-1")).rejects.toMatchObject({ status: 500 });
+    apiMock.get.mockResolvedValueOnce({ exists: true });
+    await expect(githubApp.getGithubAppInstallationExists("org-1")).resolves.toBe(true);
+    apiMock.get.mockResolvedValueOnce({ installUrl: "https://github.com/apps/first-tree/installations/new" });
+    await expect(githubApp.getGithubAppInstallUrl("org-1", "/onboarding")).resolves.toContain("github.com");
+
+    apiMock.get.mockResolvedValueOnce({ repos: [{ fullName: "acme/web" }] });
+    await expect(github.listGithubRepos()).resolves.toEqual([{ fullName: "acme/web" }]);
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ accessToken: "a", refreshToken: "r" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(auth.login("gandy", "secret")).resolves.toEqual({ accessToken: "a", refreshToken: "r" });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "bad login" }), { status: 401 }));
+    await expect(auth.login("gandy", "bad")).rejects.toThrow("bad login");
+    fetchMock.mockResolvedValueOnce(new Response("plain failure", { status: 500 }));
+    await expect(auth.login("gandy", "bad")).rejects.toThrow("plain failure");
+
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" });
+    const originalFileReader = globalThis.FileReader;
+    class SuccessFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: DOMException | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL(): void {
+        this.result = "data:text/plain;base64,aGVsbG8=";
+        this.onload?.();
+      }
+    }
+    class BadResultFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: DOMException | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL(): void {
+        this.result = new ArrayBuffer(0);
+        this.onload?.();
+      }
+    }
+    class ErrorFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: DOMException | null = new DOMException("read failed");
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL(): void {
+        this.onerror?.();
+      }
+    }
+    Object.defineProperty(globalThis, "FileReader", { configurable: true, value: SuccessFileReader });
+    await expect(chats.readFileAsBase64(file)).resolves.toBe("aGVsbG8=");
+    Object.defineProperty(globalThis, "FileReader", { configurable: true, value: BadResultFileReader });
+    await expect(chats.readFileAsBase64(file)).rejects.toThrow("Unexpected FileReader result");
+    Object.defineProperty(globalThis, "FileReader", { configurable: true, value: ErrorFileReader });
+    await expect(chats.readFileAsBase64(file)).rejects.toThrow("read failed");
+    Object.defineProperty(globalThis, "FileReader", { configurable: true, value: originalFileReader });
+
+    apiMock.post.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      onboarding.reportOnboardingEvent("agent_created", { runtimeProvider: "codex" }),
+    ).resolves.toBeUndefined();
+    apiMock.post.mockRejectedValueOnce(new Error("offline"));
+    await expect(onboarding.markOnboardingCompleted()).resolves.toBeUndefined();
+  });
+});

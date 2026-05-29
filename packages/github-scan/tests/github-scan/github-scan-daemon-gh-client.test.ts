@@ -422,7 +422,8 @@ describe("pure helpers", () => {
       apiUrl: "https://api.github.com/repos/o/r/pulls/1",
       latestCommentApiUrl: "",
       updatedAt: "2026-04-15T00:00:00Z",
-    })!;
+    });
+    if (!a) throw new Error("expected notification candidate");
     const b = { ...a, title: "B" };
     expect(deduplicate([a, b])).toHaveLength(1);
     expect(deduplicate([a, b])[0].title).toBe("A");
