@@ -152,6 +152,13 @@ const claudeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   // verified against cli.js, which resolves `effort ?? settings.effortLevel`.
   reasoningEffort: z.enum(["", "low", "medium", "high", "max"]).default(""),
 });
+const claudeCodeTuiRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("claude-code-tui"),
+  // Same `reasoningEffort` contract as claude-code — the TUI runtime drives the
+  // identical `claude` CLI, just through tmux instead of the SDK. The empty
+  // string is the same "inherit local settings.json effortLevel" sentinel.
+  reasoningEffort: z.enum(["", "low", "medium", "high", "max"]).default(""),
+});
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
   // Maps to codex-sdk ThreadOptions.modelReasoningEffort. Default "high"
@@ -163,6 +170,7 @@ const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
+  claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
@@ -259,6 +267,22 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
 };
 
 /**
+ * Default payload for a fresh claude-code-tui agent. Same fields as claude-code
+ * (including the reasoningEffort inherit sentinel) since both drive the same
+ * `claude` CLI; the provider differs only in how the client runtime
+ * communicates with that CLI (TUI through tmux vs SDK).
+ */
+export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "claude-code-tui",
+  prompt: { append: "" },
+  model: "opus",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  reasoningEffort: "",
+};
+
+/**
  * Default payload selector by runtime provider.
  */
 export function defaultRuntimeConfigPayload(
@@ -267,6 +291,8 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "claude-code-tui":
+      return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":
       return { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
     default: {

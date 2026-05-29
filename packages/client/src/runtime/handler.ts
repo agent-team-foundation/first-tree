@@ -209,6 +209,19 @@ export function registerHandler(type: string, factory: HandlerFactory): void {
   HANDLER_REGISTRY.set(type, factory);
 }
 
+/**
+ * Non-throwing check for whether a handler factory is registered for `type`.
+ *
+ * Callers that materialise agents from config (daemon startup, `agent:pinned`
+ * pushes, fs-watch rescans) use this to skip an agent whose runtime provider is
+ * a valid enum value but has no handler on this client build yet — e.g. a
+ * `claude-code-tui` agent on a client that predates the TUI handler. Without it
+ * `getHandlerFactory` throws and takes down the whole startup loop.
+ */
+export function hasHandler(type: string): boolean {
+  return HANDLER_REGISTRY.has(type);
+}
+
 /** Resolve a handler factory by type name. */
 export function getHandlerFactory(type: string): HandlerFactory {
   const factory = HANDLER_REGISTRY.get(type);

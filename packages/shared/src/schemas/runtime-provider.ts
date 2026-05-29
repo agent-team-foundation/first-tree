@@ -7,10 +7,11 @@ import { z } from "zod";
  */
 export const RUNTIME_PROVIDERS = {
   CLAUDE_CODE: "claude-code",
+  CLAUDE_CODE_TUI: "claude-code-tui",
   CODEX: "codex",
 } as const;
 
-export const runtimeProviderSchema = z.enum(["claude-code", "codex"]);
+export const runtimeProviderSchema = z.enum(["claude-code", "claude-code-tui", "codex"]);
 export type RuntimeProvider = z.infer<typeof runtimeProviderSchema>;
 
 export const DEFAULT_RUNTIME_PROVIDER: RuntimeProvider = "claude-code";

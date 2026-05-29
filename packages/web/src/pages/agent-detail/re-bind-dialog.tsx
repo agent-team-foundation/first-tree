@@ -16,10 +16,15 @@ import { Label } from "../../components/ui/label.js";
 
 const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
+  "claude-code-tui": "Claude Code (TUI)",
   codex: "Codex",
 };
 
-const PROVIDER_ORDER: RuntimeProvider[] = [RUNTIME_PROVIDERS.CLAUDE_CODE, RUNTIME_PROVIDERS.CODEX];
+const PROVIDER_ORDER: RuntimeProvider[] = [
+  RUNTIME_PROVIDERS.CLAUDE_CODE,
+  RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
+  RUNTIME_PROVIDERS.CODEX,
+];
 
 type Props = {
   open: boolean;
@@ -228,6 +233,7 @@ function describeCurrent(currentClientId: string | null, clients: HubClient[], p
 
 const UNAUTH_HINT: Record<RuntimeProvider, string> = {
   "claude-code": "Run `claude login` (or set ANTHROPIC_API_KEY) on the computer.",
+  "claude-code-tui": "Run `claude login` (or set ANTHROPIC_API_KEY) on the computer. Also requires tmux ≥ 3.0.",
   codex: "Run `codex login` (or set CODEX_API_KEY) on the computer.",
 };
 

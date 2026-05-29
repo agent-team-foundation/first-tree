@@ -81,6 +81,7 @@ export {
   agentRuntimeConfigSchema,
   type ClientMessagePayload,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   type DryRunAgentRuntimeConfig,
   defaultRuntimeConfigPayload,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
-import { getHandlerFactory, registerHandler } from "../runtime/handler.js";
+import { getHandlerFactory, hasHandler, registerHandler } from "../runtime/handler.js";
 
 function createMockHandler(): AgentHandler {
   return {
@@ -36,6 +36,12 @@ describe("Handler Registry", () => {
     registerHandler("listed-handler", echoFactory);
 
     expect(() => getHandlerFactory("missing-handler")).toThrow(/Available: .*listed-handler/);
+  });
+
+  it("hasHandler reflects registration without throwing", () => {
+    expect(hasHandler("nonexistent-handler-abc")).toBe(false);
+    registerHandler("probe-handler", echoFactory);
+    expect(hasHandler("probe-handler")).toBe(true);
   });
 
   it("creates a handler with the factory", () => {

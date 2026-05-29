@@ -4,6 +4,7 @@ import {
   agentRuntimeConfigPayloadSchema,
   agentRuntimeConfigSchema,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -62,10 +63,31 @@ describe("agent runtime config — codex defaults", () => {
       kind: "claude-code",
       model: "opus",
     });
+    expect(defaultRuntimeConfigPayload("claude-code-tui")).toMatchObject({
+      kind: "claude-code-tui",
+      model: "opus",
+    });
     expect(defaultRuntimeConfigPayload("codex")).toMatchObject({
       kind: "codex",
       model: "",
     });
+  });
+
+  it("DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD is claude-code-tui with model='opus'", () => {
+    expect(DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD.kind).toBe("claude-code-tui");
+    expect(DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD.model).toBe("opus");
+  });
+
+  it("schema accepts an explicit claude-code-tui payload (kind discriminator)", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "claude-code-tui",
+      model: "sonnet",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+    });
+    expect(parsed.kind).toBe("claude-code-tui");
+    expect(parsed.model).toBe("sonnet");
   });
 
   it("returns a distinct top-level object on each call (callers can mutate safely at top level)", () => {

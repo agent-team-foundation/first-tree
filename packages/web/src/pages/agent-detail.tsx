@@ -397,7 +397,15 @@ export function AgentDetailPage() {
     boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
-  const contextRuntimeLabel = setupRuntimeProvider === "codex" ? "Codex" : "Claude Code";
+  // Exhaustive map (not a binary ternary) so adding a provider to
+  // RuntimeProvider forces this label to be filled in — prevents a new
+  // runtime from silently rendering as "Claude Code" in the context bar.
+  const CONTEXT_RUNTIME_LABEL: Record<RuntimeProvider, string> = {
+    "claude-code": "Claude Code",
+    "claude-code-tui": "Claude Code (TUI)",
+    codex: "Codex",
+  };
+  const contextRuntimeLabel = CONTEXT_RUNTIME_LABEL[setupRuntimeProvider];
 
   const refreshAgent = async () => {
     await queryClient.invalidateQueries({ queryKey: ["agent", uuid] });

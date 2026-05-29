@@ -13,7 +13,11 @@ export function registerAgentCreateCommand(agent: Command): void {
       "--client-id <id>",
       "Client (machine) that will run this agent — must be owned by you. Run `first-tree login <token>` on that machine first.",
     )
-    .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
+    .option(
+      "--runtime <runtime>",
+      "Runtime handler — one of: claude-code, claude-code-tui, codex (default: claude-code)",
+      "claude-code",
+    )
     .option("--display-name <name>", "Display name")
     .option("--org <id>", "Target organization id (required when you belong to multiple orgs)")
     .option("--server <url>", "Hub server URL")

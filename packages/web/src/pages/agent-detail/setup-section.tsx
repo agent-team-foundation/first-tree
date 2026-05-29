@@ -36,6 +36,10 @@ const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> =
     name: "Claude Code",
     caption: "Anthropic's Claude Code runtime.",
   },
+  "claude-code-tui": {
+    name: "Claude Code (TUI)",
+    caption: "Anthropic's Claude Code driven through tmux — replacement for the SDK runtime.",
+  },
   codex: {
     name: "Codex",
     caption: "OpenAI's Codex CLI runtime.",
