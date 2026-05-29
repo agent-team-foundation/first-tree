@@ -1,4 +1,4 @@
-import type { RuntimeProvider } from "@first-tree/shared";
+import { RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
 import { PresenceChip, runtimeStateToPresence } from "../../../../components/ui/presence-chip.js";
 import type { BoundAgentsSummary } from "../view-models.js";
 import { PROVIDER_LABEL } from "./providers.js";
@@ -74,9 +74,15 @@ export function BoundAgentsList({ summary, agentName, headerless = false }: Boun
  * provider isn't recognized so the row gracefully degrades to just
  * `name + chip` rather than rendering "· null".
  */
+const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
+
 function formatRuntimeLabel(runtimeType: string | null): string | null {
   if (!runtimeType) return null;
-  if (runtimeType === "claude-code" || runtimeType === "codex") {
+  // Recognize every provider in the shared enum (not a hardcoded subset) so a
+  // newly added runtime — e.g. claude-code-tui — gets its friendly label
+  // automatically instead of leaking the raw wire string. Truly-unknown values
+  // still degrade gracefully to the raw string.
+  if (KNOWN_RUNTIME_PROVIDERS.includes(runtimeType)) {
     return PROVIDER_LABEL[runtimeType as RuntimeProvider];
   }
   return runtimeType;
