@@ -41,6 +41,7 @@ import { attentionsInChatQueryKey, listAttentionsInChat } from "../../../api/att
 import {
   type FileMessageContent,
   getChat,
+  getChatTokenUsage,
   type ImageBatchRefContent,
   type ImageRefContent,
   listChatMessages,
@@ -73,7 +74,6 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { TokenUsagePill } from "../../../components/chat/token-usage-pill.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -144,6 +144,13 @@ function formatClockTime(iso: string): string {
   }).formatToParts(d);
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+// Compact token count for the composer marker: 1234 → "1.2k", 2_500_000 → "2.5M".
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
@@ -947,6 +954,16 @@ export function ChatView({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
+  });
+
+  // Cumulative token usage for the whole chat (server SUM over token_usage
+  // events). Polled on the same cadence as messages so the composer marker
+  // catches up within a few seconds of a turn ending. Cheap aggregate query.
+  const { data: chatTokenUsage } = useQuery({
+    queryKey: ["chat-token-usage", chatId],
+    queryFn: () => getChatTokenUsage(chatId),
+    enabled: !!chatId,
+    refetchInterval: 5_000,
   });
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
@@ -2658,13 +2675,6 @@ export function ChatView({
                         case "error":
                           node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
                           break;
-                        case "token_usage":
-                          // Inline per-turn audit pill — see token-usage
-                          // design doc (sociocurrency + audit). Kept by
-                          // `filterEventsForTimeline` across turn_end so
-                          // historical turns retain their cost stamp.
-                          node = <TokenUsagePill key={item.key} event={ev} />;
-                          break;
                         default:
                           // assistant_text / tool_call / thinking are folded into
                           // the workgroup card above; turn_end is filtered
@@ -2793,6 +2803,15 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
+                    {chatTokenUsage && chatTokenUsage.totalTokens > 0 ? (
+                      <div
+                        className="mono text-caption"
+                        style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                        title={`input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()}`}
+                      >
+                        {formatTokenCount(chatTokenUsage.totalTokens)} tokens used in this chat
+                      </div>
+                    ) : null}
                     <ComposeStatusBar
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}

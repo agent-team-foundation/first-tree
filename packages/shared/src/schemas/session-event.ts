@@ -82,16 +82,24 @@ export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventP
  * Token usage for one (provider, model) within a single turn. Emitted by the
  * handler right before `turn_end`. A turn may produce multiple `token_usage`
  * events when the underlying SDK runs more than one model in a single turn
- * (e.g. Claude Agent SDK fast-mode). Codex always emits exactly one.
+ * (e.g. Claude Agent SDK fast-mode). Codex emits at most one.
  *
- * Field semantics:
+ * Field semantics — `inputTokens` and `cachedInputTokens` are DISJOINT, so
+ * total prompt tokens = inputTokens + cachedInputTokens:
  *   - `inputTokens`: prompt tokens NOT served from cache. For Anthropic this
  *     includes cache-creation tokens (they bill as input). For OpenAI/Codex
- *     this is `usage.input_tokens` straight from the SDK.
+ *     `usage.input_tokens` is the TOTAL prompt incl. the cached subset, so the
+ *     codex handler subtracts (`input_tokens - cached_input_tokens`) to land
+ *     on the non-cached figure this field expects.
  *   - `cachedInputTokens`: prompt tokens served from cache (Anthropic
  *     `cache_read_input_tokens` / OpenAI `cached_input_tokens`).
  *   - `outputTokens`: completion tokens (includes reasoning tokens for o-series
  *     models — we deliberately do not split them out in this minimal schema).
+ *
+ * All values are PER-TURN deltas. Codex's SDK only surfaces the cumulative
+ * thread total, so its handler diffs consecutive turns to recover the delta
+ * (see `computePerTurnUsageDelta`); summing these events over a thread is
+ * therefore valid for both providers.
  */
 export const tokenUsageEventPayload = z.object({
   provider: z.string(),
@@ -101,6 +109,22 @@ export const tokenUsageEventPayload = z.object({
   outputTokens: z.number().int().nonnegative(),
 });
 export type TokenUsageEventPayload = z.infer<typeof tokenUsageEventPayload>;
+
+/**
+ * Chat-wide token usage total — the server's SUM over every `token_usage`
+ * event persisted for a chat. Because `token_usage` events are per-turn deltas
+ * (see {@link tokenUsageEventPayload}), summing them yields the cumulative
+ * consumption of the whole chat. Note the count resets when a session is
+ * terminated (its events are cleared), so this is "usage since the current
+ * session history began", not an all-time billing figure.
+ */
+export const chatTokenUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  cachedInputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+});
+export type ChatTokenUsage = z.infer<typeof chatTokenUsageSchema>;
 
 export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tool_call"), payload: toolCallEventPayload }),

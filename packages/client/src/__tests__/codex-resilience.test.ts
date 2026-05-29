@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetCodexHandlerStateForTests,
+  computePerTurnUsageDelta,
   detectAgentsMdConcurrentWrite,
   isTransientCodexErrorMessage,
 } from "../handlers/codex.js";
+
+const usage = (input: number, cached: number, output: number, reasoning = 0) => ({
+  input_tokens: input,
+  cached_input_tokens: cached,
+  output_tokens: output,
+  reasoning_output_tokens: reasoning,
+});
 
 /**
  * Locks the behavioural contract of the two pure helpers introduced for
@@ -206,5 +214,43 @@ describe("detectAgentsMdConcurrentWrite + __resetCodexHandlerStateForTests", () 
     // record of the pre-reset writes.
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_400, log);
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+describe("computePerTurnUsageDelta", () => {
+  it("fresh thread with no baseline returns the cumulative as-is (turn 1)", () => {
+    expect(computePerTurnUsageDelta(usage(1000, 200, 50, 30), null, true)).toEqual(usage(1000, 200, 50, 30));
+  });
+
+  it("returns a copy, not the same object, on the fresh-thread path", () => {
+    const cumulative = usage(1000, 200, 50);
+    const out = computePerTurnUsageDelta(cumulative, null, true);
+    expect(out).not.toBe(cumulative);
+  });
+
+  it("cold resume with no baseline returns null — skip the emit, don't ship the whole thread as one turn", () => {
+    expect(computePerTurnUsageDelta(usage(50_000, 48_000, 900), null, false)).toBeNull();
+  });
+
+  it("subtracts the previous cumulative to recover the per-turn delta", () => {
+    // turn 2 cumulative minus turn 1 cumulative — codex reports running totals.
+    const prev = usage(1000, 200, 50, 30);
+    const cumulative = usage(3500, 1800, 130, 90);
+    expect(computePerTurnUsageDelta(cumulative, prev, false)).toEqual(usage(2500, 1600, 80, 60));
+  });
+
+  it("clamps every field at 0 when the cumulative drops (e.g. a compaction reset)", () => {
+    // total shrank below the previous baseline — emit a zeroed turn rather
+    // than negative tokens; the baseline advance happens in the caller.
+    const prev = usage(10_000, 5_000, 800, 400);
+    const cumulative = usage(2_000, 1_000, 100, 50);
+    expect(computePerTurnUsageDelta(cumulative, prev, false)).toEqual(usage(0, 0, 0, 0));
+  });
+
+  it("baseline takes precedence over threadIsFresh once a previous cumulative exists", () => {
+    const prev = usage(1000, 200, 50);
+    // threadIsFresh=true is irrelevant here — a non-null baseline means we are
+    // past turn 1, so still subtract.
+    expect(computePerTurnUsageDelta(usage(1500, 400, 70), prev, true)).toEqual(usage(500, 200, 20, 0));
   });
 });

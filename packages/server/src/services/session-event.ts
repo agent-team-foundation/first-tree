@@ -1,4 +1,5 @@
 import type {
+  ChatTokenUsage,
   ContextTreeUsageEvent,
   ContextTreeUsageSummary,
   SessionEvent,
@@ -361,5 +362,36 @@ export async function summarizeContextTreeUsage(
     agentCount: aggregate?.agentCount ?? 0,
     usageCount: aggregate?.usageCount ?? 0,
     recentEvents,
+  };
+}
+
+/**
+ * Sum every `token_usage` event for a chat into a single cumulative total.
+ * Each event carries per-turn deltas (input/cached/output), so the SUM is the
+ * chat's whole-history consumption. Spans every agent that participated in the
+ * chat, not just the primary speaker.
+ *
+ * Summed in SQL as `bigint` and serialized via `::text` so a busy chat can't
+ * overflow JS's safe-integer range mid-aggregation; we parse back with
+ * `Number()` at the edge where the magnitudes are realistic.
+ */
+export async function summarizeChatTokenUsage(db: Database, chatId: string): Promise<ChatTokenUsage> {
+  const [row] = await db
+    .select({
+      inputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'inputTokens')::bigint), 0)::text`,
+      cachedInputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'cachedInputTokens')::bigint), 0)::text`,
+      outputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'outputTokens')::bigint), 0)::text`,
+    })
+    .from(sessionEvents)
+    .where(and(eq(sessionEvents.chatId, chatId), eq(sessionEvents.kind, "token_usage")));
+
+  const inputTokens = Number(row?.inputTokens ?? 0);
+  const cachedInputTokens = Number(row?.cachedInputTokens ?? 0);
+  const outputTokens = Number(row?.outputTokens ?? 0);
+  return {
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    totalTokens: inputTokens + cachedInputTokens + outputTokens,
   };
 }

@@ -30,11 +30,11 @@ export function filterEventsForTimeline(events: SessionEventRow[]): SessionEvent
   const turnFiltered = events.filter((e) => {
     if (e.kind === "turn_end") return false;
     if (e.kind === "context_tree_usage") return false;
+    // `token_usage` is surfaced as a cumulative chat-wide marker above the
+    // composer (see chat-token-usage query in chat-view) rather than inline
+    // per-turn rows — drop here so the message list stays clean.
+    if (e.kind === "token_usage") return false;
     if (e.kind === "error") return true;
-    // `token_usage` is the per-turn audit pill — keep across turns so a
-    // completed turn's pill stays visible in the timeline (always-on
-    // audit). All other transient kinds are dropped once their turn ends.
-    if (e.kind === "token_usage") return true;
     return e.seq > lastTurnEndSeq;
   });
 

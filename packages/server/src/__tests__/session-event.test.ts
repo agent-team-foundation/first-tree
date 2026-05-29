@@ -268,6 +268,46 @@ describe("sessionEventService", () => {
     expect(remaining2).toHaveLength(1);
   });
 
+  it("summarizeChatTokenUsage sums per-turn deltas across agents into a cumulative total", async () => {
+    const app = getApp();
+    const a1 = agentId();
+    const a2 = agentId();
+    const c = chatId();
+
+    // Two turns from one agent...
+    await sessionEventService.appendEvent(app.db, a1, c, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 100, cachedInputTokens: 10, outputTokens: 50 },
+    });
+    await sessionEventService.appendEvent(app.db, a1, c, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 200, cachedInputTokens: 20, outputTokens: 80 },
+    });
+    // ...plus a turn from a second agent in the same chat.
+    await sessionEventService.appendEvent(app.db, a2, c, {
+      kind: "token_usage",
+      payload: { provider: "claude", model: "sonnet", inputTokens: 5, cachedInputTokens: 0, outputTokens: 15 },
+    });
+    // A non-token_usage event must not contribute.
+    await sessionEventService.appendEvent(app.db, a1, c, {
+      kind: "error",
+      payload: { source: "sdk", message: "ignored" },
+    });
+
+    const usage = await sessionEventService.summarizeChatTokenUsage(app.db, c);
+
+    expect(usage.inputTokens).toBe(305);
+    expect(usage.cachedInputTokens).toBe(30);
+    expect(usage.outputTokens).toBe(145);
+    expect(usage.totalTokens).toBe(480);
+  });
+
+  it("summarizeChatTokenUsage returns zeros for a chat with no token_usage events", async () => {
+    const app = getApp();
+    const usage = await sessionEventService.summarizeChatTokenUsage(app.db, chatId());
+    expect(usage).toEqual({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0 });
+  });
+
   it("summarizes Context Tree usage with org-wide visibility — every in-org chat exposes its topic", async () => {
     const app = getApp();
     const { agent, organizationId } = await createTestAgent(app);
