@@ -816,7 +816,7 @@ function BindClientList({
             >
               <span
                 className={cn("inline-block h-2 w-2 rounded-full shrink-0")}
-                style={{ background: isBindableClient(c) ? "var(--state-idle)" : "var(--fg-4)" }}
+                style={{ background: isBindableClient(c) ? "var(--success)" : "var(--fg-4)" }}
                 aria-hidden
               />
               <span className="flex-1 min-w-0">
@@ -846,7 +846,7 @@ const STATUS_LABELS: Record<TestResult["status"], string> = {
 };
 
 const TEST_RESULT_BORDER: Record<TestResult["status"], string> = {
-  success: "var(--state-idle)",
+  success: "var(--success)",
   offline: "var(--state-offline)",
   stale: "var(--state-blocked)",
   error: "var(--state-error)",

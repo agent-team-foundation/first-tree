@@ -13,6 +13,33 @@
 
 ---
 
+## Decisions (2026-05-29) — Green-liveness status model
+
+Owner re-opened the color strategy to use green more boldly. Net change from the shipped
+Strategy A (F): green is no longer "signature + success **only**" — it now also carries
+**liveness**, while the neutral chrome and the no-green-on-dense-buttons discipline stay.
+Implemented on branch `refactor/web-green-liveness-status`.
+
+- **Status palette re-coloured.** `--state-working` cyan → **green** (alive, pulses);
+  `--state-idle` neutral-cool → **blue** (present/idle); added `--state-needs-you` =
+  **amber**; `--state-blocked` → **orange** (warmer than needs-you, and the shared
+  caution/warning hue). error=red, offline=gray unchanged. Cool (green/blue) = healthy;
+  warm (amber/orange/red) = wants your attention, so problems pop against the live baseline.
+- **working == success at the token level**, told apart by **form** (pulsing dot + glow vs
+  a static ✓ glyph), not hue.
+- **`--state-idle` disentangled.** It had doubled as the generic "✓ ok / ready / success"
+  colour; those ~8 sites moved to `--success` (green) so idle could become a true
+  presence-blue without turning every ✓ blue.
+- **Liveness / arrival = green.** The new-message **divider** and **pill** went
+  `--primary` → green — this **reverses** the Phase-0 choice that made them neutral
+  (intentional). The selected conversation gets a **green left-rail + green-tint** (was
+  neutral `--bg-active`). A soft green **glow** on the chat working chip.
+- **Green hero CTA.** Added a `cta` Button variant (`bg-brand`), applied to the one
+  creation/launch moment per surface (Create agent, onboarding Start). Dense/repeated
+  actions stay neutral `default`.
+
+---
+
 ## Decisions (2026-05-28)
 
 Owner picked the optimization direction. These are now committed targets (implementation pending):

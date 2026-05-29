@@ -88,6 +88,9 @@ export function WorkingChip({
             height: 6,
             borderRadius: "50%",
             background: "var(--state-working)",
+            // Soft "alive" glow — box-shadow only (no layout footprint), so it
+            // doesn't disturb any aligned column; reinforces working=green=live.
+            boxShadow: "0 0 var(--sp-1_5) color-mix(in oklch, var(--state-working) 40%, transparent)",
           }}
         />
       ) : null}
