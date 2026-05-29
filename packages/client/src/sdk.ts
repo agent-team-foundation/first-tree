@@ -388,18 +388,16 @@ export class FirstTreeHubSDK {
    * stored attachment's metadata; the `id` is what upstream consumers
    * (image messages, future bookmarks / attention attachments) reference.
    *
-   * Pass `orgId` when the caller user is a member of multiple organizations
-   * — the server rejects ambiguous uploads with 400 to keep `uploaded_by`
-   * deterministic. Single-org users may omit it.
+   * `orgId` is required: upload is org-scoped (`uploaded_by` resolves to the
+   * caller's member identity in that org), so the org rides in the path.
    */
   public async uploadAttachment(opts: {
     bytes: Uint8Array | Buffer;
     mimeType: string;
     filename: string;
-    orgId?: string;
+    orgId: string;
   }): Promise<UploadAttachmentResponse> {
-    const qs = opts.orgId ? `?orgId=${encodeURIComponent(opts.orgId)}` : "";
-    const json = await this.requestJson<unknown>(`/api/v1/attachments${qs}`, {
+    const json = await this.requestJson<unknown>(`/api/v1/orgs/${encodeURIComponent(opts.orgId)}/attachments`, {
       method: "POST",
       body: opts.bytes,
       headers: {
@@ -412,16 +410,13 @@ export class FirstTreeHubSDK {
   }
 
   /**
-   * Fetch attachment bytes. Pass `chatId` when the caller is not the
-   * uploader (or the manager of the uploader's agent) — the server will
-   * verify chat membership in that case.
+   * Fetch attachment bytes. Download is a capability model — a valid session
+   * plus the unguessable id is sufficient; there is no per-attachment ACL.
    */
   public async fetchAttachment(opts: {
     id: string;
-    chatId?: string;
   }): Promise<{ bytes: Buffer; mimeType: string; filename: string; size: number }> {
-    const qs = opts.chatId ? `?chatId=${encodeURIComponent(opts.chatId)}` : "";
-    const response = await this.doFetch(`/api/v1/attachments/${encodeURIComponent(opts.id)}${qs}`);
+    const response = await this.doFetch(`/api/v1/attachments/${encodeURIComponent(opts.id)}`);
     if (!response.ok) {
       throw await this.toSdkError(response);
     }

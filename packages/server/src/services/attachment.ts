@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
 import { attachments } from "../db/schema/attachments.js";
-import { members } from "../db/schema/members.js";
 import { BadRequestError } from "../errors.js";
 
 /**
@@ -13,14 +11,14 @@ import { BadRequestError } from "../errors.js";
  * - `createAttachment` writes a row, returns the inserted record.
  * - `loadAttachmentMeta` looks up by id WITHOUT the `bytea` payload; returns
  *   `null` on miss so the route layer can emit a 404 cleanly. The download
- *   route runs auth + ETag off the metadata so a cache hit (304) never pulls
- *   the blob out of PG.
+ *   route runs the ETag check off the metadata so a cache hit (304) never
+ *   pulls the blob out of PG.
  * - `loadAttachmentData` fetches just the `bytea` payload, called only once
  *   the route has decided to actually stream bytes.
- * - `isCallerUploaderOrManager` is the first auth gate for downloads. The
- *   second gate (`?chatId=...` -> chat membership) lives in the route
- *   layer where `requireChatAccess` already knows how to throw a clean
- *   404 / 403 split.
+ *
+ * Download authorization is a capability model handled at the route layer:
+ * a valid user JWT plus knowledge of the unguessable id. The service holds no
+ * ACL logic.
  *
  * Service throws `BadRequestError` for input validation (oversize / empty
  * bytes / blank mime). Route layer maps service exceptions to HTTP.
@@ -95,30 +93,4 @@ export async function loadAttachmentMeta(db: Database, id: string): Promise<Atta
 export async function loadAttachmentData(db: Database, id: string): Promise<Buffer | null> {
   const [row] = await db.select({ data: attachments.data }).from(attachments).where(eq(attachments.id, id)).limit(1);
   return row?.data ?? null;
-}
-
-/**
- * Returns true when the caller either uploaded the attachment themselves or
- * is the user who manages the agent that did. The route layer should call
- * this first; on `false` it falls through to the `?chatId` membership check.
- *
- * Implementation: a single `agents -> members` join keyed on
- * `agents.uuid = uploadedBy` resolves the uploader's owning user id. For a
- * direct match (`caller.humanAgentId === uploadedBy`) we skip the query.
- */
-export async function isCallerUploaderOrManager(
-  db: Database,
-  uploadedBy: string,
-  caller: { userId: string; humanAgentId: string },
-): Promise<boolean> {
-  if (caller.humanAgentId === uploadedBy) return true;
-
-  const [row] = await db
-    .select({ ownerUserId: members.userId })
-    .from(agents)
-    .innerJoin(members, eq(members.id, agents.managerId))
-    .where(eq(agents.uuid, uploadedBy))
-    .limit(1);
-
-  return row?.ownerUserId === caller.userId;
 }
