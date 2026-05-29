@@ -4,7 +4,7 @@
   "version": "0.2.3",
   "type": "module",
   "description": "First Tree shared schemas, types, and configuration (internal to the monorepo)",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/agent-team-foundation/first-tree.git",

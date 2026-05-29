@@ -38,7 +38,7 @@
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/agent-team-foundation/first-tree.git",

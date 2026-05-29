@@ -106,7 +106,7 @@ export function FilterPopover({
           <Settings size={14} strokeWidth={1.75} />
           <span>Filter</span>
           {activeCount > 0 && (
-            <span className="mono" style={{ color: "var(--accent)" }}>
+            <span className="mono" style={{ color: "var(--primary)" }}>
               {activeCount}
             </span>
           )}
@@ -126,7 +126,7 @@ export function FilterPopover({
                   type="button"
                   onClick={resetOrigin}
                   className="text-label cursor-pointer"
-                  style={{ background: "transparent", border: 0, padding: 0, color: "var(--accent)" }}
+                  style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
                 >
                   Reset
                 </button>
@@ -171,7 +171,7 @@ export function FilterPopover({
                 background: "transparent",
                 border: 0,
                 padding: "var(--sp-0_5) 0",
-                color: "var(--accent)",
+                color: "var(--primary)",
               }}
             >
               Reset all
@@ -223,9 +223,9 @@ function FilterCheckbox({ label, checked, onChange }: { label: string; checked: 
           width: 14,
           height: 14,
           borderRadius: 3,
-          border: `var(--hairline) solid ${checked ? "var(--accent)" : "var(--border)"}`,
-          background: checked ? "var(--accent)" : "transparent",
-          color: "var(--fg-on-vivid)",
+          border: `var(--hairline) solid ${checked ? "var(--primary)" : "var(--border)"}`,
+          background: checked ? "var(--primary)" : "transparent",
+          color: "var(--primary-on)",
         }}
       >
         {checked && <Check size={10} strokeWidth={3} />}

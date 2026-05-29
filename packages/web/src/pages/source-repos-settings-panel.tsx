@@ -158,7 +158,7 @@ function RepoRow({
             flexShrink: 0,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--surface-2)";
+            e.currentTarget.style.background = "var(--bg-hover)";
             e.currentTarget.style.color = "var(--fg)";
           }}
           onMouseLeave={(e) => {

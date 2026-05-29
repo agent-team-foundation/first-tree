@@ -59,6 +59,23 @@ const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat("en", { numeric: "auto" }
  *
  * @param iso ISO 8601 timestamp (server returns `lastSeenAt.toISOString()`).
  */
+/**
+ * Compact integer formatter used by the Team-page Usage column and the
+ * Agent-profile KPI block. Renders values as `1.24M / 845K / 12K / 800`.
+ * `Intl.NumberFormat("en", { notation: "compact" })` would say `1.2M` —
+ * we want one decimal in the millions/thousands tier so a 1.04M agent
+ * does not collapse to `1M` (operationally that hides a 4% delta).
+ *
+ * Returns `"—"` for null/undefined/NaN so callers don't have to branch.
+ */
+export function formatCompactCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(2).replace(/\.?0+$/, "")}K`;
+  return value.toLocaleString("en");
+}
+
 export function formatRelative(iso: string | null | undefined): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();

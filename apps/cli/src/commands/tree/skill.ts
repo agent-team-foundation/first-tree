@@ -4,9 +4,11 @@ import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
+  CORE_SKILL_NAMES,
   collectSkillDiagnosis,
   collectSkillStatus,
   copyCanonicalSkills,
+  copyCoreSkills,
   repairClaudeSkillLinks,
   SKILL_NAMES,
 } from "./skill-lib.js";
@@ -32,6 +34,12 @@ function runUpgradeSkillCommand(context: CommandContext): void {
   const targetRoot = readTargetRoot(context.command);
   copyCanonicalSkills(targetRoot);
   console.log(`Upgraded ${SKILL_NAMES.length} shipped first-tree skills in ${targetRoot}.`);
+}
+
+function runInstallCoreSkillCommand(context: CommandContext): void {
+  const targetRoot = readTargetRoot(context.command);
+  copyCoreSkills(targetRoot);
+  console.log(`Installed ${CORE_SKILL_NAMES.length} core first-tree skill(s) into ${targetRoot}.`);
 }
 
 function listStatusLabel(row: { installed: boolean; compatible: boolean | null }): string {
@@ -144,6 +152,15 @@ export const skillSubcommands: SubcommandModule[] = [
     summary: "",
     description: "Reinstall shipped first-tree skills from the current package.",
     action: runUpgradeSkillCommand,
+    configure: configureRootOption,
+  },
+  {
+    name: "install-core",
+    alias: "",
+    summary: "",
+    description:
+      "Install only the core first-tree skills (currently `attention`). Used by the client's per-session workspace bootstrap so on-disk skill payloads exist even for agents without a Context Tree binding.",
+    action: runInstallCoreSkillCommand,
     configure: configureRootOption,
   },
   {

@@ -189,7 +189,9 @@ export function BindingsPage() {
               {adapters.map((a) => (
                 <DenseTableRow key={a.id} interactive onClick={() => navigate(`/agents/${a.agentId}`)}>
                   <DenseTableCell>
-                    <span className="mono font-medium">{resolveAgentName(a.agentId)}</span>
+                    <span className="mono font-medium" style={{ color: "var(--primary)" }}>
+                      {resolveAgentName(a.agentId)}
+                    </span>
                   </DenseTableCell>
                   <DenseTableCell>
                     <DenseBadge>{humanizePlatform(a.platform)}</DenseBadge>

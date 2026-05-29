@@ -11,6 +11,7 @@ import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
 import { SetupTab } from "./pages/agent-detail/setup-tab.js";
 import { ToolsTab } from "./pages/agent-detail/tools-tab.js";
+import { UsageTab } from "./pages/agent-detail/usage-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
@@ -48,6 +49,13 @@ const ChatRowAvatarPreviewPage = import.meta.env.DEV
 const OnboardingPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
   : null;
+
+// Living design-system reference (companion to DESIGN.md). Unlike the previews
+// above this ships in prod too, so it can be opened on a deployed URL — it has
+// no auth-gated data, only tokens and `components/ui` primitives.
+const StyleguidePreviewPage = lazy(() =>
+  import("./pages/styleguide-preview.js").then((module) => ({ default: module.StyleguidePreviewPage })),
+);
 
 export function App() {
   return (
@@ -92,6 +100,14 @@ export function App() {
                   }
                 />
               ) : null}
+              <Route
+                path="/preview/styleguide"
+                element={
+                  <Suspense fallback={null}>
+                    <StyleguidePreviewPage />
+                  </Suspense>
+                }
+              />
               {/* Auth-required pages. Onboarding is a standalone full-screen
                 /onboarding route (below); the workspace root redirects users
                 who haven't finished setup into it. */}
@@ -112,6 +128,7 @@ export function App() {
                   <Route path="agents/:uuid" element={<AgentDetailPage />}>
                     <Route index element={<Navigate to="profile" replace />} />
                     <Route path="profile" element={<ProfileTab />} />
+                    <Route path="usage" element={<UsageTab />} />
                     <Route path="setup" element={<SetupTab />} />
                     <Route path="prompt" element={<PromptTab />} />
                     <Route path="tools" element={<ToolsTab />} />

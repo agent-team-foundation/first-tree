@@ -888,7 +888,7 @@ export function OnboardingPreviewPage() {
                     borderRadius: "var(--radius-input)",
                     border: 0,
                     cursor: "pointer",
-                    background: on ? "color-mix(in oklch, var(--accent) 12%, transparent)" : "transparent",
+                    background: on ? "color-mix(in oklch, var(--primary) 12%, transparent)" : "transparent",
                     color: on ? "var(--fg)" : "var(--fg-2)",
                     fontWeight: on ? 600 : 400,
                   }}

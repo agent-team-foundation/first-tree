@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
 import { readSourceBindingContract } from "./binding-contract.js";
@@ -53,6 +54,7 @@ function upgradeSourceRoot(targetRoot: string, bundledSkillVersion: string): Upg
   ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
   upsertSourceIntegrationFiles(targetRoot, sourceBinding.treeRepoName, {
+    binName: channelConfig.binName,
     bindingMode: sourceBinding.bindingMode,
     entrypoint: sourceBinding.entrypoint,
     treeMode: sourceBinding.treeMode,

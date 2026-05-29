@@ -59,7 +59,26 @@ describe("ChildProcessRegistry", () => {
     const registry = getChildProcessRegistry();
     // `node` subprocess that traps SIGTERM and stays alive — we use a small
     // inline script so the test does not need extra fixtures.
-    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000);"]);
+    const child = spawn(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); process.stdout.write('ready\\n'); setTimeout(() => {}, 60000);"],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const stdout = child.stdout;
+    if (!stdout) throw new Error("child stdout unavailable");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("child did not become ready")), 5_000);
+      const onError = (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      };
+      stdout.once("data", () => {
+        clearTimeout(timer);
+        child.off("error", onError);
+        resolve();
+      });
+      child.once("error", onError);
+    });
     const record = registry.adopt(child, {
       category: "other",
       label: "ignore-sigterm",

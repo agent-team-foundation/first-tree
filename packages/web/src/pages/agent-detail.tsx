@@ -52,8 +52,14 @@ const SECTION_TO_TAB: Record<DraftSectionName, string> = {
 
 type TabDef = { key: string; label: string; path: string };
 
-function buildTabs(canEditConfig: boolean): TabDef[] {
+function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
   const tabs: TabDef[] = [{ key: "profile", label: "Profile", path: "profile" }];
+  // Usage tab is visible to any org member for any non-human agent — token
+  // usage is the team's social currency, deliberately public within the org.
+  // Human-type agents have no token usage to show.
+  if (!isHuman) {
+    tabs.push({ key: "usage", label: "Usage", path: "usage" });
+  }
   if (canEditConfig) {
     tabs.push(
       { key: "setup", label: "Setup", path: "setup" },
@@ -62,9 +68,6 @@ function buildTabs(canEditConfig: boolean): TabDef[] {
       { key: "resources", label: "Resources", path: "resources" },
     );
   }
-  // Human agents have no runtime to configure. Danger zone (suspend / delete)
-  // lives on the Profile tab, so they don't need a Setup tab entry either —
-  // it would render blank without any rows to show.
   return tabs;
 }
 
@@ -288,7 +291,7 @@ export function AgentDetailPage() {
     return set;
   }, [draft.summary.dirtySections]);
 
-  const tabs = useMemo(() => buildTabs(canEditConfig), [canEditConfig]);
+  const tabs = useMemo(() => buildTabs(canEditConfig, isHumanLocal), [canEditConfig, isHumanLocal]);
   const currentTabKey = useMemo(() => {
     const segments = location.pathname.split("/");
     const last = segments[segments.length - 1] ?? "";
@@ -681,16 +684,15 @@ function TabsNav({
               aria-selected={active}
               onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
               className={cn(
-                "bg-transparent border-0 cursor-pointer transition-colors",
+                "bg-transparent border-0 cursor-pointer transition-colors text-body",
                 "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 !active && "hover:bg-accent",
               )}
               style={{
                 padding: "var(--sp-2_5) var(--sp-3)",
-                borderBottom: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
+                borderBottom: `var(--hairline-bold) solid ${active ? "var(--primary)" : "transparent"}`,
                 color: active ? "var(--fg)" : "var(--fg-3)",
                 fontWeight: active ? 500 : 400,
-                fontSize: "var(--text-body-size)",
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "var(--sp-1_5)",
@@ -807,7 +809,7 @@ function BindClientList({
               className={cn("w-full text-left flex items-center gap-3")}
               style={{
                 padding: "var(--sp-2) var(--sp-3)",
-                background: picked ? "var(--accent-bg)" : "transparent",
+                background: picked ? "var(--bg-active)" : "transparent",
                 border: "none",
                 cursor: "pointer",
               }}

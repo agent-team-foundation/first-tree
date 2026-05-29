@@ -31,10 +31,12 @@ export const TONE_STYLES: Record<Tone, ToneStyle> = {
     fg: "var(--fg-2)",
     bd: "var(--border)",
   },
+  // Brand-green tone (the "accent" name is kept for call-site compatibility;
+  // it maps to the brand signature color, used for shared/active status badges).
   accent: {
-    bg: "var(--accent-bg)",
-    fg: "var(--accent-dim)",
-    bd: "color-mix(in oklch, var(--accent) 30%, transparent)",
+    bg: "var(--brand-bg)",
+    fg: "var(--brand-dim)",
+    bd: "color-mix(in oklch, var(--brand) 30%, transparent)",
   },
   warn: {
     bg: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",

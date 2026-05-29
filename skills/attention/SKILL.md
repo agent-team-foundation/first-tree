@@ -68,6 +68,43 @@ Mapping to schema:
 - Endorse / Supply / Direction → `--requires-response` (request)
 - Inform → omit the flag (notification, auto-closes on creation)
 
+## Concrete triggers
+
+The lenses tell you what to think about; the lists below tell you what to actually do. Each enumerates the cases you should default to raising, plus the cases you should default to not raising. When something is borderline, fall back to the lens and the five principles below.
+
+These are the **skill baseline** — the conservative, broadly-applicable defaults. Organisations and individual members can tighten or loosen them via their own CLAUDE.md / member spec when their workflow demands it. Read those layers in addition to this skill before deciding.
+
+### Default to **ask** (`--requires-response`) before any of:
+
+- **Shared-state code change where the decision itself is uncertain** — committing work the human did not explicitly request, opening a PR with non-obvious trade-offs, merging or releasing without recent endorsement. Routine commits and PRs that execute work the human already asked for go through chat, not attention.
+- **Mutating live or shared data** — DB writes, prod config edits, deleting or renaming shared resources, `force push`, schema migrations.
+- **External side effects** — deploy, calling external APIs that bill / page / message someone, broadcast messages, cross-org invites.
+- **Multi-option call where the difference is taste / priority / scope** (Direction lens) — reviewer left N follow-ups and only some should land, choosing between equally-correct designs, picking which bug to fix first.
+- **Missing fact that only a human owns** (Supply lens) — credentials, IDs, thresholds, undocumented product intent.
+- **Guardrail or blocker fires and self-recovery is unsafe** — escalation.
+
+### Default to **notify** (no `--requires-response`) immediately after any of:
+
+- **Long-running task completed while the human was unattended** (> ~2 minutes wall clock) — build, benchmark, batch QA, large refactor.
+- **Irreversible action that just landed** — deploy succeeded, PR merged, rollback fired, migration applied.
+- **Incident detected and already self-mitigated** by the agent — the human still needs to know it happened.
+- **External event observed** that changes context for next decisions — CI result, scheduled job fired, daemon restarted.
+- **Cross-chat impact** — something happened in another chat that the target human should know about.
+
+### Default to **plain chat** (no attention) for:
+
+- Progress narration, findings, FYI acks.
+- Trivial decisions with reversible outcomes (`userId` vs `uid`, error message wording).
+- Answering a question the human asked — even if it took work to compute. The ask was the chat message; the answer is the chat message.
+- Coordinating with another agent in the chat.
+- Anything you can derive from the Tree, configs, chat history, or code.
+
+### Before you raise — three-question self-check
+
+1. **What happens if you just do this and it fails?** If the rollback cost is lower than the cost of spending the human's attention budget, do not raise — decide and report.
+2. **What is your fallback if the human never answers?** If you cannot articulate one, you have not framed the decision yet. Frame it before raising.
+3. **Is this already obvious from the chat scroll?** If yes, a notify adds noise. A chat message is enough.
+
 ## Five principles
 
 1. **Attention is scarce.** Every NHA you fire spends a human's focus budget. Don't fan them out liberally. When in doubt, decide yourself and write what you decided into the chat — the human can correct you in plain text without an NHA.
@@ -78,7 +115,11 @@ Mapping to schema:
 
 ## How to write a good NHA body
 
-The body is markdown. Use four implicit sections — question, background, what-I'll-do, validity scope:
+The body is markdown. Ask and notify have different shapes — pick the right one.
+
+### Ask body (requires-response)
+
+Four implicit sections — question, background, what-I'll-do, validity scope:
 
 ```markdown
 ## Question
@@ -98,15 +139,39 @@ Should we deploy commit abc123 to prod?
 This commit hash only. Not "any similar deploy from now on".
 ```
 
-Then mirror the load-bearing parts into `metadata` so the UI can render them as first-class affordances:
+Mirror the load-bearing parts into `metadata` so the UI can render them as first-class affordances:
 
 - `metadata.timeoutHint` — "4h"
 - `metadata.fallback` — "skip this commit, escalate to oncall"
 - `metadata.validityScope` — "single commit hash abc123"
-- `metadata.tags` — `["endorse", "deploy"]`
+- `metadata.tags` — `["endorse", "deploy"]` (also `supply`, `direction` as appropriate)
 - `metadata.options` — structured single/multi choice the human can click (see `references/metadata-shape.md`)
 
 You can also write `metadata.questions[]` for a single NHA that asks several linked sub-questions at once. The UI renders each question; populate `questions[]` whenever you have multiple related sub-decisions for the same human, but always write a coherent prose body too.
+
+### Notify body (no requires-response)
+
+Three implicit sections — what happened, why it matters, where to look. Past tense; no question, no fallback, no validity scope. Keep it short — the goal is one screen of context.
+
+```markdown
+## What happened
+Deployed commit abc123 to prod at 14:02. Health checks green; rollout took 6 min.
+
+## Why you might care
+- This includes the auth-middleware swap you reviewed on Tuesday
+- Watch the next 30 min for any session-related reports
+- No action needed unless you see regressions
+
+## Where to look
+- PR #1421
+- Grafana: dashboards/api-latency
+- Deploy log: ops/deploys/abc123.log
+```
+
+Mirror only the relevant metadata — notifications do not carry decision affordances:
+
+- `metadata.tags` — `["notify", "deploy"]` (or `incident`, `merged`, `task-done`, etc.)
+- Do not set `timeoutHint` / `fallback` / `options` / `questions` on a notify; they have no semantics there.
 
 ## CLI reference
 
@@ -126,7 +191,7 @@ first-tree attention raise \
   --meta-json @options.json
 ```
 
-`--meta key=value` writes a single metadata field; `--meta-json @file.json` merges a JSON object into metadata (this is how you pass `options` / `questions`). Pass body via stdin or `@file.md` for multi-line markdown — never inline-escape newlines.
+`--meta key=value` writes a single metadata field; `--meta-json @file.json` merges a JSON object into metadata (this is how you pass `options` / `questions`). For multi-line markdown body, prefer `--body @-` with the content piped on stdin (or `--body @path/to/file.md` to load from disk) — never inline-escape newlines. Stdin is capped at 5 MB.
 
 If the target is not yet a member of `--chat`, the server rejects the raise with a 409. Run `first-tree chat invite <human>` first, then raise. This is deliberate — NHA must not be a back-door for pulling people into chats.
 
@@ -173,9 +238,11 @@ The human side (`first-tree attention respond <id> --text "..."`) is theirs to d
 
 ### How to wait for the response
 
-The runtime does **not** yet wake your session on `attention:responded`. To resume after a human reply, **poll `attention show <id>` periodically** (or `attention list --raised-by-me --state closed` if you're checking a batch). Recommended cadence: every 30-60s for the first 10 minutes, then back off. Don't tight-loop — and don't `sleep 4h` either; if you're idle that long, exit the turn and let the next session check.
+**Do not poll.** When the target replies via `attention respond`, the server echoes the response as a normal chat message into `origin_chat_id` (see `packages/server/src/services/attention.ts`). That chat message wakes you the same way any other message does — your next turn re-enters with the reply visible in chat history. Raise the NHA, finish whatever you can do without the answer, then end the turn. Don't `sleep` and don't loop `attention show <id>`.
 
-If you absolutely need a sync wait without burning a session, your handler can `exit` and rely on the next external wake (next chat message, scheduled run, etc.) to re-enter and check.
+If your turn ends with an open NHA outstanding, your next wake is the human's reply (or any other message in the chat); call `attention show <id>` once at that point to confirm `state=closed` and read the canonical `response` field before acting on it.
+
+**Echo-failure fallback.** The chat echo is best-effort: the server wraps the `sendMessage` in try/catch so a failed echo never blocks the response from being recorded. If the echo fails (server log: "attention response posted but chat-echo message failed"), the attention is still `closed` and the canonical answer still lives on `attentions.response` — but you will not be woken by a chat message. If a chat stays unusually quiet for longer than the task's natural cadence after you raised the ask, run `attention show <id>` once on your next wake (whatever wakes you — a different message, a scheduled run, anything) to check `state` directly; do not let this fallback turn back into a polling loop.
 
 ## When NOT to raise an NHA
 
@@ -199,3 +266,20 @@ This keeps the schema honest — each NHA is one question with one outcome, and 
 - `examples/direct-route-decision.md` — request routing a decision that's not the agent's call (escalation, customer-facing trade-off).
 - `examples/multi-question-launch.md` — one NHA carrying multiple related decisions via `metadata.questions[]` (atomic submission).
 - `references/metadata-shape.md` — terse spec of `metadata.options` and `metadata.questions` for when you want the human to click instead of type.
+
+## Quick lookup
+
+| What I'm about to do | Channel |
+|---|---|
+| Report results / findings the human asked for | chat |
+| Commit / push / open a PR for work the human asked for | chat |
+| Commit / push / open a PR where the call is yours and not obviously right | ask |
+| Merge to main, release, tag | ask |
+| PR merged, deploy succeeded, migration applied | notify |
+| Reviewer left N suggestions, only some should land | ask (with `options[]`) |
+| Pick between `userId` / `uid` style names | chat (decide, mention it) |
+| Need a credential, threshold, or undocumented intent | ask |
+| Long task finished while the human was away | notify |
+| Daemon self-restarted, incident self-mitigated | notify |
+| Handled a PR comment in another chat on the human's behalf | notify (in the human's main chat) |
+| "Are you there?" with no concrete decision attached | neither |

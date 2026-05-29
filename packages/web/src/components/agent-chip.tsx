@@ -22,7 +22,7 @@ import { cn } from "../lib/utils.js";
 /**
  * Tone preset controlling how the chip blends with the surrounding cell.
  *   - `neutral` (default): display name in `--fg`, `@name` in `--fg-3`.
- *   - `accent`: both halves render in `--accent-dim`, matching the
+ *   - `accent`: both halves render in `--brand-dim`, matching the
  *     delegate-column affordance the list tables used before <AgentChip>
  *     existed. Use when the chip should "pop" as a cross-reference.
  */
@@ -69,8 +69,8 @@ export function AgentChip({
   const computedTitle =
     title ?? (hasName && hasDisplay ? `${displayName} (@${name})` : hasDisplay ? displayName : `@${name}`);
 
-  const primaryColor = tone === "accent" ? "var(--accent-dim)" : undefined;
-  const slugColor = tone === "accent" ? "var(--accent-dim)" : "var(--fg-3)";
+  const primaryColor = tone === "accent" ? "var(--brand-dim)" : undefined;
+  const slugColor = tone === "accent" ? "var(--brand-dim)" : "var(--fg-3)";
 
   if (variant === "stacked") {
     return (

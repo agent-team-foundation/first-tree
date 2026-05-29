@@ -619,6 +619,24 @@ export {
   statsSchema,
 } from "./schemas/stats.js";
 export {
+  type UsageAgentSummary,
+  type UsageByAgentResponse,
+  type UsageByAgentRow,
+  type UsageDailyBucket,
+  type UsageTurnRow,
+  type UsageTurnsQuery,
+  type UsageTurnsResponse,
+  type UsageWindowQuery,
+  usageAgentSummary,
+  usageByAgentResponse,
+  usageByAgentRow,
+  usageDailyBucket,
+  usageTurnRow,
+  usageTurnsQuery,
+  usageTurnsResponse,
+  usageWindowQuery,
+} from "./schemas/usage.js";
+export {
   type CreateUser,
   createUserSchema,
   type UpdateUser,

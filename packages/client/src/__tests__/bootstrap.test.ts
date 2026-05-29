@@ -10,6 +10,7 @@ import {
   type ContextTreeBinding,
   deepEqualIdentity,
   type InstallFirstTreeIntegrationExec,
+  installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
   readCachedContextTreeHead,
@@ -756,6 +757,105 @@ describe("installFirstTreeIntegration", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe("first-tree-dev");
     expect(logs.join("\n")).not.toContain("npx");
+  });
+});
+
+describe("installCoreSkills", () => {
+  it("shells out to `first-tree tree skill install-core --root <workspace>`", () => {
+    const workspace = join(tmpBase, "core-skills-happy");
+    mkdirSync(workspace, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec();
+    const logs: string[] = [];
+
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("first-tree");
+    expect(calls[0]?.args).toEqual(["tree", "skill", "install-core", "--root", workspace]);
+    expect(calls[0]?.options.cwd).toBe(workspace);
+    expect(logs.join("\n")).toContain("Core skills installed via first-tree (PATH)");
+  });
+
+  it("falls back to npx when the channel binary is missing", () => {
+    const workspace = join(tmpBase, "core-skills-fallback");
+    mkdirSync(workspace, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        const err = new Error("spawn first-tree ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.command).toBe("npx");
+    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
+    expect(calls[1]?.args.slice(3)).toEqual(["skill", "install-core", "--root", workspace]);
+  });
+
+  it("uses the channel-resolved binary name", () => {
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    try {
+      const workspace = join(tmpBase, "core-skills-staging");
+      mkdirSync(workspace, { recursive: true });
+
+      const { exec, calls } = makeRecordingExec();
+      const result = installCoreSkills({
+        workspacePath: workspace,
+        log: () => {},
+        exec,
+      });
+
+      expect(result).toBe(true);
+      expect(calls[0]?.command).toBe("first-tree-staging");
+      expect(calls[0]?.args).toContain("install-core");
+    } finally {
+      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    }
+  });
+
+  it("returns false and logs gracefully when the binary itself is missing on dev channel (no npx fallback)", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    try {
+      const workspace = join(tmpBase, "core-skills-dev-miss");
+      mkdirSync(workspace, { recursive: true });
+
+      const { exec } = makeRecordingExec(() => {
+        const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      });
+
+      const logs: string[] = [];
+      const result = installCoreSkills({
+        workspacePath: workspace,
+        log: (m) => logs.push(m),
+        exec,
+      });
+
+      expect(result).toBe(false);
+      expect(logs.join("\n")).toContain("Core skill install skipped");
+      expect(logs.join("\n")).not.toContain("npx");
+    } finally {
+      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    }
   });
 });
 

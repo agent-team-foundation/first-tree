@@ -450,7 +450,7 @@ export function NewChatDraft({
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden relative" style={{ background: "var(--bg-base)" }}>
+    <div className="flex-1 flex flex-col overflow-hidden relative" style={{ background: "var(--bg)" }}>
       {/* Narrow-viewport summon: parallels the hamburger in chat-view's
           header. Anchored absolutely so we don't disturb the existing
           centred composer layout. */}
@@ -673,7 +673,7 @@ export function NewChatDraft({
               </span>
               <span className="flex items-center" style={{ gap: 8 }}>
                 {sending && pendingImages.length > 0 && (
-                  <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                  <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                     uploading…
                   </span>
                 )}
@@ -890,7 +890,7 @@ function ParticipantChips({
           <div
             role="listbox"
             aria-label="Add participant"
-            className="absolute z-20 flex flex-col rounded-md border shadow-lg"
+            className="absolute z-20 flex flex-col rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]"
             style={{
               top: "calc(100% + var(--sp-1))",
               left: 0,

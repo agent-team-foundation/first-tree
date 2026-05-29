@@ -116,7 +116,7 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
             Open a terminal on your computer and run this command. It installs the First Tree CLI, signs your computer
             in, and keeps it online in the background.
           </p>
-          <div className="flex items-start gap-2 rounded-md border border-border bg-muted p-3">
+          <div className="flex items-start gap-2 rounded-[var(--radius-panel)] border border-border bg-muted p-3">
             <code className="flex-1 text-caption font-mono break-all select-all">
               {command || "Generating command…"}
             </code>

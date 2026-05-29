@@ -578,6 +578,34 @@ export type InstallFirstTreeIntegrationOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
+export type InstallCoreSkillsOptions = {
+  workspacePath: string;
+  log: (msg: string) => void;
+  /**
+   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
+   * ESM-module spying limitations.
+   */
+  exec?: InstallFirstTreeIntegrationExec;
+};
+
+/**
+ * Test-mode override for `defaultInstallExec`. Set via {@link __setTestInstallExec}
+ * from `vitest.setup.ts` to a no-op so handler-level tests that go through
+ * `handler.start()` do not actually shell out to the channel binary or `npx`
+ * for `installCoreSkills` / `installFirstTreeIntegration`. Production leaves
+ * this `null` and `defaultInstallExec` runs `execFileSync` normally.
+ */
+let testInstallExecOverride: InstallFirstTreeIntegrationExec | null = null;
+
+/**
+ * Install (or clear) a global test override for the install-exec backend.
+ * Only call this from test setup files — the override is process-wide and
+ * persists until cleared with `null`.
+ */
+export function __setTestInstallExec(exec: InstallFirstTreeIntegrationExec | null): void {
+  testInstallExecOverride = exec;
+}
+
 // Kept synchronous (cf. the `execFileAsync` migration in this file): runs on
 // the per-session bootstrap path inside the handler, not the per-agent-bind
 // boot hot path, so even if `npx -y <package>@latest` stalls (cold download
@@ -585,6 +613,10 @@ export type InstallFirstTreeIntegrationOptions = {
 // `syncContextTreeRepo` did. Re-evaluate if `installFirstTreeIntegration` is
 // ever moved to a code path that runs N times in parallel at process start.
 function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
+  if (testInstallExecOverride) {
+    testInstallExecOverride(command, args, options);
+    return;
+  }
   execFileSync(command, args, {
     cwd: options.cwd,
     stdio: "pipe",
@@ -674,6 +706,71 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
         continue;
       }
       log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
+      return false;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Install the **core** (Context-Tree-independent) first-tree skill payloads
+ * — currently just `attention` — into the workspace by shelling out to
+ * `<bin> tree skill install-core`. Called unconditionally by every session
+ * bootstrap so the slimmed `tools.md` pointer at `attention/SKILL.md`
+ * resolves on disk even for agents without a Context Tree binding.
+ *
+ * Tree-bound agents will also receive `attention` via the subsequent
+ * `installFirstTreeIntegration` → `copyCanonicalSkills` flow; the duplicate
+ * copy is idempotent (cp -r overwrite) and the two paths are kept
+ * independently robust so a failure in one does not silently weaken the
+ * other.
+ *
+ * Resolution and degradation match `installFirstTreeIntegration`: try the
+ * channel-resolved binary on PATH, fall back to `npx -y <pkg>@latest` when
+ * a published package exists, log + return false on terminal failure.
+ */
+export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
+  const { workspacePath, log } = options;
+  const exec = options.exec ?? defaultInstallExec;
+  const { binName, packageName } = getCliBinding();
+
+  const args = ["tree", "skill", "install-core", "--root", workspacePath];
+
+  const attempts: Array<{ command: string; args: string[]; label: string }> = [
+    { command: binName, args, label: `${binName} (PATH)` },
+    ...(packageName
+      ? [
+          {
+            command: "npx",
+            args: ["-y", `${packageName}@latest`, ...args],
+            label: `npx ${packageName}@latest`,
+          },
+        ]
+      : []),
+  ];
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    if (!attempt) continue;
+    try {
+      exec(attempt.command, attempt.args, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+      log(`Core skills installed via ${attempt.label}`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
+      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
+      const shouldRetry = binaryMissing || unsupportedByThisCli;
+      const isLastAttempt = index === attempts.length - 1;
+      if (shouldRetry && !isLastAttempt) {
+        log(`Core skill install via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
+        continue;
+      }
+      log(`Core skill install skipped (${attempt.label}): ${msg.slice(0, 200)}`);
       return false;
     }
   }
@@ -950,51 +1047,6 @@ this command.
 
 ## When You Need a Human (Need-Human-Attention)
 
-**Hard rule:** if you need a human to decide, endorse, clarify, or just know —
-use the **Need-Human-Attention (NHA)** primitive, NOT a plain \`chat send\` that
-asks "could you confirm…" / "please decide…". NHA gives the ask a target, a
-state machine, a typed response slot, and a UI surface the human cannot miss.
-A plain chat send asking for a decision is easy to lose in the scroll and
-gives your turn no clean place to resume.
-
-\`\`\`bash
-# Ask (expects a reply) — your turn resumes when the human responds.
-${bin} attention raise \\
-  --chat <chat-id-of-this-conversation> \\
-  --target <human-agent-name> \\
-  --subject "<one-line summary>" \\
-  --body "<context, options, what you'll do on each path>" \\
-  --requires-response
-
-# Notify (fire-and-forget) — closes on creation, no response slot.
-${bin} attention raise --chat <id> --target <name> \\
-  --subject "deployed v1.4.2" --body "..."
-\`\`\`
-
-**Trigger checklist — use NHA, not \`chat send\`, when any of:**
-
-- You're about to ask a human to **decide**, **approve**, **endorse**, or
-  **clarify ambiguous intent** before you can continue.
-- You need to **escalate** because a guardrail / blocker fires (cannot
-  self-resolve safely).
-- You need to **inform** a human of a state change that affects them
-  (deploy done, PR merged, incident detected) — use \`--requires-response\`
-  off for the notification variant.
-
-**When \`chat send\` is still correct:**
-
-- Coordinating with another **agent** in the chat.
-- Narrative / progress updates that don't need any action.
-- Sending the actual answer / result the human asked for (NHA is for the
-  *ask*; the *delivery* is normal chat).
-
-**Skill reference:** read \`.claude/skills/attention/SKILL.md\` (or
-\`.agents/skills/attention/SKILL.md\`) for the full playbook — body
-template, waiting behaviour, no-response handling, and the four lenses
-(Endorse / Information / Direction / Inform).
-
-## Source Repos
-
-For development tasks, prefer the repo worktrees already present in this workspace.
+Use \`${bin} attention raise --requires-response\` before any irreversible or externally-visible action that needs the human's go-ahead (ask), use \`${bin} attention raise\` without the flag right after such an action completes while the human is not watching (notify), and use plain \`chat send\` for everything else — full trigger lists, body templates, and waiting behaviour live in the attention skill (\`.claude/skills/attention/SKILL.md\` or \`.agents/skills/attention/SKILL.md\`).
 `;
 }

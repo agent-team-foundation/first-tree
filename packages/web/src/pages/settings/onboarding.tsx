@@ -87,7 +87,7 @@ function ActiveBadge() {
       className="text-label inline-flex items-center"
       style={{
         gap: "var(--sp-1)",
-        color: "color-mix(in oklch, var(--accent) 35%, var(--fg))",
+        color: "color-mix(in oklch, var(--primary) 35%, var(--fg))",
       }}
     >
       <Check className="h-3 w-3" />

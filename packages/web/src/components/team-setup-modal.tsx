@@ -90,7 +90,9 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form className="space-y-3" onSubmit={submit}>
-      {error && <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>}
+      {error && (
+        <div className="rounded-[var(--radius-panel)] bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+      )}
       <Input
         id="team-display-name"
         aria-label="Team name"
@@ -144,7 +146,9 @@ function JoinForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form className="space-y-3" onSubmit={submit}>
-      {error && <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>}
+      {error && (
+        <div className="rounded-[var(--radius-panel)] bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+      )}
       <Input
         id="join-token"
         aria-label="Invite token or full URL"

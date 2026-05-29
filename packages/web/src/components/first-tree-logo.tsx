@@ -6,7 +6,7 @@ import type { SVGProps } from "react";
  * Native aspect ratio is 9:10 (viewBox 0 0 9 10). Pass matching `width` and
  * `height` (e.g. 9×10, 14×16, 18×20) to avoid distortion. `shape-rendering`
  * keeps the pixel rectangles crisp at any size; `currentColor` lets callers
- * drive the color via the surrounding `color` / `--fg` / `--accent`.
+ * drive the color via the surrounding `color` / `--fg` / `--brand`.
  */
 export function FirstTreeLogo(props: SVGProps<SVGSVGElement>) {
   return (

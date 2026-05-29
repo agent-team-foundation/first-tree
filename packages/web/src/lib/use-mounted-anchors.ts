@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 /**
  * Which `data-*-agent` attribute carries each status's timeline anchor.
  * Mirrors the anchors emitted by chat-view (question card / ErrorRow /
- * WorkingBubble) — see `scrollToAgentTimeline`.
+ * WorkingTurn) — see `scrollToAgentTimeline`.
  */
 const ANCHOR_ATTR = {
   working: "data-working-agent",

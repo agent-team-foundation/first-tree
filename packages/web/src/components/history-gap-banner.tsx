@@ -20,7 +20,7 @@ export function HistoryGapBanner() {
       style={{
         margin: "var(--sp-2) 0",
         gap: "var(--sp-2)",
-        color: "var(--fg-muted)",
+        color: "var(--fg-3)",
       }}
     >
       {/* Hairlines are decorative — hide from screen readers. The caption

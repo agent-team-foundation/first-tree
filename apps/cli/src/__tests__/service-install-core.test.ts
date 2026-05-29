@@ -1,0 +1,383 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { channelConfig } from "../core/channel.js";
+import {
+  collectProxyEnv,
+  getClientServiceStatus,
+  installClientService,
+  isServiceSupported,
+  isServiceUnitDriftDetected,
+  renderLaunchdWrapper,
+  renderPlist,
+  renderSystemdUnit,
+  resolveCliInvocation,
+  restartClientService,
+  startClientService,
+  stopClientService,
+  uninstallClientService,
+} from "../core/service-install.js";
+
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+const execFileSyncMock = vi.hoisted(() => vi.fn());
+const userInfoMock = vi.hoisted(() => vi.fn(() => ({ uid: 501, username: "gandy" })));
+const homedirMock = vi.hoisted(() => vi.fn(() => "/Users/gandy"));
+
+vi.mock("node:child_process", () => ({
+  spawnSync: spawnSyncMock,
+  execFileSync: execFileSyncMock,
+}));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: homedirMock,
+    userInfo: userInfoMock,
+  };
+});
+
+const originalPlatform = process.platform;
+const originalArgv = [...process.argv];
+const originalExecPath = process.execPath;
+const originalCwd = process.cwd;
+const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
+const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
+function setExecPath(value: string): void {
+  Object.defineProperty(process, "execPath", { configurable: true, value });
+}
+
+function tempHome(): string {
+  return join(tmpdir(), `ft-service-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
+let home: string;
+
+beforeEach(() => {
+  home = tempHome();
+  mkdirSync(home, { recursive: true });
+  process.env.FIRST_TREE_HOME = join(home, "ft-home");
+  process.env.XDG_CONFIG_HOME = join(home, "xdg");
+  process.argv = ["node", "/repo/dist/cli/index.mjs"];
+  setExecPath("/opt/node/bin/node");
+  process.cwd = () => "/repo";
+  execFileSyncMock.mockReset();
+  spawnSyncMock.mockReset();
+  homedirMock.mockReturnValue(home);
+  userInfoMock.mockReturnValue({ uid: 501, username: "gandy" });
+  setPlatform(originalPlatform);
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+  if (originalFirstTreeHome === undefined) delete process.env.FIRST_TREE_HOME;
+  else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  process.argv = [...originalArgv];
+  setExecPath(originalExecPath);
+  process.cwd = originalCwd;
+  setPlatform(originalPlatform);
+});
+
+describe("service install helpers", () => {
+  it("collects only non-empty proxy environment variables", () => {
+    expect(
+      collectProxyEnv({
+        HTTP_PROXY: "http://proxy.test",
+        HTTPS_PROXY: "",
+        no_proxy: "localhost,127.0.0.1",
+        OTHER: "ignored",
+      }),
+    ).toEqual({
+      HTTP_PROXY: "http://proxy.test",
+      no_proxy: "localhost,127.0.0.1",
+    });
+  });
+
+  it("resolves the channel bin when it is on PATH and falls back to node plus script", () => {
+    execFileSyncMock.mockReturnValueOnce(`/tmp/bin/${channelConfig.binName}\n`);
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: `/tmp/bin/${channelConfig.binName}` });
+
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
+    process.argv = ["node", "dist/cli/index.mjs"];
+    expect(resolveCliInvocation()).toEqual({
+      kind: "node",
+      program: "/opt/node/bin/node",
+      args: ["/repo/dist/cli/index.mjs"],
+    });
+  });
+
+  it("renders service templates with escaped values and quoted shell arguments", () => {
+    const plist = renderPlist("/tmp/First & Tree", { HTTP_PROXY: "http://a&b.test/<x>" });
+    expect(plist).toContain("<string>/tmp/First &amp; Tree</string>");
+    expect(plist).toContain("<key>HTTP_PROXY</key>");
+    expect(plist).toContain("<string>http://a&amp;b.test/&lt;x&gt;</string>");
+    expect(plist).toContain("<key>FIRST_TREE_HOME</key>");
+    expect(plist).toContain(process.env.FIRST_TREE_HOME);
+
+    const wrapper = renderLaunchdWrapper({
+      kind: "node",
+      program: "/opt/My Node/node",
+      args: ["/tmp/cli path/index.mjs"],
+    });
+    expect(wrapper).toContain('exec "/opt/My Node/node" "/tmp/cli path/index.mjs" daemon start --no-interactive');
+
+    const unit = renderSystemdUnit(
+      { kind: "bin", program: "/usr/local/bin/first tree" },
+      { HTTPS_PROXY: "http://user:pa ss@example.test" },
+    );
+    expect(unit).toContain('ExecStart="/usr/local/bin/first tree" daemon start --no-interactive');
+    expect(unit).toContain('Environment=HTTPS_PROXY="http://user:pa ss@example.test"');
+    expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
+  });
+
+  it("reports support by platform", () => {
+    setPlatform("darwin");
+    expect(isServiceSupported()).toBe(true);
+    setPlatform("linux");
+    expect(isServiceSupported()).toBe(true);
+    setPlatform("win32");
+    expect(isServiceSupported()).toBe(false);
+  });
+
+  it("reports launchd states without leaking launchctl stderr", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    writeFileSync(plistPath, "plist");
+
+    spawnSyncMock.mockReturnValueOnce({
+      status: 0,
+      stdout: "state = running\npid = 123\n",
+      stderr: "",
+    });
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "launchd",
+      state: "active",
+      pid: 123,
+      detail: "pid 123",
+    });
+
+    spawnSyncMock.mockReturnValueOnce({ status: 3, stdout: "", stderr: "Could not find service" });
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "launchd",
+      state: "inactive",
+      detail: "plist present but not loaded",
+    });
+  });
+
+  it("reports systemd states and main pid", () => {
+    setPlatform("linux");
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(unitPath, "unit");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "active\n", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "456\n", stderr: "" });
+
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "systemd",
+      state: "active",
+      pid: 456,
+      detail: "pid 456",
+    });
+
+    spawnSyncMock.mockReturnValueOnce({ status: 3, stdout: "inactive\n", stderr: "" });
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "systemd",
+      state: "inactive",
+      detail: "inactive",
+    });
+  });
+
+  it("detects service unit drift from missing and changed files", () => {
+    setPlatform("linux");
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    expect(isServiceUnitDriftDetected()).toBe(true);
+
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(unitPath, "stale");
+    expect(isServiceUnitDriftDetected()).toBe(true);
+
+    writeFileSync(
+      unitPath,
+      renderSystemdUnit({ kind: "node", program: process.execPath, args: [process.argv[1] ?? ""] }),
+    );
+    expect(isServiceUnitDriftDetected()).toBe(false);
+  });
+
+  it("starts, stops, and restarts services through the platform manager", () => {
+    setPlatform("linux");
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+    expect(startClientService()).toEqual({ ok: true });
+    expect(stopClientService()).toEqual({ ok: true });
+    expect(restartClientService()).toEqual({ ok: true });
+
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "Unit not found" });
+    expect(stopClientService()).toEqual({ ok: true, detail: "not running" });
+
+    setPlatform("win32");
+    expect(startClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
+    expect(stopClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
+    expect(restartClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
+  });
+
+  it("uses launchctl bootstrap and kickstart paths for launchd control", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    writeFileSync(plistPath, "plist");
+
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+    expect(startClientService()).toEqual({ ok: true });
+
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "loaded", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+    expect(startClientService()).toEqual({ ok: true });
+
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" });
+    expect(stopClientService()).toEqual({ ok: true, detail: "not running" });
+
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+    expect(restartClientService()).toEqual({ ok: true });
+  });
+
+  it("installs a systemd user service, enables linger, and reports the running process", () => {
+    setPlatform("linux");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "no\n", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "active\n", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "789\n", stderr: "" });
+
+    const info = installClientService();
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    const unit = readFileSync(unitPath, "utf-8");
+
+    expect(info).toMatchObject({
+      platform: "systemd",
+      label: channelConfig.serviceUnitFile,
+      state: "active",
+      pid: 789,
+      detail: "pid 789",
+      unitPath,
+    });
+    expect(existsSync(join(process.env.FIRST_TREE_HOME ?? "", "logs"))).toBe(true);
+    expect(unit).toContain(`${process.execPath} ${process.argv[1]} daemon start --no-interactive`);
+    expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["systemctl", ["--user", "daemon-reload"]],
+      ["loginctl", ["show-user", "gandy", "-p", "Linger", "--value"]],
+      ["loginctl", ["enable-linger", "gandy"]],
+      ["systemctl", ["--user", "enable", "--now", channelConfig.serviceUnitFile]],
+      ["systemctl", ["--user", "is-active", channelConfig.serviceUnitFile]],
+      ["systemctl", ["--user", "show", channelConfig.serviceUnitFile, "-p", "MainPID", "--value"]],
+    ]);
+  });
+
+  it("uninstalls a systemd service and reloads the user manager", () => {
+    setPlatform("linux");
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(unitPath, "stale");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "Unit not found" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    expect(uninstallClientService()).toMatchObject({
+      platform: "systemd",
+      label: channelConfig.serviceUnitFile,
+      state: "not-installed",
+      unitPath,
+    });
+    expect(existsSync(unitPath)).toBe(false);
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["systemctl", ["--user", "disable", "--now", channelConfig.serviceUnitFile]],
+      ["systemctl", ["--user", "daemon-reload"]],
+    ]);
+  });
+
+  it("installs launchd service files and tolerates an initially unloaded label", () => {
+    setPlatform("darwin");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "service not loaded" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "Could not find service" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "state = running\npid = 321\n", stderr: "" });
+
+    const info = installClientService();
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    const wrapperPath = join(process.env.FIRST_TREE_HOME ?? "", "service", channelConfig.displayName);
+
+    expect(info).toMatchObject({
+      platform: "launchd",
+      label: channelConfig.launchdLabel,
+      state: "active",
+      pid: 321,
+      detail: "pid 321",
+      unitPath: plistPath,
+    });
+    expect(readFileSync(wrapperPath, "utf-8")).toContain(
+      `exec ${process.execPath} ${process.argv[1]} daemon start --no-interactive`,
+    );
+    expect(readFileSync(plistPath, "utf-8")).toContain(`<string>${wrapperPath}</string>`);
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["launchctl", ["bootout", `gui/501/${channelConfig.launchdLabel}`]],
+      ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
+      ["launchctl", ["bootstrap", "gui/501", plistPath]],
+      ["launchctl", ["enable", `gui/501/${channelConfig.launchdLabel}`]],
+      ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
+    ]);
+  });
+
+  it("uninstalls launchd files even when bootout reports the label is absent", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    const wrapperPath = join(process.env.FIRST_TREE_HOME ?? "", "service", channelConfig.displayName);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    mkdirSync(dirname(wrapperPath), { recursive: true });
+    writeFileSync(plistPath, "plist");
+    writeFileSync(wrapperPath, "wrapper");
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "Could not find service" });
+
+    expect(uninstallClientService()).toMatchObject({
+      platform: "launchd",
+      label: channelConfig.launchdLabel,
+      state: "not-installed",
+      unitPath: plistPath,
+    });
+    expect(existsSync(plistPath)).toBe(false);
+    expect(existsSync(wrapperPath)).toBe(false);
+  });
+
+  it("returns unsupported status for uninstall and throws install errors on unsupported platforms", () => {
+    setPlatform("win32");
+    expect(() => installClientService()).toThrow("Background service install is not supported on win32");
+    expect(uninstallClientService()).toMatchObject({
+      platform: "unsupported",
+      label: "",
+      state: "not-installed",
+      detail: "platform win32 not supported",
+    });
+  });
+});
