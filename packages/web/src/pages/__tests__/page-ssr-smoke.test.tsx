@@ -714,7 +714,7 @@ function createClient(): QueryClient {
     [
       {
         id: 1,
-        platform: "feishu",
+        platform: "kael",
         agentId: "agent-1",
         status: "active",
         createdAt: NOW,
@@ -722,22 +722,6 @@ function createClient(): QueryClient {
       },
     ],
   );
-  queryClient.setQueryData(
-    ["adapter-mappings"],
-    [
-      {
-        id: 2,
-        platform: "feishu",
-        agentId: "agent-1",
-        externalUserId: "ou_1",
-        displayName: "Gandy Feishu",
-        boundVia: "manual",
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-    ],
-  );
-  queryClient.setQueryData(["adapter-statuses"], [{ configId: 1, connected: true, lastSeenAt: NOW }]);
   return queryClient;
 }
 

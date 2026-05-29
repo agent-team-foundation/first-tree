@@ -99,7 +99,7 @@ describe("isGithubSystemSenderMetadata", () => {
   });
 
   it("rejects other systemSender values and bare metadata", () => {
-    expect(isGithubSystemSenderMetadata({ systemSender: "feishu" })).toBe(false);
+    expect(isGithubSystemSenderMetadata({ systemSender: "other" })).toBe(false);
     expect(isGithubSystemSenderMetadata({ systemSender: "" })).toBe(false);
     expect(isGithubSystemSenderMetadata({ source: "github" })).toBe(false);
     expect(isGithubSystemSenderMetadata({})).toBe(false);
@@ -134,7 +134,7 @@ describe("isTrustedGithubDispatcherMessage", () => {
   });
 
   it("rejects when source is not 'github' (agent CLI / web / api send)", () => {
-    for (const source of ["api", "cli", "web", "feishu", null, undefined]) {
+    for (const source of ["api", "cli", "web", "other", null, undefined]) {
       expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, source })).toBe(false);
     }
   });
@@ -152,7 +152,7 @@ describe("isTrustedGithubDispatcherMessage", () => {
 
   it("rejects when the metadata marker is missing or wrong", () => {
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: {} })).toBe(false);
-    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: { systemSender: "feishu" } })).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: { systemSender: "other" } })).toBe(false);
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: null })).toBe(false);
   });
 });

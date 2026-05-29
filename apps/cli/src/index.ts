@@ -23,8 +23,6 @@ export {
   AttentionRespondError,
   AuthRefreshFailedError,
   AuthRefreshRateLimitedError,
-  bindFeishuBot,
-  bindFeishuUser,
   blank,
   ClientRuntime,
   cancelAttention,

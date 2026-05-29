@@ -1,7 +1,4 @@
-export { adapterAgentMappings } from "./adapter-agent-mappings.js";
-export { adapterChatMappings } from "./adapter-chat-mappings.js";
 export { adapterConfigs } from "./adapter-configs.js";
-export { adapterMessageReferences } from "./adapter-message-references.js";
 export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";

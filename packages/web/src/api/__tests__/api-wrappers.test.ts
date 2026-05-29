@@ -36,8 +36,6 @@ afterEach(() => {
 describe("api wrapper paths", () => {
   it("formats activity, adapter, org setting, organization, and overview requests", async () => {
     const activity = await import("../activity.js");
-    const adapterMappings = await import("../adapter-mappings.js");
-    const adapterStatus = await import("../adapter-status.js");
     const adapters = await import("../adapters.js");
     const contextTree = await import("../context-tree.js");
     const orgSettings = await import("../org-settings.js");
@@ -54,18 +52,9 @@ describe("api wrapper paths", () => {
     await activity.resetAgentActivity("agent/id");
     await activity.generateConnectToken();
 
-    await adapterMappings.listAdapterMappings();
-    await adapterMappings.createAdapterMapping({
-      platform: "feishu",
-      agentId: "agent-1",
-      externalUserId: "ou_1",
-      boundVia: "manual",
-    });
-    await adapterMappings.deleteAdapterMapping(7);
-    await adapterStatus.getAdapterStatuses();
     await adapters.listAdapters();
     await adapters.getAdapter(8);
-    await adapters.createAdapter({ platform: "feishu", agentId: "agent-1", credentials: {}, status: "active" });
+    await adapters.createAdapter({ platform: "kael", agentId: "agent-1", credentials: {}, status: "active" });
     await adapters.updateAdapter(9, { agentId: "agent-2" });
     await adapters.deleteAdapter(10);
 
@@ -88,13 +77,6 @@ describe("api wrapper paths", () => {
     expect(apiMock.post).toHaveBeenCalledWith("/clients/client-3/disconnect");
     expect(apiMock.post).toHaveBeenCalledWith("/agents/agent%2Fid/reset-activity");
     expect(apiMock.post).toHaveBeenCalledWith("/me/connect-tokens");
-    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/adapter-mappings", {
-      platform: "feishu",
-      agentId: "agent-1",
-      externalUserId: "ou_1",
-      boundVia: "manual",
-    });
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/adapters/status");
     expect(apiMock.patch).toHaveBeenCalledWith("/adapters/9", { agentId: "agent-2" });
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/snapshot?window=7d");
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {

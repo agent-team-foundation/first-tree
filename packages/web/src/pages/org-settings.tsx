@@ -18,9 +18,8 @@ import { TeamIdentityPanel } from "./team-identity-panel.js";
  * an empty form to a non-admin is more confusing than helpful.
  *
  * GitHub integration (webhook URL + secret) used to live here too, but
- * it's an external-platform bridge — same shape as Feishu / Slack
- * adapters — so it moved to `/settings/github`. This page is now pure
- * team metadata + internal binding.
+ * it's an external-platform bridge so it moved to `/settings/github`.
+ * This page is now pure team metadata + internal binding.
  *
  * Earlier versions of this page also exposed the global "System
  * configuration" panel (inbox_timeout / max_retry / polling_interval /

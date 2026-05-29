@@ -1,12 +1,10 @@
 import { z } from "zod";
 
 export const ADAPTER_PLATFORMS = {
-  FEISHU: "feishu",
-  SLACK: "slack",
   KAEL: "kael",
 } as const;
 
-export const adapterPlatformSchema = z.enum(["feishu", "slack", "kael"]);
+export const adapterPlatformSchema = z.enum(["kael"]);
 export type AdapterPlatform = z.infer<typeof adapterPlatformSchema>;
 
 export const ADAPTER_STATUSES = {
@@ -43,21 +41,3 @@ export const adapterConfigSchema = z.object({
   updatedAt: z.string(),
 });
 export type AdapterConfig = z.infer<typeof adapterConfigSchema>;
-
-export const ADAPTER_BIND_METHODS = {
-  CODE: "code",
-  REVERSE_TOKEN: "reverse_token",
-  OAUTH: "oauth",
-  MANUAL: "manual",
-} as const;
-
-export const adapterBindMethodSchema = z.enum(["code", "reverse_token", "oauth", "manual"]);
-export type AdapterBindMethod = z.infer<typeof adapterBindMethodSchema>;
-
-// -- Self-service Feishu bot binding --
-
-export const selfServiceFeishuBotSchema = z.object({
-  appId: z.string().min(1),
-  appSecret: z.string().min(1),
-});
-export type SelfServiceFeishuBot = z.infer<typeof selfServiceFeishuBotSchema>;

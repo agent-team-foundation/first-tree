@@ -19,7 +19,6 @@ import {
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -1038,9 +1037,8 @@ export async function deleteAgent(db: Database, uuid: string) {
     .where(eq(agents.uuid, uuid))
     .returning();
 
-  // Clean up adapter bindings (bot credentials + user mappings)
+  // Clean up adapter bindings (bot credentials).
   await db.delete(adapterConfigs).where(eq(adapterConfigs.agentId, uuid));
-  await db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.agentId, uuid));
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;

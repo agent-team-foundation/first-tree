@@ -6,7 +6,7 @@ export const adapterConfigs = pgTable(
   "adapter_configs",
   {
     id: serial("id").primaryKey(),
-    /** "feishu" | "slack" */
+    /** Adapter platform identifier (currently "kael"). */
     platform: text("platform").notNull(),
     agentId: text("agent_id")
       .notNull()

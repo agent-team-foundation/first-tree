@@ -17,8 +17,6 @@ type OnboardArgs = {
   assistant?: string;
   delegateMention?: string;
   server?: string;
-  feishuBotAppId?: string;
-  feishuBotAppSecret?: string;
 };
 
 type CheckItem = {
@@ -221,7 +219,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     saveAgentConfig(primaryLocalName, primary.uuid, "claude-code");
   }
 
-  let assistantUuid: string | null = null;
   if (args.assistant) {
     print.line(`Creating assistant "${args.assistant}"...\n`);
     try {
@@ -239,7 +236,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
         metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
         clientId: args.clientId,
       });
-      assistantUuid = assistant.uuid;
       const assistantLocalName = assistant.name ?? args.assistant;
       saveAgentConfig(assistantLocalName, assistant.uuid, "claude-code");
       print.line(`Assistant "${assistantLocalName}" ready.\n`);
@@ -250,20 +246,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   }
 
   const runtimeAgent = args.type === "human" ? args.assistant : args.id;
-
-  // Bind Feishu bot if requested — runs on the runtime agent (assistant for
-  // human, otherwise self).
-  if (args.feishuBotAppId && args.feishuBotAppSecret) {
-    const { bindFeishuBot } = await import("./feishu.js");
-    const targetAgentUuid = args.type === "human" ? assistantUuid : primary.uuid;
-    if (!targetAgentUuid) {
-      print.line(`Warning: Cannot bind Feishu bot — no runtime agent available for "${args.id}".\n`);
-    } else {
-      print.line("Binding Feishu bot...\n");
-      await bindFeishuBot(serverUrl, accessToken, targetAgentUuid, args.feishuBotAppId, args.feishuBotAppSecret);
-      print.line("Feishu bot bound.\n");
-    }
-  }
 
   const clientConfigPath = join(defaultConfigDir(), "client.yaml");
   setConfigValue(clientConfigPath, "server.url", serverUrl);
@@ -283,17 +265,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   }
   if (runtimeAgent) {
     print.line(`  Config:    ${defaultHome()}/config/agents/${runtimeAgent}/agent.yaml\n`);
-  }
-  if (args.feishuBotAppId) {
-    print.line(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
-  }
-
-  if (args.type === "human") {
-    print.line("\n  Next step \u2014 bind your Feishu account:\n");
-    print.line(`    Send this message to the bot in Feishu:  /bind ${args.id}\n`);
-    if (!args.feishuBotAppId) {
-      print.line("    (requires a Feishu bot to be configured in the system)\n");
-    }
   }
 
   if (runtimeAgent) {

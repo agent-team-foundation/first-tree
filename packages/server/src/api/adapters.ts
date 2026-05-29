@@ -1,12 +1,9 @@
 import { updateAdapterConfigSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../errors.js";
-import { createLogger } from "../observability/index.js";
 import { assertAgentManageableByUser } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
 import * as adapterService from "../services/adapter.js";
-
-const log = createLogger("Adapters");
 
 function parseId(raw: string): number {
   const id = Number(raw);
@@ -37,7 +34,6 @@ export async function adapterRoutes(app: FastifyInstance): Promise<void> {
     const existing = await adapterService.getAdapterConfig(app.db, id);
     await assertAgentManageableByUser(app.db, userId, existing.agentId);
     const config = await adapterService.updateAdapterConfig(app.db, id, body, app.config.secrets.encryptionKey);
-    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after update"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return {
       ...config,
@@ -52,7 +48,6 @@ export async function adapterRoutes(app: FastifyInstance): Promise<void> {
     const existing = await adapterService.getAdapterConfig(app.db, id);
     await assertAgentManageableByUser(app.db, userId, existing.agentId);
     await adapterService.deleteAdapterConfig(app.db, id);
-    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after delete"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return reply.status(204).send();
   });
