@@ -11,7 +11,10 @@ export function FilterPill({ active, count, warn, className, children, style, ..
   return (
     <button
       type="button"
-      className={cn("mono inline-flex items-center gap-1 text-caption leading-[1.6]", className)}
+      className={cn(
+        "mono inline-flex items-center gap-1 text-caption leading-[1.6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        className,
+      )}
       style={{
         padding: "var(--sp-0_5) var(--sp-1_75)",
         borderRadius: 3,

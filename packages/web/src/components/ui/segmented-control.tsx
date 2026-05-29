@@ -39,7 +39,10 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
             onClick={() => {
               if (!active) onChange(opt.value);
             }}
-            className={cn("text-caption cursor-pointer transition-colors", !active && "hover:bg-[var(--bg-hover)]")}
+            className={cn(
+              "text-caption cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              !active && "hover:bg-[var(--bg-hover)]",
+            )}
             style={{
               padding: "var(--sp-0_5) var(--sp-1_5)",
               border: 0,
