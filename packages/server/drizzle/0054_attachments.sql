@@ -10,10 +10,12 @@
 -- an agent leaves existing rows intact. v1 keeps every row forever;
 -- refcount / orphan-sweep is a follow-up only if storage growth demands.
 --
--- Auth happens at the route layer: caller is the uploader (or manages
--- the agent that uploaded), or the caller supplies an additional `chatId`
--- they have access to. The id itself is a UUIDv4 — unguessable — as a
--- baseline.
+-- Auth happens at the route layer as a capability model: download requires
+-- a valid user JWT plus knowledge of the unguessable UUIDv4 id; there is no
+-- per-attachment ACL. Stronger, attachment-scoped authorization is the
+-- consumer's responsibility. Upload is org-scoped
+-- (POST /api/v1/orgs/:orgId/attachments) so uploaded_by resolves to a stable
+-- member identity.
 --
 -- Hand-authored alongside the journal + LATEST bump because drizzle-kit
 -- generate fails on this repo's pre-existing snapshot drift (see the 0052
