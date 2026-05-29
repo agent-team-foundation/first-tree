@@ -132,7 +132,7 @@ describe("CLI command registration", () => {
       "workspace",
     ]);
     expect(subcommands(tree, "workspace")).toEqual(["sync"]);
-    expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "link", "list", "upgrade"]);
+    expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "install-core", "link", "list", "upgrade"]);
     expect(subcommands(root, "github")).toEqual(["scan"]);
   });
 

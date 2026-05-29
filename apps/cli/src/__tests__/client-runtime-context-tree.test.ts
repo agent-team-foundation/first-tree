@@ -110,6 +110,7 @@ describe("ClientRuntime context-tree wiring", () => {
   let home: string;
 
   beforeEach(() => {
+    vi.resetModules();
     home = mkdtempSync(join(tmpdir(), "ft-client-runtime-"));
     process.env.FIRST_TREE_HOME = home;
     slotInstances.length = 0;
@@ -153,6 +154,7 @@ describe("ClientRuntime context-tree wiring", () => {
     if (!slot) throw new Error("slot not constructed");
     expect(slot.start).toHaveBeenCalledTimes(1);
     expect(slot.start.mock.calls[0]).toEqual([]);
+    await rt.stop();
   });
 
   it("handles connection events, update hooks, and graceful stop", async () => {
@@ -244,6 +246,7 @@ describe("ClientRuntime context-tree wiring", () => {
     });
     expect(readFileSync(join(agentsDir, "agent-019e70b300007000", "agent.yaml"), "utf8")).toContain("codex");
     expect(slotInstances.map((slot) => slot.name)).toEqual(["kael", "agent-019e70b300007000"]);
+    await rt.stop();
   });
 
   it("reports pinned agents when no agent directory is set and ignores duplicate watched agents", async () => {
@@ -279,6 +282,7 @@ describe("ClientRuntime context-tree wiring", () => {
       runtimeProvider: "claude-code",
     });
     expect(slotInstances.filter((slot) => slot.name === "newcomer")).toHaveLength(1);
+    await rt.stop();
   });
 
   it("registers paused-mode recovery and reports auth lifecycle events", async () => {

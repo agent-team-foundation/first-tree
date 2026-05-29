@@ -133,9 +133,9 @@ describe("chat io helpers", () => {
     setProcessStdin(stdin);
 
     const result = readStdin();
-    stdin.emit("data", Buffer.alloc(10 * 1024 * 1024 + 1));
+    stdin.emit("data", Buffer.alloc(5 * 1024 * 1024 + 1));
 
-    await expect(result).rejects.toThrow("stdin exceeds 10485760 bytes");
+    await expect(result).rejects.toThrow("stdin exceeds 5242880 bytes");
     expect(stdin.destroy).toHaveBeenCalled();
   });
 
