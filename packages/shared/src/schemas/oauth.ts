@@ -56,6 +56,8 @@ export const githubDevCallbackQuerySchema = z.object({
   email: z.string().email().optional(),
   displayName: z.string().optional(),
   next: z.string().max(256).optional(),
+  /** Dev-only local testing shortcut: seed an already-onboarded local workspace after stub sign-in. */
+  skipOnboarding: z.literal("1").optional(),
   /** Synthetic installation id. Required to trigger the App-flow dev bypass. */
   installationId: z.string().regex(/^\d+$/).optional(),
   /** "User" | "Organization". Defaults to "User" when an installationId is set. */

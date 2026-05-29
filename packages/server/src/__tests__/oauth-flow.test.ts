@@ -200,6 +200,43 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(body.defaultOrganizationId).toBe(body.memberships[0]?.organizationId);
     expect(body.onboarding.step).toBe("connect");
   });
+
+  it("dev-callback can simulate an onboarded returning user for local testing", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=920&login=skip-onboarding&skipOnboarding=1",
+    });
+
+    expect(res.statusCode, res.body).toBe(302);
+    const location = res.headers.location ?? "";
+    expect(location).toContain("/auth/github/complete#");
+    const fragment = location.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("joinPath")).toBe("returning");
+    const access = params.get("access");
+    expect(access).toBeTruthy();
+
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${access}` },
+    });
+
+    expect(me.statusCode).toBe(200);
+    const body = me.json<{ onboarding: { step: string; completedAt: string | null } }>();
+    expect(body.onboarding.step).toBe("completed");
+    expect(body.onboarding.completedAt).toEqual(expect.any(String));
+
+    const step = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/onboarding-step",
+      headers: { authorization: `Bearer ${access}` },
+    });
+
+    expect(step.statusCode).toBe(200);
+    expect(step.json<{ step: string }>().step).toBe("completed");
+  });
 });
 
 describe("OAuth callback rejects malformed state", () => {

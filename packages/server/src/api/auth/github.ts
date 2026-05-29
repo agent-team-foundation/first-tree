@@ -1,16 +1,24 @@
 import {
+  AGENT_STATUSES,
+  AGENT_TYPES,
+  AGENT_VISIBILITY,
   githubCallbackQuerySchema,
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
+import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { agents } from "../../db/schema/agents.js";
+import { users } from "../../db/schema/users.js";
+import { createAgent } from "../../services/agent.js";
 import { signTokensForUser } from "../../services/auth.js";
 import {
   findOrCreateUserFromGithub,
   type GithubProfile,
   type GithubTokenBundle,
 } from "../../services/auth-identity.js";
+import { registerClient } from "../../services/client.js";
 import { encryptValue } from "../../services/crypto.js";
 import {
   buildAppAuthorizeUrl,
@@ -307,8 +315,89 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     // Dev bypass never carries a `targetOrganizationId` — the install
     // stub binds to whatever team the dev session resolves into.
-    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null, {
+      simulateOnboarded: params.skipOnboarding === "1",
+    });
   });
+}
+
+type CompleteOauthFlowOptions = {
+  simulateOnboarded?: boolean;
+};
+
+function devAgentNameForProfile(profile: GithubProfile): string {
+  const seed =
+    profile.githubId
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 47) || "user";
+  return `local-test-agent-${seed}`;
+}
+
+async function seedDevOnboardedWorkspace(
+  app: FastifyInstance,
+  data: { userId: string; organizationId: string; profile: GithubProfile },
+): Promise<void> {
+  const membership = await findActiveMembership(app.db, data.userId, data.organizationId);
+  if (!membership) {
+    throw new Error("Cannot seed onboarded dev workspace without an active membership");
+  }
+
+  const clientId = `dev-onboarded-${data.profile.githubId}`;
+  await registerClient(app.db, {
+    clientId,
+    userId: data.userId,
+    organizationId: data.organizationId,
+    instanceId: "dev-callback",
+    hostname: "dev.local",
+    os: "dev",
+    sdkVersion: "dev",
+  });
+
+  const agentName = devAgentNameForProfile(data.profile);
+  const [existingAgent] = await app.db
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
+    .from(agents)
+    .where(and(eq(agents.organizationId, data.organizationId), eq(agents.name, agentName)))
+    .limit(1);
+
+  if (existingAgent) {
+    if (existingAgent.status !== AGENT_STATUSES.ACTIVE || existingAgent.type !== AGENT_TYPES.AGENT) {
+      await app.db
+        .update(agents)
+        .set({
+          type: AGENT_TYPES.AGENT,
+          status: AGENT_STATUSES.ACTIVE,
+          clientId,
+          updatedAt: new Date(),
+        })
+        .where(eq(agents.uuid, existingAgent.uuid));
+    }
+  } else {
+    await createAgent(app.db, {
+      name: agentName,
+      type: AGENT_TYPES.AGENT,
+      displayName: "Local Test Agent",
+      managerId: membership.memberId,
+      clientId,
+      source: "portal",
+      visibility: AGENT_VISIBILITY.PRIVATE,
+      metadata: { source: "dev-callback", githubId: data.profile.githubId },
+    });
+  }
+
+  const result = await app.db
+    .update(users)
+    .set({ onboardingCompletedAt: new Date() })
+    .where(and(eq(users.id, data.userId), isNull(users.onboardingCompletedAt)))
+    .returning({ id: users.id });
+  if (result.length > 0) {
+    app.log.info(
+      { event: "onboarding.completed", source: "dev-callback", userId: data.userId },
+      "dev callback completed onboarding",
+    );
+  }
 }
 
 async function completeOauthFlow(
@@ -341,6 +430,7 @@ async function completeOauthFlow(
    * path, that org wins regardless. Null on the plain sign-in flow.
    */
   targetOrganizationId: string | null,
+  options: CompleteOauthFlowOptions = {},
 ) {
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
 
@@ -489,6 +579,11 @@ async function completeOauthFlow(
 
   if (!resolved) {
     return reply.status(500).send({ error: "Failed to resolve membership" });
+  }
+
+  if (options.simulateOnboarded === true && resolvedOrganizationId) {
+    await seedDevOnboardedWorkspace(app, { userId, organizationId: resolvedOrganizationId, profile });
+    joinPath = "returning";
   }
 
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);

@@ -14,10 +14,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.
  * insensitive). They click "Continue with GitHub" once and keep their old
  * organization, agents, and history.
  *
- * On localhost a "Dev: skip GitHub" button is rendered alongside; it
- * jumps to `/auth/github/dev-callback` which mints a stub identity in
- * one round-trip without needing a real OAuth client. Production responds
- * 404 on that route, so the button is harmless even if shipped.
+ * On localhost dev shortcuts are rendered alongside; they jump to
+ * `/auth/github/dev-callback` and mint a stub identity in one round-trip
+ * without needing a real OAuth client. Production responds 404 on that
+ * route, so the buttons are harmless even if shipped.
  */
 export function LoginPage() {
   const { isAuthenticated } = useAuth();
@@ -41,6 +41,8 @@ export function LoginPage() {
   // user, agents, and conversations. Using `1` (not the more obvious 42)
   // makes test-suite collisions cheap to spot.
   const devCallbackHref = "/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User";
+  const devSkipOnboardingHref =
+    "/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User&skipOnboarding=1";
 
   if (isAuthenticated) {
     return <Navigate to={redirectTo} replace />;
@@ -98,6 +100,12 @@ export function LoginPage() {
                   <a href={devCallbackHref}>
                     <Zap className="h-4 w-4" />
                     Dev: skip GitHub
+                  </a>
+                </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <a href={devSkipOnboardingHref}>
+                    <Zap className="h-4 w-4" />
+                    Dev: skip onboarding
                   </a>
                 </Button>
               </>
