@@ -1,5 +1,6 @@
 import type { ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { probeClaudeCodeCapability } from "./claude-code.js";
+import { probeClaudeCodeTuiCapability } from "./claude-code-tui.js";
 import { probeCodexCapability } from "./codex.js";
 
 /**
@@ -15,6 +16,7 @@ import { probeCodexCapability } from "./codex.js";
 export async function probeCapabilities(): Promise<ClientCapabilities> {
   const probes: Array<readonly [RuntimeProvider, ReturnType<typeof probeClaudeCodeCapability>]> = [
     ["claude-code", probeClaudeCodeCapability()],
+    ["claude-code-tui", probeClaudeCodeTuiCapability()],
     ["codex", probeCodexCapability()],
   ];
 

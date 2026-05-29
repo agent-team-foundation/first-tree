@@ -1,29 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@first-tree/shared";
-
-/**
- * Top-level marker file Claude Code writes after a successful OAuth login.
- * Path is platform-agnostic (`~/.claude.json`); the access token itself lives
- * in the platform credential store (macOS Keychain entry "Claude Code-
- * credentials", or libsecret on Linux), so we treat the presence of an
- * `oauthAccount.accountUuid` field as the canonical "logged in" signal.
- */
-const CLAUDE_PROFILE_PATH = () => join(homedir(), ".claude.json");
-
-function hasClaudeOAuthAccount(): boolean {
-  try {
-    const path = CLAUDE_PROFILE_PATH();
-    if (!existsSync(path)) return false;
-    const raw = readFileSync(path, "utf-8");
-    const obj = JSON.parse(raw) as { oauthAccount?: { accountUuid?: unknown } };
-    return typeof obj.oauthAccount?.accountUuid === "string" && obj.oauthAccount.accountUuid.length > 0;
-  } catch {
-    return false;
-  }
-}
+import { detectClaudeAuth } from "./claude-shared.js";
 
 async function readSdkVersion(): Promise<string | null> {
   // The Anthropic SDK does not expose `./package.json` via `exports` and only
@@ -46,16 +25,6 @@ async function readSdkVersion(): Promise<string | null> {
     // fall through
   }
   return null;
-}
-
-function detectAuth(): { authenticated: boolean; method: "api_key" | "oauth" | "none" } {
-  if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.length > 0) {
-    return { authenticated: true, method: "api_key" };
-  }
-  if (hasClaudeOAuthAccount()) {
-    return { authenticated: true, method: "oauth" };
-  }
-  return { authenticated: false, method: "none" };
 }
 
 /**
@@ -88,7 +57,7 @@ export async function probeClaudeCodeCapability(): Promise<CapabilityEntry> {
     }
 
     const sdkVersion = await readSdkVersion();
-    const auth = detectAuth();
+    const auth = detectClaudeAuth();
     if (!auth.authenticated) {
       return {
         state: "unauthenticated",
