@@ -14,7 +14,7 @@ const mk = (agentId: string, over: Partial<AgentChatStatusInput>) =>
   });
 
 describe("selectAttention — the bar surfaces only actionable/active states, most urgent first", () => {
-  it("keeps working / needs-you / failed and drops ready / paused / offline", () => {
+  it("keeps working / failed and drops needs_you / ready / paused / offline", () => {
     const statuses = [
       mk("ready", {}),
       mk("working", { working: true }),
@@ -23,15 +23,20 @@ describe("selectAttention — the bar surfaces only actionable/active states, mo
       mk("failed", { errored: true }),
       mk("paused", { engagement: "suspended" }),
     ];
-    expect(selectAttention(statuses).map((s) => s.main)).toEqual(["failed", "needs_you", "working"]);
+    // needs_you is owned by the AttentionCard, not this rail — it must not surface here.
+    expect(selectAttention(statuses).map((s) => s.main)).toEqual(["failed", "working"]);
   });
 
   it("returns empty when every agent is quiet (ready / offline)", () => {
     expect(selectAttention([mk("r", {}), mk("o", { reachable: false })])).toEqual([]);
   });
 
+  it("drops a needs_you agent even when it's the only attention", () => {
+    expect(selectAttention([mk("n", { needsYou: true })])).toEqual([]);
+  });
+
   it("sorts by MAIN_STATUS_PRIORITY (most urgent first)", () => {
-    const out = selectAttention([mk("w", { working: true }), mk("f", { errored: true }), mk("n", { needsYou: true })]);
+    const out = selectAttention([mk("w", { working: true }), mk("f", { errored: true })]);
     const idx = out.map((s) => MAIN_STATUS_PRIORITY.indexOf(s.main));
     expect(idx).toEqual([...idx].sort((x, y) => x - y));
   });
@@ -46,9 +51,9 @@ describe("pickLead — rail lead with anti-flicker", () => {
   const atlas = workingAt("atlas", "2026-05-22T00:00:00.000Z");
   const beacon = workingAt("beacon", "2026-05-22T00:00:05.000Z"); // more recent than atlas
 
-  it("an alert preempts immediately, regardless of the held working lead", () => {
-    const needs = mk("cypher", { needsYou: true });
-    expect(pickLead({ agentId: "atlas", since: NOW }, NOW + 100, [needs], [atlas], HOLD)?.agentId).toBe("cypher");
+  it("an alert (failure) preempts immediately, regardless of the held working lead", () => {
+    const failed = mk("cypher", { errored: true });
+    expect(pickLead({ agentId: "atlas", since: NOW }, NOW + 100, [failed], [atlas], HOLD)?.agentId).toBe("cypher");
   });
 
   it("with no current lead, picks the most-recently-active working agent", () => {

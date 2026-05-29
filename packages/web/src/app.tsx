@@ -45,6 +45,14 @@ const ChatRowAvatarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const ComposeStatusBarPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/compose-status-bar-preview.js").then((module) => ({
+        default: module.ComposeStatusBarPreviewPage,
+      })),
+    )
+  : null;
+
 const OnboardingPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
   : null;
@@ -89,6 +97,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatRowAvatarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ComposeStatusBarPreviewPage ? (
+                <Route
+                  path="/preview/compose-status-bar"
+                  element={
+                    <Suspense fallback={null}>
+                      <ComposeStatusBarPreviewPage />
                     </Suspense>
                   }
                 />
