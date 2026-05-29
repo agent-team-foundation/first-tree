@@ -199,6 +199,7 @@ describe("buildMessageDocumentSnapshots — filesystem failure edges", () => {
     const outsideTarget = join(outside, "external.md");
     await writeFile(target, "# flip\n", "utf8");
     await writeFile(outsideTarget, "# external\n", "utf8");
+    const targetReal = await realpath(target);
     const outsideReal = await realpath(outsideTarget);
     let targetRealpathCalls = 0;
 
@@ -208,7 +209,7 @@ describe("buildMessageDocumentSnapshots — filesystem failure edges", () => {
       return {
         ...actual,
         realpath: async (path: string) => {
-          if (path === target) {
+          if (path === targetReal) {
             targetRealpathCalls += 1;
             if (targetRealpathCalls === 2) return outsideReal;
           }
@@ -236,6 +237,7 @@ describe("buildMessageDocumentSnapshots — filesystem failure edges", () => {
     await mkdir(join(root, ".agent"), { recursive: true });
     await writeFile(target, "# flip\n", "utf8");
     await writeFile(hiddenTarget, "# secret\n", "utf8");
+    const targetReal = await realpath(target);
     const hiddenReal = await realpath(hiddenTarget);
     let targetRealpathCalls = 0;
 
@@ -245,7 +247,7 @@ describe("buildMessageDocumentSnapshots — filesystem failure edges", () => {
       return {
         ...actual,
         realpath: async (path: string) => {
-          if (path === target) {
+          if (path === targetReal) {
             targetRealpathCalls += 1;
             if (targetRealpathCalls === 2) return hiddenReal;
           }

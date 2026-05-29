@@ -58,14 +58,21 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)));
     expect(rows.length).toBe(3);
-    const claimedFirst = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, rows[0]!.messageId);
-    const claimedSecond = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, rows[1]!.messageId);
+    const firstRow = rows[0];
+    const secondRow = rows[1];
+    const thirdRow = rows[2];
+    if (!firstRow || !secondRow || !thirdRow) throw new Error("expected three notify rows");
+    const claimedFirst = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, firstRow.messageId);
+    const claimedSecond = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, secondRow.messageId);
     expect(claimedFirst).toHaveLength(1);
     expect(claimedSecond).toHaveLength(1);
+    const claimedFirstRow = claimedFirst[0];
+    const claimedSecondRow = claimedSecond[0];
+    if (!claimedFirstRow || !claimedSecondRow) throw new Error("expected claimed inbox rows");
 
     // Mark `claimedSecond` as acked so we have all three statuses represented
     // for a2's inbox at the point of the reset call.
-    await app.db.update(inboxEntries).set({ status: "acked" }).where(eq(inboxEntries.id, claimedSecond[0]!.id));
+    await app.db.update(inboxEntries).set({ status: "acked" }).where(eq(inboxEntries.id, claimedSecondRow.id));
 
     // Drive the reset for a2's inbox only.
     const resetCount = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
@@ -77,9 +84,9 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)));
     const byId = new Map(a2Final.map((r) => [r.id, r.status]));
-    expect(byId.get(claimedFirst[0]!.id)).toBe("pending"); // was delivered → reset
-    expect(byId.get(claimedSecond[0]!.id)).toBe("acked"); // untouched
-    expect(byId.get(rows[2]!.id)).toBe("pending"); // was already pending
+    expect(byId.get(claimedFirstRow.id)).toBe("pending"); // was delivered → reset
+    expect(byId.get(claimedSecondRow.id)).toBe("acked"); // untouched
+    expect(byId.get(thirdRow.id)).toBe("pending"); // was already pending
 
     // a3's mention row must be untouched by a reset that targeted only a2.
     // a3 received the dedicated @mention plus three silent fan-out rows from
@@ -143,11 +150,13 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     // Claim → delivered (retryCount stays 0 per the claim path).
     const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
     expect(claimed).toHaveLength(1);
+    const claimedRow = claimed[0];
+    if (!claimedRow) throw new Error("expected claimed inbox row");
 
     const before = await app.db
       .select({ retryCount: inboxEntries.retryCount })
       .from(inboxEntries)
-      .where(inArray(inboxEntries.id, [claimed[0]!.id]));
+      .where(inArray(inboxEntries.id, [claimedRow.id]));
     expect(before[0]?.retryCount).toBe(0);
 
     const reset = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
@@ -156,7 +165,7 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     const after = await app.db
       .select({ retryCount: inboxEntries.retryCount, status: inboxEntries.status })
       .from(inboxEntries)
-      .where(inArray(inboxEntries.id, [claimed[0]!.id]));
+      .where(inArray(inboxEntries.id, [claimedRow.id]));
     expect(after[0]?.status).toBe("pending");
     // Critical invariant: bind-time reset is NOT a retry bump. A flaky client
     // that crashes mid-turn must not push genuinely-stuck messages into

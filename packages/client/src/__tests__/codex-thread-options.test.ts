@@ -42,7 +42,11 @@ describe("buildCodexThreadOptions", () => {
     const opts = buildCodexThreadOptions(basePayload(), "/tmp/wsk");
     expect(opts.workingDirectory).toBe("/tmp/wsk");
     expect(opts.skipGitRepoCheck).toBe(true);
-    expect(opts.sandboxMode).toBe("workspace-write");
+    // Codex runs with `danger-full-access` because the agent's local-execution
+    // surface (docker, cross-directory writes) routes through it; irreversible
+    // actions are gated by Need-Human-Attention at the agent layer instead of
+    // by the codex sandbox.
+    expect(opts.sandboxMode).toBe("danger-full-access");
     expect(opts.approvalPolicy).toBe("never");
     // Default reasoning effort for codex agents is "high" (footgun F3: minimal
     // reasoning is incompatible with default tools and is excluded entirely).

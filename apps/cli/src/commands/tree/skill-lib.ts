@@ -2,15 +2,39 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, r
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const SKILL_NAMES = [
+/**
+ * Skills that every agent needs regardless of Context Tree binding. These
+ * are deployed by `bootstrapWorkspace` (packages/client) on every session
+ * start, so the on-disk `SKILL.md` is reachable even for agents that never
+ * run `tree integrate`. Currently just `attention` — the NHA primitive is
+ * a universal agent concern, not a tree concern, and the slimmed-down
+ * `tools.md` injected at bootstrap points at `attention/SKILL.md` for the
+ * full playbook.
+ */
+export const CORE_SKILL_NAMES = ["attention"] as const;
+
+/**
+ * Skills that ship with a Context Tree binding. These are deployed by the
+ * tree-related CLI commands (`tree integrate`, `tree bind`, `tree bootstrap`,
+ * `tree skill install/upgrade`, `tree upgrade`) and are only useful for
+ * agents that operate on a Context Tree.
+ */
+export const TREE_SKILL_NAMES = [
   "first-tree",
   "first-tree-onboarding",
   "first-tree-sync",
   "first-tree-write",
   "first-tree-github-scan",
   "github-scan",
-  "attention",
 ] as const;
+
+/**
+ * Union of all shipped skill payloads. Used by status / doctor / link
+ * surfaces that should report on every installable skill. Order is
+ * preserved so list output stays stable: core skills first, then tree
+ * skills.
+ */
+export const SKILL_NAMES = [...CORE_SKILL_NAMES, ...TREE_SKILL_NAMES] as const;
 
 export type SkillName = (typeof SKILL_NAMES)[number];
 
@@ -84,6 +108,10 @@ function layoutForSkill(name: SkillName): SkillLayout {
 
 function allSkillLayouts(): readonly SkillLayout[] {
   return SKILL_NAMES.map(layoutForSkill);
+}
+
+function coreSkillLayouts(): readonly SkillLayout[] {
+  return CORE_SKILL_NAMES.map(layoutForSkill);
 }
 
 function requiredFilesForSkill(name: SkillName): readonly string[] {
@@ -326,10 +354,10 @@ function ensureClaudeSymlink(targetRoot: string, layout: SkillLayout): void {
   symlinkSync(layout.claudeSymlinkTarget, claudeFull);
 }
 
-export function copyCanonicalSkills(targetRoot: string): void {
+function copySkillLayouts(targetRoot: string, layouts: readonly SkillLayout[]): void {
   const bundledSkillsRoot = resolveBundledSkillsRoot();
 
-  for (const layout of allSkillLayouts()) {
+  for (const layout of layouts) {
     const sourceDir = join(bundledSkillsRoot, layout.name);
     const agentsFull = join(targetRoot, layout.agentsPath);
     mkdirSync(dirname(agentsFull), { recursive: true });
@@ -337,6 +365,20 @@ export function copyCanonicalSkills(targetRoot: string): void {
     cpSync(sourceDir, agentsFull, { recursive: true });
     ensureClaudeSymlink(targetRoot, layout);
   }
+}
+
+export function copyCanonicalSkills(targetRoot: string): void {
+  copySkillLayouts(targetRoot, allSkillLayouts());
+}
+
+/**
+ * Copy only the core skills — those required for every agent regardless of
+ * Context Tree binding. Called by `bootstrapWorkspace` so the on-disk skill
+ * payload exists before the agent's first turn, since the slimmed `tools.md`
+ * only carries a pointer at it.
+ */
+export function copyCoreSkills(targetRoot: string): void {
+  copySkillLayouts(targetRoot, coreSkillLayouts());
 }
 
 export function collectSkillStatus(targetRoot: string): readonly SkillStatus[] {

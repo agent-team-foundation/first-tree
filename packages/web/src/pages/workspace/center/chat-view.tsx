@@ -56,7 +56,6 @@ import { cacheMessages, getCachedMessages } from "../../../api/message-store.js"
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
-  asAssistantTextPayload,
   asErrorPayload,
   listSessionEvents,
   type SessionEventRow,
@@ -73,7 +72,7 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { WorkingBubble } from "../../../components/chat/working-bubble.js";
+import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
   MentionAutocompletePopover,
@@ -166,70 +165,6 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
     <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
-  );
-}
-
-/**
- * Intermediate assistant reply text surfaced while a turn is still running.
- * These rows are hidden by the turn-grouping filter once the turn ends —
- * the final result is delivered as a regular chat message.
- */
-function AssistantTextRow({
-  event,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-  agentId,
-}: {
-  event: SessionEventRow;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-  agentId: string;
-}) {
-  const payload = asAssistantTextPayload(event.payload);
-  if (!payload || payload.text.length === 0) return null;
-  const senderName = agentNameFn(agentId);
-  return (
-    <div
-      className="grid"
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1) 0",
-        opacity: 0.85,
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(agentId)}
-        seed={agentId}
-        colorToken={agentColorTokenFn(agentId)}
-      />
-      <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-label font-semibold" style={{ color: "var(--primary)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(event.createdAt)}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            · streaming
-          </span>
-        </div>
-        <div
-          className="text-body"
-          style={{
-            color: "var(--fg-2)",
-            whiteSpace: "pre-wrap",
-            marginTop: 2,
-          }}
-        >
-          {payload.text}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1399,11 +1334,12 @@ export function ChatView({
    * turn-grouping filter so completed turns collapse to just their result
    * message. See `filterEventsForTimeline` for the full rules.
    *
-   * Second pass collapses adjacent `tool_call` + `thinking` rows into a
-   * single `workgroup` entry — these become the inline WorkingBubble. Any
-   * non-bubble item (message, assistant_text, error) flushes the current
-   * bucket, so intermediate streamed text stays visible as its own row
-   * even when surrounded by tool calls.
+   * Second pass collapses an agent's adjacent `assistant_text` + `tool_call` +
+   * `thinking` rows into a single `workgroup` entry — these become the inline
+   * WorkingTurn (latest narration as the body, tool/thinking as a
+   * de-emphasized process lane). A real message, an error, or an agent switch
+   * flushes the current bucket, so each card stays single-agent and a turn's
+   * result message lands as its own row.
    */
   // Merge cached + server messages, dedup by id (server wins so updated
   // delivery status / metadata overrides any older cached copy), and
@@ -1426,53 +1362,53 @@ export function ChatView({
     const rawEvents = eventsData?.items ?? [];
     const visibleEvents = filterEventsForTimeline(rawEvents);
 
-    // Turn id = the seq of the last turn_end seen across all events, including
-    // ones filterEventsForTimeline dropped. Every visible transient event has
-    // seq > lastTurnEndSeq, so each turn gets a unique stable anchor that
-    // survives toolUseId dedupe (where individual event ids change as
-    // pending → final updates flow in). Used to build remount-safe bubble
-    // keys so the user's manual open/closed toggle isn't reset when a single
-    // tool call's pending row gets replaced by its final-status row.
+    // Turn anchor: the seq of the last turn_end across all events (including
+    // ones filterEventsForTimeline dropped). Every surviving transient event
+    // has seq > lastTurnEndSeq, so the agent's current turn gets one stable,
+    // remount-safe key that survives toolUseId dedupe (pending → final swaps).
     let lastTurnEndSeq = -1;
     for (const e of rawEvents) {
       if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
     }
 
-    // Feed `mergedMessages` (IDB cache ∪ server) into the timeline, not the
-    // raw server window. Otherwise cached messages outside the server's
-    // "last 50" window would silently disappear on chat re-open until the
-    // server fetch lands.
-    const flat: TimelineItem[] = [
-      ...mergedMessages.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
-      ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
-    ];
-    flat.sort((a, b) => a.at.localeCompare(b.at));
+    // Collapse each agent's surviving transient events into ONE workgroup.
+    // filterEventsForTimeline already narrows them to that agent's current
+    // (un-ended) turn, so one workgroup == one in-progress turn. We deliberately
+    // do NOT split on interleaved chat messages: a message landing mid-turn must
+    // not fracture the turn into duplicate "working" cards. Each workgroup is
+    // anchored at its earliest event so it sorts into the timeline where the
+    // turn began; messages and error rows keep their own chronological slots.
+    //
+    // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
+    // window — otherwise cached messages outside the "last 50" window would
+    // vanish on chat re-open until the server fetch lands.
+    const out: TimelineItem[] = mergedMessages.map((m) => ({
+      kind: "message" as const,
+      at: m.createdAt,
+      key: `m-${m.id}`,
+      data: m,
+    }));
 
-    const grouped: TimelineItem[] = [];
-    let bucket: SessionEventRow[] = [];
-    let bucketIndex = 0;
-    const flushBucket = () => {
-      const first = bucket[0];
-      if (!first) return;
-      grouped.push({
-        kind: "workgroup",
-        at: first.createdAt,
-        key: `wg-${lastTurnEndSeq}-${bucketIndex}`,
-        events: bucket,
-      });
-      bucketIndex += 1;
-      bucket = [];
-    };
-    for (const item of flat) {
-      if (item.kind === "event" && (item.data.kind === "tool_call" || item.data.kind === "thinking")) {
-        bucket.push(item.data);
-        continue;
+    const turnEventsByAgent = new Map<string, SessionEventRow[]>();
+    for (const e of visibleEvents) {
+      if (e.kind === "tool_call" || e.kind === "thinking" || e.kind === "assistant_text") {
+        const existing = turnEventsByAgent.get(e.agentId);
+        if (existing) existing.push(e);
+        else turnEventsByAgent.set(e.agentId, [e]);
+      } else {
+        // error rows stay standalone and visible across turns.
+        out.push({ kind: "event", at: e.createdAt, key: `e-${e.id}`, data: e });
       }
-      flushBucket();
-      grouped.push(item);
     }
-    flushBucket();
-    return grouped;
+    for (const [agentId, events] of turnEventsByAgent) {
+      events.sort((a, b) => a.seq - b.seq);
+      const first = events[0];
+      if (!first) continue;
+      out.push({ kind: "workgroup", at: first.createdAt, key: `wg-${lastTurnEndSeq}-${agentId}`, events });
+    }
+
+    out.sort((a, b) => a.at.localeCompare(b.at));
+    return out;
   }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
@@ -2581,38 +2517,29 @@ export function ChatView({
                     let node: ReactNode = null;
                     if (item.kind === "workgroup") {
                       // Default to folded while chatDetail is still loading —
-                      // opening a group chat's bubble for one frame and then
+                      // opening a group chat's card for one frame and then
                       // folding it after chatDetail resolves is worse than
                       // under-opening direct chats by the same one-frame window.
                       node = (
-                        <WorkingBubble
+                        <WorkingTurn
                           key={item.key}
                           events={item.events}
                           defaultOpen={chatDetail?.type === "direct"}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
                         />
                       );
                     } else if (item.kind === "event") {
                       const ev = item.data;
                       switch (ev.kind) {
-                        case "assistant_text":
-                          node = (
-                            <AssistantTextRow
-                              key={item.key}
-                              event={ev}
-                              agentId={agentId}
-                              agentNameFn={chatScopedAgentName}
-                              agentAvatarFn={agentAvatar}
-                              agentColorTokenFn={agentColorToken}
-                            />
-                          );
-                          break;
                         case "error":
                           node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
                           break;
                         default:
-                          // tool_call / thinking are folded into the workgroup
-                          // above; turn_end is filtered upstream; anything else
-                          // is dropped.
+                          // assistant_text / tool_call / thinking are folded into
+                          // the workgroup card above; turn_end is filtered
+                          // upstream; anything else is dropped.
                           node = null;
                       }
                     } else {

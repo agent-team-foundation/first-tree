@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt,
   deepEqualIdentity,
   FIRST_TREE_WORKSPACE_MARKER,
+  installCoreSkills,
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
@@ -250,10 +251,16 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // matches the user's auth mode (e.g. ChatGPT-account auth rejects the
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
+  // Sandbox: codex is the agent's primary local-execution surface (docker,
+  // cross-directory writes, host tools all flow through it). `workspace-write`
+  // blocks unix sockets outside the workspace (notably ~/.docker/run/docker.sock)
+  // and any out-of-tree write the agent legitimately needs. We run with
+  // `danger-full-access` and rely on the agent to gate irreversible actions
+  // via Need-Human-Attention (NHA) instead of a sandbox-level wall.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: "workspace-write",
+    sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
     // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
@@ -1026,6 +1033,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       contextTreePath,
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
+    });
+    // Core skills (`attention`) ship with every agent, with or without a
+    // Context Tree. Slow path runs on first start or CLI-version drift —
+    // both moments when the on-disk skill payload could be missing or
+    // stale, so refresh unconditionally here. Tree-bound agents also
+    // receive `attention` via `ensureFirstTreeBinding` below; the
+    // duplicate copy is idempotent and the two paths stay independent.
+    installCoreSkills({
+      workspacePath: workspace,
+      log: (msg) => sessionCtx.log(msg),
     });
     const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
     writeContextTreeHead(workspace, currentTreeHead);

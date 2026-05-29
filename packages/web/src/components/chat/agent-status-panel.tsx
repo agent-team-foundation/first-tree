@@ -177,7 +177,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
   if (status.main === "working" && status.activity) {
     // "Working" (sans word) · "Bash · 0s" (mono tool + live timer). No leading
     // pulse dot — the avatar already carries the breathing status dot. The
-    // whole chip is clickable → jumps to this agent's WorkingBubble.
+    // whole chip is clickable → jumps to this agent's WorkingTurn.
     return (
       <TimelineJumpButton
         agentId={status.agentId}

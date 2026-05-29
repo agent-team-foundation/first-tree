@@ -36,6 +36,13 @@ import type { InboxEntry } from "../../src/github-scan/engine/runtime/types.js";
 const AGENT = "first-tree-bot";
 const LABEL_TS = "2026-04-30T10:00:00Z";
 
+function pageFromArgs(args: readonly string[]): number {
+  const url = args[1] ?? "";
+  const match = /[?&]page=(\d+)/.exec(url);
+  const page = match?.[1];
+  return page ? Number.parseInt(page, 10) : 1;
+}
+
 function makeEntry(overrides: Partial<InboxEntry> = {}): InboxEntry {
   return {
     id: "n-1",
@@ -384,9 +391,7 @@ describe("fetchHumanLabelAppliedAt — pagination (issue #365)", () => {
     const state = { calls: 0 };
     const run = (args: readonly string[]): GhExecResult => {
       state.calls++;
-      const url = args[1] ?? "";
-      const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = pageFromArgs(args);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };
     };
@@ -472,9 +477,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     const state = { calls: 0, requestedPages: [] as number[] };
     const run = (args: readonly string[]): GhExecResult => {
       state.calls++;
-      const url = args[1] ?? "";
-      const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = pageFromArgs(args);
       state.requestedPages.push(page);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };
@@ -527,9 +530,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     const stub = makeRunStub([fullPage1, fullPage2]);
     const explodingRun = (args: readonly string[]): GhExecResult => {
       const result = stub.run(args);
-      const url = args[1] ?? "";
-      const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = pageFromArgs(args);
       if (page >= 3) throw new Error("page 3 should not be fetched (early-exit failed)");
       return result;
     };
@@ -809,9 +810,7 @@ describe("fetchPrCommits — pagination (issue #383)", () => {
     const state = { calls: 0, requestedPages: [] as number[] };
     const run = (args: readonly string[]): GhExecResult => {
       state.calls++;
-      const url = args[1] ?? "";
-      const match = /[?&]page=(\d+)/.exec(url);
-      const page = match ? Number.parseInt(match[1]!, 10) : 1;
+      const page = pageFromArgs(args);
       state.requestedPages.push(page);
       const body = pages[page - 1] ?? [];
       return { status: 0, stdout: JSON.stringify(body), stderr: "" };

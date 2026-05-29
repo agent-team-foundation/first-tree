@@ -18,7 +18,8 @@
     "build": "tsdown src/index.ts src/observability/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests"
+    "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests",
+    "smoke:codex-sandbox": "node scripts/codex-sandbox-smoke.mjs"
   },
   "engines": {
     "node": ">=22.16.0"

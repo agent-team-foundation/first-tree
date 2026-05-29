@@ -9,6 +9,19 @@
 // Individual tests can override with `setCliBinding({...})` and reset in
 // their own `afterEach` — see `__tests__/bootstrap.test.ts` for the
 // staging/dev channel cases.
+import { __setTestInstallExec } from "./src/runtime/bootstrap.js";
 import { setCliBinding } from "./src/runtime/cli-binding.js";
 
 setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+
+// Globally neuter the install-exec backend so handler-level tests that go
+// through `handler.start()` do not shell out for `installCoreSkills` or
+// `installFirstTreeIntegration`. Individual tests that DO want to verify
+// the shell-out (`bootstrap.test.ts` integration-style cases) pass their
+// own `exec` callback to `installFirstTreeIntegration` / `installCoreSkills`
+// directly, which bypasses `defaultInstallExec` (and therefore this
+// override). Production runtime is unaffected — the override is only set
+// during vitest runs.
+__setTestInstallExec(() => {
+  // no-op
+});
