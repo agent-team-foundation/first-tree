@@ -9,10 +9,15 @@ import { RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
  * is the more common entry point, Codex second. Mirrors mockup §"Variant
  * B-2" ordering.
  */
-export const PROVIDER_ORDER: RuntimeProvider[] = [RUNTIME_PROVIDERS.CLAUDE_CODE, RUNTIME_PROVIDERS.CODEX];
+export const PROVIDER_ORDER: RuntimeProvider[] = [
+  RUNTIME_PROVIDERS.CLAUDE_CODE,
+  RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
+  RUNTIME_PROVIDERS.CODEX,
+];
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
+  "claude-code-tui": "Claude Code (TUI)",
   codex: "Codex",
 };
 
@@ -20,9 +25,15 @@ export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
  * `npm install -g` package spec per runtime. The CLI canonical install
  * command lives here so the Setup-incomplete card body can render the
  * full install + login two-step without each card duplicating strings.
+ *
+ * `claude-code-tui` shares the same `claude` CLI binary as `claude-code`
+ * — the difference is that the daemon drives it through tmux rather than
+ * the SDK. The install command is identical; the additional tmux
+ * requirement is surfaced via providerInstallHint().
  */
 export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
   "claude-code": "@anthropic-ai/claude-code",
+  "claude-code-tui": "@anthropic-ai/claude-code",
   codex: "@openai/codex",
 };
 
@@ -35,6 +46,7 @@ export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
  */
 export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
   "claude-code": "claude login",
+  "claude-code-tui": "claude login",
   codex: "codex login",
 };
 
@@ -92,6 +104,13 @@ export function providerUnauthHint(provider: RuntimeProvider, os: string | null 
 export function providerInstallHint(provider: RuntimeProvider, os: string | null | undefined): string {
   if (provider === "claude-code") {
     return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${osDeviceName(os)}.`;
+  }
+  if (provider === "claude-code-tui") {
+    // TUI shares the `claude` CLI install with `claude-code`, but additionally
+    // requires `tmux` (>= 3.0) so the daemon can spawn the runtime in a
+    // detached session. The capability probe in
+    // `runtime/capabilities/claude-code-tui.ts` enforces both at probe time.
+    return `Install \`@anthropic-ai/claude-code\` and \`tmux\` (>= 3.0) on this ${osDeviceName(os)}.`;
   }
   return `Install the OpenAI Codex CLI on this ${osDeviceName(os)}.`;
 }

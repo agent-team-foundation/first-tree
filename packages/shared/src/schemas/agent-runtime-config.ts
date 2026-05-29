@@ -145,12 +145,16 @@ export const agentRuntimeConfigPayloadShape = z.object({
 const claudeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("claude-code"),
 });
+const claudeCodeTuiRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("claude-code-tui"),
+});
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
 });
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
+  claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
@@ -245,6 +249,20 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
 };
 
 /**
+ * Default payload for a fresh claude-code-tui agent. Same 5 fields as claude-code
+ * since both drive the same `claude` CLI; the provider differs only in how the
+ * client runtime communicates with that CLI (TUI through tmux vs SDK).
+ */
+export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "claude-code-tui",
+  prompt: { append: "" },
+  model: "opus",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+};
+
+/**
  * Default payload selector by runtime provider.
  */
 export function defaultRuntimeConfigPayload(
@@ -253,6 +271,8 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "claude-code-tui":
+      return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":
       return { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
     default: {

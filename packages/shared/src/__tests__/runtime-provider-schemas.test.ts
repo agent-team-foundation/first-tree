@@ -19,8 +19,9 @@ import {
  *     here so a server change can't silently relax validation.
  */
 describe("runtimeProviderSchema", () => {
-  it("accepts both built-in providers", () => {
+  it("accepts all three built-in providers", () => {
     expect(runtimeProviderSchema.parse("claude-code")).toBe("claude-code");
+    expect(runtimeProviderSchema.parse("claude-code-tui")).toBe("claude-code-tui");
     expect(runtimeProviderSchema.parse("codex")).toBe("codex");
   });
 
@@ -31,6 +32,7 @@ describe("runtimeProviderSchema", () => {
 
   it("RUNTIME_PROVIDERS constants match the schema", () => {
     expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CLAUDE_CODE)).toBe("claude-code");
+    expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CLAUDE_CODE_TUI)).toBe("claude-code-tui");
     expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CODEX)).toBe("codex");
   });
 
