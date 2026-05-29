@@ -93,9 +93,10 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
 - Styleguide updated: real tokens, new Feedback swatches, idle shows the new tone; the temporary
   "Cleanup candidates" section was removed.
 
-**Still open (as of #672):** `--text-live` adopt/drop, `--state-*-soft` companions,
-`color-scheme: dark` on `.dark`, info callout, `.context-live-*` palette, spacing rhythm, dead `--sp-*`.
-*(focus-ring unification — done in #662, see Phase 1.)*
+**Still open:** `.context-live-*` palette, spacing rhythm, dead `--sp-*`, multi-line lint detection,
+focus-ring extension to the remaining primitives, and the ✓⚠✗⚙→lucide icon purge.
+*(DONE in the low-risk-tokens PR: `--text-live` drop, `--state-*-soft` companions, `color-scheme` on
+`:root`/`.dark`, info callout — see P1/P2 marks. focus-ring unification — done in #662, see Phase 1.)*
 
 ---
 
@@ -147,9 +148,9 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   `surface-overlay` / the `--shadow-*` scale. `Badge` uses `rounded-md` while `DenseBadge` uses
   `--radius-chip`. **DONE (#662):** standardized on the semantic four; migrated `rounded-md`/`rounded-lg`,
   fixed `Dialog`/`Badge`, retired `--radius-sm/md/lg/xl` (rule 8 now bans `rounded-(sm|md|lg|xl)`).
-- [ ] **Near-dead token.** `--text-live` (32px tier) is referenced **once** — the `/preview/styleguide`
-  demo (`styleguide-preview.tsx:136`) — and **never in product**. Adopt it (it's meant for the
-  live-status hero) or delete it.
+- [x] **Near-dead token.** `--text-live` (32px tier) was referenced **once** — the `/preview/styleguide`
+  demo — and **never in product**. **DONE:** removed the tier (the "Context tree is live" hero uses
+  `.context-live-title`, not this tier).
 - [x] **Inconsistent focus treatment.** **DONE (#662):** one recipe —
   `focus-visible:ring-2 ring-ring ring-offset-2` + a surface-matched `ring-offset` — applied across
   Button / Badge / Input / Dialog-close / Toast / settings-field. *(Extending it to `tab-bar` /
@@ -157,11 +158,12 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 
 ## P2 — Omissions
 
-- [ ] **No `--state-*-soft` companions.** Callouts have soft+strong pairs; state colors only have the
-  strong tone, so `lib/tones.ts` and `.context-change-breakdown` compute `color-mix(... 12-14%)` /
-  hardcode `oklch(.../0.12)` at the call site. Add `--state-idle-soft` … `--state-error-soft`.
-- [ ] **`.dark` missing `color-scheme: dark`** (only `.landing-marketing` sets it). Native form
-  controls / scrollbars don't get dark UA rendering in app dark mode.
+- [x] **No `--state-*-soft` companions.** **DONE:** added
+  `--state-{working,idle,needs-you,blocked,error,offline}-soft` (one canonical 14% translucent mix; raw
+  on `:root`, `--color-state-*-soft` aliases in `@theme`). Migrating `lib/tones.ts` /
+  `.context-change-breakdown` onto them is the follow-up cleanup PR.
+- [x] **`.dark` missing `color-scheme: dark`.** **DONE:** added `color-scheme: dark` to `.dark` (and
+  `color-scheme: light` to `:root`); native form controls / scrollbars now match the canvas in both modes.
 - [x] **`--color-*` semantic alias layer is unadopted.** `--color-text-*` / `--color-surface-*` /
   `--color-border-*` were each referenced once (only the styleguide). **DONE (#662):** deleted the alias
   layer; `--fg`/`--bg-*`/`--border` are canonical. Kept only the shadcn-compat aliases the primitives
@@ -169,7 +171,9 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 - [ ] **Marketing surface contrast gap.** `.landing-marketing` overrides `--bg`/`--fg`/`--border` but
   not the callout soft/strong pairs or `--state-*` — a notice on the near-black marketing canvas
   resolves to light-mode values. Define them in scope or guard against callouts there.
-- [ ] **No `info` (blue) callout pair** — only error/warn/success.
+- [x] **No `info` (blue) callout pair.** **DONE:** added `--color-info` / `--color-info-soft` (blue hue
+  245 — the presence-idle hue, following the same callout↔state hue pairing as error/warn/success),
+  light + dark.
 
 ## P3 — Discipline
 
@@ -193,9 +197,10 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 ## Notes for whoever picks this up
 
 - **Done:** P0, P0.5 rule 7, all P1 decisions, P2 `--color-*` alias (#656/#662); green-liveness colour (#672).
-- **Still open (none blocking):** P0.5 multi-line detection, `--text-live` adopt/drop, `--state-*-soft`,
-  `.dark color-scheme`, info callout, `.context-live-*` palette, spacing rhythm, dead `--sp-*`, and the
-  deferred focus-ring extension to the remaining interactive primitives.
+- **Still open (none blocking):** P0.5 multi-line detection, `.context-live-*` palette, spacing rhythm,
+  dead `--sp-*`, the deferred focus-ring extension to the remaining interactive primitives, and the
+  ✓⚠✗⚙→lucide icon purge. *(`--text-live` drop, `--state-*-soft`, `.dark`/`:root` color-scheme, and the
+  info callout are DONE — see the P1/P2 marks above.)*
 - Verify after any change: `pnpm --filter @first-tree/web typecheck` (runs tsc + `lint:tokens`).
 
 ---
@@ -267,8 +272,8 @@ fold into the phases below.
 
 **Phase 3 — rollout + folded cleanup:**
 - [ ] Apply across remaining pages (Team roster, Settings, onboarding, …).
-- [ ] Add `--state-*-soft` tokens (so `tones.ts` stops computing `color-mix` at call sites).
-- [ ] `color-scheme: dark` on `.dark`; bring the off-palette `.context-live-*` blues into tokens.
+- [x] Add `--state-*-soft` tokens — DONE (definitions). *(Migrating `tones.ts` / call sites onto them is the follow-up cleanup PR.)*
+- [~] `color-scheme: dark` on `.dark` — DONE; bringing the off-palette `.context-live-*` blues into tokens — still open.
 
 **Phase 4 — close-out:**
 - [ ] QA in light + dark.
