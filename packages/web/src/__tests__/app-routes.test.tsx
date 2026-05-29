@@ -55,9 +55,6 @@ vi.mock("../pages/settings.js", async () => {
 });
 vi.mock("../pages/settings/computers.js", () => ({ SettingsComputersPage: () => <div>settings computers</div> }));
 vi.mock("../pages/settings/github.js", () => ({ SettingsGithubPage: () => <div>settings github</div> }));
-vi.mock("../pages/settings/integrations.js", () => ({
-  SettingsIntegrationsPage: () => <div>settings integrations</div>,
-}));
 vi.mock("../pages/settings/onboarding.js", () => ({ SettingsOnboardingPage: () => <div>settings onboarding</div> }));
 vi.mock("../pages/team/settings.js", () => ({ TeamSettingsPage: () => <div>team settings</div> }));
 vi.mock("../pages/agent-detail.js", async () => {
@@ -138,7 +135,7 @@ describe("App routes", () => {
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/admin#bindings")).toContain("settings integrations");
+    expect(await renderAppAt("/admin#agents")).toContain("team page");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 

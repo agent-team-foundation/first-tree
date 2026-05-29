@@ -709,19 +709,6 @@ function createClient(): QueryClient {
     createdAt: NOW,
     updatedAt: NOW,
   });
-  queryClient.setQueryData(
-    ["adapters"],
-    [
-      {
-        id: 1,
-        platform: "kael",
-        agentId: "agent-1",
-        status: "active",
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-    ],
-  );
   return queryClient;
 }
 
@@ -929,25 +916,19 @@ describe("page SSR smoke coverage", () => {
   });
 
   it("renders public and settings pages with seeded query data", async () => {
-    const { BindingsPage } = await import("../bindings.js");
     const { ClientsPage } = await import("../clients.js");
-    const { IntegrationsPage } = await import("../integrations.js");
     const { LandingPage } = await import("../landing/index.js");
     const { OrgSettingsPage } = await import("../org-settings.js");
     const { SettingsComputersPage } = await import("../settings/computers.js");
     const { SettingsGithubPage } = await import("../settings/github.js");
-    const { SettingsIntegrationsPage } = await import("../settings/integrations.js");
     const { TeamPage } = await import("../team/index.js");
     const { TeamSettingsPage } = await import("../team/settings.js");
 
     expect(renderPage(<LandingPage />)).toContain("AI-native teams");
     expect(renderPage(<ClientsPage />)).toContain("Computers");
     expect(renderPage(<TeamPage />)).toContain("Team");
-    expect(renderPage(<IntegrationsPage />)).toContain("Messaging");
-    expect(renderPage(<BindingsPage />, "/integrations?agent=agent-1")).toContain("Bot bindings");
     expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsIntegrationsPage />)).toContain("Messaging");
     expect(renderPage(<TeamSettingsPage />)).toContain("Identity");
     expect(renderPage(<OrgSettingsPage />)).toContain("Source repos");
 
