@@ -4,7 +4,10 @@ import { cn } from "../../lib/utils.js";
 const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("rounded-[var(--radius-panel)] border bg-card text-card-foreground shadow-sm", className)}
+    className={cn(
+      "rounded-[var(--radius-panel)] border bg-card text-card-foreground shadow-[var(--shadow-sm)]",
+      className,
+    )}
     {...props}
   />
 ));

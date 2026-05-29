@@ -186,13 +186,26 @@ fold into the phases below.
 - [x] Updated `/preview/styleguide` swatches (split into Primary / Brand groups); verified light + dark.
 - [x] (already done in cleanup) working=blue / blocked=amber / error=red / idle=neutral.
 
-**Phase 1 — primitives (`components/ui/`):**
-- [ ] `Button`: make the `default` variant neutral-primary; Arco radius/shadow.
-- [ ] Consistent thin line-icon set (lucide is fine; purge any emoji from product UI).
-- [ ] Restyle Badge / Card / Input / Tab / etc. to the neutral language.
-- [ ] Fold in leftover: **unify the focus-ring recipe** (Button/Badge/settings currently differ).
-  *(Phase 0 already unified the ring **color** → neutral `--ring` / `--color-ring`; the
-  recipe — `ring-1` vs `ring-2 ring-offset` vs `outline` — still varies per primitive.)*
+**Phase 1 — primitives (`components/ui/`) — DONE 2026-05-28 (PR ____):**
+- [x] `Button`: default variant neutral-primary (via Phase 0 tokens); flat (removed the
+  Tailwind-default `shadow`) for the crisp Arco look; default hover wired to `--primary-hover`.
+- [x] Flatten / tokenize primitive shadows to the flat reference: `badge` + `input` flat;
+  `card` → `shadow-[var(--shadow-sm)]`; `row-actions-menu` → `shadow-[var(--shadow-md)]`.
+- [x] **Unify the focus-ring recipe** → one accessible form
+  (`focus-visible:ring-2 ring-ring ring-offset-2` + a surface-matched `ring-offset` color)
+  across Button / Badge / Input / Dialog-close / Toast / settings-field (theme-toggle
+  already conformed). Fixes the invisible-ring-on-`--primary`-fill bug; `ring-offset` color
+  matches each control's real surface (`--bg-sunken` for settings-field, `--bg-raised` for toast).
+- [ ] **Follow-ups (deferred):**
+  - Line-icon set / purge the ✓ ⚠ ✗ ⚙ glyphs in favor of lucide — layout-affecting, spread
+    across pages; needs a by-eye pass.
+  - Extend the focus ring to the remaining interactive primitives (`tab-bar`,
+    `segmented-control`, `command`, `popover` triggers, `filter-pill`) — they paint no ring
+    today, so no visible mismatch, but it's an a11y coverage gap.
+  - Button/Badge base `ring-offset-background` uses the page surface; on a raised card/menu
+    a sub-perceptible 2px seam can appear on keyboard focus (a primitive can't know its
+    parent surface). Masked by the filled fill; acceptable until a per-surface convention exists.
+  - Component-grammar restyle (Tabs, ConversationList, ChatView, etc.) is Phase 2.
 
 **Phase 2 — component grammar (workspace):**
 - [ ] `ConversationList`: add a Search box; tabs-as-underline; rounded-square avatars; neutral selected row.
