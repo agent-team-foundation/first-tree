@@ -386,7 +386,7 @@ export function BindingsPage() {
               {mappings.map((m) => (
                 <DenseTableRow key={m.id} interactive onClick={() => navigate(`/agents/${m.agentId}`)}>
                   <DenseTableCell>
-                    <span className="mono font-medium" style={{ color: "var(--accent-dim)" }}>
+                    <span className="mono font-medium" style={{ color: "var(--primary)" }}>
                       {resolveAgentName(m.agentId)}
                     </span>
                   </DenseTableCell>

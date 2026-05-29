@@ -14,7 +14,7 @@ export function ShowMeHow({ label = "Show me how", children }: { label?: string;
     <details className="onboarding-show-me-how">
       <summary
         className="inline-flex items-center text-label font-medium"
-        style={{ gap: "var(--sp-1)", color: "var(--accent)" }}
+        style={{ gap: "var(--sp-1)", color: "var(--primary)" }}
       >
         <ChevronRight className="onboarding-disclosure-chevron h-3.5 w-3.5" />
         {label}
@@ -40,8 +40,8 @@ function GuideSteps({ steps }: { steps: readonly string[] }) {
               height: "var(--sp-4)",
               flexShrink: 0,
               borderRadius: 999,
-              background: "color-mix(in oklch, var(--accent) 14%, transparent)",
-              color: "var(--accent)",
+              background: "color-mix(in oklch, var(--primary) 14%, transparent)",
+              color: "var(--primary)",
             }}
           >
             {i + 1}
@@ -118,11 +118,11 @@ export function TerminalGuide() {
                 height: "1em",
                 marginLeft: "var(--sp-0_5)",
                 verticalAlign: "text-bottom",
-                background: "var(--accent)",
+                background: "var(--primary)",
               }}
             />
           </div>
-          <div style={{ color: "color-mix(in oklch, var(--accent) 30%, var(--fg))", marginTop: "var(--sp-1)" }}>
+          <div style={{ color: "color-mix(in oklch, var(--primary) 30%, var(--fg))", marginTop: "var(--sp-1)" }}>
             ✓ macbook-pro connected
           </div>
         </div>
@@ -141,7 +141,7 @@ export function TerminalGuide() {
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium"
-          style={{ color: "var(--accent)" }}
+          style={{ color: "var(--primary)" }}
         >
           {COPY.connectComputer.nodeLinkLabel}
         </a>
@@ -157,8 +157,8 @@ function FlowChip({ label }: { label: string }) {
       style={{
         padding: "var(--sp-1) var(--sp-2)",
         borderRadius: "var(--radius-input)",
-        background: "color-mix(in oklch, var(--accent) 8%, transparent)",
-        border: "var(--hairline) solid color-mix(in oklch, var(--accent) 22%, transparent)",
+        background: "color-mix(in oklch, var(--primary) 8%, transparent)",
+        border: "var(--hairline) solid color-mix(in oklch, var(--primary) 22%, transparent)",
         color: "var(--fg-2)",
         whiteSpace: "nowrap",
       }}

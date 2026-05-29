@@ -119,6 +119,20 @@ if [ -n "$hits" ]; then
   report "Tailwind shadow-(lg|xl|2xl) found (2-tier scale: use shadow-[var(--shadow-md)] or --shadow-sm):" "$hits"
 fi
 
+# 10. Retired --accent token family. Strategy A split the old all-purpose green
+#     --accent into --primary (neutral action color) and --brand (signature
+#     green). The literal `--accent` (and --accent-dim/-bg/-ring) is banned so a
+#     stray reference can never silently fall back to nothing. Note: this does
+#     NOT match `--color-accent` (shadcn's neutral hover surface, intentionally
+#     kept) nor the `"accent"` DenseBadge/AgentChip tone identifier — both lack
+#     the `--accent` substring.
+hits=$(grep -rnF --include="*.tsx" --include="*.ts" --include="*.css" --exclude-dir=__tests__ \
+  -e '--accent' \
+  "$SRC" || true)
+if [ -n "$hits" ]; then
+  report "Retired \`--accent\` token reference found (use --primary for actions/active states, --brand for signature green):" "$hits"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo "✓ design-token guardrails clean"
   exit 0

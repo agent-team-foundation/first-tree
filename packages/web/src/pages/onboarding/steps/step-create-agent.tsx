@@ -98,10 +98,10 @@ export function StepCreateAgent() {
             borderRadius: "var(--radius-input)",
             color: "var(--fg)",
             outline: "none",
-            caretColor: "var(--accent)",
+            caretColor: "var(--primary)",
           }}
           onFocus={(e) => {
-            e.currentTarget.style.borderColor = "var(--accent)";
+            e.currentTarget.style.borderColor = "var(--primary)";
           }}
           onBlur={(e) => {
             e.currentTarget.style.borderColor = "var(--border)";
@@ -122,8 +122,8 @@ export function StepCreateAgent() {
               style={{
                 gap: "var(--sp-2)",
                 padding: "var(--sp-2) var(--sp-3)",
-                background: active ? "color-mix(in oklch, var(--accent) 8%, var(--bg))" : "var(--bg)",
-                border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-faint)",
+                background: active ? "color-mix(in oklch, var(--primary) 8%, var(--bg))" : "var(--bg)",
+                border: active ? "var(--hairline) solid var(--primary)" : "var(--hairline) solid var(--border-faint)",
                 borderRadius: "var(--radius-input)",
                 cursor: "pointer",
               }}
@@ -145,7 +145,9 @@ export function StepCreateAgent() {
                   marginTop: "var(--sp-0_5)",
                   flexShrink: 0,
                   borderRadius: "50%",
-                  border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
+                  border: active
+                    ? "var(--hairline) solid var(--primary)"
+                    : "var(--hairline) solid var(--border-strong)",
                 }}
               >
                 {active && (
@@ -154,7 +156,7 @@ export function StepCreateAgent() {
                       width: "var(--sp-1_5)",
                       height: "var(--sp-1_5)",
                       borderRadius: "50%",
-                      background: "var(--accent)",
+                      background: "var(--primary)",
                     }}
                   />
                 )}

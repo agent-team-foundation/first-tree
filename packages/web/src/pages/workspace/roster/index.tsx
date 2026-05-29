@@ -126,7 +126,7 @@ export function AgentRoster({
             columnGap: 8,
             padding: "var(--sp-1_75) var(--sp-2_5) var(--sp-1_75) var(--sp-3)",
             background: isSelected ? "var(--bg-active)" : "transparent",
-            borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "transparent"}`,
+            borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--primary)" : "transparent"}`,
           }}
         >
           <StateDot state={state} size={8} />
@@ -146,8 +146,8 @@ export function AgentRoster({
                   style={{
                     padding: "var(--hairline) var(--sp-1_25)",
                     borderRadius: 2,
-                    color: "var(--accent)",
-                    background: "color-mix(in oklch, var(--accent) 15%, transparent)",
+                    color: "var(--primary)",
+                    background: "color-mix(in oklch, var(--primary) 15%, transparent)",
                   }}
                 >
                   human
@@ -393,7 +393,7 @@ function PulseIcon() {
       fill="none"
       aria-hidden="true"
       focusable="false"
-      style={{ color: "var(--accent)" }}
+      style={{ color: "var(--primary)" }}
     >
       <title>pulse</title>
       <path

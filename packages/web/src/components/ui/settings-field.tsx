@@ -49,7 +49,7 @@ export function SettingsField({
   pattern?: string;
 }) {
   const inputId = useId();
-  const inputClass = `flex-1 min-w-0 outline-none text-body focus-visible:ring-1 focus-visible:ring-ring ${mono ? "mono" : ""}`;
+  const inputClass = `flex-1 min-w-0 outline-none text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-sunken)] ${mono ? "mono" : ""}`;
   const inputStyle: React.CSSProperties = {
     padding: "var(--sp-1_5) var(--sp-2_5)",
     background: "var(--bg-sunken)",
@@ -108,7 +108,7 @@ function SavedIndicator() {
       className="text-label inline-flex items-center fade-in"
       style={{
         gap: "var(--sp-1)",
-        color: "color-mix(in oklch, var(--accent) 35%, var(--fg))",
+        color: "color-mix(in oklch, var(--primary) 35%, var(--fg))",
       }}
     >
       <Check className="h-3 w-3" />
@@ -122,7 +122,7 @@ function SavedIndicator() {
  * to the input. The border is a single hairline at rest (no fill, no
  * shadow) so the shape is legible as a clickable target without
  * dominating the form row. Hover lifts the bg + ink for a clear active
- * state; focus-visible draws the accent ring for keyboard users.
+ * state; focus-visible draws the neutral focus ring for keyboard users.
  *
  * Spinner replaces ✓ during the in-flight mutation. Tooltip + aria-label
  * preserve the affordance's name despite the iconless label.

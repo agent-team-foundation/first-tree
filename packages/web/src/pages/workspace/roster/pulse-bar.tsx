@@ -24,7 +24,7 @@ export function PulseBar({
         const bucket = aggregated[i] ?? { workingCount: 0, errorMask: false };
         const normalized = bucket.workingCount === 0 ? 0.08 : bucket.workingCount / max;
         const opacity = 0.25 + normalized * 0.7;
-        const background = bucket.errorMask ? "var(--state-error)" : "var(--accent)";
+        const background = bucket.errorMask ? "var(--state-error)" : "var(--state-working)";
         return (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length deterministic bucket index

@@ -43,7 +43,7 @@ export function Tab({ active, onClick, children }: TabProps) {
       style={{
         padding: "var(--sp-1_75) var(--sp-3)",
         marginBottom: -1,
-        borderBottom: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
+        borderBottom: `var(--hairline-bold) solid ${active ? "var(--primary)" : "transparent"}`,
         color: active ? "var(--fg)" : "var(--fg-3)",
         cursor: "pointer",
         transition: "color 0.12s",

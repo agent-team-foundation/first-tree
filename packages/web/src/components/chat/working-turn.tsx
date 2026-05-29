@@ -233,7 +233,7 @@ export function WorkingTurn({ events, defaultOpen, agentNameFn, agentAvatarFn, a
 
   const header = (
     <div className="flex items-baseline" style={{ gap: 6, minWidth: 0 }}>
-      <span className="mono text-label font-semibold" style={{ color: "var(--accent)", flexShrink: 0 }}>
+      <span className="mono text-label font-semibold" style={{ color: "var(--primary)", flexShrink: 0 }}>
         {name}
       </span>
       <span style={{ display: "inline-flex", flexShrink: 0 }}>

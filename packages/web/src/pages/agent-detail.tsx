@@ -687,7 +687,7 @@ function TabsNav({
               )}
               style={{
                 padding: "var(--sp-2_5) var(--sp-3)",
-                borderBottom: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
+                borderBottom: `var(--hairline-bold) solid ${active ? "var(--primary)" : "transparent"}`,
                 color: active ? "var(--fg)" : "var(--fg-3)",
                 fontWeight: active ? 500 : 400,
                 display: "inline-flex",
@@ -806,7 +806,7 @@ function BindClientList({
               className={cn("w-full text-left flex items-center gap-3")}
               style={{
                 padding: "var(--sp-2) var(--sp-3)",
-                background: picked ? "var(--accent-bg)" : "transparent",
+                background: picked ? "var(--bg-active)" : "transparent",
                 border: "none",
                 cursor: "pointer",
               }}

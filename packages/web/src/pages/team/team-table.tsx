@@ -470,7 +470,7 @@ function HumanDelegateInline({ row }: { row: HumanRow }) {
           row.onEditDelegate();
         }}
         className="text-caption hover:underline"
-        style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--accent-dim)" }}
+        style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--primary)" }}
       >
         Set delegate →
       </button>
@@ -550,7 +550,7 @@ function HumanDelegateCell({ row }: { row: HumanRow }) {
       <AgentChip name={row.delegate.name} displayName={row.delegate.displayName} />
     </span>
   ) : (
-    <span style={{ color: "var(--accent-dim)" }}>Set delegate →</span>
+    <span style={{ color: "var(--primary)" }}>Set delegate →</span>
   );
 
   const tooltip = row.delegate ? (row.canEditDelegate ? `Change delegate · ${fullLabel}` : fullLabel) : "Set delegate";

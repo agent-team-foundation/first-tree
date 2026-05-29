@@ -71,7 +71,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
               border: "var(--hairline) solid var(--border-strong)",
             }}
           >
-            <FirstTreeLogo width={14} height={16} style={{ color: "var(--accent)" }} />
+            <FirstTreeLogo width={14} height={16} style={{ color: "var(--brand)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-subtitle" style={{ color: "var(--fg)" }}>
@@ -99,7 +99,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
           <Tile
             label="active"
             value={agent?.activeSessions ?? 0}
-            accent={(agent?.activeSessions ?? 0) > 0 ? "var(--accent)" : "var(--fg-4)"}
+            accent={(agent?.activeSessions ?? 0) > 0 ? "var(--success)" : "var(--fg-4)"}
           />
           <Tile label="uptime" value={formatUptime(client?.connectedAt ?? null)} />
         </div>
@@ -139,10 +139,10 @@ export function AgentContext({ agentId }: { agentId: string }) {
         }}
         className="flex flex-col"
       >
-        <a href={`/agents/${agentId}`} style={{ color: "var(--accent)" }} className="hover:underline text-label">
+        <a href={`/agents/${agentId}`} style={{ color: "var(--primary)" }} className="hover:underline text-label">
           Manage agent →
         </a>
-        <a href="/clients" style={{ color: "var(--accent)", marginTop: 4 }} className="hover:underline text-label">
+        <a href="/clients" style={{ color: "var(--primary)", marginTop: 4 }} className="hover:underline text-label">
           Computers →
         </a>
       </div>

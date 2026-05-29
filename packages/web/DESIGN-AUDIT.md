@@ -159,27 +159,53 @@ craft level. Reference mockup: `variant-F.html` (light + dark) in the design arc
 This is a full visual pass — do it phased, not in one shot. The earlier P1–P3 leftovers
 fold into the phases below.
 
-**Decisions still needed before coding:**
-- [~] **Gray ramp temperature** — keep the current faint green tint in the neutrals
-  (hue 150, very low chroma — a quiet brand whisper) or de-tint to pure neutral?
-  *(Recommend: keep the faint tint — it's on-strategy "green as signature".)*
-- [~] **Exact `--primary` values** — neutral near-black (light) / near-white (dark) + hover.
-- [~] **Token naming** — split `--accent` → `--brand` (green: logo / Context-Tree) +
-  keep `--success`; introduce `--primary` (neutral). Keep `--accent` as a temporary
-  alias during migration, or rename in one pass?
+**Pre-Phase-0 decisions (RESOLVED 2026-05-28):**
+- [x] **Gray ramp temperature → pure neutral (chroma 0).** De-tinted the former
+  hue-150 / low-chroma neutrals so grays never read faintly green next to the brand.
+  Decided by eye against a tinted-vs-neutral comparison; pure neutral made the brand
+  green pop *more* by contrast.
+- [x] **`--primary` values.** Light `oklch(0.21 0 0)` / hover `0.32` / on `0.99`;
+  dark `0.93` / hover `0.85` / on `0.17`. Added a neutral `--ring` (primary @ 0.4 alpha).
+  Dedicated token set (not a reuse of `--fg`) so action-ink can diverge from body text.
+- [x] **Token naming → rename in one pass, no alias.** Retired `--accent` entirely;
+  renamed the green to `--brand` (+ `--brand-dim` / `-bg` / `-ring`); kept `--success`
+  (= `--brand`); introduced neutral `--primary`. Every `var(--accent*)` was reclassified
+  per-site (≈90 sites): most → `--primary`; logo / mentions / avatar-fallback / admin
+  badge / agent-chip → `--brand`; healthy / active-sessions / pulse → `--success`.
+  Selection fills → `--bg-active`. `shadcn`'s `--color-accent` (neutral hover surface)
+  and the `"accent"` tone identifier are intentionally kept — neither contains the
+  `--accent` substring, so the guardrail leaves them alone.
 
-**Phase 0 — token role refactor (`index.css`):**
-- [ ] Add `--primary` / `--primary-hover` / `--primary-on` (neutral, auto-inverting `:root` / `.dark`).
-- [ ] Repoint primary actions from `--accent` → `--primary` (buttons, send, primary CTAs, selected state).
-- [ ] Rename `--accent` → `--brand` for logo / Context-Tree surfaces; keep `--success` for success.
-- [ ] Selected / active states → neutral fill (not green tint).
-- [ ] (already done in cleanup) confirm working=blue / blocked=amber / error=red / idle=neutral.
+**Phase 0 — token role refactor (`index.css`) — DONE 2026-05-28:**
+- [x] Added `--primary` / `--primary-hover` / `--primary-on` / `--ring` (auto-inverting `:root` / `.dark`).
+- [x] Repointed primary actions / active / selected / focus / links: `--accent` → `--primary`.
+- [x] Renamed `--accent` → `--brand` (logo / mentions / avatar fallback / signature); `--success` → `--brand`.
+- [x] Selected / active states → neutral fill (`--bg-active` / `--primary`), not green tint.
+- [x] De-tinted the neutral ramp to chroma 0 (decision 1), light + dark.
+- [x] Guardrail **rule 10** bans the retired `--accent` family to force completeness.
+- [x] Updated `/preview/styleguide` swatches (split into Primary / Brand groups); verified light + dark.
+- [x] (already done in cleanup) working=blue / blocked=amber / error=red / idle=neutral.
 
-**Phase 1 — primitives (`components/ui/`):**
-- [ ] `Button`: make the `default` variant neutral-primary; Arco radius/shadow.
-- [ ] Consistent thin line-icon set (lucide is fine; purge any emoji from product UI).
-- [ ] Restyle Badge / Card / Input / Tab / etc. to the neutral language.
-- [ ] Fold in leftover: **unify the focus-ring recipe** (Button/Badge/settings currently differ).
+**Phase 1 — primitives (`components/ui/`) — DONE 2026-05-28 (PR ____):**
+- [x] `Button`: default variant neutral-primary (via Phase 0 tokens); flat (removed the
+  Tailwind-default `shadow`) for the crisp Arco look; default hover wired to `--primary-hover`.
+- [x] Flatten / tokenize primitive shadows to the flat reference: `badge` + `input` flat;
+  `card` → `shadow-[var(--shadow-sm)]`; `row-actions-menu` → `shadow-[var(--shadow-md)]`.
+- [x] **Unify the focus-ring recipe** → one accessible form
+  (`focus-visible:ring-2 ring-ring ring-offset-2` + a surface-matched `ring-offset` color)
+  across Button / Badge / Input / Dialog-close / Toast / settings-field (theme-toggle
+  already conformed). Fixes the invisible-ring-on-`--primary`-fill bug; `ring-offset` color
+  matches each control's real surface (`--bg-sunken` for settings-field, `--bg-raised` for toast).
+- [ ] **Follow-ups (deferred):**
+  - Line-icon set / purge the ✓ ⚠ ✗ ⚙ glyphs in favor of lucide — layout-affecting, spread
+    across pages; needs a by-eye pass.
+  - Extend the focus ring to the remaining interactive primitives (`tab-bar`,
+    `segmented-control`, `command`, `popover` triggers, `filter-pill`) — they paint no ring
+    today, so no visible mismatch, but it's an a11y coverage gap.
+  - Button/Badge base `ring-offset-background` uses the page surface; on a raised card/menu
+    a sub-perceptible 2px seam can appear on keyboard focus (a primitive can't know its
+    parent surface). Masked by the filled fill; acceptable until a per-surface convention exists.
+  - Component-grammar restyle (Tabs, ConversationList, ChatView, etc.) is Phase 2.
 
 **Phase 2 — component grammar (workspace):**
 - [ ] `ConversationList`: add a Search box; tabs-as-underline; rounded-square avatars; neutral selected row.

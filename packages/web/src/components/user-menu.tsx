@@ -221,9 +221,9 @@ function RoleBadge({ role }: { role: string | null | undefined }) {
       style={{
         padding: "var(--hairline) var(--sp-1_75)",
         borderRadius: "var(--radius-chip)",
-        color: role === "admin" ? "var(--accent-dim)" : "var(--fg-3)",
+        color: role === "admin" ? "var(--brand-dim)" : "var(--fg-3)",
         border: "var(--hairline) solid var(--border)",
-        background: role === "admin" ? "var(--accent-bg)" : "var(--bg-sunken)",
+        background: role === "admin" ? "var(--brand-bg)" : "var(--bg-sunken)",
       }}
     >
       {role}

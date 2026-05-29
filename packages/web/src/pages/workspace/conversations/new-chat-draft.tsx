@@ -673,7 +673,7 @@ export function NewChatDraft({
               </span>
               <span className="flex items-center" style={{ gap: 8 }}>
                 {sending && pendingImages.length > 0 && (
-                  <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                  <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                     uploading…
                   </span>
                 )}

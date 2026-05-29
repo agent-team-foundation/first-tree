@@ -168,7 +168,7 @@ function highlightMention(body: string, mentionedUser: string | undefined): Reac
     return (
       <>
         {body.slice(0, prefixedIdx)}
-        <span className="font-medium" style={{ color: "var(--accent)" }}>
+        <span className="font-medium" style={{ color: "var(--brand)" }}>
           {body.slice(prefixedIdx, prefixedIdx + prefixed.length)}
         </span>
         {body.slice(prefixedIdx + prefixed.length)}
@@ -182,7 +182,7 @@ function highlightMention(body: string, mentionedUser: string | undefined): Reac
     return (
       <>
         {body.slice(0, start)}
-        <span className="font-medium" style={{ color: "var(--accent)" }}>
+        <span className="font-medium" style={{ color: "var(--brand)" }}>
           {body.slice(start, end)}
         </span>
         {body.slice(end)}
@@ -226,7 +226,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         lineHeight: 1.4,
       }}
     >
-      <span className="font-semibold" style={{ color: "var(--accent-dim)" }}>
+      <span className="font-semibold" style={{ color: "var(--primary)" }}>
         {tagLabel}
       </span>
       <span style={{ color: "var(--fg-3)" }}>{entityNumber}</span>

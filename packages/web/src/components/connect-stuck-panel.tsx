@@ -45,7 +45,7 @@ export function ConnectStuckPanel() {
         target="_blank"
         rel="noopener noreferrer"
         className="text-label font-medium self-start"
-        style={{ color: "var(--accent)" }}
+        style={{ color: "var(--primary)" }}
       >
         {COPY.connectComputer.nodeLinkLabel} →
       </a>

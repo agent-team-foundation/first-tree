@@ -96,10 +96,10 @@ export function StepTeam() {
           borderRadius: "var(--radius-input)",
           color: "var(--fg)",
           outline: "none",
-          caretColor: "var(--accent)",
+          caretColor: "var(--primary)",
         }}
         onFocus={(e) => {
-          e.currentTarget.style.borderColor = "var(--accent)";
+          e.currentTarget.style.borderColor = "var(--primary)";
         }}
         onBlur={(e) => {
           e.currentTarget.style.borderColor = "var(--border)";
