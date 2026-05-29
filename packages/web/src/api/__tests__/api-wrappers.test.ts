@@ -34,9 +34,8 @@ afterEach(() => {
 });
 
 describe("api wrapper paths", () => {
-  it("formats activity, adapter, org setting, organization, and overview requests", async () => {
+  it("formats activity, org setting, organization, and overview requests", async () => {
     const activity = await import("../activity.js");
-    const adapters = await import("../adapters.js");
     const contextTree = await import("../context-tree.js");
     const orgSettings = await import("../org-settings.js");
     const organizations = await import("../organizations.js");
@@ -51,12 +50,6 @@ describe("api wrapper paths", () => {
     await activity.disconnectClient("client-3");
     await activity.resetAgentActivity("agent/id");
     await activity.generateConnectToken();
-
-    await adapters.listAdapters();
-    await adapters.getAdapter(8);
-    await adapters.createAdapter({ platform: "kael", agentId: "agent-1", credentials: {}, status: "active" });
-    await adapters.updateAdapter(9, { agentId: "agent-2" });
-    await adapters.deleteAdapter(10);
 
     await contextTree.getContextTreeSnapshot("org/id", "7d");
     await orgSettings.getContextTreeSetting("org/id");
@@ -77,7 +70,6 @@ describe("api wrapper paths", () => {
     expect(apiMock.post).toHaveBeenCalledWith("/clients/client-3/disconnect");
     expect(apiMock.post).toHaveBeenCalledWith("/agents/agent%2Fid/reset-activity");
     expect(apiMock.post).toHaveBeenCalledWith("/me/connect-tokens");
-    expect(apiMock.patch).toHaveBeenCalledWith("/adapters/9", { agentId: "agent-2" });
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/snapshot?window=7d");
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {
       repo: "https://github.com/acme/tree",
