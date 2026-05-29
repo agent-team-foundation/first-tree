@@ -111,7 +111,7 @@ function ChangedChip() {
       style={{
         padding: "var(--hairline) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
-        background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+        background: "var(--state-blocked-soft)",
         color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
       }}
     >

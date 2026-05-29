@@ -34,7 +34,7 @@ export function DisconnectChip() {
         border: 0,
         outline: "var(--hairline) solid color-mix(in oklch, var(--state-error) 38%, transparent)",
         outlineOffset: -1,
-        background: "color-mix(in oklch, var(--state-error) 14%, transparent)",
+        background: "var(--state-error-soft)",
         color: "color-mix(in oklch, var(--state-error) 80%, var(--fg))",
         minWidth: 0,
       }}
