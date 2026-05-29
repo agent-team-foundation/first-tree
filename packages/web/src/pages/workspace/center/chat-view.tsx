@@ -72,6 +72,7 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import { TokenUsagePill } from "../../../components/chat/token-usage-pill.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -2535,6 +2536,13 @@ export function ChatView({
                       switch (ev.kind) {
                         case "error":
                           node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
+                          break;
+                        case "token_usage":
+                          // Inline per-turn audit pill — see token-usage
+                          // design doc (sociocurrency + audit). Kept by
+                          // `filterEventsForTimeline` across turn_end so
+                          // historical turns retain their cost stamp.
+                          node = <TokenUsagePill key={item.key} event={ev} />;
                           break;
                         default:
                           // assistant_text / tool_call / thinking are folded into

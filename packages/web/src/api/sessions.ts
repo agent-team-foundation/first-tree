@@ -61,7 +61,8 @@ export type SessionEventKind =
   | "assistant_text"
   | "thinking"
   | "turn_end"
-  | "context_tree_usage";
+  | "context_tree_usage"
+  | "token_usage";
 
 export type SessionEventRow = {
   id: string;

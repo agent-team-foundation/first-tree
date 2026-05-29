@@ -11,6 +11,7 @@ import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
 import { SetupTab } from "./pages/agent-detail/setup-tab.js";
 import { ToolsTab } from "./pages/agent-detail/tools-tab.js";
+import { UsageTab } from "./pages/agent-detail/usage-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
@@ -127,6 +128,7 @@ export function App() {
                   <Route path="agents/:uuid" element={<AgentDetailPage />}>
                     <Route index element={<Navigate to="profile" replace />} />
                     <Route path="profile" element={<ProfileTab />} />
+                    <Route path="usage" element={<UsageTab />} />
                     <Route path="setup" element={<SetupTab />} />
                     <Route path="prompt" element={<PromptTab />} />
                     <Route path="tools" element={<ToolsTab />} />

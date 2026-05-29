@@ -1,6 +1,7 @@
-import type { Agent } from "@first-tree/shared";
+import type { Agent, UsageByAgentRow } from "@first-tree/shared";
 import { Bot, Lock, type LucideIcon, User, Users } from "lucide-react";
 import { type CSSProperties, type ReactNode, useState } from "react";
+import type { UsageWindow } from "../../api/usage.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import {
@@ -14,7 +15,7 @@ import {
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
-import { formatDay } from "../../lib/utils.js";
+import { formatCompactCount, formatDay } from "../../lib/utils.js";
 
 export type { RowAction };
 
@@ -85,9 +86,22 @@ type Props = {
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
   getAgentActions: (row: AgentRow) => RowAction[];
+  /**
+   * Aggregate token-usage rows keyed by `agent.uuid` for the current
+   * `usageWindow`. Map missing entries render as "—" — same visual
+   * affordance as a zero-usage row. Pass `null` to hide the Usage column
+   * entirely (used while the query is still loading).
+   */
+  usageByAgentId: Map<string, UsageByAgentRow> | null;
+  /** Currently-selected aggregation window. Drives the column header label and the segmented control's active state. */
+  usageWindow: UsageWindow;
+  /** Fired when the user clicks 7d / 30d in the column header's segmented control. */
+  onUsageWindowChange: (next: UsageWindow) => void;
+  /** True while the usage query is in flight — keeps the column visible with skeleton cells. */
+  usageLoading: boolean;
 };
 
-type ColumnKey = "name" | "delegate" | "manager" | "runtime" | "status" | "created" | "actions";
+type ColumnKey = "name" | "delegate" | "manager" | "runtime" | "status" | "usage" | "created" | "actions";
 
 type Column = {
   key: ColumnKey;
@@ -119,9 +133,14 @@ const COLUMNS_WIDE: Column[] = [
   // tooltip — 170 fits the typical `claude-code @ alice-macbook` form on
   // one line and longer FQDNs ellipsize cleanly. Status (live operational
   // state) is the orthogonal axis and stays in its own column.
-  { key: "runtime", label: "Runs on", width: 170 },
-  { key: "status", label: "Status", width: 88 },
-  { key: "created", label: "Created", width: 88 },
+  { key: "runtime", label: "Runs on", width: 150 },
+  { key: "status", label: "Status", width: 80 },
+  // Usage column header doubles as the 7d/30d window picker — see
+  // UsageColumnHeader. Width chosen to fit "1.24M · 142t" without ellipsis
+  // at the dominant content density. Sits after Status (the next visually
+  // dominant signal) so the eye reaches "how online?" before "how busy?".
+  { key: "usage", label: "Usage", width: 120 },
+  { key: "created", label: "Created", width: 80 },
   { key: "actions", label: "", width: 44 },
 ];
 
@@ -143,15 +162,25 @@ function sectionCellStyle(isLast: boolean, style?: CSSProperties): CSSProperties
   return { ...style, borderBottom: 0 };
 }
 
-export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions, getAgentActions }: Props) {
+export function TeamTable({
+  groups,
+  clientHostMap,
+  onAgentClick,
+  getHumanActions,
+  getAgentActions,
+  usageByAgentId,
+  usageWindow,
+  onUsageWindowChange,
+  usageLoading,
+}: Props) {
   const viewport = useWorkspaceViewport();
   const isNarrow = viewport === "narrow";
   const columns = isNarrow ? COLUMNS_NARROW : COLUMNS_WIDE;
   return (
     // Narrow drops `table-fixed`: with only Name + Status + Actions we let
     // the Name column flex to fill the remaining width (Status/Actions are
-    // fixed via td-level `width`). Wide keeps `table-fixed` so the 7-column
-    // canvas balances by the declared widths as before.
+    // fixed via td-level `width`). Wide keeps `table-fixed` so the 8-column
+    // canvas (post-Usage column) balances by the declared widths as before.
     <DenseTable className={isNarrow ? undefined : "table-fixed"}>
       <DenseTableHeader>
         <DenseTableRow>
@@ -167,7 +196,11 @@ export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions
               }}
               aria-hidden={col.key === "actions"}
             >
-              {col.label}
+              {col.key === "usage" ? (
+                <UsageColumnHeader window={usageWindow} onChange={onUsageWindowChange} />
+              ) : (
+                col.label
+              )}
             </DenseTableHead>
           ))}
         </DenseTableRow>
@@ -182,9 +215,60 @@ export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions
           onAgentClick={onAgentClick}
           getHumanActions={getHumanActions}
           getAgentActions={getAgentActions}
+          usageByAgentId={usageByAgentId}
+          usageLoading={usageLoading}
         />
       ))}
     </DenseTable>
+  );
+}
+
+/**
+ * Column-header cell that doubles as the 7d/30d window picker. The header
+ * row is the only place the table exposes a control, so keeping the
+ * "Usage" label and the chooser in one cell keeps the chrome quiet.
+ */
+function UsageColumnHeader({ window, onChange }: { window: UsageWindow; onChange: (next: UsageWindow) => void }) {
+  const baseBtn: CSSProperties = {
+    background: "transparent",
+    border: 0,
+    padding: "0 var(--sp-1_5)",
+    cursor: "pointer",
+    color: "var(--fg-3)",
+    fontWeight: 600,
+  };
+  const active: CSSProperties = { ...baseBtn, color: "var(--fg-2)", background: "var(--bg-hover)" };
+  return (
+    <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+      <span>Usage</span>
+      <span
+        className="inline-flex items-center text-caption"
+        style={{ gap: "var(--hairline)", border: "var(--hairline) solid var(--border)", padding: "var(--hairline)" }}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange("7d");
+          }}
+          style={window === "7d" ? active : baseBtn}
+          aria-pressed={window === "7d"}
+        >
+          7d
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange("30d");
+          }}
+          style={window === "30d" ? active : baseBtn}
+          aria-pressed={window === "30d"}
+        >
+          30d
+        </button>
+      </span>
+    </span>
   );
 }
 
@@ -196,6 +280,8 @@ function GroupBody({
   onAgentClick,
   getHumanActions,
   getAgentActions,
+  usageByAgentId,
+  usageLoading,
 }: {
   group: TeamGroup;
   columns: Column[];
@@ -204,6 +290,8 @@ function GroupBody({
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
   getAgentActions: (row: AgentRow) => RowAction[];
+  usageByAgentId: Map<string, UsageByAgentRow> | null;
+  usageLoading: boolean;
 }) {
   const [open, setOpen] = useState(!group.collapsible);
 
@@ -245,6 +333,8 @@ function GroupBody({
               onClick={() => onAgentClick(row.agent.uuid)}
               isLast={isLast}
               isNarrow={isNarrow}
+              usage={usageByAgentId ? (usageByAgentId.get(row.agent.uuid) ?? null) : null}
+              usageLoading={usageLoading}
             />
           );
         })}
@@ -441,6 +531,10 @@ function HumanRowView({
       <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         —
       </DenseTableCell>
+      {/* Usage column — humans don't run turns; render the half-blank em-dash for visual structure (same pattern as Manager/Runs-on for human rows). */}
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
+        —
+      </DenseTableCell>
       <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(row.createdAt)}
       </DenseTableCell>
@@ -590,6 +684,8 @@ function AgentRowView({
   onClick,
   isLast,
   isNarrow,
+  usage,
+  usageLoading,
 }: {
   row: AgentRow;
   clientHost: string | null;
@@ -597,6 +693,10 @@ function AgentRowView({
   onClick: () => void;
   isLast: boolean;
   isNarrow: boolean;
+  /** `null` when the org-wide usage map has no entry for this agent (idle in window). */
+  usage: UsageByAgentRow | null;
+  /** Drives the loading skeleton in the Usage cell while the org query is in flight. */
+  usageLoading: boolean;
 }) {
   const { agent, managerLabel, isOwnedBySelf, showVisibilityChip } = row;
 
@@ -683,6 +783,9 @@ function AgentRowView({
       <DenseTableCell style={sectionCellStyle(isLast)}>
         <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
       </DenseTableCell>
+      <DenseTableCell style={sectionCellStyle(isLast)}>
+        <UsageCell usage={usage} loading={usageLoading} />
+      </DenseTableCell>
       <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(agent.createdAt)}
       </DenseTableCell>
@@ -693,6 +796,41 @@ function AgentRowView({
         <RowActionsMenu actions={actions} ariaLabel={`Actions for ${agent.displayName}`} />
       </DenseTableCell>
     </DenseTableRow>
+  );
+}
+
+/**
+ * Render the Usage cell for one agent. Shows "1.24M · 142t" when the agent
+ * has activity in the window, "—" when idle (zero usage), and a skeleton
+ * dash while the org-wide query is still loading. Total tokens here =
+ * input + cached + output so the number reads as the agent's whole
+ * footprint, matching how the agent-profile KPI counts.
+ */
+function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading: boolean }) {
+  if (loading && !usage) {
+    return (
+      <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+        …
+      </span>
+    );
+  }
+  if (!usage || usage.turns === 0) {
+    return (
+      <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+        —
+      </span>
+    );
+  }
+  const totalTokens = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens;
+  return (
+    <span
+      className="text-caption mono"
+      style={{ color: "var(--fg-2)" }}
+      title={`Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · ${usage.turns} turns`}
+    >
+      {formatCompactCount(totalTokens)}
+      <span style={{ color: "var(--fg-4)" }}>{` · ${formatCompactCount(usage.turns)}t`}</span>
+    </span>
   );
 }
 
