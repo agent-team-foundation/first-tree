@@ -74,9 +74,10 @@ export type AgentStatusView = {
  * treatment, per the §9.1 visual vocabulary of the agent-status-ui design.
  * Pure and side-effect-free.
  *
- * Colors are the shared `--state-*` tokens (working = blue everywhere, etc.)
- * so this composite vocabulary and the runtime-A StateDot render with one
- * palette; shapes follow StateDot's shape+color double-encoding. This is the
+ * Colors are the shared `--state-*` tokens (working = green/alive, idle = blue,
+ * needs-you = amber, blocked = orange, etc.) so this composite vocabulary and
+ * the runtime-A StateDot render with one palette; shapes follow StateDot's
+ * shape+color double-encoding. This is the
  * *composite* mapping — it does NOT replace StateChip/StateDot, which keep
  * rendering the agent-global runtime vocabulary for the management pages.
  */
@@ -92,7 +93,7 @@ export function viewOf(main: AgentMainStatus): AgentStatusView {
       };
     case "needs_you":
       return {
-        colorVar: "var(--state-blocked)",
+        colorVar: "var(--state-needs-you)",
         shape: "dot",
         pulse: "needs-you",
         animationClass: "agent-status-pulse--needs-you",

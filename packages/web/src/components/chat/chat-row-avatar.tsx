@@ -429,7 +429,13 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
  */
 function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
   if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
-  if (needsYou) return <CornerBadge background="var(--state-blocked)">?</CornerBadge>;
+  // Dark glyph on the light amber fill — white-on-amber (L≈0.82) is too low-contrast.
+  if (needsYou)
+    return (
+      <CornerBadge background="var(--state-needs-you)" fg="oklch(0.28 0.07 75)">
+        ?
+      </CornerBadge>
+    );
   const label = formatUnreadLabel(unread);
   if (label === null) return null;
   return (
@@ -453,10 +459,12 @@ function CornerBadge({
   background,
   children,
   wide = false,
+  fg = "var(--fg-on-vivid)",
 }: {
   background: string;
   children: ReactNode;
   wide?: boolean;
+  fg?: string;
 }) {
   return (
     <span
@@ -473,7 +481,7 @@ function CornerBadge({
         padding: wide ? "0 var(--sp-1)" : 0,
         borderRadius: wide ? CORNER_BADGE_SIZE / 2 : "50%",
         background,
-        color: "var(--fg-on-vivid)",
+        color: fg,
         fontSize: "var(--text-caption)",
         fontWeight: 700,
         lineHeight: 1,

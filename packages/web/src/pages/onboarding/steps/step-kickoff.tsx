@@ -192,7 +192,7 @@ function AdminKickoff() {
           <FlowNote tone="info">{COPY.kickoff.noProjectBody}</FlowNote>
           {error && <FlowNote>{error}</FlowNote>}
           <div className="flex">
-            <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
+            <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
               <span>{COPY.kickoff.start}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
@@ -487,7 +487,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
             preserves the "continue with intro only" path so users can't
             soft-lock themselves. */}
         <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-          <Button type="button" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
+          <Button type="button" variant="cta" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
             <span>{COPY.kickoff.start}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>

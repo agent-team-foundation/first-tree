@@ -177,7 +177,7 @@ export function StepCreateAgent() {
       {agentError && <FlowNote>{COPY.errors.agentFailed}</FlowNote>}
 
       <div className="flex">
-        <Button type="button" onClick={handleCreate} disabled={!canCreate}>
+        <Button type="button" variant="cta" onClick={handleCreate} disabled={!canCreate}>
           <span>Create {trimmed || "your agent"}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>

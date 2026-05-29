@@ -24,20 +24,21 @@ export function NewMessagesPill({ count, onClick }: { count: number; onClick: ()
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="absolute inline-flex items-center font-medium shadow-md"
+      className="absolute inline-flex items-center font-medium shadow-[var(--shadow-md)]"
       style={{
         // Sit above the input composer with comfortable breathing
         // room; offset from the right so it does not collide with
-        // the timeline content.
+        // the timeline content. Filled brand-green = a live "new arrival"
+        // nudge (distinct from the red unread-backlog badges).
         bottom: "var(--sp-3)",
         right: "var(--sp-4)",
         gap: "var(--sp-1_5)",
         height: "var(--sp-7)",
         padding: "0 var(--sp-3)",
         borderRadius: 999,
-        border: "var(--hairline) solid var(--primary)",
-        background: "var(--bg-raised)",
-        color: "var(--primary)",
+        border: "none",
+        background: "var(--brand)",
+        color: "var(--fg-on-vivid)",
         cursor: "pointer",
         zIndex: 5,
       }}
