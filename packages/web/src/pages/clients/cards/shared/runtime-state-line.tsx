@@ -34,7 +34,7 @@ export function RuntimeStateLine({
     case "ok":
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
-          <span style={{ color: "var(--state-idle)" }}>✓</span> {label}
+          <span style={{ color: "var(--success)" }}>✓</span> {label}
           {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
         </div>
       );

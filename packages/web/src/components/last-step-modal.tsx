@@ -122,7 +122,7 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
             </code>
             <Button variant="outline" size="icon" className="shrink-0" onClick={handleCopy} disabled={!command}>
               {copied ? (
-                <Check className="h-4 w-4" style={{ color: "var(--state-idle)" }} />
+                <Check className="h-4 w-4" style={{ color: "var(--success)" }} />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

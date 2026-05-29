@@ -85,10 +85,7 @@ export function SaveBar(props: SaveBarProps) {
             </div>
           )}
           {props.justSaved && !props.summary.anyDirty && !props.errorMessage && !props.conflictMessage && (
-            <div
-              className="inline-flex items-center gap-1.5 text-body font-medium"
-              style={{ color: "var(--state-idle)" }}
-            >
+            <div className="inline-flex items-center gap-1.5 text-body font-medium" style={{ color: "var(--success)" }}>
               <Check className="h-3.5 w-3.5" />
               Saved
             </div>
