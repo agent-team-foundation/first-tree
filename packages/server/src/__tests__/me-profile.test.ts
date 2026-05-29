@@ -69,6 +69,18 @@ describe("PATCH /me/profile", () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it("rejects a whitespace-only display name (trim → empty)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `me-prof-ws-${Date.now()}` });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/me/profile",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { displayName: "   " },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
 
 describe("member lastActiveAt (derived from most recent message)", () => {

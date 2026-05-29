@@ -90,7 +90,7 @@ export async function fetchAllAgents(
 }
 
 export function TeamPage() {
-  const { role, memberId } = useAuth();
+  const { role, memberId, refreshMe } = useAuth();
   const isAdmin = role === "admin";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -162,7 +162,13 @@ export function TeamPage() {
   // agent's displayName changes too, so refresh agents alongside members.
   const updateMyProfileMut = useMutation({
     mutationFn: async (displayName: string) => updateMyProfile({ displayName }),
-    onSuccess: () => {
+    onSuccess: async () => {
+      // displayName has TWO visible sources of truth: the members/agents React
+      // Query caches AND the AuthProvider's own `/me` state (user-menu, etc.
+      // read useAuth().user.displayName, which is NOT in the query cache).
+      // Refresh both, else the top-right menu shows the old name until the next
+      // natural fetchMe.
+      await refreshMe();
       queryClient.invalidateQueries({ queryKey: ["members"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },

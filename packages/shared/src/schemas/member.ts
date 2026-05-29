@@ -45,7 +45,10 @@ export type UpdateMember = z.infer<typeof updateMemberSchema>;
  * route `PATCH /orgs/:orgId/members/:id` remains the only way to change roles.
  */
 export const updateMyProfileSchema = z.object({
-  displayName: z.string().min(1).max(200),
+  // `.trim()` runs before `.min(1)`, so a whitespace-only name collapses to ""
+  // and is rejected — a direct API caller can't write a blank display name
+  // (the web dialog already trims, this closes the server-side hole).
+  displayName: z.string().trim().min(1).max(200),
 });
 export type UpdateMyProfile = z.infer<typeof updateMyProfileSchema>;
 
