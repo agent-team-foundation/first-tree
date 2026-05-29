@@ -25,6 +25,7 @@ import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
+import { attachmentRoutes } from "./api/attachments.js";
 import { attentionRoutes } from "./api/attention.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -42,6 +43,7 @@ import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAdapterRoutes } from "./api/orgs/adapters.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
+import { orgAttachmentRoutes } from "./api/orgs/attachments.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
@@ -329,6 +331,16 @@ export async function buildApp(config: Config) {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
   });
 
+  // Body parser for `application/octet-stream` — needed by the attachment
+  // upload route. Fastify's built-in parsers cover json / text only; without
+  // this registration `request.body` would be undefined on an octet-stream
+  // POST and the route would 415. Registered globally because Fastify only
+  // supports global content-type parsers; the route still owns its own
+  // `bodyLimit` so the byte cap is route-local.
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
+
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
   const isDev = process.env.NODE_ENV !== "production";
@@ -498,6 +510,17 @@ export async function buildApp(config: Config) {
         { prefix: "/attention" },
       );
 
+      // Object-storage primitive — download surface (user-JWT). Generic
+      // binary blob download; not bound to any business surface. Auth is a
+      // capability model: valid JWT + knowledge of the unguessable id. Upload
+      // lives under the org scope below. See api/attachments.ts.
+      await api.register(
+        userScope("attachmentRoutesScope", async (scope) => {
+          await scope.register(attachmentRoutes);
+        }),
+        { prefix: "/attachments" },
+      );
+
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
       await api.register(
         userScope("orgsScope", async (scope) => {
@@ -515,6 +538,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
+          await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
         }),
         { prefix: "/orgs/:orgId" },
       );
