@@ -51,7 +51,7 @@ export type {
   SessionContext,
   SessionMessage,
 } from "./runtime/handler.js";
-export { getHandlerFactory, registerHandler } from "./runtime/handler.js";
+export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
 export type {
   AttentionFrameCallbacks,
   AttentionFrameDispatcher,

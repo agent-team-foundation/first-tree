@@ -81,6 +81,9 @@ vi.mock("@first-tree/client", () => {
     })),
     getChildProcessRegistry: vi.fn(() => ({ killAll: killAllMock })),
     getHandlerFactory: vi.fn(() => vi.fn()),
+    // Mirror the real registry: only the built-in providers have a handler.
+    // The unsupported-runtime guard in addAgent keys off this.
+    hasHandler: vi.fn((type: string) => type === "claude-code" || type === "codex"),
     registerBuiltinHandlers: vi.fn(),
   };
 });
@@ -369,4 +372,44 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(print.status).toHaveBeenCalledWith("⚠️", "client connection error: socket reset");
     await rt.stop();
   });
+
+  it(
+    "skips an agent whose runtime has no handler on this build, without crashing startup",
+    async () => {
+      const { print } = await import("../core/output.js");
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://hub.test", "client-test");
+
+      // A valid enum provider this client build ships no handler for yet
+      // (e.g. claude-code-tui before the TUI handler lands). Added FIRST so the
+      // test also proves it does not abort registration of the agent after it.
+      rt.addAgent("tui-agent", {
+        agentId: "agent-tui",
+        runtime: "claude-code-tui",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
+      rt.addAgent("alpha", {
+        agentId: "agent-alpha",
+        runtime: "claude-code",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
+
+      // Must not throw despite the unsupported agent in the load set.
+      await rt.start();
+
+      // Only the supported agent built a slot; the unsupported one was skipped.
+      expect(slotInstances).toHaveLength(1);
+      expect(slotInstances[0]?.name).toBe("alpha");
+      // Operator got a clear warning naming the agent and its runtime.
+      expect(print.status).toHaveBeenCalledWith(
+        "⚠️",
+        expect.stringContaining('agent "tui-agent" uses runtime "claude-code-tui"'),
+      );
+
+      await rt.stop();
+    },
+    RUNTIME_TEST_TIMEOUT_MS,
+  );
 });

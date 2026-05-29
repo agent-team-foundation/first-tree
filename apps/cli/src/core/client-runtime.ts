@@ -9,6 +9,7 @@ import {
   type GitMirrorManager,
   getChildProcessRegistry,
   getHandlerFactory,
+  hasHandler,
   registerBuiltinHandlers,
   type UpdateHooks,
   UpdateManager,
@@ -181,6 +182,22 @@ export class ClientRuntime {
 
   addAgent(name: string, config: AgentConfig): void {
     if (this.agentNames.has(name)) return;
+    // The runtime provider is a valid enum value, but this client build may not
+    // ship a handler for it yet (e.g. a `claude-code-tui` agent pinned to a
+    // client that predates the TUI handler). Skip it with a clear warning
+    // rather than letting `getHandlerFactory` throw and crash daemon startup —
+    // which would also stop every other agent in the same load loop. Record the
+    // name/id so rescans and reconnects don't re-warn; a client upgrade + restart
+    // picks the agent up once its handler is registered.
+    if (!hasHandler(config.runtime)) {
+      print.status(
+        "⚠️",
+        `agent "${name}" uses runtime "${config.runtime}" which this client build does not support yet — skipping. Update the client to run it.`,
+      );
+      this.agentNames.add(name);
+      this.agentIds.add(config.agentId);
+      return;
+    }
     const handlerFactory = getHandlerFactory(config.runtime);
     const slot = new AgentSlot({
       name,

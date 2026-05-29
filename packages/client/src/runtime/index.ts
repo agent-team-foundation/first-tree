@@ -23,7 +23,7 @@ export type {
   SessionContext,
   SessionMessage,
 } from "./handler.js";
-export { getHandlerFactory, registerHandler } from "./handler.js";
+export { getHandlerFactory, hasHandler, registerHandler } from "./handler.js";
 export { InputController } from "./input-controller.js";
 export { registerShutdownHook, runShutdown } from "./lifecycle.js";
 export type { AgentRuntimeOptions } from "./runtime.js";
