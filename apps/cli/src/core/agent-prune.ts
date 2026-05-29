@@ -16,6 +16,10 @@ import { z } from "zod";
  * - `pinned-elsewhere`  — agentId belongs to the user but is pinned to a
  *                         *different* client. R-RUN would reject `bind`
  *                         on this machine; the agent is alive on the other.
+ *
+ * Suspended agents pinned to this client are not stale. The server still
+ * returns them from `/me/pinned-agents` with `status: "suspended"` so prune
+ * keeps their local config/workspace/session state for future reactivation.
  */
 export type StaleAliasReason =
   | { kind: "unreadable"; error: string }
@@ -29,7 +33,7 @@ export type StaleAlias = {
   reason: StaleAliasReason;
 };
 
-export type PinnedAgent = { agentId: string; clientId: string };
+export type PinnedAgent = { agentId: string; clientId: string; status?: string };
 
 const minimalAgentYamlSchema = z
   .object({

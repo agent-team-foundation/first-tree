@@ -81,22 +81,53 @@ const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
 };
 
 /**
- * `entity.key` arrives as `owner/repo#N` or `owner/repo@<sha>`. Strip the
- * repo prefix so the chip renders the short `#N` / `@<sha>` form. Falls
- * back defensively to the segment after the last `/` if the prefix does
- * not match (older messages, schema drift).
+ * `entity.key` arrives as `owner/repo#N` (issue / PR), `owner/repo@<sha>`
+ * (commit), or `owner/repo#discussion-N` (discussion — the odd one out:
+ * the key carries a `discussion-` infix but the server's surface title
+ * uses the bare `disc.number`, see `entitySurfaceTitle` in
+ * services/github-normalize.ts). Strip the repo prefix, then collapse the
+ * `discussion-` infix so the chip and the surface-title-strip both
+ * reference the same `#N` form that appears in the server-rendered title.
+ * Falls back defensively to the segment after the last `/` if neither
+ * prefix shape matches (older messages, schema drift).
  */
-function shortEntityNumber(key: string, repository: string): string {
+export function shortEntityNumber(key: string, repository: string): string {
+  let tail: string;
   if (repository && (key.startsWith(`${repository}#`) || key.startsWith(`${repository}@`))) {
-    return key.slice(repository.length);
+    tail = key.slice(repository.length);
+  } else {
+    const lastSlash = key.lastIndexOf("/");
+    tail = lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
   }
-  const lastSlash = key.lastIndexOf("/");
-  return lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
+  const DISC_PREFIX = "#discussion-";
+  return tail.startsWith(DISC_PREFIX) ? `#${tail.slice(DISC_PREFIX.length)}` : tail;
 }
 
 function shortRepoName(repository: string): string {
   const lastSlash = repository.lastIndexOf("/");
   return lastSlash >= 0 ? repository.slice(lastSlash + 1) : repository;
+}
+
+/**
+ * Server-side `entitySurfaceTitle` (services/github-normalize.ts) wraps the
+ * raw entity title as `"PR #N: <title>"` / `"Issue #N: <title>"` /
+ * `"Discussion #N: <title>"` / `"Commit: <title>"`. The L1 chip already
+ * renders that prefix as a colored badge, so leaving it inside the title
+ * string duplicates information. Strip the exact prefix we expect from the
+ * server formatter; if the title doesn't match (older messages, schema
+ * drift), return as-is so we never silently drop the title.
+ */
+export function stripEntityPrefix(title: string, entityType: GithubEntityType, entityNumber: string): string {
+  const prefix = ENTITY_TAG_LABEL[entityType];
+  if (entityType === "commit") {
+    if (title.startsWith(`${prefix}: `)) return title.slice(prefix.length + 2);
+    if (title === prefix) return "";
+    return title;
+  }
+  const head = `${prefix} ${entityNumber}`;
+  if (title.startsWith(`${head}: `)) return title.slice(head.length + 2);
+  if (title === head) return "";
+  return title;
 }
 
 function subscribedVerb(kind: GithubEventCard["kind"]): string {
@@ -210,6 +241,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
   const entityNumber = shortEntityNumber(content.entity.key, content.repository);
   const repoShort = shortRepoName(content.repository);
   const verb = actionVerb(content);
+  const titleText = stripEntityPrefix(content.title, content.entity.type, entityNumber);
 
   const entityChip = (
     <span
@@ -246,7 +278,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         }}
       >
         {entityChip}
-        {content.title ? (
+        {titleText ? (
           link ? (
             <a
               href={link}
@@ -255,11 +287,11 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
               className="font-medium no-underline hover:underline"
               style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
             >
-              {content.title}
+              {titleText}
             </a>
           ) : (
             <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
-              {content.title}
+              {titleText}
             </span>
           )
         ) : null}

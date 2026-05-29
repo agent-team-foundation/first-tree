@@ -7,7 +7,6 @@ import {
   agentPinnedMessageSchema,
   type ClientPausedReason,
   type InboxDeliverFrame,
-  imagePayloadFrameSchema,
   inboxDeliverFrameSchema,
   type RuntimeState,
   type ServerWelcomeFrame,
@@ -19,7 +18,6 @@ import {
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-import { writeImage } from "./runtime/image-store.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
 
 /**
@@ -122,7 +120,7 @@ type ClientConnectionEvents = {
   reconnected: [];
   error: [error: Error];
   "agent:bound": [agent: BoundAgent];
-  "agent:unbound": [agentId: string];
+  "agent:unbound": [agentId: string, reason?: string];
   /**
    * Server pushed a fully-assembled inbox entry over the WS data plane.
    * Listeners must call `connection.sendInboxAck(frame.entryId)` once the
@@ -406,15 +404,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    * permanent → never).
    */
   private readonly bindRetryRecords = new Map<string, BindRetryRecord>();
-
-  /**
-   * In-flight image writes from recent `image_payload` frames. `image_payload`
-   * arrives on the WS just before `inbox:deliver` for the same message, but
-   * the EventEmitter dispatch is sync — so without gating, the deliver
-   * handler can fire before the image bytes hit disk. Block `inbox:deliver`
-   * emission until these settle.
-   */
-  private readonly pendingImageWrites = new Set<Promise<void>>();
 
   constructor(config: ClientConnectionConfig) {
     super();
@@ -994,7 +983,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const agentId = msg.agentId as string;
       if (agentId && this.boundAgents.has(agentId)) {
         this.boundAgents.delete(agentId);
-        this.emit("agent:unbound", agentId);
+        this.emit("agent:unbound", agentId, typeof msg.reason === "string" ? msg.reason : "server_forced");
       }
       return;
     }
@@ -1014,23 +1003,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (agentId && staleChatIds) {
         this.emit("session:reconcile:result", { agentId, staleChatIds });
       }
-      return;
-    }
-
-    if (type === "image_payload") {
-      const parsed = imagePayloadFrameSchema.safeParse(msg);
-      if (!parsed.success) {
-        this.wsLogger.warn({ err: parsed.error.flatten() }, "malformed image_payload frame — dropping");
-        return;
-      }
-      const { imageId, chatId, mimeType, base64 } = parsed.data;
-      const write = writeImage({ chatId, imageId, mimeType, base64 })
-        .then(() => {})
-        .catch((err: unknown) => {
-          this.wsLogger.warn({ err, imageId, chatId }, "image_payload write failed");
-        });
-      this.pendingImageWrites.add(write);
-      write.finally(() => this.pendingImageWrites.delete(write));
       return;
     }
 
@@ -1076,15 +1048,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         );
         return;
       }
-      // Image-write race guard: server pushes `image_payload` immediately
-      // before `inbox:deliver`, so make sure disk writes flush before the
-      // runtime tries to render the message.
-      const emit = () => this.emit("inbox:deliver", parsed.data.inboxId, parsed.data);
-      if (this.pendingImageWrites.size > 0) {
-        Promise.all([...this.pendingImageWrites]).finally(emit);
-      } else {
-        emit();
-      }
+      this.emit("inbox:deliver", parsed.data.inboxId, parsed.data);
       return;
     }
 

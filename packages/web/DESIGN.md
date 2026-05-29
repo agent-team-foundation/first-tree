@@ -51,6 +51,7 @@
 | success / passing / done | green (`--success`) |
 | working / alive (pulses + glow) | green (`--state-working`) |
 | live arrival (new-message pill + divider) | green |
+| selected conversation (liveness) | green (left-rail + tint — distinct from a selected *tab*, which stays neutral) |
 | idle / present | blue (`--state-idle`) |
 | needs-you | amber (`--state-needs-you`) |
 | blocked / stuck | orange (`--state-blocked`) |
@@ -95,6 +96,10 @@ in `src/` (except `index.css`):
 | 4 | font-weights outside 400/500/600/700 | the four allowed weights |
 | 5 | Inline `fontSize`/`fontWeight`/`fontFamily`/`lineHeight`/`letterSpacing` | `text-*` tier + `font-*` class |
 | 6 | Tailwind default text sizes (`text-sm`, `text-xl`, …) | the 6-tier semantic scale |
+| 7 | `var(--x)` referencing a token **not defined** in `index.css` (ghost tokens) | define it in `index.css`, or fix the name |
+| 8 | Tailwind default radius classes (`rounded-sm/md/lg/xl`) | `rounded-[var(--radius-chip\|input\|panel\|dialog)]` |
+| 9 | Tailwind shadows above the 2-tier scale (`shadow-lg/xl/2xl`) | `shadow-[var(--shadow-sm\|md)]` |
+| 10 | The retired `--accent` family (`--accent`, `--accent-dim/-bg/-ring`) | `--primary` for actions/active, `--brand` for signature green |
 
 If you need a value the tokens don't cover, **add a token to `index.css`** —
 don't inline the literal.
@@ -329,9 +334,12 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 - `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
 - Every animation respects `prefers-reduced-motion: reduce`.
 - Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
-- Focus is visible: `focus-visible:ring-1 ring-ring` on interactive controls;
+- Focus is visible: the shared primitives (Button / Badge / Input / Dialog-close /
+  Toast / settings-field) use `focus-visible:ring-2 ring-ring ring-offset-2`;
   custom radio/checkbox cards surface a ring on `:focus-within` (the real input
-  is `sr-only`).
+  is `sr-only`). *(Some page-level form controls still carry the older `ring-1` —
+  extending the `ring-2` recipe to the remaining primitives is a tracked
+  follow-up; see DESIGN-AUDIT.md.)*
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---

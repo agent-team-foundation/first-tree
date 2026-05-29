@@ -20,7 +20,6 @@ import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
-import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
@@ -162,17 +161,17 @@ export function App() {
                     <Route path="team" element={<TeamSettingsPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
                     <Route path="github" element={<SettingsGithubPage />} />
-                    <Route path="integrations" element={<SettingsIntegrationsPage />} />
                     <Route path="onboarding" element={<SettingsOnboardingPage />} />
                     {/* Old name was "setup" — keep the redirect so existing
                         in-app links / saved bookmarks keep working. */}
                     <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
+                    <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}
                   <Route path="agents" element={<Navigate to="/team" replace />} />
                   <Route path="clients" element={<Navigate to="/settings/computers" replace />} />
-                  <Route path="integrations" element={<Navigate to="/settings/integrations" replace />} />
+                  <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />
@@ -190,8 +189,5 @@ export function App() {
 
 function AdminRedirect() {
   const location = useLocation();
-  if (location.hash === "#bindings") {
-    return <Navigate to={`/settings/integrations${location.search}`} replace />;
-  }
   return <Navigate to={`/team${location.hash}`} replace />;
 }

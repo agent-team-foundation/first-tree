@@ -395,8 +395,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET /me/pinned-agents — every agent pinned to a client owned by the
-   * caller's user. Used by the SDK reconcile layer to authoritatively map
-   * `agents.runtime_provider` before spawning handlers.
+   * caller's user, excluding deleted agents. Used by the SDK reconcile layer
+   * to authoritatively map `agents.runtime_provider` and retain suspended
+   * local aliases without treating them as unowned.
    */
   app.get("/me/pinned-agents", async (request) => {
     const { userId } = requireUser(request);

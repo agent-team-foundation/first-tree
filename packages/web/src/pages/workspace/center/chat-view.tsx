@@ -36,6 +36,7 @@ import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
+import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
 import { attentionsInChatQueryKey, listAttentionsInChat } from "../../../api/attention.js";
 import {
   type FileMessageContent,
@@ -306,8 +307,12 @@ function TextRow({
   // chip styling the composer's mirror overlay uses. Code blocks and
   // link text are skipped by the plugin itself, so a message containing
   // `\`@param\`` or a quoted handle inside a markdown link keeps its
-  // original rendering.
-  const messageRehypePlugins = useMemo(() => [rehypeMentions(mentionParticipants)], [mentionParticipants]);
+  // original rendering. `selfAgentId` flips chips that target the viewer
+  // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
+  const messageRehypePlugins = useMemo(
+    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
+    [mentionParticipants, myAgentId],
+  );
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -592,8 +597,11 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
 }
 
 /**
- * Render an image whose bytes live in per-browser IndexedDB. Cache hit →
- * inline preview; miss → placeholder text (cross-device or cleared cache).
+ * Render an image referenced by `{imageId}`. The per-browser IndexedDB cache
+ * is consulted first (sender's own sends warm it on send); on a miss the bytes
+ * are fetched from the org attachment store and the cache is warmed for next
+ * time. Only a failed fetch (deleted attachment / network) falls through to
+ * the placeholder.
  */
 function ImageFromRef({ content }: { content: ImageRefContent }) {
   const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
@@ -602,14 +610,23 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
 
   useEffect(() => {
     let cancelled = false;
-    getImage(content.imageId).then((hit) => {
+    (async () => {
+      const hit = await getImage(content.imageId);
       if (cancelled) return;
       if (hit) {
         setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
-      } else {
-        setState({ kind: "miss" });
+        return;
       }
-    });
+      try {
+        const fetched = await fetchAttachmentBase64(content.imageId);
+        if (cancelled) return;
+        // Warm the cache for subsequent renders; best-effort.
+        putImage({ imageId: content.imageId, base64: fetched.base64, mimeType: fetched.mimeType }).catch(() => {});
+        setState({ kind: "hit", src: `data:${fetched.mimeType};base64,${fetched.base64}` });
+      } catch {
+        if (!cancelled) setState({ kind: "miss" });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -627,7 +644,7 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
   if (state.kind === "miss") {
     return (
       <span className="text-label" style={{ color: "var(--fg-3)", fontStyle: "italic" }}>
-        [Image "{content.filename}" not available on this device]
+        [Image "{content.filename}" failed to load]
       </span>
     );
   }
@@ -1200,30 +1217,27 @@ export function ChatView({
         // `pendingHighWaterAdvance` for rationale.
         let lastSentMessageId: string | null = null;
 
-        // Read every image's bytes + write to IndexedDB up front, building
-        // the inline batch body in one pass. The batched POST below sends
-        // caption + all attachments as a single `format: "file"` message,
-        // collapsing what used to be N image messages + 1 trailing text
-        // message into one bubble.
-        const inlineAttachments: { data: string; mimeType: string; filename: string; size: number; imageId: string }[] =
-          [];
+        // Upload every image's bytes to the org attachment store first, then
+        // build the ref-only batch body. The batched POST below sends caption
+        // + all refs as a single `format: "file"` message, collapsing what
+        // used to be N image messages + 1 trailing text message into one
+        // bubble. Bytes never ride the message body any more.
         const optimisticRefs: ImageRefContent[] = [];
         for (const img of images) {
-          const data = await readFileAsBase64(img.file);
-          const imageId = crypto.randomUUID();
-          // Write to IndexedDB before the POST so the sending tab can render
-          // its own message via the imageRef shape immediately on refetch,
-          // even if the server write races ahead of the response.
-          await putImage({ imageId, base64: data, mimeType: img.file.type });
-          inlineAttachments.push({
-            data,
-            mimeType: img.file.type,
-            filename: img.file.name,
-            size: img.file.size,
-            imageId,
-          });
+          const uploaded = await uploadImageAttachment(img.file);
+          // Warm the per-browser cache so the sending tab renders its own
+          // message instantly without re-downloading the bytes it just
+          // uploaded. A failed cache write is non-fatal — the render path
+          // falls back to fetching from the server.
+          try {
+            const data = await readFileAsBase64(img.file);
+            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type });
+          } catch {
+            // Cache warm is best-effort; ignore IndexedDB quota / availability
+            // failures and let the render path fetch from the server.
+          }
           optimisticRefs.push({
-            imageId,
+            imageId: uploaded.id,
             mimeType: img.file.type,
             filename: img.file.name,
             size: img.file.size,
@@ -1260,7 +1274,7 @@ export function ChatView({
           chatId,
           {
             ...(text ? { caption: text } : {}),
-            attachments: inlineAttachments,
+            attachments: optimisticRefs,
           },
           imageMetadata,
         );
@@ -2148,6 +2162,25 @@ export function ChatView({
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
   );
+  // Rendered-message variant of the projection above: the rehype plugin
+  // resolves `@<name>` tokens against this list, and it MUST include the
+  // viewer themselves so chips that target them flip to the
+  // `.mention-chip.is-self` attention tone. `mentionCandidates` deliberately
+  // excludes self (the composer's `@` autocomplete should not suggest you
+  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
+  // that self-exclusive semantics), so we append the viewer here in a
+  // separate projection used only by rendered messages. Source the viewer's
+  // slug from the speaker-only `chatParticipantById` map — NOT from the
+  // org-identity fallback in `chatScopedAgentIdentity` — so a non-speaker
+  // watcher viewing the chat doesn't get their org-wide name pushed into
+  // the resolver, which would paint chips that the server would never
+  // actually route to them.
+  const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
+    if (!myAgentId) return mentionParticipants;
+    const selfParticipant = chatParticipantById.get(myAgentId);
+    if (!selfParticipant?.name) return mentionParticipants;
+    return [...mentionParticipants, { agentId: myAgentId, name: selfParticipant.name }];
+  }, [mentionParticipants, myAgentId, chatParticipantById]);
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**
@@ -2644,7 +2677,7 @@ export function ChatView({
                           agentNameFn={chatScopedAgentName}
                           agentAvatarFn={agentAvatar}
                           agentColorTokenFn={agentColorToken}
-                          mentionParticipants={mentionParticipants}
+                          mentionParticipants={renderMentionParticipants}
                         />
                       );
                     }

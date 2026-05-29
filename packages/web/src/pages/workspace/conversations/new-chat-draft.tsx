@@ -2,7 +2,8 @@ import { type Agent, extractMentions, type MentionParticipant } from "@first-tre
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
+import { uploadImageAttachment } from "../../../api/attachments.js";
+import { type ImageRefContent, readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -363,19 +364,27 @@ export function NewChatDraft({
         // set. The server applies `enforceMention` to every chat shape now,
         // so no path can rely on an empty-mentions skip.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
-        const attachments: { data: string; mimeType: string; filename: string; size: number; imageId: string }[] = [];
+        const attachments: ImageRefContent[] = [];
         for (const img of images) {
-          const data = await readFileAsBase64(img.file);
-          const imageId = crypto.randomUUID();
-          // Write to IndexedDB before the POST so the sending tab can render
-          // the image from its imageRef immediately on refetch.
-          await putImage({ imageId, base64: data, mimeType: img.file.type });
+          // Upload bytes to the org attachment store first; the returned id
+          // is what every recipient fetches from GET /attachments/:id. The
+          // message carries refs only — no inline base64.
+          const uploaded = await uploadImageAttachment(img.file);
+          // Warm this tab's IndexedDB cache so the sending user renders the
+          // image immediately on refetch instead of round-tripping the server.
+          // Best-effort: the bytes are authoritative server-side, so a cache
+          // miss is recoverable on the render path.
+          try {
+            const data = await readFileAsBase64(img.file);
+            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type });
+          } catch {
+            // ignore — render path re-fetches from the server on miss
+          }
           attachments.push({
-            data,
+            imageId: uploaded.id,
             mimeType: img.file.type,
             filename: img.file.name,
             size: img.file.size,
-            imageId,
           });
         }
         await sendFileMessageBatch(

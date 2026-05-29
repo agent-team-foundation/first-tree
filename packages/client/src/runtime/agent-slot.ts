@@ -42,6 +42,7 @@ export type AgentSlotConfig = {
 type ConnectionListener =
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
+  | { event: "agent:unbound"; fn: (agentId: string, reason?: string) => void }
   | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void }
   | { event: "session:reconcile:result"; fn: (result: SessionReconcileResult) => void };
 
@@ -52,6 +53,7 @@ export class AgentSlot {
   private agentConfigCache: AgentConfigCache | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: ConnectionListener[] = [];
+  private stopping: Promise<void> | null = null;
   /**
    * The inbox this slot's agent owns — used to filter `inbox:deliver`
    * frames addressed to other agents on the same client. Captured at
@@ -138,140 +140,167 @@ export class AgentSlot {
         this.sessionManager.applyStaleChatIds(result.staleChatIds);
       }
     };
+    const onUnbound = (agentId: string, reason?: string) => {
+      if (agentId !== this.config.agentId || !reason) return;
+      this.stop().catch((err) => {
+        this.logger.error({ err, reason }, "forced agent stop failed");
+      });
+    };
     this.clientConnection.on("inbox:deliver", onInboxDeliver);
     this.clientConnection.on("agent:bound", onBound);
+    this.clientConnection.on("agent:unbound", onUnbound);
     this.clientConnection.on("session:reconcile:result", onReconcileResult);
     this.listeners.push(
       { event: "inbox:deliver", fn: onInboxDeliver },
       { event: "agent:bound", fn: onBound },
+      { event: "agent:unbound", fn: onUnbound },
       { event: "session:reconcile:result", fn: onReconcileResult },
     );
 
-    const bound = await this.clientConnection.bindAgent(
-      this.config.agentId,
-      this.config.runtimeType ?? this.config.type,
-      this.config.runtimeVersion,
-    );
-    const sdk = bound.sdk;
-    const agent = await sdk.register();
-
-    this.logger.info({ displayName: agent.displayName }, "agent bound");
-
-    if (agent.type === "human") {
-      this.logger.info("server reports type=human — message processing disabled");
-      return agent;
-    }
-
-    this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
+    let bindSucceeded = false;
     try {
-      const cfg = await this.agentConfigCache.refresh(agent.agentId);
-      this.logger.info({ version: cfg.version }, "runtime config loaded");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error({ err }, "failed to fetch agent config — bind aborted");
-      throw new Error(`Hub unreachable while loading agent config: ${msg}`);
-    }
-
-    this.inboxId = agent.inboxId;
-    const contextTreeBinding = await syncAgentContextTree(sdk, (msg) => this.logger.info(msg));
-    if (!contextTreeBinding) {
-      this.logger.info("context tree not configured or sync skipped — agent will start without organizational context");
-    }
-
-    const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
-
-    // The runtime owns the GitMirrorManager and injects it here — sharing one
-    // manager across slots is what makes `withUrlLock` actually serialise
-    // concurrent worktree adds for the same URL (PRD §5.1.5).
-    const gitMirrorManager = this.config.gitMirrorManager;
-
-    // Ack is fire-and-forget over WS: `ws.send` doesn't block on flush and
-    // SessionManager treats ack as advisory. Wrap in a resolved Promise so
-    // the `(id) => Promise<void>` config signature is satisfied.
-    const ackEntry = (entryId: number) => {
-      this.clientConnection.sendInboxAck(entryId);
-      return Promise.resolve();
-    };
-
-    this.sessionManager = new SessionManager({
-      session: this.config.session,
-      concurrency: this.config.concurrency,
-      handlerFactory: this.config.handlerFactory,
-      handlerConfig: {
-        workspaceRoot: join(defaultDataDir(), "workspaces", this.config.name),
-        agentName: this.config.name,
-        contextTreePath: contextTreeBinding?.path,
-        contextTreeRepoUrl: contextTreeBinding?.repoUrl,
-        gitMirrorManager,
-      },
-      agentIdentity: {
-        agentId: agent.agentId,
-        inboxId: agent.inboxId,
-        displayName: agent.displayName,
-        type: agent.type,
-        visibility: agent.visibility,
-        delegateMention: agent.delegateMention,
-        metadata: agent.metadata,
-      },
-      sdk,
-      log: this.logger,
-      registryPath,
-      agentConfigCache: this.agentConfigCache,
-      ackEntry,
-      onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
-      onRuntimeStateChange: (state) => this.reportRuntimeState(state),
-      onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
-      onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
-    });
-
-    const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
-      if (cmd.agentId === this.config.agentId && this.sessionManager) {
-        this.sessionManager
-          .handleCommand(cmd.chatId, cmd.type as "session:suspend" | "session:terminate")
-          .catch((err) => {
-            this.logger.error({ err, chatId: cmd.chatId, type: cmd.type }, "session command error");
-          });
-      }
-    };
-    this.clientConnection.on("session:command", onCommand);
-    this.listeners.push({ event: "session:command", fn: onCommand });
-
-    // Flush any `inbox:deliver` frames the early listener captured
-    // during init. With the bind-time reset+drain path (see design §4)
-    // the server pushes pending entries the instant it processes the
-    // `agent:bind` frame, but the surrounding `sdk.register` +
-    // `agentConfigCache.refresh` + `syncAgentContextTree` chain above
-    // can take anywhere from ~100ms (no Context Tree) to 15s
-    // (cold-clone Context Tree). Without this flush every restart with
-    // an un-acked in-flight message lost the recovery push and the
-    // server row stayed `delivered` indefinitely — the in-process
-    // Deduplicator absorbed every subsequent bind-reset replay so the
-    // entry never re-dispatched and never acked.
-    if (earlyDeliverBuffer.length > 0) {
-      this.logger.info(
-        { buffered: earlyDeliverBuffer.length },
-        "flushing early inbox:deliver buffer — frames received during init window",
+      const bound = await this.clientConnection.bindAgent(
+        this.config.agentId,
+        this.config.runtimeType ?? this.config.type,
+        this.config.runtimeVersion,
       );
-      for (const frame of earlyDeliverBuffer.splice(0)) {
-        this.dispatchPushedFrame(frame).catch((err) => {
-          this.logger.warn({ err, entryId: frame.entryId }, "buffered inbox:deliver dispatch error");
-        });
+      bindSucceeded = true;
+      const sdk = bound.sdk;
+      const agent = await sdk.register();
+
+      this.logger.info({ displayName: agent.displayName }, "agent bound");
+
+      if (agent.type === "human") {
+        this.logger.info("server reports type=human — message processing disabled");
+        return agent;
       }
+
+      this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
+      try {
+        const cfg = await this.agentConfigCache.refresh(agent.agentId);
+        this.logger.info({ version: cfg.version }, "runtime config loaded");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error({ err }, "failed to fetch agent config — bind aborted");
+        throw new Error(`Hub unreachable while loading agent config: ${msg}`);
+      }
+
+      this.inboxId = agent.inboxId;
+      const contextTreeBinding = await syncAgentContextTree(sdk, (msg) => this.logger.info(msg));
+      if (!contextTreeBinding) {
+        this.logger.info(
+          "context tree not configured or sync skipped — agent will start without organizational context",
+        );
+      }
+
+      const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
+
+      // The runtime owns the GitMirrorManager and injects it here — sharing one
+      // manager across slots is what makes `withUrlLock` actually serialise
+      // concurrent worktree adds for the same URL (PRD §5.1.5).
+      const gitMirrorManager = this.config.gitMirrorManager;
+
+      // Ack is fire-and-forget over WS: `ws.send` doesn't block on flush and
+      // SessionManager treats ack as advisory. Wrap in a resolved Promise so
+      // the `(id) => Promise<void>` config signature is satisfied.
+      const ackEntry = (entryId: number) => {
+        this.clientConnection.sendInboxAck(entryId);
+        return Promise.resolve();
+      };
+
+      this.sessionManager = new SessionManager({
+        session: this.config.session,
+        concurrency: this.config.concurrency,
+        handlerFactory: this.config.handlerFactory,
+        handlerConfig: {
+          workspaceRoot: join(defaultDataDir(), "workspaces", this.config.name),
+          agentName: this.config.name,
+          contextTreePath: contextTreeBinding?.path,
+          contextTreeRepoUrl: contextTreeBinding?.repoUrl,
+          gitMirrorManager,
+        },
+        agentIdentity: {
+          agentId: agent.agentId,
+          inboxId: agent.inboxId,
+          displayName: agent.displayName,
+          type: agent.type,
+          visibility: agent.visibility,
+          delegateMention: agent.delegateMention,
+          metadata: agent.metadata,
+        },
+        sdk,
+        log: this.logger,
+        registryPath,
+        agentConfigCache: this.agentConfigCache,
+        ackEntry,
+        onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
+        onRuntimeStateChange: (state) => this.reportRuntimeState(state),
+        onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+        onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
+      });
+
+      const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
+        if (cmd.agentId === this.config.agentId && this.sessionManager) {
+          this.sessionManager
+            .handleCommand(cmd.chatId, cmd.type as "session:suspend" | "session:terminate")
+            .catch((err) => {
+              this.logger.error({ err, chatId: cmd.chatId, type: cmd.type }, "session command error");
+            });
+        }
+      };
+      this.clientConnection.on("session:command", onCommand);
+      this.listeners.push({ event: "session:command", fn: onCommand });
+
+      // Flush any `inbox:deliver` frames the early listener captured
+      // during init. With the bind-time reset+drain path (see design §4)
+      // the server pushes pending entries the instant it processes the
+      // `agent:bind` frame, but the surrounding `sdk.register` +
+      // `agentConfigCache.refresh` + `syncAgentContextTree` chain above
+      // can take anywhere from ~100ms (no Context Tree) to 15s
+      // (cold-clone Context Tree). Without this flush every restart with
+      // an un-acked in-flight message lost the recovery push and the
+      // server row stayed `delivered` indefinitely — the in-process
+      // Deduplicator absorbed every subsequent bind-reset replay so the
+      // entry never re-dispatched and never acked.
+      if (earlyDeliverBuffer.length > 0) {
+        this.logger.info(
+          { buffered: earlyDeliverBuffer.length },
+          "flushing early inbox:deliver buffer — frames received during init window",
+        );
+        for (const frame of earlyDeliverBuffer.splice(0)) {
+          this.dispatchPushedFrame(frame).catch((err) => {
+            this.logger.warn({ err, entryId: frame.entryId }, "buffered inbox:deliver dispatch error");
+          });
+        }
+      }
+
+      // Initial-startup fullStateSync. The `on("agent:bound", onBound)`
+      // listener above also fires here now that it's attached pre-bind,
+      // but `sessionManager` was null inside its callback — so its
+      // `fullStateSync()` call was a no-op. Run it explicitly now that
+      // the manager exists.
+      this.fullStateSync();
+
+      this.startReconcileLoop();
+
+      return agent;
+    } catch (err) {
+      await this.cleanupFailedStart({ unbind: bindSucceeded });
+      throw err;
     }
-
-    // Initial-startup fullStateSync. The `on("agent:bound", onBound)`
-    // listener above also fires here now that it's attached pre-bind,
-    // but `sessionManager` was null inside its callback — so its
-    // `fullStateSync()` call was a no-op. Run it explicitly now that
-    // the manager exists.
-    this.fullStateSync();
-
-    this.startReconcileLoop();
-
-    return agent;
   }
 
   async stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.stopping = this.stopOnce();
+    try {
+      await this.stopping;
+    } finally {
+      this.stopping = null;
+    }
+  }
+
+  private async stopOnce(): Promise<void> {
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
@@ -282,7 +311,32 @@ export class AgentSlot {
     this.listeners = [];
     await this.clientConnection.unbindAgent(this.config.agentId);
     await this.sessionManager?.shutdown();
+    this.sessionManager = null;
+    this.agentConfigCache = null;
+    this.inboxId = null;
     this.logger.info("stopped");
+  }
+
+  private async cleanupFailedStart(opts: { unbind: boolean }): Promise<void> {
+    if (this.reconcileTimer) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
+    for (const entry of this.listeners) {
+      this.clientConnection.off(entry.event, entry.fn);
+    }
+    this.listeners = [];
+    if (opts.unbind) {
+      try {
+        await this.clientConnection.unbindAgent(this.config.agentId);
+      } catch (err) {
+        this.logger.warn({ err }, "failed to unbind after aborted agent start");
+      }
+    }
+    await this.sessionManager?.shutdown();
+    this.sessionManager = null;
+    this.agentConfigCache = null;
+    this.inboxId = null;
   }
 
   private reportSessionState(chatId: string, state: SessionState): void {

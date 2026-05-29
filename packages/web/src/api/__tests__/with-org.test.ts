@@ -24,7 +24,7 @@ describe("withOrg / withOrgAt", () => {
       expect(withOrg("/members")).toBe("/orgs/org-x/members");
       expect(withOrg("/agents?limit=100")).toBe("/orgs/org-x/agents?limit=100");
       expect(withOrg("/agents/names/foo/availability")).toBe("/orgs/org-x/agents/names/foo/availability");
-      expect(withOrg("/adapters/status")).toBe("/orgs/org-x/adapters/status");
+      expect(withOrg("/agents/status")).toBe("/orgs/org-x/agents/status");
       // `listOrgClients()` in api/activity.ts wraps `/clients` with `withOrg` —
       // pin the resulting path here so a future rename of the helper or the
       // route prefix can't silently break the Computers page's admin view.

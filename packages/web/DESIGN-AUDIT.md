@@ -13,12 +13,26 @@
 
 ---
 
-## Decisions (2026-05-29) — Green-liveness status model
+## Current shipped state (read this first)
+
+The live design language is the **green-liveness status model** (next section), shipped in
+**#672**, layered on **Strategy A**'s neutral chrome (Phase 0 + primitives, shipped in #662).
+DESIGN.md already describes this end state.
+
+Everything below dated **2026-05-28** — the Strategy A `Decisions`, `Implemented`, and the
+`Strategy A migration` phase plan — is kept as a **historical fix-log**. Where a 2026-05-28
+note records a colour that green-liveness later changed (notably `--state-working` cyan→green
+and `--state-idle` neutral→blue), **the green-liveness section wins**; such lines are annotated
+*(superseded by #672)*.
+
+---
+
+## Decisions (2026-05-29) — Green-liveness status model — SHIPPED in #672
 
 Owner re-opened the color strategy to use green more boldly. Net change from the shipped
 Strategy A (F): green is no longer "signature + success **only**" — it now also carries
 **liveness**, while the neutral chrome and the no-green-on-dense-buttons discipline stay.
-Implemented on branch `refactor/web-green-liveness-status`.
+Shipped in **#672** (branch `refactor/web-green-liveness-main`).
 
 - **Status palette re-coloured.** `--state-working` cyan → **green** (alive, pulses);
   `--state-idle` neutral-cool → **blue** (present/idle); added `--state-needs-you` =
@@ -50,7 +64,7 @@ Owner picked the optimization direction. These are now committed targets (implem
    (and the agent-`--state-*`) aliases to a single shared base hue, so there is **one value per color**.
    The root problem was duplicate *values*, not duplicate *names*. The severity triad migrates onto the
    feedback set; raw `--ok` is removed.
-2. **`--state-idle` → neutral.** Break the `--accent` == `--ok` == `--state-idle` collision: idle becomes a neutral/de-saturated tone, visually distinct from brand green and success — but still distinct from `--state-offline`. *(Value being chosen by eye in `/preview/styleguide`: candidates A `oklch(0.72 0.02 150)` / B `oklch(0.70 0.03 240)` / C `oklch(0.68 0.05 150)`.)*
+2. **`--state-idle` → neutral.** Break the `--accent` == `--ok` == `--state-idle` collision: idle becomes a neutral/de-saturated tone, visually distinct from brand green and success — but still distinct from `--state-offline`. *(Value being chosen by eye in `/preview/styleguide`: candidates A `oklch(0.72 0.02 150)` / B `oklch(0.70 0.03 240)` / C `oklch(0.68 0.05 150)`.)* **(superseded by #672:** `--state-idle` is now presence-**blue** `oklch(0.62 0.14 245)`, not neutral.)
 3. **Radius → semantic only; shadow stays 2-tier.** Standardize radius on `--radius-*`; migrate the 38
    `rounded-md` (= 6px = `--radius-panel`, value-preserving) and `Dialog` `rounded-lg` (= 8px =
    `--radius-dialog`, value-preserving); `Badge` → `--radius-chip` (match DenseBadge). Retire shadcn
@@ -71,7 +85,7 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
   (dynamic `var(--x-${…})` and `__tests__` excluded). Multi-line inline-style detection deferred.
 - ✅ **P1** — removed `--ok/--warn/--danger`; added `--success`/`--warning`/`--danger` aliased to
   `--accent`/`--state-blocked`/`--state-error`; migrated all consumers (index.css + context.tsx).
-  `--state-idle` → `oklch(0.7 0.03 240)` (cool standby). Radius: 38 `rounded-md` + `rounded-lg/sm`
+  `--state-idle` → `oklch(0.7 0.03 240)` (cool standby) *(later → presence-blue `oklch(0.62 0.14 245)` by #672)*. Radius: 38 `rounded-md` + `rounded-lg/sm`
   → semantic `rounded-[var(--radius-*)]`, `Badge` → chip, `Dialog` `shadow-lg` → `--shadow-md`,
   removed `--radius-sm/md/lg/xl`.
 - ✅ **P2 (partial)** — deleted the unadopted `--color-text-*/surface-*/border-*` alias layer
@@ -79,8 +93,9 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
 - Styleguide updated: real tokens, new Feedback swatches, idle shows the new tone; the temporary
   "Cleanup candidates" section was removed.
 
-**Still open:** focus-ring unification, `--text-live` adopt/drop, `--state-*-soft` companions,
+**Still open (as of #672):** `--text-live` adopt/drop, `--state-*-soft` companions,
 `color-scheme: dark` on `.dark`, info callout, `.context-live-*` palette, spacing rhythm, dead `--sp-*`.
+*(focus-ring unification — done in #662, see Phase 1.)*
 
 ---
 
@@ -88,51 +103,57 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
 
 Each of these resolves to an invalid/empty value at runtime. Fix = point at the real token.
 
+**RESOLVED (#656/#662)** — all 8 fixed (the 7 below + the stray `--shadow-lg`); `lint:tokens`
+rule 7 (undefined-token) now stays green, so these can't silently regress.
+
 | # | File:line | Written | Effect | Fix |
 |---|-----------|---------|--------|-----|
-| [ ] 1 | `components/ui/toast.tsx:114` | `var(--surface-1)` | Toast background transparent | `--bg-raised` |
-| [ ] 2 | `pages/workspace/right-sidebar/attentions-section.tsx:89,167` | `var(--sp-0_25)` | Vertical padding collapses to 0 | `--sp-px` (1px) or `--sp-0_5` |
-| [ ] 3 | `pages/source-repos-settings-panel.tsx:161` | `var(--surface-2)` | Hover background no-op | `--bg-hover` |
-| [ ] 4 | `components/history-gap-banner.tsx:23` | `var(--fg-muted)` | Text color falls back to inherit | `--fg-3` |
-| [ ] 5 | `pages/workspace/conversations/new-chat-draft.tsx:451` | `var(--bg-base)` | Background transparent | `--bg` |
-| [ ] 6 | `pages/invite-accept.tsx:132` | `var(--destructive)` | Urgent color not applied | `--state-error` (or `text-destructive` util) |
-| [ ] 7 | `pages/agent-detail.tsx:692` | `fontSize: "var(--text-body-size)"` | Font size not applied **+** illegal inline `fontSize` | Use `text-body` class; drop inline `fontSize` |
+| [x] 1 | `components/ui/toast.tsx:114` | `var(--surface-1)` | Toast background transparent | `--bg-raised` |
+| [x] 2 | `pages/workspace/right-sidebar/attentions-section.tsx:89,167` | `var(--sp-0_25)` | Vertical padding collapses to 0 | `--sp-px` (1px) or `--sp-0_5` |
+| [x] 3 | `pages/source-repos-settings-panel.tsx:161` | `var(--surface-2)` | Hover background no-op | `--bg-hover` |
+| [x] 4 | `components/history-gap-banner.tsx:23` | `var(--fg-muted)` | Text color falls back to inherit | `--fg-3` |
+| [x] 5 | `pages/workspace/conversations/new-chat-draft.tsx:451` | `var(--bg-base)` | Background transparent | `--bg` |
+| [x] 6 | `pages/invite-accept.tsx:132` | `var(--destructive)` | Urgent color not applied | `--state-error` (or `text-destructive` util) |
+| [x] 7 | `pages/agent-detail.tsx:692` | `fontSize: "var(--text-body-size)"` | Font size not applied **+** illegal inline `fontSize` | Use `text-body` class; drop inline `fontSize` |
 
-Also check: a stray `var(--shadow-lg)` reference exists (1×) but `--shadow-lg` is undefined
-(only `--shadow-sm` / `--shadow-md` exist). Locate and either define `--shadow-lg` or use `--shadow-md`.
+**Done** — the stray `var(--shadow-lg)` (in `attentions-section.tsx`) was repointed to `--shadow-md`;
+rule 9 now bans `shadow-(lg|xl|2xl)` so the 2-tier `--shadow-sm/md` scale stays enforced.
 
 ## P0.5 — Close the guardrail hole (highest leverage)
 
 The token linter (`scripts/check-design-tokens.sh`) is line-based, so it missed both classes
 of P0 bug. Two additions catch the entire P0 list automatically and stop recurrence:
 
-- [ ] **Undefined-token check:** collect every `var(--x)` in `src/`, diff against the tokens
-  defined in `index.css`; fail on any reference to an undefined token. (Would have caught all 7 above.)
-- [ ] **Multi-line style detection:** rules 1 (raw px) and 5 (inline font props) only match when
+- [x] **Undefined-token check (shipped — rule 7).** Collects every `var(--x)` in `src/`, diffs against
+  the tokens defined in `index.css`; fails on any reference to an undefined token. (Caught all 7 above.)
+- [ ] **Multi-line style detection (still deferred):** rules 1 (raw px) and 5 (inline font props) only match when
   `style={{` and the property are on the same line. `agent-detail.tsx:692` evaded both by spanning
   lines. Normalize whitespace before matching, or scan JSX style objects as blocks.
 
-## P1 — Redundancy & contradiction (DECISIONS NEEDED before fixing)
+## P1 — Redundancy & contradiction (mostly RESOLVED — see marks)
 
-- [ ] **Duplicate color vocab.** `--ok` / `--warn` / `--danger` have byte-identical values to
+- [x] **Duplicate color vocab.** `--ok` / `--warn` / `--danger` have byte-identical values to
   `--state-idle` / `--state-blocked` / `--state-error`. Two names per color = change-one-forget-other.
   **DECIDED + DONE:** removed `--ok/--warn/--danger`; severity migrated to the feedback set
   `--success` / `--warning` / `--danger` (aliased to `--accent` / `--state-blocked` / `--state-error`).
-- [ ] **Triple-identical green.** `--accent` == `--ok` == `--state-idle` == `oklch(0.72 0.17 150)`.
-  Brand/primary, "success", and "idle agent" are visually indistinguishable.
-  **DECIDED:** `--state-idle` becomes a neutral/de-saturated tone, distinct from `--accent` and from
-  `--state-offline`. New value TBD — propose options first.
-- [ ] **Two radius systems, both live.** Semantic `--radius-chip/input/panel/dialog` vs shadcn-legacy
+- [x] **Triple-identical green.** (was `--accent` == `--ok` == `--state-idle` == `oklch(0.72 0.17 150)` —
+  brand/primary, "success", and "idle agent" visually indistinguishable.)
+  **DONE:** `--accent` retired (→ `--primary` / `--brand`, #662); then #672 took `--state-idle` all the
+  way to presence-**blue** `oklch(0.62 0.14 245)`. Brand-green, success, working, and idle are now four
+  distinct, intentional roles.
+- [x] **Two radius systems, both live.** Semantic `--radius-chip/input/panel/dialog` vs shadcn-legacy
   `--radius-sm/md/lg/xl`. `rounded-md` (legacy) is used **38×**; the flagship `Dialog`
   (`dialog.tsx:32`) uses `rounded-lg` + Tailwind `shadow-lg`, bypassing `--radius-dialog` /
   `surface-overlay` / the `--shadow-*` scale. `Badge` uses `rounded-md` while `DenseBadge` uses
-  `--radius-chip`. **DECIDED:** standardize on the semantic four; migrate `rounded-md`/`rounded-lg`,
-  fix `Dialog`/`Badge`, retire `--radius-sm/md/lg/xl`.
-- [ ] **Dead token.** `--text-live` (32px tier) has zero `text-live` usages. Adopt it (it's meant for
-  the live-status hero) or delete it.
-- [~] **Inconsistent focus treatment.** Button `focus-visible:ring-1 ring-ring`; Badge
-  `focus:ring-2 ring-offset-2`; settings-save button `outline: --hairline-bold solid --accent-ring`.
-  **Decision:** define one focus recipe (token + utility) and apply everywhere.
+  `--radius-chip`. **DONE (#662):** standardized on the semantic four; migrated `rounded-md`/`rounded-lg`,
+  fixed `Dialog`/`Badge`, retired `--radius-sm/md/lg/xl` (rule 8 now bans `rounded-(sm|md|lg|xl)`).
+- [ ] **Near-dead token.** `--text-live` (32px tier) is referenced **once** — the `/preview/styleguide`
+  demo (`styleguide-preview.tsx:136`) — and **never in product**. Adopt it (it's meant for the
+  live-status hero) or delete it.
+- [x] **Inconsistent focus treatment.** **DONE (#662):** one recipe —
+  `focus-visible:ring-2 ring-ring ring-offset-2` + a surface-matched `ring-offset` — applied across
+  Button / Badge / Input / Dialog-close / Toast / settings-field. *(Extending it to `tab-bar` /
+  `segmented-control` / `command` / `popover` / `filter-pill` is still a deferred a11y follow-up.)*
 
 ## P2 — Omissions
 
@@ -141,11 +162,10 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   hardcode `oklch(.../0.12)` at the call site. Add `--state-idle-soft` … `--state-error-soft`.
 - [ ] **`.dark` missing `color-scheme: dark`** (only `.landing-marketing` sets it). Native form
   controls / scrollbars don't get dark UA rendering in app dark mode.
-- [ ] **`--color-*` semantic alias layer is unadopted.** `--color-text-*` / `--color-surface-*` /
-  `--color-border-*` are each referenced once (only the styleguide). Real components use `--fg`,
-  `--bg-raised`, `--border` directly. **DECIDED:** delete the alias layer; `--fg`/`--bg-*`/`--border`
-  are canonical. Keep only the shadcn-compat aliases the primitives need (`--color-primary`,
-  `--color-destructive`, `--color-ring`, etc.).
+- [x] **`--color-*` semantic alias layer is unadopted.** `--color-text-*` / `--color-surface-*` /
+  `--color-border-*` were each referenced once (only the styleguide). **DONE (#662):** deleted the alias
+  layer; `--fg`/`--bg-*`/`--border` are canonical. Kept only the shadcn-compat aliases the primitives
+  need (`--color-primary`, `--color-destructive`, `--color-ring`, etc.).
 - [ ] **Marketing surface contrast gap.** `.landing-marketing` overrides `--bg`/`--fg`/`--border` but
   not the callout soft/strong pairs or `--state-*` — a notice on the near-black marketing canvas
   resolves to light-mode values. Define them in scope or guard against callouts there.
@@ -172,8 +192,10 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 
 ## Notes for whoever picks this up
 
-- P0 + P0.5 are safe to do anytime — pure bugfixes, no design judgment.
-- P1 / the `[~]` items need an owner decision; they're the agenda for the optimization discussion.
+- **Done:** P0, P0.5 rule 7, all P1 decisions, P2 `--color-*` alias (#656/#662); green-liveness colour (#672).
+- **Still open (none blocking):** P0.5 multi-line detection, `--text-live` adopt/drop, `--state-*-soft`,
+  `.dark color-scheme`, info callout, `.context-live-*` palette, spacing rhythm, dead `--sp-*`, and the
+  deferred focus-ring extension to the remaining interactive primitives.
 - Verify after any change: `pnpm --filter @first-tree/web typecheck` (runs tsc + `lint:tokens`).
 
 ---
@@ -207,13 +229,16 @@ fold into the phases below.
 - [x] Added `--primary` / `--primary-hover` / `--primary-on` / `--ring` (auto-inverting `:root` / `.dark`).
 - [x] Repointed primary actions / active / selected / focus / links: `--accent` → `--primary`.
 - [x] Renamed `--accent` → `--brand` (logo / mentions / avatar fallback / signature); `--success` → `--brand`.
-- [x] Selected / active states → neutral fill (`--bg-active` / `--primary`), not green tint.
+- [x] Selected / active states → neutral fill (`--bg-active` / `--primary`), not green tint. *(#672 later
+  reverted the **selected conversation** to a green left-rail + green-tint for liveness; tabs and other
+  selections stay neutral.)*
 - [x] De-tinted the neutral ramp to chroma 0 (decision 1), light + dark.
 - [x] Guardrail **rule 10** bans the retired `--accent` family to force completeness.
 - [x] Updated `/preview/styleguide` swatches (split into Primary / Brand groups); verified light + dark.
-- [x] (already done in cleanup) working=blue / blocked=amber / error=red / idle=neutral.
+- [x] (cleanup) status palette set — *(superseded by #672 green-liveness: now working=**green**,
+  idle=**blue**, needs-you=**amber**, blocked=**orange**, error=red, offline=gray.)*
 
-**Phase 1 — primitives (`components/ui/`) — DONE 2026-05-28 (PR ____):**
+**Phase 1 — primitives (`components/ui/`) — DONE (#662):**
 - [x] `Button`: default variant neutral-primary (via Phase 0 tokens); flat (removed the
   Tailwind-default `shadow`) for the crisp Arco look; default hover wired to `--primary-hover`.
 - [x] Flatten / tokenize primitive shadows to the flat reference: `badge` + `input` flat;
@@ -235,8 +260,9 @@ fold into the phases below.
   - Component-grammar restyle (Tabs, ConversationList, ChatView, etc.) is Phase 2.
 
 **Phase 2 — component grammar (workspace):**
-- [ ] `ConversationList`: add a Search box; tabs-as-underline; rounded-square avatars; neutral selected row.
-- [ ] `ChatView`: neutral "you" bubble; neutral send button; blue working tag.
+- [ ] `ConversationList`: add a Search box; tabs-as-underline; rounded-square avatars. *(#672 already
+  shipped the green-rail selected conversation + the new-message divider/pill.)*
+- [ ] `ChatView`: neutral "you" bubble; neutral send button; **green** working chip (glow) — per #672.
 - [ ] Right **Session sidebar**: agent card + Runtime/Model KV + Live-context tree nodes (green) + Needs-you.
 
 **Phase 3 — rollout + folded cleanup:**
@@ -246,6 +272,7 @@ fold into the phases below.
 
 **Phase 4 — close-out:**
 - [ ] QA in light + dark.
-- [ ] Update `/preview/styleguide` to render the new language.
-- [ ] Rewrite DESIGN.md §3 (Color) / §8 (Iconography) / §10 (Theming) to describe the
-  now-implemented language; drop the "migration in progress" caveats.
+- [x] `/preview/styleguide` renders the new language (updated in #672).
+- [x] DESIGN.md §3 (Color) rewritten to the now-implemented green-liveness language (#672); no
+  "migration in progress" caveats remain. *(§8 Iconography — the ✓ ⚠ ✗ glyph→lucide purge — is still
+  the deferred Phase-1 follow-up.)*

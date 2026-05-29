@@ -547,6 +547,17 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
 
   if (compact) {
     const delegateText = row.delegate ? `Delegate: ${row.delegate.displayName}` : "No delegate";
+    // Self keeps the interactive delegate selector even on narrow screens
+    // (otherwise there'd be no entry to set/change it — the kebab is empty
+    // for self). Others get plain meta text.
+    const meta = row.canEditDelegate ? (
+      <span className="inline-flex items-center min-w-0" style={{ gap: "var(--sp-1)" }}>
+        <DelegateCell row={row} candidates={delegateCandidates} onSetDelegate={onSetDelegate} />
+        <span style={{ color: "var(--fg-4)" }}>· {lastActive}</span>
+      </span>
+    ) : (
+      `${delegateText} · ${lastActive}`
+    );
     return (
       <CompactRow
         displayName={row.displayName}
@@ -556,7 +567,7 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
         seed={row.id}
         selfTag={row.isSelf}
         adminBadge={row.role === "admin"}
-        meta={`${delegateText} · ${lastActive}`}
+        meta={meta}
         actions={menuActions}
         onOpen={open}
       />

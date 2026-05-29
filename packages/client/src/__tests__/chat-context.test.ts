@@ -221,7 +221,7 @@ describe("renderChatContextSection", () => {
     expect(renderChatContextSection(undefined)).toBeNull();
   });
 
-  it("renders Current Chat Context with chatId/title/participants — Topic line elided when title === topic", () => {
+  it("renders Topic line with the raw value when topic is set (Title line de-duped against topic)", () => {
     const md = renderChatContextSection({
       chatId: "chat-1",
       title: "ship v1",
@@ -235,18 +235,20 @@ describe("renderChatContextSection", () => {
     if (!md) return;
     expect(md).toContain("## Current Chat Context");
     expect(md).toContain("Chat ID: chat-1");
-    expect(md).toContain("Title: ship v1");
-    // De-dup: when topic equals title, only the Title line is emitted.
-    expect(md).not.toContain("Topic: ship v1");
+    expect(md).toContain("Topic: ship v1");
+    // Title is de-duped when it equals topic — the agent already knows the
+    // label from the Topic line.
+    expect(md).not.toMatch(/Title \(auto-derived\):/);
     expect(md).toContain("@alice (Alice, type=human)");
     expect(md).toContain("@bob-bot (Bob Bot, type=agent)");
     expect(md).not.toContain("Your owner:");
   });
 
-  it("emits server-resolved Title even when topic is null (fallback case)", () => {
+  it("emits Topic: (unset) sentinel + auto-derived Title when topic is null", () => {
     // Most real chats are created without an explicit topic — server's
-    // `title` falls back to first-message preview / participant join. This
-    // pins that the rendered section always has a Title line.
+    // `title` falls back to first-message preview / participant join. The
+    // section now always renders a Topic line so the agent can see whether
+    // it should set one this turn.
     const md = renderChatContextSection({
       chatId: "chat-1",
       title: "alice, bob-bot",
@@ -258,32 +260,27 @@ describe("renderChatContextSection", () => {
     });
     expect(md).not.toBeNull();
     if (!md) return;
-    expect(md).toContain("Title: alice, bob-bot");
-    expect(md).not.toMatch(/Topic:/);
+    expect(md).toContain("Topic: (unset");
+    expect(md).toContain("Title (auto-derived): alice, bob-bot");
   });
 
-  it("emits BOTH Title and Topic when the creator set a custom topic distinct from the fallback title", () => {
+  it("renders Topic + auto-derived Title when topic is set but distinct from title", () => {
+    // Currently impossible via server logic (title falls back to topic when
+    // topic is non-null), but the render path must still be sound if the
+    // two ever diverge — e.g. a stale cache or a future server change.
     const md = renderChatContextSection({
-      chatId: "chat-1",
-      title: "ship v1",
-      topic: "ship v1",
-      participants: [],
-    });
-    // Equal → only Title (covered above). Now exercise the distinct case:
-    const md2 = renderChatContextSection({
       chatId: "chat-1",
       title: "alice, bob-bot",
       topic: "Q2 launch coordination",
       participants: [{ name: "alice", displayName: "Alice", type: "human" }],
     });
     expect(md).not.toBeNull();
-    expect(md2).not.toBeNull();
-    if (!md2) return;
-    expect(md2).toContain("Title: alice, bob-bot");
-    expect(md2).toContain("Topic: Q2 launch coordination");
+    if (!md) return;
+    expect(md).toContain("Topic: Q2 launch coordination");
+    expect(md).toContain("Title (auto-derived): alice, bob-bot");
   });
 
-  it("includes 'Your owner' line only when selfOwner is set", () => {
+  it("includes 'Your owner' line only when selfOwner is set; Topic sentinel still emitted when unset", () => {
     const md = renderChatContextSection({
       chatId: "chat-1",
       title: "alice + Me PA",
@@ -294,8 +291,7 @@ describe("renderChatContextSection", () => {
     expect(md).not.toBeNull();
     if (!md) return;
     expect(md).toContain("Your owner: Owner Human (@owner)");
-    // Topic missing → line elided
-    expect(md).not.toMatch(/Topic:/);
+    expect(md).toContain("Topic: (unset");
   });
 
   it("does NOT leak internal id / access_mode / role / mode fields", () => {

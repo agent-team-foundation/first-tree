@@ -173,8 +173,9 @@ function sanitizeChatId(chatId: string): string {
 
 /**
  * Write a legacy inline-base64 image to a temp file so Claude Code's Read
- * tool can pick it up. Only the legacy path — new messages go through the
- * image_payload WS push which pre-writes to the data dir before delivery.
+ * tool can pick it up. Only the legacy path — new messages reference an
+ * `attachments` row whose bytes are fetched to the data dir before delivery
+ * (see SessionManager.ensureImagesLocal).
  */
 async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatId: string): Promise<string> {
   const dir = join(tmpdir(), "first-tree", "images", sanitizeChatId(chatId));
@@ -664,7 +665,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   ): Promise<SDKUserMessage> {
     // Image messages — two supported shapes:
     //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
-    //      live on local disk, delivered via the `image_payload` WS push.
+    //      live on local disk, fetched from the `attachments` store on delivery
+    //      (see SessionManager.ensureImagesLocal).
     //   2. legacy inline: `{data, mimeType, filename, size}` — pre-refactor
     //      messages still pending at rollout time. Decode once and drop the
     //      temp path into the prompt.
@@ -721,8 +723,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             session_id: sessionId,
           };
         }
-        // Bytes never reached this client (offline during the image_payload
-        // push, or sending server lived on another instance). Treat as the
+        // Bytes never reached this client (the attachments fetch failed or
+        // the ref points at a deleted/expired attachment). Treat as the
         // "not available on this device" case so the session keeps moving.
         const fallbackText = `[Image "${filename}" not available on this device]`;
         return {

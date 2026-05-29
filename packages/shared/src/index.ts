@@ -122,6 +122,15 @@ export {
   RUNTIME_STALE_MS,
 } from "./schemas/agent-status.js";
 export {
+  ATTACHMENT_FILENAME_HEADER,
+  ATTACHMENT_MIME_HEADER,
+  type AttachmentMetadata,
+  attachmentMetadataSchema,
+  MAX_ATTACHMENT_BYTES,
+  type UploadAttachmentResponse,
+  uploadAttachmentResponseSchema,
+} from "./schemas/attachment.js";
+export {
   ATTENTION_STATES,
   type Attention,
   type AttentionCancelledFrame,
@@ -304,15 +313,9 @@ export {
 export {
   extractCaption,
   IMAGE_MIME_TO_EXT,
-  type ImageBatchInlineContent,
   type ImageBatchRefContent,
-  type ImageInlineContent,
-  type ImagePayloadFrame,
   type ImageRefContent,
-  imageBatchInlineContentSchema,
   imageBatchRefContentSchema,
-  imageInlineContentSchema,
-  imagePayloadFrameSchema,
   imageRefContentSchema,
   isImageBatchRefContent,
   isImageRefContent,

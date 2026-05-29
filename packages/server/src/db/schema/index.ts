@@ -3,6 +3,7 @@ export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";
 export { agents } from "./agents.js";
+export { attachments } from "./attachments.js";
 export { attentions } from "./attentions.js";
 export { authIdentities } from "./auth-identities.js";
 export { chatMembership } from "./chat-membership.js";

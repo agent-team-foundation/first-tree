@@ -25,7 +25,15 @@ import { CLI_USER_AGENT } from "./version.js";
 type AgentEntry = {
   name: string;
   slot: AgentSlot;
+  state: AgentStartState;
 };
+
+type AgentStartState = "idle" | "starting" | "running" | "suspended-skipped" | "failed";
+
+export function isAgentSuspendedBindError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes("agent_suspended");
+}
 
 export type ClientRuntimeOptions = {
   /**
@@ -163,6 +171,12 @@ export class ClientRuntime {
     this.connection.on("agent:pinned", (message) => {
       this.handleAgentPinned(message);
     });
+
+    this.connection.on("agent:unbound", (agentId, reason) => {
+      const entry = this.agents.find((agent) => agent.slot.agentId === agentId);
+      if (!entry || !reason) return;
+      entry.state = reason === "agent_suspended" ? "suspended-skipped" : "idle";
+    });
   }
 
   addAgent(name: string, config: AgentConfig): void {
@@ -186,7 +200,7 @@ export class ClientRuntime {
       clientConnection: this.connection,
       gitMirrorManager: this.gitMirrorManager,
     });
-    this.agents.push({ name, slot });
+    this.agents.push({ name, slot, state: "idle" });
     this.agentNames.add(name);
     this.agentIds.add(config.agentId);
   }
@@ -234,21 +248,13 @@ export class ClientRuntime {
       return;
     }
 
-    await Promise.allSettled(
-      this.agents.map(async (agent) => {
-        try {
-          const identity = await agent.slot.start();
-          print.check(true, `${agent.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          print.check(false, `${agent.name}: connection failed`, msg);
-        }
-      }),
-    );
+    const startupResults = await Promise.all(this.agents.map((agent) => this.startAgentEntry(agent)));
 
-    const connected = this.agents.length;
+    const connected = startupResults.filter((r) => r === "connected").length;
+    const skipped = startupResults.filter((r) => r === "skipped").length;
     print.blank();
-    print.status("", `${connected} agent(s) running. Press Ctrl+C to stop.`);
+    const skippedSuffix = skipped > 0 ? `, ${skipped} skipped` : "";
+    print.status("", `${connected} agent(s) running${skippedSuffix}. Press Ctrl+C to stop.`);
   }
 
   watchAgentsDir(agentsDir: string): void {
@@ -406,10 +412,14 @@ export class ClientRuntime {
    * creating an agent from the admin UI or API.
    */
   private handleAgentPinned(message: AgentPinnedMessage): void {
-    // Skip if we already track this agentId — avoids double-registration when
-    // the user also ran `agent add` manually, or when the server re-fires on
-    // reconnect in the future.
-    if (this.agentIds.has(message.agentId)) return;
+    const existing = this.agents.find((agent) => agent.slot.agentId === message.agentId);
+    if (existing) {
+      if (existing.state === "suspended-skipped") {
+        print.status("", `agent reactivated: ${existing.name}`);
+        this.startAgent(existing.name);
+      }
+      return;
+    }
 
     if (!this.agentsDir) {
       print.status("⚠️", `agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.`);
@@ -469,14 +479,30 @@ export class ClientRuntime {
   private startAgent(name: string): void {
     const entry = this.agents.find((a) => a.name === name);
     if (!entry) return;
-    entry.slot
-      .start()
-      .then((identity) => {
-        print.check(true, `${name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
-      })
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        print.check(false, `${name}: connection failed`, msg);
-      });
+    void this.startAgentEntry(entry);
+  }
+
+  private async startAgentEntry(entry: AgentEntry): Promise<"connected" | "skipped" | "failed"> {
+    if (entry.state === "starting" || entry.state === "running") {
+      return entry.state === "running" ? "connected" : "skipped";
+    }
+
+    entry.state = "starting";
+    try {
+      const identity = await entry.slot.start();
+      entry.state = "running";
+      print.check(true, `${entry.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
+      return "connected";
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (isAgentSuspendedBindError(error)) {
+        entry.state = "suspended-skipped";
+        print.status("•", `${entry.name}: skipped (suspended)`);
+        return "skipped";
+      }
+      entry.state = "failed";
+      print.check(false, `${entry.name}: connection failed`, msg);
+      return "failed";
+    }
   }
 }

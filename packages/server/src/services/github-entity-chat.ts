@@ -2,7 +2,7 @@ import type { ToolCallEventPayload } from "@first-tree/shared";
 import { chatMetadataSchema } from "@first-tree/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
-import { formatEntityTitle } from "../api/webhooks/github-entity.js";
+import { formatEntityTitle, refreshEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -403,6 +403,71 @@ async function resolveBindingPair(
     humanAgentId: representative.agentId,
     delegateAgentId: reporterAgentId,
   };
+}
+
+/**
+ * Refresh a GitHub-sourced chat's `topic` to match the current entity title.
+ *
+ * The chat's topic was first written at creation time by `createEntityChat`
+ * using `formatEntityTitle(entity, eventType, action)`. If the upstream PR /
+ * issue title later changes on GitHub, that webhook arrives with the new
+ * `entity.title` — we swap the title portion in and leave the prefix/anchor
+ * head intact.
+ *
+ * Scope rules (all three matter — see PR #657 review):
+ *   - **Owning anchor only.** A chat can carry several mapping rows: the
+ *     `direct` first-touch row the chat was minted for, plus `fixes_link` /
+ *     `human_fallback` siblings that point *related* entities at the same
+ *     chat. We refresh only when the incoming event is for the chat's own
+ *     `direct` anchor entity; an event for a linked entity must never
+ *     overwrite the topic with a different entity's title. (A chat with no
+ *     `direct` row — e.g. one an agent created a PR inside of, bound via
+ *     `agent_created` — is not github-minted and is left alone.)
+ *   - **Prefix preserved.** `refreshEntityTitle` reuses the prefix already
+ *     baked into the stored topic, so a later `review_requested` /
+ *     `*_review_comment` event can't drift a `PR …` head into `PR Review …`
+ *     (or vice-versa). It also returns null — leaving the topic untouched —
+ *     when the stored topic isn't a recognised github head (agent rename) or
+ *     the payload carries no title (would downgrade to a bare \`PR repo#307\`).
+ *   - No-op when the recomputed topic equals the stored topic.
+ *
+ * Failures are swallowed: the caller is the github delivery loop, and a
+ * topic-refresh hiccup must not block message delivery.
+ */
+export async function refreshGithubChatTopic(db: Database, chatId: string, entity: GithubEntity): Promise<void> {
+  if (!entity.title || entity.title.length === 0) return;
+
+  try {
+    const [anchor] = await db
+      .select({
+        entityType: githubEntityChatMappings.entityType,
+        entityKey: githubEntityChatMappings.entityKey,
+      })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.boundVia, "direct")))
+      .limit(1);
+    if (!anchor) return;
+    if (anchor.entityType !== entity.type || anchor.entityKey !== entity.key) return;
+
+    const [row] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    if (!row || !row.topic) return;
+
+    const nextTopic = refreshEntityTitle(row.topic, entity);
+    if (!nextTopic || nextTopic === row.topic) return;
+
+    await db.update(chats).set({ topic: nextTopic, updatedAt: new Date() }).where(eq(chats.id, chatId));
+    log.info({ chatId, entityType: entity.type, entityKey: entity.key, nextTopic }, "refreshed github chat topic");
+  } catch (err) {
+    log.warn(
+      {
+        chatId,
+        entityType: entity.type,
+        entityKey: entity.key,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      },
+      "failed to refresh github chat topic — continuing",
+    );
+  }
 }
 
 /**

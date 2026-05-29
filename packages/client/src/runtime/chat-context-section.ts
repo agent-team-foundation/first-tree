@@ -16,15 +16,22 @@ export function renderChatContextSection(chatContext: ChatContext | undefined): 
   lines.push("## Current Chat Context");
   lines.push("");
   lines.push(`- Chat ID: ${chatContext.chatId}`);
-  // Title is server-resolved and always non-empty (falls back to first-message
-  // preview / participant join). Topic is the raw column — render it as a
-  // separate line only when explicitly set, so the LLM can tell "creator
-  // chose this label" from "Hub auto-derived a label".
-  if (chatContext.title && chatContext.title.trim().length > 0) {
-    lines.push(`- Title: ${chatContext.title}`);
-  }
-  if (chatContext.topic && chatContext.topic.trim().length > 0 && chatContext.topic !== chatContext.title) {
+  // Topic is the raw `chats.topic` column. We render it on every turn —
+  // either the explicit value or a sentinel — so the agent can decide
+  // whether to set/refresh it without round-tripping through the API. See
+  // the "Naming this Chat (Topic)" section in tools.md for the two hard
+  // rules the agent is expected to follow when it sees `(unset)` here.
+  if (chatContext.topic && chatContext.topic.trim().length > 0) {
     lines.push(`- Topic: ${chatContext.topic}`);
+  } else {
+    lines.push(`- Topic: (unset — see "Naming this Chat" in tools.md)`);
+  }
+  // Title is the server-resolved display label (falls back to first-message
+  // preview / participant join when topic is null). Only render when it
+  // differs from topic — when topic is set, title == topic and the second
+  // line would be redundant.
+  if (chatContext.title && chatContext.title.trim().length > 0 && chatContext.title !== chatContext.topic) {
+    lines.push(`- Title (auto-derived): ${chatContext.title}`);
   }
   if (chatContext.selfOwner) {
     lines.push(`- Your owner: ${chatContext.selfOwner.displayName} (@${chatContext.selfOwner.name})`);

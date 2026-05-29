@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -7,6 +7,7 @@ import {
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
+import { parse as parseYaml } from "yaml";
 import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
 import { cliFetch } from "./cli-fetch.js";
 import { blank, print } from "./output.js";
@@ -108,6 +109,25 @@ export function checkAgentConfigs(): CheckResult {
   }
 }
 
+function countSuspendedLocalAliases(agentsDir: string, suspendedAgentIds: ReadonlySet<string>): number {
+  if (suspendedAgentIds.size === 0 || !existsSync(agentsDir)) return 0;
+
+  let count = 0;
+  for (const entry of readdirSync(agentsDir)) {
+    const yamlPath = join(agentsDir, entry, "agent.yaml");
+    if (!existsSync(yamlPath)) continue;
+    try {
+      const raw = parseYaml(readFileSync(yamlPath, "utf-8"));
+      if (raw === null || typeof raw !== "object") continue;
+      const agentId = (raw as Record<string, unknown>).agentId;
+      if (typeof agentId === "string" && suspendedAgentIds.has(agentId)) count++;
+    } catch {
+      // Malformed aliases are reported by findStaleAliases as unreadable.
+    }
+  }
+  return count;
+}
+
 /**
  * Server-aware agent reconciliation. Walks `agents/<name>/agent.yaml` and
  * cross-references each `agentId` with `/api/v1/me/pinned-agents`,
@@ -115,7 +135,9 @@ export function checkAgentConfigs(): CheckResult {
  * actually accept on this machine.
  *
  * Categorises each local alias into:
- *   - pinned             — bind would succeed on this client.
+ *   - pinned             — owned by you and assigned to this client.
+ *   - suspended          — pinned to this client but disabled; retained
+ *                          locally and skipped at runtime until reactivated.
  *   - pinned-elsewhere   — owned by you, but pinned to a different client
  *                          (alias is dead weight here; real agent is alive
  *                          on the other machine).
@@ -156,10 +178,12 @@ export async function reconcileAgentConfigs(opts: {
   }
 
   let stale: StaleAlias[];
+  let remote: PinnedAgent[];
   try {
+    remote = await opts.listPinnedAgents();
     stale = await findStaleAliases({
       clientId: opts.clientId,
-      listPinnedAgents: opts.listPinnedAgents,
+      listPinnedAgents: async () => remote,
       agentsDir,
     });
   } catch (err) {
@@ -172,12 +196,20 @@ export async function reconcileAgentConfigs(opts: {
   }
 
   const pinnedCount = localCount - stale.length;
+  const suspendedAgentIds = new Set(
+    remote.filter((r) => r.clientId === opts.clientId && r.status === "suspended").map((r) => r.agentId),
+  );
+  const suspendedLocalCount = countSuspendedLocalAliases(agentsDir, suspendedAgentIds);
+  const activePinnedCount = pinnedCount - suspendedLocalCount;
 
   if (stale.length === 0) {
     return {
       label: "Agents",
       ok: true,
-      detail: `${localCount} configured, all pinned to this client`,
+      detail:
+        suspendedLocalCount > 0
+          ? `${localCount} configured, ${activePinnedCount} active and ${suspendedLocalCount} suspended/disabled on this client`
+          : `${localCount} configured, all pinned to this client`,
     };
   }
 
@@ -191,7 +223,8 @@ export async function reconcileAgentConfigs(opts: {
     label: "Agents",
     ok: false,
     detail:
-      `${localCount} configured locally, ${pinnedCount} pinned to this client; ` +
+      `${localCount} configured locally, ${activePinnedCount} active` +
+      `${suspendedLocalCount > 0 ? `, ${suspendedLocalCount} suspended/disabled` : ""}; ` +
       `${stale.length} stale: ${staleSummary}${truncated} — ` +
       "run `first-tree agent prune` to clean up",
   };

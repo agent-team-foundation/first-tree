@@ -20,8 +20,10 @@ type ClientConnectionPrivate = {
   pausedReason: "auth_rejected" | "auth_refresh_failed" | null;
   nextReconnectMinDelayMs: number;
   desiredBindings: Map<string, { agentId: string; runtimeType: string; runtimeVersion?: string }>;
+  boundAgents: Map<string, BoundAgent>;
   pendingBinds: Map<string, PendingBind>;
   openWebSocket(): Promise<void>;
+  handleMessage(msg: Record<string, unknown>, connectResolve?: () => void): void;
   sendBind(agentId: string, runtimeType: string, runtimeVersion?: string): Promise<BoundAgent>;
   rebindAgents(): void;
   scheduleReconnect(): void;
@@ -254,6 +256,29 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     expect(events).toContain("error:plain reconnect failure");
 
     internal.clearTimers();
+  });
+
+  it("emits force-disconnect reason on agent:unbound", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const events: Array<{ agentId: string; reason?: string }> = [];
+    connection.on("agent:unbound", (agentId, reason) => events.push({ agentId, reason }));
+
+    internal.boundAgents.set("agent-suspended", {
+      agentId: "agent-suspended",
+      displayName: "Suspended Agent",
+      agentType: "agent",
+      sdk: {} as BoundAgent["sdk"],
+    });
+
+    internal.handleMessage({
+      type: "agent:force_disconnect",
+      agentId: "agent-suspended",
+      reason: "agent_suspended",
+    });
+
+    expect(events).toEqual([{ agentId: "agent-suspended", reason: "agent_suspended" }]);
+    expect(internal.boundAgents.has("agent-suspended")).toBe(false);
   });
 
   it("covers proactive refresh rate-limit fallback without Retry-After", async () => {
