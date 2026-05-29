@@ -139,7 +139,7 @@ export function ConnectCommandPanel({
           style={{
             gap: "var(--sp-2_5)",
             padding: "var(--sp-2_5) var(--sp-3)",
-            background: "color-mix(in oklch, var(--state-blocked) 14%, transparent)",
+            background: "var(--state-blocked-soft)",
             border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 35%, transparent)",
             borderRadius: "var(--radius-input)",
             color: "color-mix(in oklch, var(--state-blocked) 35%, var(--fg))",
@@ -172,7 +172,7 @@ export function ConnectCommandPanel({
           className="text-body"
           style={{
             padding: "var(--sp-2_5) var(--sp-3)",
-            background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+            background: "var(--state-error-soft)",
             border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
             borderRadius: "var(--radius-input)",
             color: "var(--state-error)",

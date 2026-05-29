@@ -372,7 +372,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 <div
                   className="mb-3 p-2 rounded"
                   style={{
-                    background: "color-mix(in oklch, var(--state-blocked) 12%, transparent)",
+                    background: "var(--state-blocked-soft)",
                     border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
                   }}
                 >
@@ -390,7 +390,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 <div
                   className="mb-3 p-2 rounded text-body"
                   style={{
-                    background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+                    background: "var(--state-error-soft)",
                     border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
                     color: "var(--state-error)",
                   }}
@@ -834,7 +834,7 @@ function TeamLoadErrorBanner() {
         margin: "var(--sp-3) var(--sp-3) 0",
         padding: "var(--sp-2_5) var(--sp-3)",
         borderRadius: "var(--radius-panel)",
-        background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+        background: "var(--state-error-soft)",
         border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
         color: "var(--state-error)",
       }}

@@ -183,6 +183,8 @@ function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: "var(--hairline-bold) solid var(--state-error)",
+        // Intentionally fainter than --state-error-soft (14%): this inline error row
+        // already carries a solid --hairline-bold error borderLeft, so the wash stays at 6%.
         background: "color-mix(in oklch, var(--state-error) 6%, transparent)",
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
