@@ -5,15 +5,14 @@
 
 ## Validation
 
-- [ ] `pnpm lint`
+- [ ] `pnpm check`
 - [ ] `pnpm typecheck`
 - [ ] `pnpm test`
-- [ ] `pnpm build`
 
 ## Change Surface
 
 - [ ] `apps/cli` public CLI or help output
-- [ ] `packages/auto` / `first-tree github scan`
+- [ ] `packages/github-scan` / `first-tree github scan`
 - [ ] tree onboarding / binding / inspection behavior
 - [ ] shipped or planned skill topology
 - [ ] docs or contributor-facing repository metadata
