@@ -37,10 +37,12 @@ function makeMentionElement(value: string, name: string, agentId: string, isSelf
     type: "element",
     tagName: "span",
     properties: {
-      // Self-mentions get an extra class so the css can paint them in the
-      // attention/unread tone — the viewer needs to spot "this one's about
-      // me" before the brand-green chips around it.
-      className: isSelf ? ["mention-chip", "mention-chip-self"] : ["mention-chip"],
+      // Self-mentions get an extra `is-self` state class so the css can
+      // paint them in the attention/unread tone — the viewer needs to
+      // spot "this one's about me" before the brand-green chips around
+      // it. `is-x` matches the repo's existing state-modifier convention
+      // (`.context-network-card.is-live`, `.context-usage-feed-row.is-fresh`).
+      className: isSelf ? ["mention-chip", "is-self"] : ["mention-chip"],
       "data-mention-agent-id": agentId,
       "data-mention-name": name,
     },

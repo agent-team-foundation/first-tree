@@ -1458,10 +1458,12 @@ tr[data-interactive]:hover {
  * message mentions the current viewer, the chip switches from the
  * brand-green tone (used for everyone else) to the unread/attention
  * tone so the viewer can spot "this one is about me" without scanning
- * the whole message. Declared after `.mention-chip` so the background
- * override wins by source order; rehype-mentions emits both classes
- * together so the layout (padding, radius, nowrap) is inherited. */
-.mention-chip-self {
+ * the whole message. Uses the `.foo.is-x` state-modifier convention
+ * already in this file (see `.context-network-card.is-live`,
+ * `.context-usage-feed-row.is-fresh`); the compound-selector specificity
+ * naturally beats `.mention-chip` alone so the background override is
+ * deterministic, and layout (padding, radius, nowrap) is inherited. */
+.mention-chip.is-self {
   background: var(--state-unread);
   font-weight: 600;
 }

@@ -307,7 +307,7 @@ function TextRow({
   // link text are skipped by the plugin itself, so a message containing
   // `\`@param\`` or a quoted handle inside a markdown link keeps its
   // original rendering. `selfAgentId` flips chips that target the viewer
-  // into a higher-priority tone — see `.mention-chip-self` in index.css.
+  // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
   const messageRehypePlugins = useMemo(
     () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
     [mentionParticipants, myAgentId],
@@ -2152,6 +2152,20 @@ export function ChatView({
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
   );
+  // Rendered-message variant of the projection above: the rehype plugin
+  // resolves `@<name>` tokens against this list, and it MUST include the
+  // viewer themselves so chips that target them flip to the
+  // `.mention-chip-self` attention tone. `mentionCandidates` deliberately
+  // excludes self (the composer's `@` autocomplete should not suggest you
+  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
+  // that self-exclusive semantics), so we append the viewer here in a
+  // separate projection used only by rendered messages.
+  const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
+    if (!myAgentId) return mentionParticipants;
+    const selfIdent = chatScopedAgentIdentity(myAgentId);
+    if (!selfIdent?.name) return mentionParticipants;
+    return [...mentionParticipants, { agentId: myAgentId, name: selfIdent.name }];
+  }, [mentionParticipants, myAgentId, chatScopedAgentIdentity]);
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**
@@ -2648,7 +2662,7 @@ export function ChatView({
                           agentNameFn={chatScopedAgentName}
                           agentAvatarFn={agentAvatar}
                           agentColorTokenFn={agentColorToken}
-                          mentionParticipants={mentionParticipants}
+                          mentionParticipants={renderMentionParticipants}
                         />
                       );
                     }
