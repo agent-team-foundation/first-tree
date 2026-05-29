@@ -93,8 +93,8 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
 - Styleguide updated: real tokens, new Feedback swatches, idle shows the new tone; the temporary
   "Cleanup candidates" section was removed.
 
-**Still open:** `.context-live-*` palette, spacing rhythm, dead `--sp-*`, multi-line lint detection,
-and the ✓⚠✗⚙→lucide icon purge (authed surfaces — needs a local-stack by-eye pass).
+**Still open:** spacing rhythm, dead `--sp-*`, multi-line lint detection, and the ✓⚠✗⚙→lucide icon
+purge (authed surfaces — needs a local-stack by-eye pass).
 *(focus-ring extension — DONE: `filter-pill`/`tab-bar`/`segmented-control`; popover/command don't fit the ring.)*
 *(DONE in the low-risk-tokens PR: `--text-live` drop, `--state-*-soft` companions, `color-scheme` on
 `:root`/`.dark`, info callout — see P1/P2 marks. focus-ring unification — done in #662, see Phase 1.)*
@@ -186,8 +186,12 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 
 ## P3 — Discipline
 
-- [ ] **`.context-live-*` is off-palette.** ~40 lines in index.css hardcode blue hues 255–265
-  (e.g. `oklch(0.2 0.04 265)`) that exist in no token. Bring them into the token system.
+- [x] **`.context-live-*` is off-palette.** **DONE:** the hardcoded blue inks (255–265), faint-green
+  card surfaces, brand-green fills, and the `.context-change-breakdown` chips are now a value-preserving
+  `--context-*` token family in `:root` (reusing `--brand-bg` / `--state-*-soft` where exact). 1:1 lift —
+  a later pass can rationalize the near-duplicate inks. Dark mode unchanged (the page is light-only; tokens
+  are `:root`-only) — adding `.dark { --context-* }` overrides is now a trivial follow-up if the page
+  should become dark-aware.
 - [ ] **Spacing rhythm.** Half-steps (`--sp-1_25`=5px, `--sp-1_75`=7px) are used 12× / 23×, signalling
   pixel-nudging off a 4/8 rhythm. Converge to 4/8; mark half-steps as explicit exceptions.
 - [ ] **Prune dead `--sp-*`.** Defined but unused in components: `--sp-2_75`, `--sp-3_25`, `--sp-3_75`,
@@ -206,7 +210,7 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 ## Notes for whoever picks this up
 
 - **Done:** P0, P0.5 rule 7, all P1 decisions, P2 `--color-*` alias (#656/#662); green-liveness colour (#672).
-- **Still open (none blocking):** P0.5 multi-line detection, `.context-live-*` palette, spacing rhythm,
+- **Still open (none blocking):** P0.5 multi-line detection, spacing rhythm,
   dead `--sp-*`, and the ✓⚠✗⚙→lucide icon purge (authed surfaces — local-stack by-eye pass). *(focus-ring
   extension is DONE for filter-pill/tab-bar/segmented-control. `--text-live` drop, `--state-*-soft`, `.dark`/`:root` color-scheme, and the
   info callout are DONE — see the P1/P2 marks above.)*
@@ -283,7 +287,7 @@ fold into the phases below.
 **Phase 3 — rollout + folded cleanup:**
 - [ ] Apply across remaining pages (Team roster, Settings, onboarding, …).
 - [x] Add `--state-*-soft` tokens — DONE (definitions + `tones.ts`/call-site migration). *(`.context-change-breakdown` still raw — folded into the `.context-*` palette PR. Follow-up idea: add `--state-*-line` (~30%) border tokens so the borders that still hand-roll `color-mix` can converge too.)*
-- [~] `color-scheme: dark` on `.dark` — DONE; bringing the off-palette `.context-live-*` blues into tokens — still open.
+- [x] `color-scheme: dark` on `.dark` — DONE; the off-palette `.context-live-*` blues are now in the `--context-*` token family — DONE.
 
 **Phase 4 — close-out:**
 - [ ] QA in light + dark.
