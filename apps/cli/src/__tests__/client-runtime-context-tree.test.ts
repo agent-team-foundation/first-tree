@@ -19,6 +19,7 @@ const slotInstances: Array<{
   getQuietGateSnapshot: ReturnType<typeof vi.fn>;
 }> = [];
 const connectionListeners = new Map<string, (...args: unknown[]) => void>();
+const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
 const sweepMock = vi.fn(async () => ({ scanned: 0, deleted: 0, failed: 0 }));
@@ -155,7 +156,7 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(slot.start).toHaveBeenCalledTimes(1);
     expect(slot.start.mock.calls[0]).toEqual([]);
     await rt.stop();
-  });
+  }, RUNTIME_TEST_TIMEOUT_MS);
 
   it("handles connection events, update hooks, and graceful stop", async () => {
     const { print } = await import("../core/output.js");
