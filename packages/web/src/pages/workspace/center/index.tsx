@@ -21,6 +21,7 @@ export function CenterPanel({
   onSelectChat,
   narrow,
   onShowConversations,
+  initialParticipantIds,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
@@ -32,6 +33,10 @@ export function CenterPanel({
    *  conversation-list overlay. ChatView renders a hamburger button
    *  in its header when provided. */
   onShowConversations: (() => void) | null;
+  /** Seed chips for a fresh draft, from the `?with=` param (e.g. the Team
+   *  page "Chat" action pre-selects that agent). Takes precedence over the
+   *  default-delegate seed. */
+  initialParticipantIds?: string[];
 }) {
   const { organizationId } = useAuth();
 
@@ -48,6 +53,7 @@ export function CenterPanel({
         key={organizationId ?? "no-org"}
         onCreated={onSelectChat}
         onShowConversations={onShowConversations}
+        initialParticipantIds={initialParticipantIds}
       />
     );
   }
