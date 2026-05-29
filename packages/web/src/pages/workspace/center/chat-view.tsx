@@ -307,8 +307,12 @@ function TextRow({
   // chip styling the composer's mirror overlay uses. Code blocks and
   // link text are skipped by the plugin itself, so a message containing
   // `\`@param\`` or a quoted handle inside a markdown link keeps its
-  // original rendering.
-  const messageRehypePlugins = useMemo(() => [rehypeMentions(mentionParticipants)], [mentionParticipants]);
+  // original rendering. `selfAgentId` flips chips that target the viewer
+  // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
+  const messageRehypePlugins = useMemo(
+    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
+    [mentionParticipants, myAgentId],
+  );
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -2158,6 +2162,25 @@ export function ChatView({
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
   );
+  // Rendered-message variant of the projection above: the rehype plugin
+  // resolves `@<name>` tokens against this list, and it MUST include the
+  // viewer themselves so chips that target them flip to the
+  // `.mention-chip.is-self` attention tone. `mentionCandidates` deliberately
+  // excludes self (the composer's `@` autocomplete should not suggest you
+  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
+  // that self-exclusive semantics), so we append the viewer here in a
+  // separate projection used only by rendered messages. Source the viewer's
+  // slug from the speaker-only `chatParticipantById` map — NOT from the
+  // org-identity fallback in `chatScopedAgentIdentity` — so a non-speaker
+  // watcher viewing the chat doesn't get their org-wide name pushed into
+  // the resolver, which would paint chips that the server would never
+  // actually route to them.
+  const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
+    if (!myAgentId) return mentionParticipants;
+    const selfParticipant = chatParticipantById.get(myAgentId);
+    if (!selfParticipant?.name) return mentionParticipants;
+    return [...mentionParticipants, { agentId: myAgentId, name: selfParticipant.name }];
+  }, [mentionParticipants, myAgentId, chatParticipantById]);
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**
@@ -2654,7 +2677,7 @@ export function ChatView({
                           agentNameFn={chatScopedAgentName}
                           agentAvatarFn={agentAvatar}
                           agentColorTokenFn={agentColorToken}
-                          mentionParticipants={mentionParticipants}
+                          mentionParticipants={renderMentionParticipants}
                         />
                       );
                     }

@@ -1454,6 +1454,20 @@ tr[data-interactive]:hover {
   white-space: nowrap;
 }
 
+/* Mention chip — self variant. Highest-priority highlight: when a
+ * message mentions the current viewer, the chip switches from the
+ * brand-green tone (used for everyone else) to the unread/attention
+ * tone so the viewer can spot "this one is about me" without scanning
+ * the whole message. Uses the `.foo.is-x` state-modifier convention
+ * already in this file (see `.context-network-card.is-live`,
+ * `.context-usage-feed-row.is-fresh`); the compound-selector specificity
+ * naturally beats `.mention-chip` alone so the background override is
+ * deterministic, and layout (padding, radius, nowrap) is inherited. */
+.mention-chip.is-self {
+  background: var(--state-unread);
+  font-weight: 600;
+}
+
 /* Mention text — composer-side variant. MUST NOT introduce padding,
  * background, border, margin, OR font-weight / font-size / letter-
  * spacing changes, because the mirror overlay paints glyphs

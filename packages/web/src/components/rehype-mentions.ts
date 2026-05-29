@@ -32,12 +32,17 @@ type HastNode = HastText | HastElement | HastRoot | { type: string; children?: H
 
 const SKIP_TAGS = new Set(["code", "pre", "a"]);
 
-function makeMentionElement(value: string, name: string, agentId: string): HastElement {
+function makeMentionElement(value: string, name: string, agentId: string, isSelf: boolean): HastElement {
   return {
     type: "element",
     tagName: "span",
     properties: {
-      className: ["mention-chip"],
+      // Self-mentions get an extra `is-self` state class so the css can
+      // paint them in the attention/unread tone — the viewer needs to
+      // spot "this one's about me" before the brand-green chips around
+      // it. `is-x` matches the repo's existing state-modifier convention
+      // (`.context-network-card.is-live`, `.context-usage-feed-row.is-fresh`).
+      className: isSelf ? ["mention-chip", "is-self"] : ["mention-chip"],
       "data-mention-agent-id": agentId,
       "data-mention-name": name,
     },
@@ -45,7 +50,11 @@ function makeMentionElement(value: string, name: string, agentId: string): HastE
   };
 }
 
-function splitTextNode(node: HastText, nameMap: Map<string, { name: string; agentId: string }>): HastNode[] | null {
+function splitTextNode(
+  node: HastText,
+  nameMap: Map<string, { name: string; agentId: string }>,
+  selfAgentId: string | null,
+): HastNode[] | null {
   const content = node.value;
   if (!content) return null;
   const out: HastNode[] = [];
@@ -58,7 +67,7 @@ function splitTextNode(node: HastText, nameMap: Map<string, { name: string; agen
     if (m.index > cursor) {
       out.push({ type: "text", value: content.slice(cursor, m.index) });
     }
-    out.push(makeMentionElement(m[0], resolved.name, resolved.agentId));
+    out.push(makeMentionElement(m[0], resolved.name, resolved.agentId, resolved.agentId === selfAgentId));
     cursor = m.index + m[0].length;
   }
   if (out.length === 0) return null; // no rewrites — leave node intact
@@ -68,7 +77,11 @@ function splitTextNode(node: HastText, nameMap: Map<string, { name: string; agen
   return out;
 }
 
-function walk(node: HastNode, nameMap: Map<string, { name: string; agentId: string }>): void {
+function walk(
+  node: HastNode,
+  nameMap: Map<string, { name: string; agentId: string }>,
+  selfAgentId: string | null,
+): void {
   if (!("children" in node) || !node.children) return;
   const next: HastNode[] = [];
   for (const child of node.children) {
@@ -82,11 +95,11 @@ function walk(node: HastNode, nameMap: Map<string, { name: string; agentId: stri
         next.push(el);
         continue;
       }
-      walk(el, nameMap);
+      walk(el, nameMap, selfAgentId);
       next.push(el);
     } else if (child.type === "text") {
       // Same `as` rationale as above — fallback overlap on string discriminator.
-      const split = splitTextNode(child as HastText, nameMap);
+      const split = splitTextNode(child as HastText, nameMap, selfAgentId);
       if (split) next.push(...split);
       else next.push(child);
     } else {
@@ -96,13 +109,17 @@ function walk(node: HastNode, nameMap: Map<string, { name: string; agentId: stri
   node.children = next;
 }
 
-export function rehypeMentions(participants: MentionParticipant[]): () => (tree: HastRoot) => void {
+export function rehypeMentions(
+  participants: MentionParticipant[],
+  options?: { selfAgentId?: string | null },
+): () => (tree: HastRoot) => void {
+  const selfAgentId = options?.selfAgentId ?? null;
   const nameMap = new Map<string, { name: string; agentId: string }>();
   for (const p of participants) {
     if (p.name) nameMap.set(p.name.toLowerCase(), { name: p.name, agentId: p.agentId });
   }
   return () => (tree: HastRoot) => {
     if (nameMap.size === 0) return;
-    walk(tree, nameMap);
+    walk(tree, nameMap, selfAgentId);
   };
 }
