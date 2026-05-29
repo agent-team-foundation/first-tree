@@ -129,7 +129,11 @@ describe("api wrapper paths", () => {
     await chats.sendChatMessage("chat/id", "no route", []);
     await chats.sendFileMessageBatch(
       "chat/id",
-      { attachments: [{ data: "a", mimeType: "image/png", filename: "a.png", size: 1 }] },
+      {
+        attachments: [
+          { imageId: "11111111-1111-4111-8111-111111111111", mimeType: "image/png", filename: "a.png", size: 1 },
+        ],
+      },
       {
         mentions: ["agent-1"],
       },

@@ -8,7 +8,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { deriveRepoLocalPath } from "@first-tree/shared";
+import { deriveRepoLocalPath, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -25,6 +25,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "./handler.js";
+import { findImagePath, writeImage } from "./image-store.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
 
@@ -438,10 +439,54 @@ export class SessionManager {
     // 4. Extract message content (handler does not see inbox metadata)
     const message = this.extractMessage(entry);
 
+    // 4b. Pull any referenced image bytes to local disk before the handler
+    // renders. Bytes live in the server's `attachments` object store (uploaded
+    // by the sender); each client fetches once and caches under the chat's
+    // images dir. Best-effort — a failed fetch leaves the handler to surface a
+    // "not available on this device" placeholder for that ref.
+    await this.ensureImagesLocal(message);
+
     // 5. Route by session state. ACK no longer happens inside route — the
     // entry sits in `inFlightEntries` until the handler calls
     // `ctx.markCompleted()` at turn end.
     await this.routeMessage(chatId, message);
+  }
+
+  /**
+   * Resolve every image reference on an inbound `format: "file"` message to a
+   * file on local disk, fetching missing bytes from the `attachments` store.
+   * Single-ref and batch-ref shapes are both handled; non-image file content
+   * is ignored. Fetches run in parallel and never throw — the renderer
+   * degrades to a placeholder for any ref that didn't land.
+   */
+  private async ensureImagesLocal(message: SessionMessage): Promise<void> {
+    if (message.format !== "file") return;
+    const refs = isImageBatchRefContent(message.content)
+      ? message.content.attachments
+      : isImageRefContent(message.content)
+        ? [message.content]
+        : [];
+    if (refs.length === 0) return;
+
+    await Promise.all(
+      refs.map(async (ref) => {
+        if (findImagePath(message.chatId, ref.imageId, ref.mimeType)) return;
+        try {
+          const { bytes } = await this.config.sdk.fetchAttachment({ id: ref.imageId });
+          await writeImage({
+            chatId: message.chatId,
+            imageId: ref.imageId,
+            mimeType: ref.mimeType,
+            base64: bytes.toString("base64"),
+          });
+        } catch (err) {
+          this.config.log.warn(
+            { chatId: message.chatId, imageId: ref.imageId, err },
+            "eager image fetch failed — message will render a placeholder",
+          );
+        }
+      }),
+    );
   }
 
   /** Handle a server-issued session command. Terminate drops all local state without reporting back. */

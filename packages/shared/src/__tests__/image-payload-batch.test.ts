@@ -1,21 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   extractCaption,
-  imageBatchInlineContentSchema,
   imageBatchRefContentSchema,
-  imageInlineContentSchema,
   imageRefContentSchema,
   isImageBatchRefContent,
   isImageRefContent,
   MAX_BATCH_ATTACHMENTS,
 } from "../schemas/image-payload.js";
-
-const SAMPLE_INLINE = {
-  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
-  mimeType: "image/png" as const,
-  filename: "photo.png",
-  size: 128,
-};
 
 const SAMPLE_REF = {
   imageId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
@@ -25,44 +16,6 @@ const SAMPLE_REF = {
 };
 
 describe("image-payload — batch schemas", () => {
-  describe("imageBatchInlineContentSchema (wire)", () => {
-    it("accepts caption + multiple inline attachments", () => {
-      const parsed = imageBatchInlineContentSchema.parse({
-        caption: "look at these",
-        attachments: [SAMPLE_INLINE, { ...SAMPLE_INLINE, filename: "photo2.png" }],
-      });
-      expect(parsed.attachments).toHaveLength(2);
-      expect(parsed.caption).toBe("look at these");
-    });
-
-    it("accepts a batch with no caption (attachment-only send)", () => {
-      const parsed = imageBatchInlineContentSchema.parse({ attachments: [SAMPLE_INLINE] });
-      expect(parsed.caption).toBeUndefined();
-      expect(parsed.attachments).toHaveLength(1);
-    });
-
-    it("rejects an empty attachments array", () => {
-      const result = imageBatchInlineContentSchema.safeParse({ caption: "hi", attachments: [] });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects when an attachment is malformed", () => {
-      const result = imageBatchInlineContentSchema.safeParse({
-        attachments: [{ data: "", mimeType: "image/png", filename: "x.png" }],
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("does NOT match a single inline image (kept distinct for backward compat)", () => {
-      // Old single-image messages stay on imageInlineContentSchema and would
-      // fail the batch schema (no `attachments` array). Renderers parse each
-      // schema in order and fall through when the shape doesn't match.
-      const result = imageBatchInlineContentSchema.safeParse(SAMPLE_INLINE);
-      expect(result.success).toBe(false);
-      expect(imageInlineContentSchema.safeParse(SAMPLE_INLINE).success).toBe(true);
-    });
-  });
-
   describe("imageBatchRefContentSchema (persisted)", () => {
     it("accepts caption + multiple refs", () => {
       const parsed = imageBatchRefContentSchema.parse({
@@ -90,18 +43,8 @@ describe("image-payload — batch schemas", () => {
   });
 
   describe("attachments count cap (MAX_BATCH_ATTACHMENTS)", () => {
-    // Fastify's bodyLimit is a byte limit, not a count — without this `.max()`
-    // a single authenticated POST could carry hundreds of small images and
-    // fan out to every recipient via the broadcast path.
-    it("rejects more than MAX_BATCH_ATTACHMENTS inline attachments", () => {
-      const tooMany = Array.from({ length: MAX_BATCH_ATTACHMENTS + 1 }, (_, i) => ({
-        ...SAMPLE_INLINE,
-        filename: `photo${i}.png`,
-      }));
-      const result = imageBatchInlineContentSchema.safeParse({ attachments: tooMany });
-      expect(result.success).toBe(false);
-    });
-
+    // Caps the ref array (and the per-attachment fetches it implies on render)
+    // at a finite, product-sane number.
     it("rejects more than MAX_BATCH_ATTACHMENTS ref attachments", () => {
       const tooMany = Array.from({ length: MAX_BATCH_ATTACHMENTS + 1 }, (_, i) => ({
         ...SAMPLE_REF,
@@ -114,10 +57,10 @@ describe("image-payload — batch schemas", () => {
 
     it("accepts exactly MAX_BATCH_ATTACHMENTS attachments (boundary)", () => {
       const atLimit = Array.from({ length: MAX_BATCH_ATTACHMENTS }, (_, i) => ({
-        ...SAMPLE_INLINE,
-        filename: `photo${i}.png`,
+        ...SAMPLE_REF,
+        imageId: `11111111-1111-4111-8111-1111111111${(i + 10).toString().padStart(2, "0")}`,
       }));
-      const result = imageBatchInlineContentSchema.safeParse({ attachments: atLimit });
+      const result = imageBatchRefContentSchema.safeParse({ attachments: atLimit });
       expect(result.success).toBe(true);
     });
   });

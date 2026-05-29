@@ -1,12 +1,10 @@
 /**
- * Per-browser image cache keyed by imageId. Images sent from THIS browser
- * live here so we can render historical messages without refetching bytes
- * from the server — the server-side DB only stores a reference.
- *
- * Cross-device / incognito / a different browser → cache miss → the UI
- * falls back to a "not available on this device" placeholder. This is the
- * accepted trade-off of the image-out-of-messages design (bytes live on
- * the sender's device + on each online agent client, never on the server).
+ * Per-browser image cache keyed by imageId, fronting the org attachment store.
+ * Renders consult this cache first to avoid re-downloading bytes; on a miss
+ * the UI fetches from `GET /attachments/:id` and warms this cache. The
+ * authoritative bytes always live server-side, so a cache miss (cross-device,
+ * incognito, cleared storage) is recoverable — not a "not available"
+ * dead-end like the old IndexedDB-only design.
  */
 
 const DB_NAME = "first-tree-images";
@@ -45,11 +43,10 @@ function openDb(): Promise<IDBDatabase | null> {
 
 /**
  * Persist image bytes keyed by imageId. Rejects when IndexedDB is unavailable
- * (incognito, disabled) or the write itself fails (quota, aborted). Since
- * the server stores only a reference to these bytes, callers MUST treat a
- * rejection as a send-blocking error — posting the reference without a local
- * cache entry means the sender's own tab will immediately render the
- * "not available on this device" placeholder for the image it just sent.
+ * (incognito, disabled) or the write itself fails (quota, aborted). This is a
+ * best-effort cache warm: the bytes also live in the server attachment store,
+ * so a rejection is non-fatal — callers should swallow it and let the render
+ * path re-fetch from the server on the next view.
  */
 export async function putImage(params: { imageId: string; base64: string; mimeType: string }): Promise<void> {
   const db = await openDb();

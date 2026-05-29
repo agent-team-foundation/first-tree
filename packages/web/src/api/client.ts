@@ -202,6 +202,52 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
   return (await res.json()) as T;
 }
 
+/**
+ * Auth-aware fetch for non-JSON payloads — binary upload (octet-stream body)
+ * and blob download. Mirrors `request()`'s bearer-token injection and single
+ * 401-refresh retry, but never touches the request body or parses the
+ * response: the caller owns both. Throws `ApiError` on a non-ok response
+ * (after the refresh retry), matching `request()`'s error contract.
+ */
+export async function apiFetchRaw(
+  path: string,
+  init: { method?: string; body?: BodyInit; headers?: Record<string, string> } = {},
+): Promise<Response> {
+  const doFetch = (token?: string) => {
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(`${BASE_URL}${path}`, { method: init.method ?? "GET", headers, body: init.body });
+  };
+
+  const tokens = getStoredTokens();
+  let res = await doFetch(tokens?.accessToken);
+
+  if (res.status === 401 && tokens?.refreshToken) {
+    const refreshed = await tryRefresh(tokens.refreshToken);
+    if (refreshed) {
+      res = await doFetch(refreshed.accessToken);
+    }
+  }
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearStoredTokens();
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+    }
+    const text = await res.text();
+    let message = text;
+    try {
+      const json = JSON.parse(text) as { error?: string };
+      message = json.error ?? text;
+    } catch {
+      // Non-JSON error body — surface the raw text.
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  return res;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
