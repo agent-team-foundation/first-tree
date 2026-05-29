@@ -27,13 +27,13 @@ export function removeConnection(agentId: string, ws: WebSocket): boolean {
 }
 
 /** Force-disconnect an agent's active WS connection. Returns true if a connection was closed. */
-export function forceDisconnect(agentId: string): boolean {
+export function forceDisconnect(agentId: string, reason?: string): boolean {
   const clientId = agentToClient.get(agentId);
   if (clientId) {
     // M1 mode: unbind the single agent without closing the shared client WS
     const entry = clientConnections.get(clientId);
     if (entry && entry.ws.readyState <= 1) {
-      entry.ws.send(JSON.stringify({ type: "agent:force_disconnect", agentId }));
+      entry.ws.send(JSON.stringify({ type: "agent:force_disconnect", agentId, ...(reason ? { reason } : {}) }));
     }
     unbindAgentFromClient(agentId);
     return true;

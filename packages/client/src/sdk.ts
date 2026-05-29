@@ -260,11 +260,13 @@ export class FirstTreeHubSDK {
   }
 
   /**
-   * Member-scoped: every agent pinned to a client owned by the calling user.
-   * Used by client startup to reconcile the local `agent.yaml::runtime` with
-   * the authoritative `agents.runtime_provider` before spawning handlers.
+   * Member-scoped: every non-deleted agent pinned to a client owned by the
+   * calling user. Includes suspended agents so local reconciliation/prune can
+   * preserve their config, workspace, and saved sessions while disabled.
    */
-  async listMyAgents(): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
+  async listMyAgents(): Promise<
+    Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider; status?: string }>
+  > {
     return this.requestJson("/api/v1/me/pinned-agents");
   }
 

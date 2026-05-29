@@ -100,6 +100,17 @@ describe("doctor core checks", () => {
       }),
     ).resolves.toEqual({ label: "Agents", ok: true, detail: "1 configured, all pinned to this client" });
 
+    await expect(
+      reconcileAgentConfigs({
+        clientId: "client-1",
+        listPinnedAgents: async () => [{ agentId: "agent-1", clientId: "client-1", status: "suspended" }],
+      }),
+    ).resolves.toEqual({
+      label: "Agents",
+      ok: true,
+      detail: "1 configured, 0 active and 1 suspended/disabled on this client",
+    });
+
     writeAgent("moved", "agentId: agent-2\nruntime: claude-code\n");
     const stale = await reconcileAgentConfigs({
       clientId: "client-1",

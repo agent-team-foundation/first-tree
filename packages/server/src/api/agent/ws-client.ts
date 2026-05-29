@@ -142,6 +142,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        */
       const inboxInFlight = new Map<string, number>();
 
+      function isAgentStillRoutedHere(agentId: string): boolean {
+        return (
+          boundAgents.has(agentId) && clientId !== null && connectionManager.getAgentClientId(agentId) === clientId
+        );
+      }
+
       /**
        * Returns `false` when the socket has already moved out of `OPEN` —
        * the only failure mode the caller can observe synchronously.
@@ -215,6 +221,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        */
       function makeInboxPushHandler(agentId: string, inboxId: string): InboxPushHandler {
         return async (messageId: string) => {
+          if (!isAgentStillRoutedHere(agentId)) return;
           const current = inboxInFlight.get(agentId) ?? 0;
           if (current >= inboxMaxInFlightPerAgent) {
             app.log.debug(
@@ -273,6 +280,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        */
       async function drainBacklogForAgent(agentId: string, inboxId: string): Promise<void> {
         if (socket.readyState !== socket.OPEN) return;
+        if (!isAgentStillRoutedHere(agentId)) return;
         const inFlight = inboxInFlight.get(agentId) ?? 0;
         const slotsFree = inboxMaxInFlightPerAgent - inFlight;
         if (slotsFree <= 0) return;
@@ -703,7 +711,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
             } else if (type === "session:state") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -757,7 +765,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "session:runtime") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -794,7 +802,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "session:reconcile") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -830,7 +838,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               );
             } else if (type === "runtime:state") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -857,7 +865,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -951,7 +959,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             } else if (type === "heartbeat") {
               if (clientId) {
                 await clientService.heartbeatClient(app.db, clientId);
-                await Promise.all([...boundAgents.keys()].map((id) => presenceService.touchAgent(app.db, id)));
+                await Promise.all(
+                  [...boundAgents.keys()]
+                    .filter((id) => isAgentStillRoutedHere(id))
+                    .map((id) => presenceService.touchAgent(app.db, id)),
+                );
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }

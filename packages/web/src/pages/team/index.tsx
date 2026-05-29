@@ -16,6 +16,10 @@ import {
 import { deleteMember, listMembers, updateMember } from "../../api/members.js";
 import { getOrgUsageByAgent, type UsageWindow } from "../../api/usage.js";
 import { useAuth } from "../../auth/auth-context.js";
+import {
+  AgentDeleteConfirmDialog,
+  AgentSuspendConfirmDialog,
+} from "../../components/agent-lifecycle-confirm-dialog.js";
 import { NewAgentDialog } from "../../components/new-agent-dialog.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -75,6 +79,11 @@ type DelegateTarget = {
   currentDelegate: string | null;
 };
 
+type AgentLifecycleTarget = {
+  uuid: string;
+  label: string;
+};
+
 type FilterKey = "all" | "yours" | "humans" | "team";
 
 const AGENT_PAGE_SIZE = 100;
@@ -105,6 +114,8 @@ export function TeamPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<MemberEditTarget | null>(null);
   const [delegateTarget, setDelegateTarget] = useState<DelegateTarget | null>(null);
+  const [suspendTarget, setSuspendTarget] = useState<AgentLifecycleTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AgentLifecycleTarget | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   // 7d / 30d window for the Usage column. Default 30d — matches the
@@ -233,11 +244,17 @@ export function TeamPage() {
   });
   const suspendAgentMut = useMutation({
     mutationFn: suspendAgent,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
   });
   const reactivateAgentMut = useMutation({
     mutationFn: reactivateAgent,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
   });
   const setDelegateMut = useMutation({
     mutationFn: async (vars: { humanAgentId: string; delegateMention: string | null }) =>
@@ -330,18 +347,18 @@ export function TeamPage() {
         actions.push({
           key: "suspend",
           label: "Suspend",
-          onSelect: () => suspendAgentMut.mutate(agent.uuid),
+          onSelect: () => setSuspendTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid }),
         });
       }
       actions.push({
         key: "delete",
-        label: "Delete",
+        label: agent.status === "suspended" ? "Delete" : "Delete (suspend first)",
         destructive: true,
-        onSelect: () => {
-          if (window.confirm(`Delete agent ${agent.displayName}? This cannot be undone.`)) {
-            deleteAgentMut.mutate(agent.uuid);
-          }
-        },
+        disabled: agent.status !== "suspended",
+        onSelect: () =>
+          agent.status === "suspended"
+            ? setDeleteTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid })
+            : undefined,
       });
     }
     return actions;
@@ -449,6 +466,32 @@ export function TeamPage() {
           if (!delegateTarget) return;
           await setDelegateMut.mutateAsync({ humanAgentId: delegateTarget.humanAgentId, delegateMention });
           setDelegateTarget(null);
+        }}
+      />
+
+      <AgentSuspendConfirmDialog
+        open={suspendTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setSuspendTarget(null);
+        }}
+        label={suspendTarget?.label ?? ""}
+        pending={suspendAgentMut.isPending}
+        onConfirm={() => {
+          if (!suspendTarget) return;
+          suspendAgentMut.mutate(suspendTarget.uuid, { onSuccess: () => setSuspendTarget(null) });
+        }}
+      />
+
+      <AgentDeleteConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        expected={deleteTarget?.label ?? ""}
+        deleting={deleteAgentMut.isPending}
+        onDelete={() => {
+          if (!deleteTarget) return;
+          deleteAgentMut.mutate(deleteTarget.uuid, { onSuccess: () => setDeleteTarget(null) });
         }}
       />
     </>

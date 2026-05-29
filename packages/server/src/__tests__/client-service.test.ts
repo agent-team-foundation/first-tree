@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { createAgent, suspendAgent } from "../services/agent.js";
 import * as clientService from "../services/client.js";
 import * as presenceService from "../services/presence.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -107,5 +108,39 @@ describe("client service: disconnectClient", () => {
     expect(presA?.status).toBe("offline");
     expect(presB?.status).toBe("online");
     expect(presB?.clientId).toBe(clientY);
+  });
+});
+
+describe("client service: pinned agent startup surfaces", () => {
+  const getApp = useTestApp();
+
+  it("excludes suspended agents from startup candidate lists", async () => {
+    const app = getApp();
+    const {
+      agent: active,
+      userId,
+      clientId,
+      memberId,
+      organizationId,
+    } = await createTestAgent(app, {
+      name: `cs-pin-active-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const suspended = await createAgent(app.db, {
+      name: `cs-pin-suspended-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      source: "admin-api",
+      managerId: memberId,
+      organizationId,
+      clientId,
+    });
+    await suspendAgent(app.db, suspended.uuid);
+
+    await expect(clientService.listActiveAgentsPinnedToClient(app.db, clientId)).resolves.toEqual([
+      expect.objectContaining({ uuid: active.uuid }),
+    ]);
+    await expect(clientService.listMyPinnedAgents(app.db, { userId })).resolves.toEqual([
+      expect.objectContaining({ agentId: active.uuid, clientId, status: "active" }),
+      expect.objectContaining({ agentId: suspended.uuid, clientId, status: "suspended" }),
+    ]);
   });
 });

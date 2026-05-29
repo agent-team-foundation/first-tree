@@ -1,9 +1,11 @@
 import type { Agent } from "@first-tree/shared";
 import { Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
+import {
+  AgentDeleteConfirmDialog,
+  AgentSuspendConfirmDialog,
+} from "../../components/agent-lifecycle-confirm-dialog.js";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
-import { Input } from "../../components/ui/input.js";
 import { Section } from "../../components/ui/section.js";
 import { ConfigRow } from "./flat-section.js";
 
@@ -44,7 +46,7 @@ export function DangerZone(props: DangerZoneProps) {
         {agent.status === "active" ? (
           <ConfigRow
             label="Suspend agent"
-            description="Pause all active sessions. You can reactivate later; tokens stay revoked until then."
+            description="Stop the connected runtime and prevent new messages from waking this agent until it is reactivated."
             action={
               <Button variant="outline" size="xs" onClick={() => setSuspendOpen(true)} disabled={props.suspendPending}>
                 {props.suspendPending ? "Suspending…" : "Suspend"}
@@ -54,7 +56,7 @@ export function DangerZone(props: DangerZoneProps) {
         ) : (
           <ConfigRow
             label="Reactivate agent"
-            description="Resume sessions. Tokens must be recreated — they are not restored."
+            description="Allow this agent to bind again and receive new routed messages."
             action={
               <Button variant="outline" size="xs" onClick={props.onReactivate} disabled={props.reactivatePending}>
                 {props.reactivatePending ? "Reactivating…" : "Reactivate"}
@@ -91,7 +93,7 @@ export function DangerZone(props: DangerZoneProps) {
         )}
       </Section>
 
-      <SuspendConfirmDialog
+      <AgentSuspendConfirmDialog
         open={suspendOpen}
         onOpenChange={setSuspendOpen}
         label={displayLabel}
@@ -101,7 +103,7 @@ export function DangerZone(props: DangerZoneProps) {
         }}
         pending={props.suspendPending}
       />
-      <DeleteConfirmDialog
+      <AgentDeleteConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         expected={displayLabel}
@@ -112,91 +114,5 @@ export function DangerZone(props: DangerZoneProps) {
         deleting={props.deletePending}
       />
     </section>
-  );
-}
-
-type DeleteConfirmProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  expected: string;
-  onDelete: () => void;
-  deleting: boolean;
-};
-
-type SuspendConfirmProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  label: string;
-  onConfirm: () => void;
-  pending: boolean;
-};
-
-function SuspendConfirmDialog({ open, onOpenChange, label, onConfirm, pending }: SuspendConfirmProps) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Suspend "{label}"?</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <p className="text-body" style={{ color: "var(--fg-2)" }}>
-            Runtime binds and HTTP calls will be refused while the agent is suspended. Active sessions end on their next
-            message. You can reactivate later from this same page.
-          </p>
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={pending}>
-            {pending ? "Suspending…" : "Suspend"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function DeleteConfirmDialog({ open, onOpenChange, expected, onDelete, deleting }: DeleteConfirmProps) {
-  const [typed, setTyped] = useState("");
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (typed === expected) onDelete();
-  }
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        onOpenChange(o);
-        if (!o) setTyped("");
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Delete "{expected}"?</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <p className="text-body text-muted-foreground">
-            This action cannot be undone. Type <span className="font-mono font-medium text-foreground">{expected}</span>{" "}
-            to confirm.
-          </p>
-          <Input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            autoFocus
-            placeholder={expected}
-            className="font-mono"
-          />
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={deleting}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="destructive" disabled={typed !== expected || deleting}>
-              {deleting ? "Deleting…" : "Delete"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
