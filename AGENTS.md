@@ -42,6 +42,10 @@ pnpm --filter @first-tree/server db:migrate    # Apply migrations
 
 If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org — read [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md) first. It's the single source of truth for route naming, JWT shape, and middleware choice.
 
+## Web UI & Design System
+
+If your work touches `packages/web` UI (components, styles, tokens, layout) — read [packages/web/docs/DESIGN.md](packages/web/docs/DESIGN.md) first and follow it. It's the single source of truth for the visual design system: the design language (Strategy A — near-monochrome, neutral `--primary`, green reserved for brand/success), OkLCH color tokens, typography, spacing/radius, `components/ui` primitives, and theming. Tokens are **enforced** by [packages/web/scripts/check-design-tokens.sh](packages/web/scripts/check-design-tokens.sh) (runs on `pnpm --filter @first-tree/web typecheck`) — raw px / hex / Tailwind-palette / off-scale shadow & radius values fail the lint. Current migration state and open items are in [packages/web/docs/DESIGN-AUDIT.md](packages/web/docs/DESIGN-AUDIT.md).
+
 ## Local Testing Isolation
 
 Use `scripts/dev-install.sh` to install the in-tree CLI as `first-tree-dev` on PATH. The dev binary's channel identity (`first-tree-dev` / `~/.first-tree-dev/` / `first-tree-dev.service`) gives it its own home, unit, and label — coexists with whatever prod (`first-tree`) / staging (`first-tree-staging`) install you already have running.

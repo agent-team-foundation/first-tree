@@ -1,9 +1,9 @@
 # First Tree — Web Design System
 
 > Source of truth for the React admin dashboard (`packages/web`).
-> Distilled from the live system: [`src/index.css`](src/index.css),
-> [`src/components/ui/`](src/components/ui), and
-> [`scripts/check-design-tokens.sh`](scripts/check-design-tokens.sh).
+> Distilled from the live system: [`src/index.css`](../src/index.css),
+> [`src/components/ui/`](../src/components/ui), and
+> [`scripts/check-design-tokens.sh`](../scripts/check-design-tokens.sh).
 >
 > **One rule above all:** components never hardcode color, size, spacing, or
 > typography. Everything references a token defined in `index.css`. This is not
@@ -213,14 +213,14 @@ Shadows are tokens: `--shadow-sm`, `--shadow-md` (deeper in dark mode).
 
 ## 7. Components
 
-~31 primitives in [`src/components/ui/`](src/components/ui), built on
+~31 primitives in [`src/components/ui/`](../src/components/ui), built on
 **Radix** (Dialog, Label, Slot, Popover) + **CVA** for variants +
 `cn()` (clsx + tailwind-merge) for class composition. No shadcn/MUI/Chakra —
 this is a bespoke system on Tailwind v4 + Radix.
 
 **Variant pattern** (every variant-bearing component follows this — see
-[`button.tsx`](src/components/ui/button.tsx),
-[`badge.tsx`](src/components/ui/badge.tsx)):
+[`button.tsx`](../src/components/ui/button.tsx),
+[`badge.tsx`](../src/components/ui/badge.tsx)):
 
 ```ts
 const buttonVariants = cva("…base classes…", {
@@ -273,7 +273,7 @@ override them — **every animation has a reduced-motion fallback**. Vocabulary:
 ## 10. Theming
 
 Class-based: `.dark` on `<html>`, persisted to `localStorage`, falling back to
-`prefers-color-scheme`. Toggle in [`theme-toggle.tsx`](src/components/ui/theme-toggle.tsx).
+`prefers-color-scheme`. Toggle in [`theme-toggle.tsx`](../src/components/ui/theme-toggle.tsx).
 
 Three palettes share the **same variable names** (so every utility inherits
 automatically):
