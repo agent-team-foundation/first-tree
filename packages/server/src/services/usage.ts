@@ -146,9 +146,6 @@ export async function summarizeAgent(
   db: Database,
   args: { agentId: string; from: Date; to: Date },
 ): Promise<UsageAgentSummary> {
-  const now = new Date();
-  const gridStart = new Date(now.getTime() - ACTIVITY_GRID_DAYS * 24 * 60 * 60 * 1000);
-
   const [totals] = await db
     .select({
       inputTokens: sumBigint("inputTokens"),
@@ -182,8 +179,8 @@ export async function summarizeAgent(
       and(
         eq(sessionEvents.agentId, args.agentId),
         eq(sessionEvents.kind, TOKEN_USAGE_KIND),
-        gte(sessionEvents.createdAt, gridStart),
-        lt(sessionEvents.createdAt, now),
+        gte(sessionEvents.createdAt, sql<Date>`now() - ${ACTIVITY_GRID_DAYS} * interval '1 day'`),
+        lt(sessionEvents.createdAt, sql<Date>`now()`),
       ),
     )
     .groupBy(sql`date_trunc('day', ${sessionEvents.createdAt} at time zone 'UTC')`)
