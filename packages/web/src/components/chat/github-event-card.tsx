@@ -81,17 +81,26 @@ const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
 };
 
 /**
- * `entity.key` arrives as `owner/repo#N` or `owner/repo@<sha>`. Strip the
- * repo prefix so the chip renders the short `#N` / `@<sha>` form. Falls
- * back defensively to the segment after the last `/` if the prefix does
- * not match (older messages, schema drift).
+ * `entity.key` arrives as `owner/repo#N` (issue / PR), `owner/repo@<sha>`
+ * (commit), or `owner/repo#discussion-N` (discussion — the odd one out:
+ * the key carries a `discussion-` infix but the server's surface title
+ * uses the bare `disc.number`, see `entitySurfaceTitle` in
+ * services/github-normalize.ts). Strip the repo prefix, then collapse the
+ * `discussion-` infix so the chip and the surface-title-strip both
+ * reference the same `#N` form that appears in the server-rendered title.
+ * Falls back defensively to the segment after the last `/` if neither
+ * prefix shape matches (older messages, schema drift).
  */
-function shortEntityNumber(key: string, repository: string): string {
+export function shortEntityNumber(key: string, repository: string): string {
+  let tail: string;
   if (repository && (key.startsWith(`${repository}#`) || key.startsWith(`${repository}@`))) {
-    return key.slice(repository.length);
+    tail = key.slice(repository.length);
+  } else {
+    const lastSlash = key.lastIndexOf("/");
+    tail = lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
   }
-  const lastSlash = key.lastIndexOf("/");
-  return lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
+  const DISC_PREFIX = "#discussion-";
+  return tail.startsWith(DISC_PREFIX) ? `#${tail.slice(DISC_PREFIX.length)}` : tail;
 }
 
 function shortRepoName(repository: string): string {
