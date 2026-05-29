@@ -228,9 +228,19 @@ describe("shortEntityNumber", () => {
  */
 describe("entity-key → strip integration (mirrors GithubEventCardMessage)", () => {
   const cases = [
-    { type: "pull_request" as const, key: "owner/repo#42", title: "PR #42: Refactor inbox", expected: "Refactor inbox" },
+    {
+      type: "pull_request" as const,
+      key: "owner/repo#42",
+      title: "PR #42: Refactor inbox",
+      expected: "Refactor inbox",
+    },
     { type: "issue" as const, key: "owner/repo#7", title: "Issue #7: Bug in parser", expected: "Bug in parser" },
-    { type: "discussion" as const, key: "owner/repo#discussion-9", title: "Discussion #9: RFC draft", expected: "RFC draft" },
+    {
+      type: "discussion" as const,
+      key: "owner/repo#discussion-9",
+      title: "Discussion #9: RFC draft",
+      expected: "RFC draft",
+    },
     { type: "commit" as const, key: "owner/repo@abc", title: "Commit: Fix typo", expected: "Fix typo" },
   ];
 
