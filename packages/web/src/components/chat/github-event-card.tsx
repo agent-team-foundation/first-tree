@@ -99,6 +99,28 @@ function shortRepoName(repository: string): string {
   return lastSlash >= 0 ? repository.slice(lastSlash + 1) : repository;
 }
 
+/**
+ * Server-side `entitySurfaceTitle` (services/github-normalize.ts) wraps the
+ * raw entity title as `"PR #N: <title>"` / `"Issue #N: <title>"` /
+ * `"Discussion #N: <title>"` / `"Commit: <title>"`. The L1 chip already
+ * renders that prefix as a colored badge, so leaving it inside the title
+ * string duplicates information. Strip the exact prefix we expect from the
+ * server formatter; if the title doesn't match (older messages, schema
+ * drift), return as-is so we never silently drop the title.
+ */
+export function stripEntityPrefix(title: string, entityType: GithubEntityType, entityNumber: string): string {
+  const prefix = ENTITY_TAG_LABEL[entityType];
+  if (entityType === "commit") {
+    if (title.startsWith(`${prefix}: `)) return title.slice(prefix.length + 2);
+    if (title === prefix) return "";
+    return title;
+  }
+  const head = `${prefix} ${entityNumber}`;
+  if (title.startsWith(`${head}: `)) return title.slice(head.length + 2);
+  if (title === head) return "";
+  return title;
+}
+
 function subscribedVerb(kind: GithubEventCard["kind"]): string {
   switch (kind) {
     case "opened":
@@ -210,6 +232,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
   const entityNumber = shortEntityNumber(content.entity.key, content.repository);
   const repoShort = shortRepoName(content.repository);
   const verb = actionVerb(content);
+  const titleText = stripEntityPrefix(content.title, content.entity.type, entityNumber);
 
   const entityChip = (
     <span
@@ -246,7 +269,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         }}
       >
         {entityChip}
-        {content.title ? (
+        {titleText ? (
           link ? (
             <a
               href={link}
@@ -255,11 +278,11 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
               className="font-medium no-underline hover:underline"
               style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
             >
-              {content.title}
+              {titleText}
             </a>
           ) : (
             <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
-              {content.title}
+              {titleText}
             </span>
           )
         ) : null}

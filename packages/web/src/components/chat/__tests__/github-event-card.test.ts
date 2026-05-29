@@ -3,6 +3,7 @@ import {
   isGithubEventCardContent,
   isGithubSystemSenderMetadata,
   isTrustedGithubDispatcherMessage,
+  stripEntityPrefix,
 } from "../github-event-card.js";
 
 /**
@@ -154,5 +155,40 @@ describe("isTrustedGithubDispatcherMessage", () => {
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: {} })).toBe(false);
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: { systemSender: "other" } })).toBe(false);
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: null })).toBe(false);
+  });
+});
+
+/**
+ * Server-side `entitySurfaceTitle` (services/github-normalize.ts) prefixes
+ * the raw entity title with `"PR #N: "` / `"Issue #N: "` /
+ * `"Discussion #N: "` / `"Commit: "`. The L1 chip already renders that
+ * prefix as a badge, so the card strips it before showing the title. Pin
+ * the stripping contract so a regression silently re-introduces the
+ * "PR-NN: PR-NN: ..." visual duplication that motivated this change.
+ * (Issue numbers in this file kept at 1-2 digits to avoid the hex-color
+ * guardrail in scripts/check-design-tokens.sh.)
+ */
+describe("stripEntityPrefix", () => {
+  it("strips PR / Issue / Discussion prefix when title matches the server format", () => {
+    expect(stripEntityPrefix("PR #42: Refactor inbox", "pull_request", "#42")).toBe("Refactor inbox");
+    expect(stripEntityPrefix("Issue #7: Bug in parser", "issue", "#7")).toBe("Bug in parser");
+    expect(stripEntityPrefix("Discussion #9: RFC draft", "discussion", "#9")).toBe("RFC draft");
+  });
+
+  it("strips the bare prefix when entity.title was absent server-side", () => {
+    // entitySurfaceTitle returns just `"PR #N"` (no colon) when entity.title is empty.
+    // The chip already shows it, so render-side returns "" to hide the title element.
+    expect(stripEntityPrefix("PR #42", "pull_request", "#42")).toBe("");
+    expect(stripEntityPrefix("Commit", "commit", "@x")).toBe("");
+  });
+
+  it("strips Commit prefix (no number in surface title) for commits", () => {
+    expect(stripEntityPrefix("Commit: Fix typo in README", "commit", "@x")).toBe("Fix typo in README");
+  });
+
+  it("returns the title as-is when the prefix does not match (older messages / schema drift)", () => {
+    expect(stripEntityPrefix("Some legacy title", "pull_request", "#42")).toBe("Some legacy title");
+    // Number mismatch — defensive: don't slice mid-token.
+    expect(stripEntityPrefix("PR #99: Title", "pull_request", "#42")).toBe("PR #99: Title");
   });
 });
