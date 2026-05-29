@@ -1052,6 +1052,20 @@ export function ChatView({
     null,
   );
 
+  // Bundles the optimistic-insert + watermark pre-advance pair into
+  // one call so every own-send entry point (text, image, text-after-
+  // image, and any future variant like resend or forward) keeps the
+  // invariant "the same render that adds an own optimistic row also
+  // moves the watermark past it". Avoids the per-call-site copy that
+  // a reviewer flagged as easy to skip when adding a new send path.
+  const insertOwnOptimisticMessage = useCallback(
+    (msg: MessageWithDelivery) => {
+      insertOptimisticMessage(msg);
+      setPendingHighWaterAdvance({ chatId, messageId: msg.id });
+    },
+    [insertOptimisticMessage, chatId],
+  );
+
   const sendMut = useMutation({
     mutationFn: ({ content, mentions }: { content: string; mentions: string[] }) =>
       sendChatMessage(chatId, content, mentions),
@@ -1065,7 +1079,7 @@ export function ChatView({
       setDraft("");
       const optimistic = buildOptimisticTextMessage(content);
       if (!optimistic) return { tempId: null, previousDraft };
-      insertOptimisticMessage(optimistic);
+      insertOwnOptimisticMessage(optimistic);
       return { tempId: optimistic.id, previousDraft };
     },
     onSuccess: (saved, _content, ctx) => {
@@ -1236,7 +1250,10 @@ export function ChatView({
           };
           batchTempId = optimistic.id;
           pendingTempIds.add(batchTempId);
-          insertOptimisticMessage(optimistic);
+          // Pre-advance the watermark before the batched POST resolves so
+          // the pill never counts the optimistic file batch as new
+          // (parallel to sendMut.onMutate's pre-advance for text).
+          insertOwnOptimisticMessage(optimistic);
         }
 
         const saved = await sendFileMessageBatch(
@@ -1459,11 +1476,6 @@ export function ChatView({
   // "pill never shows on return-to-chat-with-injected-messages" and
   // root-caused it to the live readState read in the pill baseline.
   const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
-  // Dismiss when the divider has scrolled out the top of the
-  // viewport (IntersectionObserver below). Kept as state so the
-  // render path can drop the divider once dismissed. Reset on chat
-  // switch.
-  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
   // Tracks which chatId we have already snapshotted the divider
   // anchor for. Without this guard, the snapshot would re-fire on
   // every tracker IDB write (each one updates the React Query
@@ -1473,7 +1485,6 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
   useLayoutEffect(() => {
     setDividerAnchorMessageId(null);
-    setDividerDismissed(false);
     dividerSnapshotChatIdRef.current = null;
   }, [chatId]);
   // Snapshot once the read-state query for this chatId has resolved
@@ -1623,18 +1634,32 @@ export function ChatView({
     return Math.max(sessionIdx, unreadAnchorIdx);
   }, [sessionHighestId, mergedMessages, unreadAnchorIdx]);
 
-  // Pill count = messages strictly newer than the effective high
-  // watermark. Hides (count = 0) whenever the user has had every
-  // currently-rendered message at viewport bottom at some point
-  // (either this session or a prior one persisted in IDB).
+  // Pill count = NON-SELF messages strictly newer than the effective
+  // high watermark. Own sends never contribute even if the pre-advance
+  // hasn't drained yet (e.g. the optimistic→saved replace step
+  // briefly invalidates `sessionHighestId` between renders) — the
+  // pill is semantically "remote arrivals you haven't seen", not
+  // "anything past the watermark".
   const pillCount = useMemo<number>(() => {
     if (mergedMessages.length === 0) return 0;
     if (sessionHighestIdx < 0) return 0;
-    return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
-  }, [mergedMessages, sessionHighestIdx]);
+    let count = 0;
+    for (let i = sessionHighestIdx + 1; i < mergedMessages.length; i++) {
+      const msg = mergedMessages[i];
+      if (!msg) continue;
+      if (myAgentId && msg.senderId === myAgentId) continue;
+      count++;
+    }
+    return count;
+  }, [mergedMessages, sessionHighestIdx, myAgentId]);
 
-  // Index of the first message strictly newer than the snapshotted
-  // anchor — i.e., where the "New Messages" line slots in.
+  // Index of the first NON-SELF message strictly newer than the
+  // snapshotted anchor — i.e., where the "New Messages" line slots
+  // in. Own sends are skipped so the divider only marks the boundary
+  // between "what I had seen" and "what arrived from someone else".
+  // Without this skip, the user's own optimistic row (which is also
+  // an `idx > unreadAnchorIdx` message) would re-trigger the divider
+  // immediately after the user sends, which is not the intent.
   //
   // Comparison is by index in `mergedMessages` (which is sorted by
   // `createdAt` ascending). DO NOT compare by lex order on the
@@ -1646,7 +1671,7 @@ export function ChatView({
   // anchor's — the bug code-reviewer reproduced in rev 8.
   //
   // Returns -1 when the divider should not render (no anchor, anchor
-  // has aged out of the window, or no newer messages).
+  // has aged out of the window, or no newer non-self messages).
   const firstNewItemIdx = useMemo<number>(() => {
     if (unreadAnchorIdx < 0) return -1;
     const idxById = new Map<string, number>();
@@ -1658,19 +1683,39 @@ export function ChatView({
       const item = items[i];
       if (!item || item.kind !== "message") continue;
       const idx = idxById.get(item.data.id);
-      if (idx !== undefined && idx > unreadAnchorIdx) return i;
+      if (idx === undefined || idx <= unreadAnchorIdx) continue;
+      if (myAgentId && item.data.senderId === myAgentId) continue;
+      return i;
     }
     return -1;
-  }, [items, mergedMessages, unreadAnchorIdx]);
+  }, [items, mergedMessages, unreadAnchorIdx, myAgentId]);
 
-  // Hide the divider the moment it scrolls past the top of the
-  // viewport — but keep it visible while the user is still looking
-  // at it, even after they have read every new message below.
-  // Dismissal is one-way during a visit; the next chat open
-  // re-evaluates from the fresh snapshot.
+  // Re-arm semantics: when the divider scrolls past the viewport
+  // top, advance `dividerAnchorMessageId` to what the user has
+  // actually reached. The next render then has `firstNewItemIdx`
+  // fall back to -1 for messages they've already passed — the
+  // divider unmounts naturally (no jitter / reflow mid-list, since
+  // it was already off-screen). Any subsequent NON-SELF arrival
+  // strictly newer than the new anchor re-renders the divider at
+  // the right slot. The divider is a recurring marker, not a
+  // one-shot ribbon — dismissal is encoded entirely in the anchor.
+  //
+  // Latest `mergedMessages` / `liveBottomVisibleId` are read through
+  // refs so the observer only rebuilds when the divider's mount
+  // state flips (`firstNewItemIdx` crossing -1). Otherwise every
+  // poll-driven message append and every sub-frame scroll tick
+  // would disconnect + recreate the IntersectionObserver. Reviewer
+  // R3 on PR 652.
   const dividerRef = useRef<HTMLDivElement | null>(null);
+  const liveBottomVisibleIdRef = useRef<string | null>(liveBottomVisibleId);
+  const mergedMessagesRef = useRef<readonly MessageWithDelivery[]>(mergedMessages);
   useEffect(() => {
-    if (dividerDismissed) return;
+    liveBottomVisibleIdRef.current = liveBottomVisibleId;
+  }, [liveBottomVisibleId]);
+  useEffect(() => {
+    mergedMessagesRef.current = mergedMessages;
+  }, [mergedMessages]);
+  useEffect(() => {
     if (firstNewItemIdx < 0) return;
     const node = dividerRef.current;
     const container = scrollContainerRef.current;
@@ -1681,7 +1726,46 @@ export function ChatView({
           const rootBounds = entry.rootBounds;
           if (!rootBounds) continue;
           if (entry.boundingClientRect.bottom < rootBounds.top) {
-            setDividerDismissed(true);
+            // Advance the anchor to what the user has ACTUALLY
+            // reached (live bottom-visible), NOT the chat tip. When
+            // a batch of remote messages is taller than the
+            // viewport, the divider can scroll past the top while
+            // the user has only reached part-way down the batch —
+            // anchoring at the tip would mark the still-below-the-
+            // fold messages as already seen, suppressing both the
+            // divider and `pillCount` for them. The live bottom-
+            // visible message id is the boundary between "I have
+            // seen this" and "still below the fold" at the moment
+            // of dismissal. Codex P2 review on PR 652.
+            //
+            // Race guard: if the live bottom-visible is currently
+            // an `optimistic-*` row (user scrolled to it during a
+            // mid-flight own send) we skip it and walk back to the
+            // last server-acked id. Without this guard, the
+            // optimistic id gets replaced by the saved id moments
+            // later → `unreadAnchorIdx = findIndex(...) = -1` →
+            // `firstNewItemIdx` permanently falls through to -1 for
+            // the rest of the visit, silently killing the divider
+            // until the user switches chats. Reviewer R4 on PR 652.
+            //
+            // Fallback to the chat tip only when nothing usable is
+            // available (very first paint, before the tracker has
+            // emitted a bottom-visible). `firstNewItemIdx`
+            // transiently stays -1 until the tracker catches up; no
+            // harmful flash.
+            const live = liveBottomVisibleIdRef.current;
+            const msgs = mergedMessagesRef.current;
+            let reached: string | null = live && !live.startsWith("optimistic-") ? live : null;
+            if (!reached) {
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (m && !m.id.startsWith("optimistic-")) {
+                  reached = m.id;
+                  break;
+                }
+              }
+            }
+            setDividerAnchorMessageId(reached);
             return;
           }
         }
@@ -1690,7 +1774,7 @@ export function ChatView({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [firstNewItemIdx, dividerDismissed]);
+  }, [firstNewItemIdx]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
@@ -2569,10 +2653,11 @@ export function ChatView({
                     // server window.
                     const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
                     // Insert the "New Messages" divider before the first item
-                    // whose message id is strictly newer than the snapshot
-                    // taken at chat-open. Dismissed once it has scrolled past
-                    // the top of the viewport (IntersectionObserver above).
-                    const showDivider = !dividerDismissed && idx === firstNewItemIdx;
+                    // whose message id is strictly newer than the current
+                    // anchor (snapshotted at chat-open; re-armed when the
+                    // divider scrolls past the viewport top — see the
+                    // IntersectionObserver above).
+                    const showDivider = idx === firstNewItemIdx;
                     const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
                     const epilogue =
                       isGapAnchor && item.kind === "message" ? (
