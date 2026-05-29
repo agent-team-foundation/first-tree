@@ -12,6 +12,7 @@ import type { OnboardingFlowValue } from "../onboarding/onboarding-flow.js";
 import { ADMIN_STEPS, INVITEE_STEPS, type OnboardingPath, type StepId } from "../onboarding/steps.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const WAIT_FOR_TEXT_TIMEOUT_MS = 3_000;
 
 const activityMocks = vi.hoisted(() => ({
   disconnectClient: vi.fn(),
@@ -314,6 +315,8 @@ const ORG_AGENTS = [
   agent({ uuid: "agent-2", name: "design", displayName: "Design Critique", managerId: "member-alice" }),
 ];
 
+const mountedRoots = new Set<Root>();
+
 function setupDom(): void {
   const storage = createStorage();
   window.HTMLElement.prototype.scrollIntoView = () => undefined;
@@ -380,6 +383,7 @@ async function renderDom(
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  mountedRoots.add(root);
   const queryClient = createClient();
   queryClient.setQueryData(["agents", "org-list"], { items: ORG_AGENTS, nextCursor: null });
   seed?.(queryClient);
@@ -394,6 +398,11 @@ async function renderDom(
   });
   await flush();
   return { container, root };
+}
+
+async function unmountRoot(root: Root): Promise<void> {
+  mountedRoots.delete(root);
+  await act(async () => root.unmount());
 }
 
 function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue {
@@ -490,10 +499,11 @@ async function click(el: Element | null): Promise<void> {
 }
 
 async function waitForText(text: string, container: HTMLElement = document.body): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
+  const deadline = Date.now() + WAIT_FOR_TEXT_TIMEOUT_MS;
+  do {
     if (container.textContent?.includes(text)) return;
     await flush();
-  }
+  } while (Date.now() < deadline);
   throw new Error(`Missing text: ${text}\n${container.textContent ?? ""}`);
 }
 
@@ -632,7 +642,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const root of [...mountedRoots]) await unmountRoot(root);
   document.body.innerHTML = "";
 });
 
@@ -663,7 +674,7 @@ describe("web DOM interaction coverage", () => {
     );
     expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ uuid: "agent-created" }), "claude-code");
 
-    await act(async () => root.unmount());
+    await unmountRoot(root);
   });
 
   it("renders NewAgentDialog zero-computer recovery command", async () => {
@@ -699,7 +710,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Alice", admin.container);
     await waitForText("Auth expired", admin.container);
 
-    await act(async () => admin.root.unmount());
+    await unmountRoot(admin.root);
 
     authMock.value = { ...authMock.value, role: "member" };
     activityMocks.listClients.mockResolvedValue([]);
@@ -708,7 +719,7 @@ describe("web DOM interaction coverage", () => {
       queryClient.setQueryData(["activity"], { agents: [], clients: [] });
     });
     await waitForText("No computers connected yet.", member.container);
-    await act(async () => member.root.unmount());
+    await unmountRoot(member.root);
 
     authMock.value = { ...authMock.value, role: "admin" };
     activityMocks.listOrgClients.mockRejectedValue(new Error("forbidden"));
@@ -731,7 +742,7 @@ describe("web DOM interaction coverage", () => {
     expect(meChatMocks.createMeChat).toHaveBeenCalledWith({ participantIds: ["agent-1"] });
     expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-created", "hello", ["agent-1"]);
     expect(onCreated).toHaveBeenCalledWith("chat-created");
-    await act(async () => first.root.unmount());
+    await unmountRoot(first.root);
 
     meChatMocks.createMeChat.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
@@ -782,7 +793,7 @@ describe("web DOM interaction coverage", () => {
 
     expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", { participantIds: ["agent-2"] });
     expect(onAdded).toHaveBeenCalled();
-    await act(async () => first.root.unmount());
+    await unmountRoot(first.root);
 
     const second = await renderDom(
       <AddParticipantDropdown
@@ -814,7 +825,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Sign in with GitHub", local.container);
     await waitForText("Dev: skip GitHub", local.container);
     expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
-    await act(async () => local.root.unmount());
+    await unmountRoot(local.root);
 
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -822,7 +833,7 @@ describe("web DOM interaction coverage", () => {
     });
     const deepLink = await renderDom(<LoginPage />, "/login", undefined);
     expect(deepLink.container.textContent).not.toContain("Dev: skip GitHub");
-    await act(async () => deepLink.root.unmount());
+    await unmountRoot(deepLink.root);
 
     authMock.value = { ...authMock.value, isAuthenticated: true };
     const authed = await renderDom(<LoginPage />, "/login", undefined);
@@ -851,7 +862,7 @@ describe("web DOM interaction coverage", () => {
     });
     expect(replaceState).toHaveBeenCalledWith(null, "", "/auth/github/complete");
     expect(sessionStorage.getItem("onboarding:joinPath")).toBe("invite");
-    await act(async () => success.root.unmount());
+    await unmountRoot(success.root);
 
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -877,7 +888,7 @@ describe("web DOM interaction coverage", () => {
     );
     expect(hideDisabled).toBeTruthy();
     expect(hideDisabled?.hasAttribute("disabled")).toBe(true);
-    await act(async () => disabled.root.unmount());
+    await unmountRoot(disabled.root);
 
     authMock.value = {
       ...authMock.value,
@@ -893,7 +904,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
-    await act(async () => active.root.unmount());
+    await unmountRoot(active.root);
 
     authMock.value = {
       ...authMock.value,
@@ -909,7 +920,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(authMock.value.restoreOnboarding).toHaveBeenCalled();
-    await act(async () => dismissed.root.unmount());
+    await unmountRoot(dismissed.root);
 
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
     const completed = await renderDom(<SettingsOnboardingPage />);
@@ -942,7 +953,7 @@ describe("web DOM interaction coverage", () => {
         null,
     );
     expect(onClose).toHaveBeenCalled();
-    await act(async () => modal.root.unmount());
+    await unmountRoot(modal.root);
 
     activityMocks.generateConnectToken.mockResolvedValueOnce({
       token: "prod-token",
@@ -1053,7 +1064,7 @@ describe("web DOM interaction coverage", () => {
       await flush();
     }
     expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe("https://hub.example/invite/token-2");
-    await act(async () => panel.root.unmount());
+    await unmountRoot(panel.root);
 
     api.get = vi.fn(async () => {
       throw new Error("load failed");
@@ -1106,7 +1117,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(disconnected.flow.goNext).toHaveBeenCalled();
-    await act(async () => disconnected.root.unmount());
+    await unmountRoot(disconnected.root);
 
     githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
       installationId: 42,
@@ -1141,7 +1152,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(connected.flow.goNext).toHaveBeenCalled();
-    await act(async () => connected.root.unmount());
+    await unmountRoot(connected.root);
 
     githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
       installationId: 42,
@@ -1159,7 +1170,7 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
     const scopeMissing = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Reconnect GitHub with project access", scopeMissing.container);
-    await act(async () => scopeMissing.root.unmount());
+    await unmountRoot(scopeMissing.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
@@ -1199,7 +1210,7 @@ describe("web DOM interaction coverage", () => {
     expect(markTreeAutoInitDone).toHaveBeenCalled();
     expect(setTreeMode).toHaveBeenCalledWith("existing");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
-    await act(async () => adminAutoDetect.root.unmount());
+    await unmountRoot(adminAutoDetect.root);
 
     const adminExisting = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
@@ -1227,7 +1238,7 @@ describe("web DOM interaction coverage", () => {
       repo: "https://github.com/acme/context-tree",
     });
     expect(adminExisting.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
-    await act(async () => adminExisting.root.unmount());
+    await unmountRoot(adminExisting.root);
 
     const setTreeModeNew = vi.fn();
     const setTreeUrlNew = vi.fn();
@@ -1251,7 +1262,7 @@ describe("web DOM interaction coverage", () => {
     );
     expect(setTreeUrlNew).toHaveBeenCalledWith("");
     expect(setTreeModeNew).toHaveBeenCalledWith("new");
-    await act(async () => adminNew.root.unmount());
+    await unmountRoot(adminNew.root);
 
     chatApiMocks.sendChatMessage.mockRejectedValueOnce(new Error("message failed"));
     const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
@@ -1268,7 +1279,7 @@ describe("web DOM interaction coverage", () => {
     );
     expect(chatApiMocks.createAgentChat).toHaveBeenLastCalledWith("agent-1");
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
-    await act(async () => adminNoProject.root.unmount());
+    await unmountRoot(adminNoProject.root);
 
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
     const inviteeWaiting = await renderOnboardingDom(<StepKickoff />, {
@@ -1282,7 +1293,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(inviteeWaiting.flow.finishLater).toHaveBeenCalled();
-    await act(async () => inviteeWaiting.root.unmount());
+    await unmountRoot(inviteeWaiting.root);
 
     githubAppMocks.getGithubAppInstallationExists.mockResolvedValueOnce(false);
     const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, {
@@ -1296,7 +1307,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(navigator.clipboard.writeText).toHaveBeenCalled();
-    await act(async () => inviteeNoInstall.root.unmount());
+    await unmountRoot(inviteeNoInstall.root);
 
     const inviteeConfirm = await renderOnboardingDom(<StepKickoff />, {
       path: "invitee",
@@ -1313,7 +1324,7 @@ describe("web DOM interaction coverage", () => {
       "tree_chat_started",
       expect.objectContaining({ joinPath: "invite" }),
     );
-    await act(async () => inviteeConfirm.root.unmount());
+    await unmountRoot(inviteeConfirm.root);
 
     orgSettingsMocks.getSourceReposSetting.mockResolvedValueOnce({ repos: [] });
     githubMocks.listGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
@@ -1322,7 +1333,7 @@ describe("web DOM interaction coverage", () => {
       activeStep: "kickoff",
     });
     await waitForText("Reconnect GitHub with project access", inviteePickerScope.container);
-    await act(async () => inviteePickerScope.root.unmount());
+    await unmountRoot(inviteePickerScope.root);
 
     orgSettingsMocks.getSourceReposSetting.mockResolvedValueOnce({ repos: [] });
     githubMocks.listGithubRepos.mockRejectedValueOnce(new Error("network"));
@@ -1436,7 +1447,7 @@ describe("web DOM interaction coverage", () => {
       headers: { Authorization: "Bearer token" },
     });
 
-    await act(async () => root.unmount());
+    await unmountRoot(root);
   });
 
   it("edits environment variable rows, reveal state, and sensitive keep-existing behavior", async () => {
@@ -1527,7 +1538,7 @@ describe("web DOM interaction coverage", () => {
       sensitive: true,
     });
 
-    await act(async () => root.unmount());
+    await unmountRoot(root);
   });
 
   it("edits Git repository rows and validates derived local path collisions", async () => {
@@ -1605,6 +1616,6 @@ describe("web DOM interaction coverage", () => {
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
     expect(onUpdate).toHaveBeenCalledWith("web", { url: "https://github.com/acme/web.git" });
 
-    await act(async () => root.unmount());
+    await unmountRoot(root);
   });
 });

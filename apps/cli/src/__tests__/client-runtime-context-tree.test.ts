@@ -138,25 +138,29 @@ describe("ClientRuntime context-tree wiring", () => {
     vi.clearAllMocks();
   });
 
-  it("starts eager slots without a shared Context Tree binding", async () => {
-    const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test");
-    rt.addAgent("alpha", {
-      agentId: "agent-alpha",
-      runtime: "claude-code",
-      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
-      concurrency: 1,
-    } as unknown as Parameters<typeof rt.addAgent>[1]);
+  it(
+    "starts eager slots without a shared Context Tree binding",
+    async () => {
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://hub.test", "client-test");
+      rt.addAgent("alpha", {
+        agentId: "agent-alpha",
+        runtime: "claude-code",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
 
-    await rt.start();
+      await rt.start();
 
-    expect(slotInstances).toHaveLength(1);
-    const slot = slotInstances[0];
-    if (!slot) throw new Error("slot not constructed");
-    expect(slot.start).toHaveBeenCalledTimes(1);
-    expect(slot.start.mock.calls[0]).toEqual([]);
-    await rt.stop();
-  }, RUNTIME_TEST_TIMEOUT_MS);
+      expect(slotInstances).toHaveLength(1);
+      const slot = slotInstances[0];
+      if (!slot) throw new Error("slot not constructed");
+      expect(slot.start).toHaveBeenCalledTimes(1);
+      expect(slot.start.mock.calls[0]).toEqual([]);
+      await rt.stop();
+    },
+    RUNTIME_TEST_TIMEOUT_MS,
+  );
 
   it("handles connection events, update hooks, and graceful stop", async () => {
     const { print } = await import("../core/output.js");

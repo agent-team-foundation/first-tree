@@ -28,10 +28,11 @@ describe("buildNotificationCandidate", () => {
       updatedAt: "2026-01-01T00:00:00Z",
     });
     expect(candidate).toBeDefined();
+    if (!candidate) throw new Error("expected review request candidate");
     expect(candidate?.kind).toBe("review_request");
     expect(candidate?.priority).toBe(100);
     expect(candidate?.threadKey).toBe("/repos/owner/repo/pulls/12");
-    expect(taskPrNumber(candidate!)).toBe(12);
+    expect(taskPrNumber(candidate)).toBe(12);
   });
 
   it("builds candidates for mentions referencing comments with anchor urls", () => {
@@ -45,9 +46,10 @@ describe("buildNotificationCandidate", () => {
       latestCommentApiUrl: "https://api.github.com/repos/bingran-you/github-scan/issues/comments/4247540715",
       updatedAt: "2026-04-14T22:18:56Z",
     });
+    if (!candidate) throw new Error("expected mention candidate");
     expect(candidate?.kind).toBe("mention");
-    expect(taskPrNumber(candidate!)).toBe(98);
-    expect(taskUrl(candidate!)).toBe("https://github.com/bingran-you/github-scan/pull/98#issuecomment-4247540715");
+    expect(taskPrNumber(candidate)).toBe(98);
+    expect(taskUrl(candidate)).toBe("https://github.com/bingran-you/github-scan/pull/98#issuecomment-4247540715");
   });
 
   it("returns undefined for non-actionable reasons", () => {
@@ -89,7 +91,8 @@ describe("buildNotificationCandidate", () => {
       latestCommentApiUrl: "",
       updatedAt: "2026-01-01T00:00:00Z",
     });
-    expect(taskUrl(candidate!)).toBe("https://github.com/o/r/issues/7");
+    if (!candidate) throw new Error("expected issue candidate");
+    expect(taskUrl(candidate)).toBe("https://github.com/o/r/issues/7");
   });
 });
 
@@ -125,7 +128,8 @@ describe("candidateFromTaskMetadata", () => {
     expect(c?.kind).toBe("review_request");
     expect(c?.apiUrl).toBe("https://api.github.com/repos/owner/repo/pulls/12");
     expect(c?.webUrl).toBe("https://github.com/owner/repo/pull/12");
-    expect(effectiveWorkspaceRepo(c!)).toBe("bingran-you/bingran-you");
+    if (!c) throw new Error("expected metadata candidate");
+    expect(effectiveWorkspaceRepo(c)).toBe("bingran-you/bingran-you");
   });
 
   it("returns undefined when required fields are missing", () => {
