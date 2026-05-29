@@ -1,6 +1,7 @@
 {
   "name": "@first-tree/e2e",
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "Cross-process E2E framework — real pg + server + client processes, no fastify.inject. Standalone package: `rm -rf packages/e2e` must leave the published CLI tarball untouched (see proposals/hub-local-e2e-framework.20260518.md §三).",
