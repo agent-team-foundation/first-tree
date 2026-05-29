@@ -94,7 +94,8 @@ Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + 
   "Cleanup candidates" section was removed.
 
 **Still open:** `.context-live-*` palette, spacing rhythm, dead `--sp-*`, multi-line lint detection,
-focus-ring extension to the remaining primitives, and the ✓⚠✗⚙→lucide icon purge.
+and the ✓⚠✗⚙→lucide icon purge (authed surfaces — needs a local-stack by-eye pass).
+*(focus-ring extension — DONE: `filter-pill`/`tab-bar`/`segmented-control`; popover/command don't fit the ring.)*
 *(DONE in the low-risk-tokens PR: `--text-live` drop, `--state-*-soft` companions, `color-scheme` on
 `:root`/`.dark`, info callout — see P1/P2 marks. focus-ring unification — done in #662, see Phase 1.)*
 
@@ -153,8 +154,10 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   `.context-live-title`, not this tier).
 - [x] **Inconsistent focus treatment.** **DONE (#662):** one recipe —
   `focus-visible:ring-2 ring-ring ring-offset-2` + a surface-matched `ring-offset` — applied across
-  Button / Badge / Input / Dialog-close / Toast / settings-field. *(Extending it to `tab-bar` /
-  `segmented-control` / `command` / `popover` / `filter-pill` is still a deferred a11y follow-up.)*
+  Button / Badge / Input / Dialog-close / Toast / settings-field. **Extended** to `filter-pill`,
+  `tab-bar` (Tab), and `segmented-control`. `popover` triggers are caller-owned (already ringed via the
+  `Button`/`FilterPill` passed in), and `command` (cmdk) uses its `aria-selected` highlight model with an
+  always-focused input, so the button-style ring doesn't apply there.
 
 ## P2 — Omissions
 
@@ -204,8 +207,8 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 
 - **Done:** P0, P0.5 rule 7, all P1 decisions, P2 `--color-*` alias (#656/#662); green-liveness colour (#672).
 - **Still open (none blocking):** P0.5 multi-line detection, `.context-live-*` palette, spacing rhythm,
-  dead `--sp-*`, the deferred focus-ring extension to the remaining interactive primitives, and the
-  ✓⚠✗⚙→lucide icon purge. *(`--text-live` drop, `--state-*-soft`, `.dark`/`:root` color-scheme, and the
+  dead `--sp-*`, and the ✓⚠✗⚙→lucide icon purge (authed surfaces — local-stack by-eye pass). *(focus-ring
+  extension is DONE for filter-pill/tab-bar/segmented-control. `--text-live` drop, `--state-*-soft`, `.dark`/`:root` color-scheme, and the
   info callout are DONE — see the P1/P2 marks above.)*
 - Verify after any change: `pnpm --filter @first-tree/web typecheck` (runs tsc + `lint:tokens`).
 
@@ -261,10 +264,11 @@ fold into the phases below.
   matches each control's real surface (`--bg-sunken` for settings-field, `--bg-raised` for toast).
 - [ ] **Follow-ups (deferred):**
   - Line-icon set / purge the ✓ ⚠ ✗ ⚙ glyphs in favor of lucide — layout-affecting, spread
-    across pages; needs a by-eye pass.
-  - Extend the focus ring to the remaining interactive primitives (`tab-bar`,
-    `segmented-control`, `command`, `popover` triggers, `filter-pill`) — they paint no ring
-    today, so no visible mismatch, but it's an a11y coverage gap.
+    across pages (`runtime-state-line`, `working-turn`); needs a by-eye pass on authed surfaces
+    (not reachable from the styleguide), so deferred to a local-stack session. **Still open.**
+  - [x] Extend the focus ring to the remaining interactive primitives — **DONE** for `filter-pill` /
+    `tab-bar` / `segmented-control`; `popover` trigger is caller-owned and `command` uses cmdk
+    `aria-selected` (neither fits the button ring), so the recipe is now applied everywhere it makes sense.
   - Button/Badge base `ring-offset-background` uses the page surface; on a raised card/menu
     a sub-perceptible 2px seam can appear on keyboard focus (a primitive can't know its
     parent surface). Masked by the filled fill; acceptable until a per-surface convention exists.
