@@ -107,7 +107,7 @@ describe("CLI command registration", () => {
     registerGithubCommands(root);
 
     const agent = command(root, "agent");
-    expect(subcommands(agent, "bind")).toEqual(["bot", "client", "user"]);
+    expect(subcommands(agent, "bind")).toEqual(["client"]);
     expect(subcommands(agent, "session")).toEqual(["list", "suspend", "terminate"]);
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 

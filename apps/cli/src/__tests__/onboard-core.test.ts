@@ -6,15 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const cliFetchMock = vi.hoisted(() => vi.fn());
 const ensureFreshAccessTokenMock = vi.hoisted(() => vi.fn());
 const loadCredentialsMock = vi.hoisted(() => vi.fn());
-const bindFeishuBotMock = vi.hoisted(() => vi.fn());
 const stderrMock = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
 vi.mock("../core/cli-fetch.js", () => ({
   cliFetch: cliFetchMock,
-}));
-
-vi.mock("../core/feishu.js", () => ({
-  bindFeishuBot: bindFeishuBotMock,
 }));
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
@@ -38,7 +33,6 @@ beforeEach(() => {
   cliFetchMock.mockReset();
   ensureFreshAccessTokenMock.mockReset();
   loadCredentialsMock.mockReset();
-  bindFeishuBotMock.mockReset();
   stderrMock.mockClear();
 });
 
@@ -94,7 +88,7 @@ describe("onboard core", () => {
     expect(formatCheckReport(missing)).toContain("Run `first-tree login <token>` first");
   });
 
-  it("creates agent and assistant rows, writes local config, and binds Feishu", async () => {
+  it("creates agent and assistant rows and writes local config", async () => {
     vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
       ensureFreshAccessToken: ensureFreshAccessTokenMock,
@@ -112,7 +106,6 @@ describe("onboard core", () => {
       )
       .mockResolvedValueOnce(jsonResponse(200, { uuid: "human-uuid", name: "gandy" }))
       .mockResolvedValueOnce(jsonResponse(200, { uuid: "assistant-uuid", name: "gandy-assistant" }));
-    bindFeishuBotMock.mockResolvedValue(undefined);
     saveOnboardState({ id: "gandy" });
 
     await onboardCreate({
@@ -123,8 +116,6 @@ describe("onboard core", () => {
       role: "Lead",
       domains: "runtime, tools",
       clientId: "client-1",
-      feishuBotAppId: "cli_app",
-      feishuBotAppSecret: "secret",
     });
 
     expect(cliFetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
@@ -145,13 +136,6 @@ describe("onboard core", () => {
       visibility: "private",
       clientId: "client-1",
     });
-    expect(bindFeishuBotMock).toHaveBeenCalledWith(
-      "http://hub.test",
-      "access-1",
-      "assistant-uuid",
-      "cli_app",
-      "secret",
-    );
     expect(readFileSync(join(home, "config", "agents", "gandy-assistant", "agent.yaml"), "utf8")).toContain(
       'agentId: "assistant-uuid"',
     );
