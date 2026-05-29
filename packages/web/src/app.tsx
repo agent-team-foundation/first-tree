@@ -49,6 +49,10 @@ const OnboardingPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
   : null;
 
+const TeamPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/team-preview.js").then((module) => ({ default: module.TeamPreviewPage })))
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -95,6 +99,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <OnboardingPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {TeamPreviewPage ? (
+                <Route
+                  path="/preview/team"
+                  element={
+                    <Suspense fallback={null}>
+                      <TeamPreviewPage />
                     </Suspense>
                   }
                 />

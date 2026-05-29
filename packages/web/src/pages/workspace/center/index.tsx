@@ -21,6 +21,7 @@ export function CenterPanel({
   onSelectChat,
   narrow,
   onShowConversations,
+  initialParticipantIds,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
@@ -32,22 +33,30 @@ export function CenterPanel({
    *  conversation-list overlay. ChatView renders a hamburger button
    *  in its header when provided. */
   onShowConversations: (() => void) | null;
+  /** Seed chips for a fresh draft, from the `?with=` param (e.g. the Team
+   *  page "Chat" action pre-selects that agent). Takes precedence over the
+   *  default-delegate seed. */
+  initialParticipantIds?: string[];
 }) {
   const { organizationId } = useAuth();
 
   if (selectedChatId === DRAFT_CHAT_ID) {
-    // `key={organizationId}` resets all of NewChatDraft's local state when
-    // the user switches orgs while a draft is open — chips, draft text,
-    // pending images, and crucially the `knownAgents` accumulator (which
-    // resolves @-name → uuid for `extractMentions`). Without this remount,
-    // a uuid from the previous org could stay in the cache and silently
-    // resolve a new-org `@bob` to a stranger; the server then 4xxs the
-    // chat create with a confusing visibility error.
+    // The key resets all of NewChatDraft's local state on remount — chips,
+    // draft text, pending images, and the `knownAgents` accumulator.
+    //   - organizationId: switching orgs must drop a stale uuid that could
+    //     resolve a new-org `@bob` to a stranger (server then 4xxs).
+    //   - initialParticipantIds (`?with=`): the seed effect is one-shot
+    //     (seededDefaultRef), so re-navigating from Team's "Chat" on agent A
+    //     then agent B (`?c=draft&with=A` → `…with=B`) would otherwise leave
+    //     chips on [A] and send to the wrong target. Folding `with` into the
+    //     key forces a fresh draft seeded with the new participants (and
+    //     clears any half-typed body that belonged to the previous target).
     return (
       <NewChatDraft
-        key={organizationId ?? "no-org"}
+        key={`${organizationId ?? "no-org"}:${(initialParticipantIds ?? []).join(",")}`}
         onCreated={onSelectChat}
         onShowConversations={onShowConversations}
+        initialParticipantIds={initialParticipantIds}
       />
     );
   }

@@ -308,6 +308,7 @@ export function WorkspacePage() {
           onSelectChat={selectChat}
           narrow={isNarrow}
           onShowConversations={isNarrow ? () => setConvOverlayOpen(true) : null}
+          initialParticipantIds={participants}
         />
       </main>
       <DocPreviewDrawer />

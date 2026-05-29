@@ -66,6 +66,7 @@ import { cn } from "../../../lib/utils.js";
 export function NewChatDraft({
   onCreated,
   onShowConversations = null,
+  initialParticipantIds,
 }: {
   onCreated: (chatId: string) => void;
   /** Non-null only in narrow-viewport mode — renders a hamburger in the
@@ -73,6 +74,10 @@ export function NewChatDraft({
    *  it, narrow users who land on a draft URL have no path back to their
    *  chats (the inline rail is collapsed). */
   onShowConversations?: (() => void) | null;
+  /** Initial participant uuids to seed as chips (from the `?with=` param —
+   *  e.g. the Team page "Chat" action). Takes precedence over the default
+   *  delegate seed; only applied once, on first mount of an empty draft. */
+  initialParticipantIds?: string[];
 }) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId, memberId: myMemberId } = useAuth();
@@ -256,6 +261,15 @@ export function NewChatDraft({
   useEffect(() => {
     if (seededDefaultRef.current) return;
     if (chips.length > 0) return;
+    // Explicit `?with=` participants (e.g. the Team page "Chat" action)
+    // take precedence over the default-delegate seed and don't need to
+    // wait for the org list — the uuids come from a trusted caller and
+    // chip labels resolve once knownAgents catches up.
+    if (initialParticipantIds && initialParticipantIds.length > 0) {
+      seededDefaultRef.current = true;
+      setChips([...initialParticipantIds]);
+      return;
+    }
     // Wait for the org-list query to settle before picking — without
     // this guard the pre-fetch render would always pick `null` and
     // arm `seededDefaultRef`, locking out the real default once the
@@ -264,7 +278,7 @@ export function NewChatDraft({
     const defaultId = pickDefault(orgAgentsPage.items, myAgentId);
     seededDefaultRef.current = true;
     if (defaultId) setChips([defaultId]);
-  }, [orgAgentsPage?.items, myAgentId, chips.length]);
+  }, [orgAgentsPage?.items, myAgentId, chips.length, initialParticipantIds]);
 
   const bodyMentions = useMemo(() => {
     const ps: MentionParticipant[] = candidates.map((c) => ({ agentId: c.agentId, name: c.name }));

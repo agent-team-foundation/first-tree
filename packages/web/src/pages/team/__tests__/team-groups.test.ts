@@ -1,6 +1,6 @@
 import type { Agent } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { buildGroups, fetchAllAgents, selectDelegateCandidates } from "../index.js";
+import { buildTeamData, fetchAllAgents, selectDelegateCandidates } from "../index.js";
 
 function agent(input: {
   uuid: string;
@@ -11,7 +11,6 @@ function agent(input: {
   managerId?: string | null;
   visibility?: Agent["visibility"];
   status?: string;
-  createdAt?: string;
 }): Agent {
   return {
     uuid: input.uuid,
@@ -30,19 +29,27 @@ function agent(input: {
     runtimeProvider: "claude-code",
     avatarColorToken: null,
     avatarImageUrl: null,
-    createdAt: input.createdAt ?? "2026-01-01T00:00:00.000Z",
-    updatedAt: input.createdAt ?? "2026-01-01T00:00:00.000Z",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
   };
 }
 
-describe("Team page grouping", () => {
+const member = (id: string, agentId: string, displayName: string, role = "member") => ({
+  id,
+  agentId,
+  username: displayName.toLowerCase(),
+  displayName,
+  role,
+  createdAt: "2026-01-01T00:00:00.000Z",
+});
+
+describe("fetchAllAgents", () => {
   it("fetches every agent page before building delegate state", async () => {
     const first = agent({ uuid: "human-1", type: "human", displayName: "Ada", delegateMention: "assistant-1" });
     const second = agent({ uuid: "assistant-1", type: "agent", displayName: "Ada Assistant" });
     const result = await fetchAllAgents(async ({ cursor }) =>
       cursor ? { items: [second], nextCursor: null } : { items: [first], nextCursor: "next-page" },
     );
-
     expect(result.map((a) => a.uuid)).toEqual(["human-1", "assistant-1"]);
   });
 
@@ -51,272 +58,182 @@ describe("Team page grouping", () => {
       "fetchAllAgents exceeded 100 pages",
     );
   });
+});
 
-  it("resolves a human delegate from the fully loaded agent map", () => {
+describe("buildTeamData", () => {
+  const base = {
+    filter: "all" as const,
+    search: "",
+    isAdmin: false,
+    selfMemberId: "member-1",
+    resolveMember: (id: string) => id,
+  };
+
+  it("resolves a human's delegate identity from the loaded agent map", () => {
     const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", delegateMention: "assistant-1" });
-    const assistant = agent({
-      uuid: "assistant-1",
-      type: "agent",
-      displayName: "Ada Assistant",
-      name: "ada-helper",
-    });
-    const groups = buildGroups({
-      filter: "all",
-      search: "",
-      isAdmin: false,
-      selfMemberId: "member-1",
-      members: [
-        {
-          id: "member-1",
-          agentId: "human-1",
-          username: "ada",
-          displayName: "Ada",
-          role: "member",
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      yourAgents: [],
-      teamAgents: [],
-      otherPrivateAgents: [],
-      resolveMember: (id) => id,
+    const assistant = agent({ uuid: "assistant-1", type: "agent", displayName: "Ada Assistant", name: "ada-helper" });
+    const { humans } = buildTeamData({
+      ...base,
+      members: [member("member-1", "human-1", "Ada")],
+      agents: [],
       agentByUuid: new Map([
         [human.uuid, human],
         [assistant.uuid, assistant],
       ]),
-      openDelegate: () => {},
     });
-
-    // "Your agents" renders first (even when empty); humans is the second
-    // group. Locate it by key rather than positional indexing so the test
-    // doesn't rot if section order changes again.
-    const humansGroup = groups.find((g) => g.key === "humans");
-    if (!humansGroup) throw new Error("expected a humans group");
-    const row = humansGroup.rows[0];
-    if (row?.kind !== "human") throw new Error("expected first humans row to be human");
-    expect(row.delegate).toEqual({ name: "ada-helper", displayName: "Ada Assistant" });
+    const row = humans[0];
+    if (!row) throw new Error("expected a human row");
+    expect(row.delegate).toEqual({ uuid: "assistant-1", name: "ada-helper", displayName: "Ada Assistant" });
+    // Only the user themselves can edit their own delegate (admins cannot).
     expect(row.canEditDelegate).toBe(true);
   });
 
-  it("places Your agents section first and partitions agents by manager", () => {
+  it("partitions agents into Public/Private with own agents pinned first", () => {
     const myShared = agent({
       uuid: "my-shared",
       type: "agent",
-      displayName: "My Shared Bot",
+      displayName: "Zed Shared",
       visibility: "organization",
       managerId: "member-1",
     });
     const myPrivate = agent({
       uuid: "my-private",
       type: "agent",
-      displayName: "My Private Bot",
+      displayName: "My Private",
       visibility: "private",
       managerId: "member-1",
     });
     const theirShared = agent({
       uuid: "their-shared",
       type: "agent",
-      displayName: "Their Shared Bot",
+      displayName: "Acme Shared",
       visibility: "organization",
       managerId: "member-2",
     });
-    const groups = buildGroups({
-      filter: "all",
-      search: "",
-      isAdmin: false,
-      selfMemberId: "member-1",
+    const { publicAgents, privateAgents, agentCount } = buildTeamData({
+      ...base,
       members: [],
-      yourAgents: [myShared, myPrivate],
-      teamAgents: [theirShared],
-      otherPrivateAgents: [],
-      resolveMember: (id) => id,
+      agents: [theirShared, myShared, myPrivate],
       agentByUuid: new Map(),
-      openDelegate: () => {},
     });
-
-    expect(groups.map((g) => g.key)).toEqual(["yours", "humans", "team"]);
-    const yoursGroup = groups[0];
-    if (!yoursGroup) throw new Error("expected yours group");
-    expect(yoursGroup.title).toBe("Your agents");
-    expect(yoursGroup.count).toBe(2);
-    // Private agents sort to the top of Your agents — governance attention
-    // belongs on the sensitive rows.
-    const yoursFirst = yoursGroup.rows[0];
-    if (yoursFirst?.kind !== "agent") throw new Error("expected agent row");
-    expect(yoursFirst.agent.uuid).toBe("my-private");
-    expect(yoursFirst.showVisibilityChip).toBe(true);
-
-    const teamGroup = groups.find((g) => g.key === "team");
-    if (!teamGroup) throw new Error("expected team group");
-    expect(teamGroup.count).toBe(1);
-    const teamFirst = teamGroup.rows[0];
-    if (teamFirst?.kind !== "agent") throw new Error("expected agent row");
-    // Homogeneous section — no per-row visibility chip needed.
-    expect(teamFirst.showVisibilityChip).toBe(false);
+    // Public: own agent pinned first despite alphabetical ordering of the other.
+    expect(publicAgents.map((r) => r.agent.uuid)).toEqual(["my-shared", "their-shared"]);
+    expect(privateAgents.map((r) => r.agent.uuid)).toEqual(["my-private"]);
+    expect(agentCount).toBe(3);
   });
 
-  it("sorts Your agents deterministically: private first, then displayName tiebreaker", () => {
-    // Deliberately scrambled input order — without a stable secondary
-    // sort key the rendered order would follow this scramble and reshuffle
-    // visibly across refetches. The sort should pin private to the top
-    // and break ties alphabetically (case-insensitive).
-    const sharedZeta = agent({
-      uuid: "shared-z",
-      type: "agent",
-      displayName: "Zeta",
-      visibility: "organization",
-      managerId: "member-1",
-    });
-    const sharedAlpha = agent({
-      uuid: "shared-a",
-      type: "agent",
-      displayName: "alpha",
-      visibility: "organization",
-      managerId: "member-1",
-    });
-    const privateBeta = agent({
-      uuid: "private-b",
-      type: "agent",
-      displayName: "Beta",
-      visibility: "private",
-      managerId: "member-1",
-    });
-    const privateGamma = agent({
-      uuid: "private-g",
-      type: "agent",
-      displayName: "gamma",
-      visibility: "private",
-      managerId: "member-1",
-    });
-
-    const groups = buildGroups({
-      filter: "all",
-      search: "",
-      isAdmin: false,
-      selfMemberId: "member-1",
-      members: [],
-      // Order: shared, private, shared, private — guarantees the test
-      // exercises both the visibility partition and the alpha tiebreaker.
-      yourAgents: [sharedZeta, privateBeta, sharedAlpha, privateGamma],
-      teamAgents: [],
-      otherPrivateAgents: [],
-      resolveMember: (id) => id,
-      agentByUuid: new Map(),
-      openDelegate: () => {},
-    });
-
-    const yoursGroup = groups.find((g) => g.key === "yours");
-    if (!yoursGroup) throw new Error("expected yours group");
-    const uuids = yoursGroup.rows.map((r) => (r.kind === "agent" ? r.agent.uuid : "?"));
-    expect(uuids).toEqual(["private-b", "private-g", "shared-a", "shared-z"]);
-  });
-
-  it("shows Other members' private agents collapsibly for admins only", () => {
+  it("hides other members' private agents from members but shows them to admins", () => {
     const theirPrivate = agent({
       uuid: "their-private",
       type: "agent",
-      displayName: "Their Private Bot",
+      displayName: "Theirs",
       visibility: "private",
       managerId: "member-2",
     });
+    const memberView = buildTeamData({ ...base, members: [], agents: [theirPrivate], agentByUuid: new Map() });
+    expect(memberView.privateAgents).toHaveLength(0);
 
-    const memberView = buildGroups({
-      filter: "all",
-      search: "",
-      isAdmin: false,
-      selfMemberId: "member-1",
-      members: [],
-      yourAgents: [],
-      teamAgents: [],
-      otherPrivateAgents: [theirPrivate],
-      resolveMember: (id) => id,
-      agentByUuid: new Map(),
-      openDelegate: () => {},
-    });
-    expect(memberView.find((g) => g.key === "other-private")).toBeUndefined();
-
-    const adminView = buildGroups({
-      filter: "all",
-      search: "",
+    const adminView = buildTeamData({
+      ...base,
       isAdmin: true,
-      selfMemberId: "member-1",
       members: [],
-      yourAgents: [],
-      teamAgents: [],
-      otherPrivateAgents: [theirPrivate],
-      resolveMember: (id) => id,
+      agents: [theirPrivate],
       agentByUuid: new Map(),
-      openDelegate: () => {},
     });
-    const adminOtherPrivate = adminView.find((g) => g.key === "other-private");
-    expect(adminOtherPrivate).toBeDefined();
-    expect(adminOtherPrivate?.collapsible).toBe(true);
-    expect(adminOtherPrivate?.count).toBe(1);
+    expect(adminView.privateAgents.map((r) => r.agent.uuid)).toEqual(["their-private"]);
   });
 
-  it("respects the yours / team / humans filter pills", () => {
-    const myAgent = agent({
-      uuid: "my-agent",
-      type: "agent",
-      displayName: "Mine",
-      managerId: "member-1",
-    });
-    const theirAgent = agent({
-      uuid: "their-agent",
+  it("`mine` filter narrows agents to the viewer but leaves humans untouched", () => {
+    const mine = agent({ uuid: "mine", type: "agent", displayName: "Mine", managerId: "member-1" });
+    const theirs = agent({
+      uuid: "theirs",
       type: "agent",
       displayName: "Theirs",
       visibility: "organization",
       managerId: "member-2",
     });
-    const baseArgs = {
-      search: "",
-      isAdmin: false,
-      selfMemberId: "member-1",
-      members: [
-        {
-          id: "member-1",
-          agentId: "human-1",
-          username: "ada",
-          displayName: "Ada",
-          role: "member",
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      yourAgents: [myAgent],
-      teamAgents: [theirAgent],
-      otherPrivateAgents: [],
-      resolveMember: (id: string) => id,
-      agentByUuid: new Map(),
-      openDelegate: () => {},
-    };
+    const members = [member("member-1", "human-1", "Ada"), member("member-2", "human-2", "Bo")];
 
-    expect(buildGroups({ ...baseArgs, filter: "yours" }).map((g) => g.key)).toEqual(["yours"]);
-    expect(buildGroups({ ...baseArgs, filter: "humans" }).map((g) => g.key)).toEqual(["humans"]);
-    expect(buildGroups({ ...baseArgs, filter: "team" }).map((g) => g.key)).toEqual(["team"]);
+    const all = buildTeamData({ ...base, members, agents: [mine, theirs], agentByUuid: new Map() });
+    expect(all.agentCount).toBe(2);
+    expect(all.humans).toHaveLength(2);
+
+    const onlyMine = buildTeamData({
+      ...base,
+      filter: "mine",
+      members,
+      agents: [mine, theirs],
+      agentByUuid: new Map(),
+    });
+    expect(onlyMine.publicAgents.map((r) => r.agent.uuid)).toEqual(["mine"]);
+    expect(onlyMine.agentCount).toBe(1);
+    // Humans are not affected by the agent-scoped Mine filter.
+    expect(onlyMine.humans).toHaveLength(2);
   });
 
-  it("keeps private active assistants selectable for admin delegate edits", () => {
-    const privateAssistant = agent({
-      uuid: "private-assistant",
+  it("filters both sections by search", () => {
+    const found = agent({ uuid: "found", type: "agent", displayName: "Searchable Bot", managerId: "member-1" });
+    const other = agent({ uuid: "other", type: "agent", displayName: "Hidden", managerId: "member-1" });
+    const { publicAgents, humans } = buildTeamData({
+      ...base,
+      search: "searchable",
+      members: [member("member-1", "human-1", "Ada")],
+      agents: [found, other],
+      agentByUuid: new Map(),
+    });
+    expect(publicAgents.map((r) => r.agent.uuid)).toEqual(["found"]);
+    expect(humans).toHaveLength(0); // "Ada"/"ada" doesn't match "searchable"
+  });
+
+  it("pins the viewer's own human row to the top", () => {
+    const { humans } = buildTeamData({
+      ...base,
+      members: [member("member-2", "human-2", "Bo"), member("member-1", "human-1", "Ada")],
+      agents: [],
+      agentByUuid: new Map(),
+    });
+    expect(humans[0]?.id).toBe("member-1");
+    expect(humans[0]?.isSelf).toBe(true);
+  });
+});
+
+describe("selectDelegateCandidates", () => {
+  it("returns only the given manager's active private assistants", () => {
+    const minePrivate = agent({
+      uuid: "mine-private",
       type: "agent",
-      displayName: "Private Assistant",
+      displayName: "Mine",
+      visibility: "private",
+      managerId: "member-1",
+    });
+    const theirPrivate = agent({
+      uuid: "their-private",
+      type: "agent",
+      displayName: "Theirs",
       visibility: "private",
       managerId: "member-2",
     });
-    const suspendedAssistant = agent({
-      uuid: "suspended-assistant",
+    const suspended = agent({
+      uuid: "suspended",
       type: "agent",
-      displayName: "Suspended Assistant",
+      displayName: "Suspended",
+      visibility: "private",
       status: "suspended",
+      managerId: "member-1",
     });
-    const humanAgent = agent({ uuid: "human-1", type: "human", displayName: "Ada" });
-    const autonomousAgent = agent({
-      uuid: "auto-1",
+    const autonomous = agent({
+      uuid: "auto",
       type: "agent",
-      displayName: "Cron Bot",
+      displayName: "Cron",
+      visibility: "organization",
+      managerId: "member-1",
     });
+    const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", managerId: "member-1" });
 
     expect(
-      selectDelegateCandidates([humanAgent, autonomousAgent, privateAssistant, suspendedAssistant]).map((a) => a.uuid),
-    ).toEqual(["private-assistant"]);
+      selectDelegateCandidates([minePrivate, theirPrivate, suspended, autonomous, human], "member-1").map(
+        (a) => a.uuid,
+      ),
+    ).toEqual(["mine-private"]);
   });
 });

@@ -1,7 +1,7 @@
 import type { Agent, RuntimeProvider } from "@first-tree/shared";
 import { MEMBER_ROLES } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search, UserPlus } from "lucide-react";
+import { Link2, Plus, Search } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
@@ -23,39 +23,30 @@ import {
 import { NewAgentDialog } from "../../components/new-agent-dialog.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
-import { FilterPill } from "../../components/ui/filter-pill.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { InviteLinkPanel } from "../invite-link-panel.js";
-import { type AgentRow, type HumanRow, type RowAction, type TeamGroup, TeamTable } from "./team-table.js";
+import { type AgentRow, type HumanRow, type RowAction, TeamTable } from "./team-table.js";
 
 /**
- * Team page — single roster combining humans and agents into one merged
- * table. Section order is built around the two main reasons a user lands
- * on this tab: creating a new agent (top-right CTA) and configuring agents
- * they own. "Your agents" is therefore pinned to the top regardless of
- * visibility, so the most likely target of "I want to tweak this" is the
- * first thing in the user's eye-line.
+ * Team page — two stacked sections (Agent teammates first, Human teammates
+ * second). Replaces the old merged single table. See the design doc
+ * (drafts/team-teammates-redesign.md) and the `/preview/team` prototype.
  *
- *   - Your agents                 (managerId = self, any visibility — chip on row marks shared vs private)
- *   - Humans                      (login users; org members — set-delegate flow lives here)
- *   - Team agents                 (visibility = organization && managerId != self)
- *   - Other members' private agents (admin-only governance, collapsed)
+ *   - Agent teammates: Public / Private subgroups; visibility encoded by the
+ *     group (no per-row chip). `All | Mine` filter; own agents pinned first.
+ *   - Human teammates: Delegate (inline, self-editable) · Last active · actions.
  *
- * The three agent sections form a clean partition: every agent belongs to
- * exactly one section, so the table never double-lists a row.
- *
- * Admin role decides the data source: admins fetch `/agents/all` which
- * surfaces other members' private agents; members fetch the regular
- * visibility-filtered list. Either way the page uses one query — the
- * grouping below is purely client-side.
+ * Admin role decides the agent data source: admins fetch `/agents/all`
+ * (includes other members' private agents); members fetch the visibility-
+ * filtered list. Grouping/sorting/search is client-side in `buildTeamData`.
  */
 
 type MemberListItem = {
   id: string;
-  /** UUID of the human-mirror agent (members.agent_id). Needed by the Set-delegate dialog so it can PATCH the right agent row. */
+  /** UUID of the human-mirror agent (members.agent_id) — delegate edits PATCH this. */
   agentId: string;
   username: string;
   displayName: string;
@@ -70,21 +61,13 @@ type MemberEditTarget = {
   role: string;
 };
 
-type DelegateTarget = {
-  /** UUID of the human agent whose delegateMention we are editing. */
-  humanAgentId: string;
-  /** Display name of the human — shown in the dialog body so the user knows whose delegate they're configuring. */
-  humanDisplayName: string;
-  /** Current value of delegateMention on the human agent, or null. */
-  currentDelegate: string | null;
-};
+type AgentFilter = "all" | "mine";
 
+/** Target for the suspend / delete confirm dialogs (adopted from main PR 673). */
 type AgentLifecycleTarget = {
   uuid: string;
   label: string;
 };
-
-type FilterKey = "all" | "yours" | "humans" | "team";
 
 const AGENT_PAGE_SIZE = 100;
 const MAX_AGENT_PAGES = 100;
@@ -113,34 +96,17 @@ export function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<MemberEditTarget | null>(null);
-  const [delegateTarget, setDelegateTarget] = useState<DelegateTarget | null>(null);
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
   const [suspendTarget, setSuspendTarget] = useState<AgentLifecycleTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentLifecycleTarget | null>(null);
-  const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
-  // 7d / 30d window for the Usage column. Default 30d — matches the
-  // settled-on default in the design doc; the column header exposes a
-  // segmented control so 7d switching costs one click.
   const [usageWindow, setUsageWindow] = useState<UsageWindow>("30d");
 
-  const membersQuery = useQuery({
-    queryKey: ["members"],
-    queryFn: listMembers,
-  });
+  const membersQuery = useQuery({ queryKey: ["members"], queryFn: listMembers });
 
-  /**
-   * Org-wide per-agent usage for the current `usageWindow`. One request
-   * powers the entire Team table's Usage column; the table looks up by
-   * `agent.uuid`. Agents missing from the response are rendered as "—"
-   * (zero usage) by `UsageCell`.
-   */
   const usageQuery = useQuery({
     queryKey: ["usage", "by-agent", usageWindow],
     queryFn: () => getOrgUsageByAgent(usageWindow),
-    // Token usage is monotone-rising during the window; a tight refetch
-    // would burn API calls for a number that moves rarely on the human
-    // timescale of "looking at the Team page". 60s is the same cadence
-    // ledger-style sociocurrency surfaces typically refresh at.
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
@@ -151,29 +117,14 @@ export function TeamPage() {
     return m;
   }, [usageQuery.data]);
 
-  // Admins read the superset; members read the visibility-filtered view.
-  // Both produce the same `Agent[]` shape so downstream code branches only
-  // on what's *in* the list, not on the query key.
   const agentsQuery = useQuery({
     queryKey: ["agents", "team-page", isAdmin ? "admin" : "member"],
     queryFn: () => fetchAllAgents((params) => (isAdmin ? listAllAgents(params) : listAgents(params))),
-    // Reachability (the Status column's `<PresenceChip>`) is derived from
-    // `agent.runtimeState` off this list. No admin-WS frame invalidates
-    // `["agents"]` today, so without polling an agent that flips between
-    // online and offline while the Team tab stays open would keep showing
-    // the stale value until the user refocuses or remounts. Match the 10s
-    // cadence the legacy `/activity` poll used before this surface migrated
-    // off it.
+    // Reachability (Status PresenceChip) is derived from agent.runtimeState off
+    // this list; nothing invalidates ["agents"] on a presence flip, so poll.
     refetchInterval: 10_000,
   });
 
-  // `/me/clients` is the cross-org list of clients the caller owns. We use
-  // it to enrich each agent's Runtime cell with the host it's bound to
-  // (e.g. `claude-code @ alice-macbook`). Agents bound to clients we don't
-  // own (other members' machines hosting shared agents) won't resolve — the
-  // cell falls back to just the runtime provider, which is acceptable: a
-  // dedicated org-admin clients endpoint exists server-side but isn't wired
-  // here yet.
   const { data: clientsData } = useQuery({
     queryKey: ["clients", "team-page"],
     queryFn: listClients,
@@ -187,38 +138,15 @@ export function TeamPage() {
     return m;
   }, [clientsData]);
 
-  // Each derivation is memoized so the downstream `groups` useMemo (which
-  // depends on these arrays) can actually cache — without these, every
-  // render produced fresh array refs and `groups` recomputed every time.
   const members = useMemo<MemberListItem[]>(() => membersQuery.data ?? [], [membersQuery.data]);
-  // Full agents list — includes humans, used to resolve a member's
-  // delegateMention into a display identity. The visible agent groups
-  // filter humans out below (they're already shown in the Humans section).
   const allAgents = useMemo<Agent[]>(() => agentsQuery.data ?? [], [agentsQuery.data]);
   const agentByUuid = useMemo(() => {
     const m = new Map<string, Agent>();
     for (const a of allAgents) m.set(a.uuid, a);
     return m;
   }, [allAgents]);
-  // type === "human" agents are the user-mirrors auto-created for every
-  // member (chat-identity proxies). The Humans section above already shows
-  // them as people, so the agents groups must hide them to avoid double-listing.
+  // type="human" mirrors are shown in the Human section; hide them from agent groups.
   const agents = useMemo<Agent[]>(() => allAgents.filter((a) => a.type !== "human"), [allAgents]);
-
-  // Three-way partition of the loaded agent list — every agent appears in
-  // exactly one bucket so the table never double-lists a row.
-  //   - yourAgents:         managed by me (any visibility) → top section, the headline answer to "what did I build?"
-  //   - teamAgents:         org-shared agents managed by *others* → "what did the team build?"
-  //   - otherPrivateAgents: private agents managed by others (admin-only) → governance bucket, collapsed
-  const yourAgents = useMemo(() => agents.filter((a) => a.managerId === memberId), [agents, memberId]);
-  const teamAgents = useMemo(
-    () => agents.filter((a) => a.visibility === "organization" && a.managerId !== memberId),
-    [agents, memberId],
-  );
-  const otherPrivateAgents = useMemo(
-    () => agents.filter((a) => a.visibility === "private" && a.managerId !== memberId),
-    [agents, memberId],
-  );
 
   const updateMemberMut = useMutation({
     mutationFn: async (vars: { id: string; patch: { displayName?: string; role?: "admin" | "member" } }) =>
@@ -227,9 +155,6 @@ export function TeamPage() {
   });
   const deleteMemberMut = useMutation({
     mutationFn: deleteMember,
-    // The server reassigns the removed member's managed agents to a fallback
-    // admin (services/member.ts:deleteMember), so the agents query is stale
-    // too. Invalidate both to keep the manager column accurate.
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["members"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -263,56 +188,57 @@ export function TeamPage() {
   });
 
   const search = query.trim().toLowerCase();
-  const groups = useMemo(
+  const { publicAgents, privateAgents, humans, agentCount } = useMemo(
     () =>
-      buildGroups({
-        filter,
+      buildTeamData({
+        filter: agentFilter,
         search,
         isAdmin,
         selfMemberId: memberId,
         members,
-        yourAgents,
-        teamAgents,
-        otherPrivateAgents,
-        resolveMember,
+        agents,
         agentByUuid,
-        openDelegate: (humanAgentId, humanDisplayName) =>
-          setDelegateTarget({
-            humanAgentId,
-            humanDisplayName,
-            currentDelegate: agentByUuid.get(humanAgentId)?.delegateMention ?? null,
-          }),
+        resolveMember,
       }),
-    [
-      filter,
-      search,
-      isAdmin,
-      memberId,
-      members,
-      yourAgents,
-      teamAgents,
-      otherPrivateAgents,
-      resolveMember,
-      agentByUuid,
-    ],
+    [agentFilter, search, isAdmin, memberId, members, agents, agentByUuid, resolveMember],
   );
 
-  function getHumanActions(row: HumanRow): RowAction[] {
+  // Personal-assistant candidates for the viewer's own delegate selector.
+  const delegateCandidates = useMemo(() => selectDelegateCandidates(allAgents, memberId), [allAgents, memberId]);
+
+  function getAgentMenuActions(row: AgentRow): RowAction[] {
+    const { agent, isOwnedBySelf } = row;
+    const canManage = isAdmin || isOwnedBySelf;
+    if (!canManage) return [];
     const actions: RowAction[] = [];
-    // Delegate edits live inline in the Manager · Delegate column (see
-    // HumanDelegateCell) — no kebab entry needed. PATCH /orgs/:orgId/members/:id
-    // is admin-only (server gates with requireOrgAdmin), so "Edit profile"
-    // only appears for admins; surfacing it to non-admin self would 403.
-    if (isAdmin) {
+    // Suspend/Delete go through confirm dialogs; delete is gated behind
+    // suspension (suspended-agent lifecycle, main PR 673).
+    if (agent.status === "suspended") {
+      actions.push({ key: "reactivate", label: "Reactivate", onSelect: () => reactivateAgentMut.mutate(agent.uuid) });
+    } else {
       actions.push({
-        key: "edit",
-        label: "Edit profile",
-        onSelect: () =>
-          setEditTarget({ id: row.id, username: row.username, displayName: row.displayName, role: row.role }),
+        key: "suspend",
+        label: "Suspend",
+        onSelect: () => setSuspendTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid }),
       });
     }
-    if (isAdmin && !row.isSelf) {
-      actions.push({
+    actions.push({
+      key: "delete",
+      label: agent.status === "suspended" ? "Delete" : "Delete (suspend first)",
+      destructive: true,
+      disabled: agent.status !== "suspended",
+      onSelect: () =>
+        agent.status === "suspended"
+          ? setDeleteTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid })
+          : undefined,
+    });
+    return actions;
+  }
+
+  function getHumanMenuActions(row: HumanRow): RowAction[] {
+    if (!isAdmin || row.isSelf) return [];
+    return [
+      {
         key: "remove",
         label: "Remove from org",
         destructive: true,
@@ -321,47 +247,8 @@ export function TeamPage() {
             deleteMemberMut.mutate(row.id);
           }
         },
-      });
-    }
-    return actions;
-  }
-
-  function getAgentActions(row: AgentRow): RowAction[] {
-    const { agent, isOwnedBySelf } = row;
-    const canManage = isAdmin || isOwnedBySelf;
-    const actions: RowAction[] = [
-      {
-        key: "open",
-        label: "Open",
-        onSelect: () => navigate(`/agents/${encodeURIComponent(agent.uuid)}`),
       },
     ];
-    if (canManage) {
-      if (agent.status === "suspended") {
-        actions.push({
-          key: "reactivate",
-          label: "Reactivate",
-          onSelect: () => reactivateAgentMut.mutate(agent.uuid),
-        });
-      } else {
-        actions.push({
-          key: "suspend",
-          label: "Suspend",
-          onSelect: () => setSuspendTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid }),
-        });
-      }
-      actions.push({
-        key: "delete",
-        label: agent.status === "suspended" ? "Delete" : "Delete (suspend first)",
-        destructive: true,
-        disabled: agent.status !== "suspended",
-        onSelect: () =>
-          agent.status === "suspended"
-            ? setDeleteTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid })
-            : undefined,
-      });
-    }
-    return actions;
   }
 
   return (
@@ -370,13 +257,15 @@ export function TeamPage() {
         title="Team"
         right={
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <Button size="xs" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" />
+            {/* Brand-green cta is reserved for the one creation/hero action. */}
+            <Button size="sm" variant="cta" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
               New agent
             </Button>
+            {/* Secondary, admin-only — neutral outline, never green. */}
             {isAdmin && (
-              <Button size="xs" variant="ghost" onClick={() => setInviteOpen(true)}>
-                <UserPlus className="h-3 w-3" />
+              <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)}>
+                <Link2 className="h-3.5 w-3.5" />
                 Invite link
               </Button>
             )}
@@ -388,20 +277,10 @@ export function TeamPage() {
           padding: "var(--sp-2) var(--sp-5) var(--sp-7)",
           display: "flex",
           flexDirection: "column",
-          gap: "var(--sp-3)",
+          gap: "var(--sp-1)",
         }}
       >
-        <FilterBar
-          filter={filter}
-          onFilter={setFilter}
-          query={query}
-          onQuery={setQuery}
-          counts={{
-            yours: yourAgents.length,
-            humans: members.length,
-            team: teamAgents.length,
-          }}
-        />
+        <SearchBar query={query} onQuery={setQuery} />
 
         {agentsQuery.isLoading || membersQuery.isLoading ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
@@ -413,15 +292,31 @@ export function TeamPage() {
           </div>
         ) : (
           <TeamTable
-            groups={groups}
+            publicAgents={publicAgents}
+            privateAgents={privateAgents}
+            humans={humans}
+            isAdmin={isAdmin}
+            dimPrivateOwner={!isAdmin}
+            agentFilter={agentFilter}
+            onAgentFilter={setAgentFilter}
+            agentCount={agentCount}
             clientHostMap={clientHostMap}
-            onAgentClick={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
-            getHumanActions={getHumanActions}
-            getAgentActions={getAgentActions}
             usageByAgentId={usageByAgentId}
             usageWindow={usageWindow}
             onUsageWindowChange={setUsageWindow}
             usageLoading={usageQuery.isLoading}
+            onChat={(uuid) => navigate(`/?c=draft&with=${encodeURIComponent(uuid)}`)}
+            onAgentDetails={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
+            getAgentMenuActions={getAgentMenuActions}
+            onHumanDetails={(row) =>
+              setEditTarget({ id: row.id, username: row.username, displayName: row.displayName, role: row.role })
+            }
+            getHumanMenuActions={getHumanMenuActions}
+            delegateCandidates={delegateCandidates}
+            onSetDelegate={(humanAgentId, delegateUuid) =>
+              setDelegateMut.mutate({ humanAgentId, delegateMention: delegateUuid })
+            }
+            searchActive={search.length > 0}
           />
         )}
       </div>
@@ -445,7 +340,7 @@ export function TeamPage() {
         }}
       />
 
-      <EditMemberDialog
+      <MemberDetailsDialog
         target={editTarget}
         isAdmin={isAdmin}
         isSaving={updateMemberMut.isPending}
@@ -454,18 +349,6 @@ export function TeamPage() {
           if (!editTarget) return;
           await updateMemberMut.mutateAsync({ id: editTarget.id, patch });
           setEditTarget(null);
-        }}
-      />
-
-      <SetDelegateDialog
-        target={delegateTarget}
-        candidates={selectDelegateCandidates(allAgents)}
-        isSaving={setDelegateMut.isPending}
-        onClose={() => setDelegateTarget(null)}
-        onSave={async (delegateMention) => {
-          if (!delegateTarget) return;
-          await setDelegateMut.mutateAsync({ humanAgentId: delegateTarget.humanAgentId, delegateMention });
-          setDelegateTarget(null);
         }}
       />
 
@@ -502,123 +385,87 @@ function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function FilterBar({
-  filter,
-  onFilter,
-  query,
-  onQuery,
-  counts,
-}: {
-  filter: FilterKey;
-  onFilter: (k: FilterKey) => void;
-  query: string;
-  onQuery: (q: string) => void;
-  counts: { yours: number; humans: number; team: number };
-}) {
-  // Pills sit in the same order the sections render below: "Your agents"
-  // first because it's the primary scan target (creating + tweaking your
-  // own agents is the main reason people open this tab), then Humans
-  // (where the set-delegate flow lives), then Team agents. Each pill maps
-  // 1:1 to a section title so the filter mental model is trivial.
-  const chips: Array<{ key: FilterKey; label: string; count?: number }> = [
-    { key: "all", label: "All" },
-    { key: "yours", label: "Your agents", count: counts.yours },
-    { key: "humans", label: "Humans", count: counts.humans },
-    { key: "team", label: "Team agents", count: counts.team },
-  ];
+function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   return (
-    <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-1)" }}>
-        {chips.map((chip) => (
-          <FilterPill key={chip.key} active={filter === chip.key} count={chip.count} onClick={() => onFilter(chip.key)}>
-            {chip.label}
-          </FilterPill>
-        ))}
-      </div>
-      {/* Search input is sized to match the FilterPill rhythm (short
-          height, text-caption, tiny corner radius) rather than the default
-          Input atom (h-9, text-body, larger radius) — that way the filter
-          row reads as one homogenous chip strip instead of a tall input
-          sitting beside short pills. The radius matches FilterPill's
-          inline `borderRadius: 3` so the two atoms read as siblings. */}
-      <div className="relative" style={{ width: 220 }}>
-        <Search
-          aria-hidden
-          className="h-3.5 w-3.5"
-          style={{
-            position: "absolute",
-            left: "var(--sp-1_5)",
-            top: "50%",
-            transform: "translateY(-50%)",
-            color: "var(--fg-4)",
-          }}
-        />
-        <Input
-          value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          placeholder="Search name or @handle"
-          aria-label="Search team"
-          className="h-7 text-caption"
-          style={{ paddingLeft: "var(--sp-5)", borderRadius: 3 }}
-        />
-      </div>
+    <div className="relative" style={{ width: "var(--sp-60)", maxWidth: "100%", marginBottom: "var(--sp-2)" }}>
+      <Search
+        aria-hidden
+        className="h-3.5 w-3.5"
+        style={{
+          position: "absolute",
+          left: "var(--sp-1_5)",
+          top: "50%",
+          transform: "translateY(-50%)",
+          color: "var(--fg-4)",
+        }}
+      />
+      <Input
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder="Search name or @handle"
+        aria-label="Search team"
+        className="h-7 text-caption"
+        style={{ paddingLeft: "var(--sp-5)", borderRadius: 3 }}
+      />
     </div>
   );
 }
 
-export function buildGroups(args: {
-  filter: FilterKey;
+export function buildTeamData(args: {
+  filter: AgentFilter;
   search: string;
   isAdmin: boolean;
   selfMemberId: string | null;
   members: MemberListItem[];
-  /** Agents managed by the viewer, any visibility. Rendered first. */
-  yourAgents: Agent[];
-  /** Shared agents managed by other members. */
-  teamAgents: Agent[];
-  /** Private agents managed by other members — admin governance bucket. */
-  otherPrivateAgents: Agent[];
-  resolveMember: (id: string) => string;
+  /** Non-human agents only. */
+  agents: Agent[];
   agentByUuid: Map<string, Agent>;
-  openDelegate: (humanAgentId: string, humanDisplayName: string) => void;
-}): TeamGroup[] {
-  const {
-    filter,
-    search,
-    isAdmin,
-    selfMemberId,
-    members,
-    yourAgents,
-    teamAgents,
-    otherPrivateAgents,
-    agentByUuid,
-    openDelegate,
-  } = args;
+  resolveMember: (id: string) => string;
+}): { publicAgents: AgentRow[]; privateAgents: AgentRow[]; humans: HumanRow[]; agentCount: number } {
+  const { filter, search, isAdmin, selfMemberId, members, agents, agentByUuid, resolveMember } = args;
 
-  // Returns the resolved identity of the human's delegate agent, or null
-  // if no delegate is configured / the target agent isn't in the loaded
-  // page (e.g. soft-deleted, beyond the 100-row cap).
-  const resolveDelegate = (humanAgentId: string): { name: string | null; displayName: string } | null => {
+  const matchAgent = (a: Agent) =>
+    !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
+  const matchHuman = (m: MemberListItem) =>
+    !search || m.displayName.toLowerCase().includes(search) || m.username.toLowerCase().includes(search);
+
+  const visible = (a: Agent) => {
+    // Members only see their own private agents; admins see all.
+    if (a.visibility === "private" && !isAdmin && a.managerId !== selfMemberId) return false;
+    // `Mine` filter: across both groups, only agents the viewer manages.
+    if (filter === "mine" && a.managerId !== selfMemberId) return false;
+    return matchAgent(a);
+  };
+
+  const toRow = (a: Agent): AgentRow => ({
+    kind: "agent",
+    agent: a,
+    managerLabel: a.managerId ? resolveMember(a.managerId) : null,
+    isOwnedBySelf: a.managerId === selfMemberId,
+  });
+
+  // Own agents pinned first (fast self-location), then alphabetical — stable
+  // across paginated refetches.
+  const sortRows = (rows: AgentRow[]) =>
+    rows.sort((x, y) => {
+      const mineX = x.isOwnedBySelf ? 0 : 1;
+      const mineY = y.isOwnedBySelf ? 0 : 1;
+      if (mineX !== mineY) return mineX - mineY;
+      return x.agent.displayName.localeCompare(y.agent.displayName, undefined, { sensitivity: "base" });
+    });
+
+  const publicAgents = sortRows(agents.filter((a) => a.visibility === "organization" && visible(a)).map(toRow));
+  const privateAgents = sortRows(agents.filter((a) => a.visibility === "private" && visible(a)).map(toRow));
+
+  const resolveDelegate = (humanAgentId: string): HumanRow["delegate"] => {
     const human = agentByUuid.get(humanAgentId);
     if (!human?.delegateMention) return null;
     const d = agentByUuid.get(human.delegateMention);
     if (!d) return null;
-    return { name: d.name, displayName: d.displayName };
+    return { uuid: d.uuid, name: d.name, displayName: d.displayName };
   };
 
-  const matchHuman = (m: MemberListItem) =>
-    !search || m.displayName.toLowerCase().includes(search) || m.username.toLowerCase().includes(search);
-  const matchAgent = (a: Agent) =>
-    !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
-
-  const showYours = filter === "all" || filter === "yours";
-  const showHumans = filter === "all" || filter === "humans";
-  const showTeam = filter === "all" || filter === "team";
-  // Admin governance bucket only renders inside the All view; the
-  // dedicated pills don't surface it to keep their meaning literal.
-  const showOtherPrivate = isAdmin && filter === "all";
-
-  const humanRows: HumanRow[] = members
+  const humans: HumanRow[] = members
     .filter(matchHuman)
     .map((m): HumanRow => {
       const isSelf = selfMemberId === m.id;
@@ -629,105 +476,37 @@ export function buildGroups(args: {
         username: m.username,
         displayName: m.displayName,
         role: m.role,
-        createdAt: m.createdAt,
         isSelf,
         delegate: resolveDelegate(m.agentId),
-        canEditDelegate: isSelf || isAdmin,
-        onEditDelegate: () => openDelegate(m.agentId, m.displayName),
+        // Per spec only the user themselves sets their own delegate (admins don't).
+        canEditDelegate: isSelf,
+        // Phase 2 wires the real timestamp; null renders "—" for now.
+        lastActiveLabel: null,
       };
     })
-    // Pin (you) to the top of the Humans section — when scanning a roster the
-    // viewer almost always wants their own row first, and it's where the
-    // "Set delegate →" inline CTA lives. Stable sort keeps backend order for
-    // the rest.
+    // Pin (you) to the top of the Humans section.
     .sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
 
-  const toAgentRow = (agent: Agent, opts?: { showVisibilityChip?: boolean }): AgentRow => ({
-    kind: "agent",
-    agent,
-    managerLabel: agent.managerId ? args.resolveMember(agent.managerId) : null,
-    isOwnedBySelf: agent.managerId === selfMemberId,
-    showVisibilityChip: opts?.showVisibilityChip ?? false,
-  });
-
-  // "Your agents" mixes shared + private rows, so each row carries an
-  // inline visibility chip so the viewer can tell them apart at a glance.
-  // Sort:
-  //   1. Private agents first (governance attention belongs on the more
-  //      sensitive rows).
-  //   2. Tiebreaker on displayName so order stays deterministic across
-  //      paginated fetches and refetches — the source `yourAgents` array
-  //      arrives in whatever order /agents pages return, and without a
-  //      stable secondary key the section would visibly reshuffle when
-  //      the list refreshes.
-  const yourRows: AgentRow[] = yourAgents
-    .filter(matchAgent)
-    .map((a) => toAgentRow(a, { showVisibilityChip: true }))
-    .sort((a, b) => {
-      const aPriv = a.agent.visibility === "private" ? 0 : 1;
-      const bPriv = b.agent.visibility === "private" ? 0 : 1;
-      if (aPriv !== bPriv) return aPriv - bPriv;
-      // Case-insensitive locale-aware compare so "Coder" and "coder" sort
-      // adjacent rather than splitting by ASCII code point.
-      return a.agent.displayName.localeCompare(b.agent.displayName, undefined, { sensitivity: "base" });
-    });
-  // Team / Other-private rows are homogeneous in visibility (shared / private
-  // respectively); the section title already encodes that, so no chip.
-  const teamRows: AgentRow[] = teamAgents.filter(matchAgent).map((a) => toAgentRow(a));
-  const otherPrivateRows: AgentRow[] = otherPrivateAgents.filter(matchAgent).map((a) => toAgentRow(a));
-
-  const groups: TeamGroup[] = [];
-  if (showYours) {
-    groups.push({
-      key: "yours",
-      title: "Your agents",
-      count: yourRows.length,
-      rows: yourRows,
-      emptyMessage: search
-        ? "No agents match this search."
-        : "You haven't created any agents yet. Click New agent above to add one.",
-    });
-  }
-  if (showHumans) {
-    groups.push({
-      key: "humans",
-      title: "Humans",
-      count: humanRows.length,
-      rows: humanRows,
-      emptyMessage: search ? "No humans match this search." : undefined,
-    });
-  }
-  if (showTeam) {
-    groups.push({
-      key: "team",
-      title: "Team agents",
-      count: teamRows.length,
-      rows: teamRows,
-      emptyMessage: search ? "No team agents match this search." : "No shared agents from other team members yet.",
-    });
-  }
-  if (showOtherPrivate && otherPrivateRows.length > 0) {
-    groups.push({
-      key: "other-private",
-      title: "Other members' private agents",
-      count: otherPrivateRows.length,
-      rows: otherPrivateRows,
-      collapsible: true,
-    });
-  }
-  return groups;
+  return { publicAgents, privateAgents, humans, agentCount: publicAgents.length + privateAgents.length };
 }
 
-export function selectDelegateCandidates(agents: Agent[]): Agent[] {
-  // Post-type-merge: "personal assistant" is now `type=agent +
-  // visibility=private` (the new-agent dialog's default). Autonomous
-  // org-visible agents stay out of the delegate target list.
-  return agents.filter((a) => a.type === "agent" && a.visibility === "private" && a.status === "active");
+export function selectDelegateCandidates(agents: Agent[], managerId: string | null | undefined): Agent[] {
+  // Personal assistants the viewer manages: type=agent + private + active +
+  // managed by the viewer. The managerId filter is the issue 669 candidate fix —
+  // the selector only lists the user's own agents, not the whole org's.
+  return agents.filter(
+    (a) => a.type === "agent" && a.visibility === "private" && a.status === "active" && a.managerId === managerId,
+  );
 }
 
 const roleValues = Object.values(MEMBER_ROLES);
 
-function EditMemberDialog({
+/**
+ * Member profile dialog. Opened by the row "Details" action. Admins can edit
+ * (display name + role); non-admins see a read-only profile for now. Self-edit
+ * of one's own profile lands in Phase 2 via `PATCH /me/profile`.
+ */
+function MemberDetailsDialog({
   target,
   isAdmin,
   isSaving,
@@ -759,7 +538,7 @@ function EditMemberDialog({
     if (displayName.trim() && displayName !== target.displayName) {
       patch.displayName = displayName.trim();
     }
-    if (isAdmin && memberRole !== target.role) {
+    if (memberRole !== target.role) {
       patch.role = memberRole as "admin" | "member";
     }
     if (Object.keys(patch).length === 0) {
@@ -774,37 +553,36 @@ function EditMemberDialog({
   }
 
   const open = target !== null;
+  const readOnly = !isAdmin;
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit profile</DialogTitle>
+          <DialogTitle>{readOnly ? "Profile" : "Edit profile"}</DialogTitle>
         </DialogHeader>
         {target && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label>Username</Label>
               <Input value={target.username} disabled className="font-mono" />
-              <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-                Username is permanent after creation.
-              </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-member-display">Display name</Label>
+              <Label htmlFor="member-display">Display name</Label>
               <Input
-                id="edit-member-display"
+                id="member-display"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 required
                 maxLength={200}
+                disabled={readOnly}
               />
             </div>
             {isAdmin && (
               <div className="space-y-2">
-                <Label htmlFor="edit-member-role">Role</Label>
+                <Label htmlFor="member-role">Role</Label>
                 <select
-                  id="edit-member-role"
+                  id="member-role"
                   value={memberRole}
                   onChange={(e) => setMemberRole(e.target.value)}
                   className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -816,7 +594,7 @@ function EditMemberDialog({
                   ))}
                 </select>
                 <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-                  Demoting the last admin is blocked — every org needs at least one admin to manage members.
+                  Demoting the last admin is blocked — every org needs at least one admin.
                 </p>
               </div>
             )}
@@ -827,113 +605,13 @@ function EditMemberDialog({
             )}
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={onClose} disabled={isSaving}>
-                Cancel
+                {readOnly ? "Close" : "Cancel"}
               </Button>
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? "Saving…" : "Save"}
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * Focused dialog for the "configure my delegate" flow. The full identity
- * editor (display name + visibility + delegate) lives on the agent-detail
- * page, but the Team page surfaces this single decision directly so a
- * non-admin self has a one-click path that doesn't require visiting their
- * mirror agent's detail page.
- *
- * The candidate list mirrors what the identity-section editor uses:
- * active `agent` rows with visibility=private from the Team page's
- * fully-paginated agent query. Admins receive the all-agent source so
- * private assistants owned by other members remain selectable when
- * editing another human.
- */
-function SetDelegateDialog({
-  target,
-  candidates,
-  isSaving,
-  onClose,
-  onSave,
-}: {
-  target: DelegateTarget | null;
-  candidates: Agent[];
-  isSaving: boolean;
-  onClose: () => void;
-  onSave: (delegateMention: string | null) => Promise<void>;
-}) {
-  const [delegate, setDelegate] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (target) {
-      setDelegate(target.currentDelegate ?? "");
-      setError(null);
-    }
-  }, [target]);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!target) return;
-    setError(null);
-    try {
-      await onSave(delegate || null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  const open = target !== null;
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Set delegate</DialogTitle>
-        </DialogHeader>
-        {target && (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-body" style={{ color: "var(--fg-2)" }}>
-              Pick a personal assistant to act on behalf of <strong>{target.humanDisplayName}</strong>. When teammates
-              @mention this human, the assistant receives the message and can reply in their place.
-            </p>
-            <div className="space-y-2">
-              <Label htmlFor="set-delegate-pick">Delegate</Label>
-              <select
-                id="set-delegate-pick"
-                value={delegate}
-                onChange={(e) => setDelegate(e.target.value)}
-                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">None — no delegate</option>
-                {candidates.map((a) => (
-                  <option key={a.uuid} value={a.uuid}>
-                    {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
-                  </option>
-                ))}
-              </select>
-              {candidates.length === 0 && (
-                <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-                  No personal assistants available. Create one from the <em>New agent</em> button above first.
-                </p>
+              {!readOnly && (
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? "Saving…" : "Save"}
+                </Button>
               )}
-            </div>
-            {error && (
-              <p className="text-body" style={{ color: "var(--state-error)" }}>
-                {error}
-              </p>
-            )}
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onClose} disabled={isSaving}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? "Saving…" : "Save"}
-              </Button>
             </DialogFooter>
           </form>
         )}
