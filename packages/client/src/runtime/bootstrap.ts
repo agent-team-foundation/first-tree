@@ -1053,5 +1053,7 @@ this command.
 ## When You Need a Human (Need-Human-Attention)
 
 Use \`${bin} attention raise --requires-response\` before any irreversible or externally-visible action that needs the human's go-ahead (ask), use \`${bin} attention raise\` without the flag right after such an action completes while the human is not watching (notify), and use plain \`chat send\` for everything else — full trigger lists, body templates, and waiting behaviour live in the attention skill (\`.claude/skills/attention/SKILL.md\` or \`.agents/skills/attention/SKILL.md\`).
+
+**\`AskUserQuestion\` is NOT available in this Hub — it is denied on call.** If you ever invoke \`AskUserQuestion\` (or any built-in "ask the user" tool) and it is denied, you MUST re-issue the request as a request-type NHA via \`${bin} attention raise --requires-response\`. Do NOT fall back to asking the question as plain final-text or a \`chat send\`: a request-NHA is the only mechanism that targets a specific human, carries a response expectation, and resumes your turn when they reply. Convert each choice you would have offered into the NHA body (and \`metadata.options\` / \`metadata.questions\` when the human should click rather than type).
 `;
 }
