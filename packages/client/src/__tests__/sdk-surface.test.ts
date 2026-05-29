@@ -143,7 +143,7 @@ describe("FirstTreeHubSDK public surface", () => {
     const responses = [
       jsonResponse({ repo: "https://example.com/tree.git", branch: "main" }),
       jsonResponse({ agentId: "agent-1", version: 3, payload: { gitRepos: [] } }),
-      jsonResponse([{ agentId: "agent-1", clientId: "client-1", runtimeProvider: "codex" }]),
+      jsonResponse([{ agentId: "agent-1", clientId: "client-1", runtimeProvider: "codex", status: "suspended" }]),
       jsonResponse({ items: [{ id: "chat-1" }], nextCursor: "next" }),
       jsonResponse({ id: "chat-1", topic: "Build" }),
       jsonResponse({ items: [{ id: "m1" }], nextCursor: null }),
@@ -157,7 +157,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.getContextTreeConfig()).resolves.toEqual({ repo: "https://example.com/tree.git", branch: "main" });
     await expect(sdk.fetchAgentConfig()).resolves.toMatchObject({ agentId: "agent-1", version: 3 });
     await expect(sdk.listMyAgents()).resolves.toEqual([
-      { agentId: "agent-1", clientId: "client-1", runtimeProvider: "codex" },
+      { agentId: "agent-1", clientId: "client-1", runtimeProvider: "codex", status: "suspended" },
     ]);
     await expect(sdk.listChats({ limit: 20, cursor: "abc" })).resolves.toMatchObject({ nextCursor: "next" });
     await expect(sdk.getChatDetail("chat-1")).resolves.toMatchObject({ id: "chat-1" });

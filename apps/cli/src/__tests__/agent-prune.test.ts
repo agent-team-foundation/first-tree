@@ -53,6 +53,21 @@ describe("findStaleAliases", () => {
     expect(stale).toEqual([]);
   });
 
+  it("keeps suspended aliases pinned to this client out of the prune set", async () => {
+    writeAlias(agentsDir, "paused", "agentId: 00000000-0000-0000-0000-00000000ssss\nruntime: claude-code\n");
+
+    const remote: PinnedAgent[] = [
+      { agentId: "00000000-0000-0000-0000-00000000ssss", clientId: THIS_CLIENT, status: "suspended" },
+    ];
+
+    const stale = await findStaleAliases({
+      agentsDir,
+      clientId: THIS_CLIENT,
+      listPinnedAgents: async () => remote,
+    });
+    expect(stale).toEqual([]);
+  });
+
   it("classifies an agentId pinned to a different client as pinned-elsewhere", async () => {
     writeAlias(agentsDir, "shared-name", "agentId: 00000000-0000-0000-0000-00000000cccc\nruntime: claude-code\n");
 

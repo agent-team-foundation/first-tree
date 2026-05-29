@@ -10,14 +10,17 @@ type AuthoritativePinnedAgent = {
   agentId: string;
   clientId: string;
   runtimeProvider: RuntimeProvider;
+  status?: string;
 };
 
 /**
  * Pre-flight reconciliation called before the agents loop spawns. Pulls
- * authoritative `runtime_provider` for every agent the calling user owns and
- * rewrites any local `agent.yaml` whose `runtime` field disagrees. Best-
- * effort: a transient hub failure logs and falls back to the local YAML
- * value (the in-band repair path catches any remaining drift on first bind).
+ * authoritative `runtime_provider` for every non-deleted agent the calling
+ * user owns and rewrites any local `agent.yaml` whose `runtime` field
+ * disagrees. Suspended agents stay in this ownership list so their local
+ * footprint is preserved while disabled. Best-effort: a transient hub failure
+ * logs and falls back to the local YAML value (the in-band repair path catches
+ * any remaining drift on first bind).
  */
 export async function reconcileLocalRuntimeProviders(opts: {
   serverUrl: string;

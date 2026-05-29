@@ -253,7 +253,9 @@ export function extractCapabilities(metadata: unknown): ClientCapabilities {
  * the client was offline — without it, an admin who pinned an agent during a
  * client outage would still need a manual `first-tree agent add`.
  *
- * Excludes soft-deleted agents (status = "deleted"). Human agents are
+ * Only returns active agents. Suspended/deleted agents are intentionally not
+ * startup candidates, so clients do not attempt binds the server will reject.
+ * Human agents are
  * naturally excluded by the `clientId` filter — they never carry a clientId.
  */
 export async function listActiveAgentsPinnedToClient(db: Database, clientId: string) {
@@ -266,35 +268,34 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
       runtimeProvider: agents.runtimeProvider,
     })
     .from(agents)
-    .where(and(eq(agents.clientId, clientId), ne(agents.status, "deleted")));
+    .where(and(eq(agents.clientId, clientId), eq(agents.status, "active")));
 }
 
 /**
- * Member-scoped: every active agent pinned to a client owned by this user.
- * Used by client startup to reconcile its local YAML against the authoritative
- * `agents.runtime_provider`. Cross-org by design — a client is owned by a
- * user, not an org (decouple-client-from-identity §4.1).
+ * Member-scoped: every non-deleted agent pinned to a client owned by this
+ * user. This is an ownership/reconciliation surface, not a startup-candidate
+ * surface: suspended agents must stay visible so local config/workspaces are
+ * retained while disabled. Cross-org by design — a client is owned by a user,
+ * not an org (decouple-client-from-identity §4.1).
  */
 export async function listMyPinnedAgents(
   db: Database,
   scope: { userId: string },
-): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
+): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider; status: string }>> {
   const rows = await db
     .select({
       agentId: agents.uuid,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      status: agents.status,
     })
     .from(agents)
     .innerJoin(clients, eq(agents.clientId, clients.id))
     .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted")));
-  return rows
-    .filter((r): r is { agentId: string; clientId: string; runtimeProvider: string } => r.clientId !== null)
-    .map((r) => ({
-      agentId: r.agentId,
-      clientId: r.clientId,
-      runtimeProvider: r.runtimeProvider as RuntimeProvider,
-    }));
+  return rows.filter(
+    (r): r is { agentId: string; clientId: string; runtimeProvider: RuntimeProvider; status: string } =>
+      r.clientId !== null,
+  );
 }
 
 /**

@@ -162,6 +162,52 @@ describe("ClientRuntime context-tree wiring", () => {
     RUNTIME_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "reports suspended local aliases as skipped instead of connection failures",
+    async () => {
+      const { print } = await import("../core/output.js");
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://hub.test", "client-test");
+      rt.addAgent("active", {
+        agentId: "agent-active",
+        runtime: "claude-code",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
+      rt.addAgent("paused", {
+        agentId: "agent-paused",
+        runtime: "claude-code",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
+      slotInstances[1]?.start.mockRejectedValueOnce(new Error("agent:bind rejected (agent_suspended)"));
+
+      await rt.start();
+
+      expect(print.status).toHaveBeenCalledWith("•", "paused: skipped (suspended)");
+      expect(print.status).toHaveBeenCalledWith("", "1 agent(s) running, 1 skipped. Press Ctrl+C to stop.");
+      expect(print.check).not.toHaveBeenCalledWith(
+        false,
+        "paused: connection failed",
+        expect.stringContaining("agent_suspended"),
+      );
+
+      const pinned = connectionListeners.get("agent:pinned");
+      if (!pinned) throw new Error("agent:pinned listener missing");
+      pinned({
+        agentId: "agent-paused",
+        name: "paused",
+        runtimeProvider: "claude-code",
+      });
+
+      await vi.waitFor(() => expect(slotInstances[1]?.start).toHaveBeenCalledTimes(2));
+      expect(print.status).toHaveBeenCalledWith("", "agent reactivated: paused");
+      expect(print.check).toHaveBeenCalledWith(true, "paused: connected", "agent: paused");
+      await rt.stop();
+    },
+    RUNTIME_TEST_TIMEOUT_MS,
+  );
+
   it("handles connection events, update hooks, and graceful stop", async () => {
     const { print } = await import("../core/output.js");
     const client = await import("@first-tree/client");
