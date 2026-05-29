@@ -1,7 +1,58 @@
-# Web Design System Handoff
+# Claude Code Handoff - Web Design System Rollout
 
-This handoff is for the next session that will plan and land the remaining
-visual design-system PRs for `packages/web`.
+This handoff is for a Claude Code session that will plan and land the remaining
+visual design-system work for `packages/web`.
+
+## Current PR Context
+
+- Branch: `feat/web-design-system-rollout`
+- Base documentation commit: `304100cf docs: update web design system rollout`
+- PR: created by the user from this branch
+- Current committed scope: documentation only
+  - `packages/web/DESIGN.md`
+  - `packages/web/DESIGN-AUDIT.md`
+  - `packages/web/DESIGN-HANDOFF.md`
+
+If the branch has moved, inspect `git status`, `git log --oneline -5`, and the
+PR discussion before making changes.
+
+## Suggested Claude Code Prompt
+
+Use this as the opening instruction for the Claude Code session:
+
+```text
+Please continue the Web visual design-system rollout in
+/Users/gandy/.codex/worktrees/31bc/first-tree-hub.
+
+Important scope:
+- This work is strictly visual design language / design-system consistency.
+- Do not introduce product functionality.
+- Do not change data models, APIs, routing logic, approval flows, or information architecture.
+- Do not change GTM positioning or landing-page messaging strategy.
+
+Start by reading:
+1. AGENTS.md
+2. packages/web/DESIGN.md
+3. packages/web/DESIGN-AUDIT.md
+4. packages/web/DESIGN-HANDOFF.md
+5. packages/web/src/index.css
+6. packages/web/scripts/check-design-tokens.sh
+7. packages/web/src/pages/styleguide-preview.tsx
+
+Then create your own implementation plan for the remaining rollout. Begin with
+the PR 1 scope from DESIGN-HANDOFF.md: guardrails + low-risk tokens.
+
+Keep PRs small and serial:
+1. Guardrails + Low-Risk Tokens
+2. Token Cleanup + State Surface Migration
+3a. Primitive Focus + Icons
+3b. Workspace Visual Grammar
+4. Surface Rollout + Closeout
+
+Run the relevant verification before marking work complete:
+pnpm --filter @first-tree/web lint:tokens
+pnpm --filter @first-tree/web typecheck
+```
 
 ## Current Scope
 
@@ -33,12 +84,13 @@ landing-page messaging strategy.
 - `packages/web/src/pages/styleguide-preview.tsx` is the living visual
   reference at `/preview/styleguide`.
 
-## Current Local Changes
+## Committed Documentation Changes
 
-This session has already modified:
+The current branch already modified:
 
 - `packages/web/DESIGN.md`
 - `packages/web/DESIGN-AUDIT.md`
+- `packages/web/DESIGN-HANDOFF.md`
 
 The changes are documentation-only:
 
@@ -49,8 +101,8 @@ The changes are documentation-only:
 - removed product-experience / work-loop / surface-audit material that was
   outside the user's intended scope
 
-Before starting implementation, inspect `git status` and review these docs.
-Do not overwrite unrelated user changes.
+Before starting implementation, inspect `git status` and review the PR. Do not
+overwrite unrelated user changes.
 
 ## Target Visual Direction
 
