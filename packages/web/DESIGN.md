@@ -1,6 +1,7 @@
 # First Tree — Web Design System
 
-> Source of truth for the React admin dashboard (`packages/web`).
+> Source of truth for the React admin dashboard design system
+> (`packages/web`).
 > Distilled from the live system: [`src/index.css`](src/index.css),
 > [`src/components/ui/`](src/components/ui), and
 > [`scripts/check-design-tokens.sh`](scripts/check-design-tokens.sh).
@@ -29,10 +30,12 @@
    Context-Tree surfaces (node glyphs, "writing to tree"), and on `success`
    semantics. It is **never** the generic button / link / selected color — that
    collision (brand == success == idle) is exactly what this strategy retires.
-4. **Lark / Arco craft, not Lark color.** Borrow the *discipline* — a neutral
-   gray token ramp, hairline borders, soft low-opacity elevation, thin line
-   icons, search + underline tabs, rounded-square avatars, comfortable aligned
-   spacing, a right Session sidebar. Do **not** borrow Feishu's blue primary.
+4. **Quiet operational craft.** The app should feel precise, low-noise, and
+   built for repeated work: neutral gray ramps, hairline borders, soft
+   low-opacity elevation, thin line icons, search + underline tabs,
+   rounded-square avatars, aligned spacing, and restrained right-side detail
+   panels.
+   Do not introduce a saturated generic primary color.
 
 **Semantic color map — the only places color appears:**
 
@@ -317,9 +320,10 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 - `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
 - Every animation respects `prefers-reduced-motion: reduce`.
 - Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
-- Focus is visible: `focus-visible:ring-1 ring-ring` on interactive controls;
-  custom radio/checkbox cards surface a ring on `:focus-within` (the real input
-  is `sr-only`).
+- Focus is visible: `focus-visible:ring-2 ring-ring ring-offset-2` on
+  interactive controls, with a surface-matched ring offset where the component
+  sits on a raised or sunken surface. Custom radio/checkbox cards surface a ring
+  on `:focus-within` (the real input is `sr-only`).
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---
