@@ -4,7 +4,6 @@ import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import * as chatService from "../../services/chat.js";
-import { prepareImageOutbound } from "../../services/image-broadcast.js";
 import * as messageService from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 
@@ -65,12 +64,11 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       // to require explicit source — it would break unaudited third-
       // party integrations.
       const body = sendMessageSchema.parse(request.body);
-      const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, body);
       const { message: msg, recipients } = await messageService.sendMessage(
         app.db,
         request.params.chatId,
         identity.uuid,
-        prepared,
+        body,
         {
           // Explicit-only contract: agent SDK callers (CLI `chat send`,
           // result-sink, etc.) declare routing via `receiverNames` or

@@ -1,4 +1,11 @@
-import { extractCaption, type SendMessage, scanMentionTokens } from "@first-tree/shared";
+import {
+  extractCaption,
+  imageBatchRefContentSchema,
+  imageRefContentSchema,
+  MAX_BATCH_ATTACHMENTS,
+  type SendMessage,
+  scanMentionTokens,
+} from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -32,6 +39,25 @@ function stripUntrustedMetadataKeys(
   if (options.allowSystemSender || !("systemSender" in meta)) return meta;
   const { systemSender: _drop, ...rest } = meta;
   return rest;
+}
+
+/**
+ * Fail-closed guard for `format: "file"` writes. `sendMessageSchema.content`
+ * is `z.unknown()` (format-agnostic), so without this the message write
+ * boundary would persist and fan out malformed, unsupported-MIME, or
+ * over-limit image batches — recipients would then either not recognise the
+ * batch or fan out unbounded attachment fetches. The only legal `file`
+ * content is a single image ref or a 1..MAX_BATCH_ATTACHMENTS batch, both
+ * restricted to supported MIME types. Reuses the shared schemas so this guard
+ * can't drift from the renderers' contract.
+ */
+function validateFileContent(content: unknown): void {
+  if (imageBatchRefContentSchema.safeParse(content).success) return;
+  if (imageRefContentSchema.safeParse(content).success) return;
+  throw new BadRequestError(
+    `Invalid file message content: expected an image reference ({imageId, mimeType, filename}) or a batch ` +
+      `({caption?, attachments[1..${MAX_BATCH_ATTACHMENTS}]}), with MIME one of png/jpeg/gif/webp.`,
+  );
 }
 
 export type SendMessageResult = {
@@ -140,6 +166,12 @@ async function sendMessageInner(
   data: SendMessage,
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
+  // Fail fast before opening a transaction: `format: "file"` content must be a
+  // valid image ref / batch (the route's schema leaves content unknown).
+  if (data.format === "file") {
+    validateFileContent(data.content);
+  }
+
   const txResult = await db.transaction(async (tx) => {
     // 1. Load participants and sender (inbox + org) in parallel — both are
     //    needed for fan-out + mention enforcement + post-tx session
