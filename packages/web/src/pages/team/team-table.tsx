@@ -51,12 +51,16 @@ export type AgentRow = {
 };
 
 // ── Shared row geometry (cross-module alignment contract) ──────────────────
+// Tuned for the app's shared 960 content canvas (Layout maxWidth 960 — same as
+// Context / Settings / Agent-detail), NOT the 1280 of the early prototype.
+// Lower Name min + trimmer Status/Actions tracks keep the middle band
+// (Owner · Runs on · Usage) un-cramped at ~872 usable px.
 const ROW_GRID =
-  "minmax(var(--sp-60), 1.6fr) minmax(0, 2.2fr) calc(var(--sp-20) + var(--sp-8)) calc(var(--sp-20) + var(--sp-16))";
+  "minmax(var(--sp-60), 1.6fr) minmax(0, 2.2fr) calc(var(--sp-20) + var(--sp-4)) calc(var(--sp-20) + var(--sp-12))";
 const ROW_GAP = "var(--sp-5)";
-// Agent middle band sub-grid: Owner | Runs on | Usage (sub-columns slightly
-// tighter than the major band boundaries for a sound spacing hierarchy).
-const AGENT_MIDDLE_GRID = "minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr)";
+// Agent middle band sub-grid: Owner | Runs on | Usage. Usage carries a min wide
+// enough for its "Usage 7d 30d" header control so it never crowds Status.
+const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-20) + var(--sp-8)), 1fr)";
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
