@@ -1120,14 +1120,17 @@ describe("page SSR smoke coverage", () => {
         />,
       ),
     ).toContain("Working");
-    expect(
-      renderPage(
-        <ComposeStatusBar
-          chatId="chat-1"
-          agents={CHAT_PARTICIPANTS.filter((participant) => participant.type !== "human")}
-        />,
-      ),
-    ).toContain("needs reply");
+    // The rail surfaces working / failed only — the working lead renders its
+    // goal (turnText) first; a needs_you agent is owned by the AttentionCard
+    // and must NOT appear here.
+    const statusRail = renderPage(
+      <ComposeStatusBar
+        chatId="chat-1"
+        agents={CHAT_PARTICIPANTS.filter((participant) => participant.type !== "human")}
+      />,
+    );
+    expect(statusRail).toContain("Checking the rollout path.");
+    expect(statusRail).not.toContain("needs reply");
     expect(renderPage(<AgentContext agentId="agent-1" />)).toContain("Computer");
     expect(renderPage(<ChatView agentId="agent-1" chatId="chat-1" />)).toContain("Launch planning");
     expect(renderPage(<WorkspacePage />, "/?c=chat-1&origin=manual&with=agent-1&unread=1&watching=1")).toContain(

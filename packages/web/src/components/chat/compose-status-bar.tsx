@@ -5,10 +5,11 @@ import {
   type LiveActivity,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, CornerDownLeft } from "lucide-react";
+import { Brain, ChevronDown, Pencil, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
+import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
@@ -20,35 +21,38 @@ import { formatElapsed } from "./working-chip.js";
  * AgentStatusPanel); not the timeline's WorkingTurn (which scrolls away).
  * No box / no fill — it reads as part of the composer, with one faint hairline.
  *
+ * Scope: only **working** and **failed** raise the bar. `needs_you` was removed
+ * — a Need-Human-Attention now owns the chat bottom via the AttentionCard (which
+ * replaces the composer), plus the sidebar AttentionsSection and avatar badges,
+ * so echoing "needs reply" here was a duplicate signal (and the old `Reply ↩`
+ * jump is gone with it).
+ *
  * Single line = lead + N:
- *   - lead = the highest-priority active agent (failed > needs-you > working;
- *     within working, the most-recently-active, held ~4s so working agents
- *     don't swap faces too fast — but an alert preempts immediately).
- *   - lead shows `[coloured dot] <name> · <detail>`: working → "Using Bash ·
- *     npm test · 12s" (live), needs-you → "needs reply" + [Reply], failed →
- *     "failed". The leading mark is always the state's coloured dot (no
- *     ⏸/⚠/?/!).
+ *   - lead = the highest-priority active agent (failed > working; within
+ *     working, the most-recently-active, held ~4s so working agents don't swap
+ *     faces too fast — but a failure preempts immediately).
+ *   - lead shows `[coloured dot] <name> · <goal> · <tool> · 12s`: working puts
+ *     the agent's running narration (`turnText`, the *goal* — what it's trying
+ *     to do) first, then the live action (the *means* — `Bash · npm test`,
+ *     `Thinking`, …) with a kind icon, then the elapsed ticker; failed → "failed".
  *   - `+N` (others active) and a chevron expand a light multi-row list of every
  *     active agent (≤ ~5 visible, then internal scroll).
  *   - All quiet → the whole rail is hidden.
  *
- * Click zones: the lead/row text → jump to that agent's timeline anchor;
- * `Reply ↩` (needs-you only) → jump + focus the question card's own answer
- * input; +N / chevron → expand. Data is the shared /agent-status query
- * (React-Query-deduped, admin-WS-live, ~1s-throttled).
+ * Click zones: the lead/row text → jump to that agent's timeline anchor
+ * (working → WorkingTurn, failed → ErrorRow); +N / chevron → expand. Data is
+ * the shared /agent-status query (React-Query-deduped, admin-WS-live,
+ * ~1s-throttled).
  */
-const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
+const ATTENTION: ReadonlySet<string> = new Set(["failed", "working"]);
 const TICK_INTERVAL_MS = 1000;
 const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
-/** Visual cap (in pixels) for the assistant-text reply preview, so it reads as a
- *  glance (one clause) on the rail instead of sprawling across the wide composer;
- *  CSS `truncate` adds the ellipsis. Roughly 30 CJK / 55 latin chars at the
- *  caption font size. */
-const ASSISTANT_PREVIEW_MAX_WIDTH = 300;
 
+/** A failure preempts the working-lead anti-flicker hold (see {@link pickLead}).
+ *  `needs_you` no longer reaches the bar, so "alert" is just "failed" now. */
 function isAlert(s: AgentChatStatus): boolean {
-  return s.main === "needs_you" || s.main === "failed";
+  return s.main === "failed";
 }
 
 function activityStartedMs(s: AgentChatStatus): number {
@@ -56,9 +60,10 @@ function activityStartedMs(s: AgentChatStatus): number {
 }
 
 /**
- * The agents worth raising the bar for — needs-you / failed / working — sorted
- * highest-attention first. ready / paused / offline are filtered out. Exported
- * for tests.
+ * The agents worth raising the bar for — failed / working — sorted
+ * highest-attention first. needs_you / ready / paused / offline are filtered
+ * out (needs_you is owned by the AttentionCard, not this rail). Exported for
+ * tests.
  */
 export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
   return statuses.filter((s) => ATTENTION.has(s.main)).sort((a, b) => compareMainStatus(a.main, b.main));
@@ -68,11 +73,11 @@ export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] 
  * Pick the rail's lead with anti-flicker, given the previously-held lead.
  * Pure & exported for tests.
  *
- * Rules: an alert (failed / needs-you) preempts immediately. Among working
- * agents the most-recently-active is the candidate, but if the current lead is
- * still working it's held until `holdMs` has elapsed (so working agents don't
- * swap faces every tick). Returns the new held lead (`{ agentId, since }`), or
- * null when nothing is active.
+ * Rules: an alert (failed) preempts immediately. Among working agents the
+ * most-recently-active is the candidate, but if the current lead is still
+ * working it's held until `holdMs` has elapsed (so working agents don't swap
+ * faces every tick). Returns the new held lead (`{ agentId, since }`), or null
+ * when nothing is active.
  */
 export function pickLead(
   current: { agentId: string; since: number } | null,
@@ -88,24 +93,6 @@ export function pickLead(
   const heldStillWorking = current !== null && working.some((w) => w.agentId === current.agentId);
   if (heldStillWorking && now - current.since < holdMs) return current; // hold the current face
   return { agentId: mostRecent.agentId, since: now };
-}
-
-/** [Reply ↩]: scroll to the agent's question card AND focus its own answer
- *  input — the structured AskUserQuestion is answered inside the card, not the
- *  main composer. Falls back to the first focusable element in the card. */
-function scrollToQuestionAnswer(agentId: string): void {
-  const els = document.querySelectorAll<HTMLElement>(`[data-pending-question-agent="${agentId}"]`);
-  const card = els[els.length - 1];
-  if (!card) return;
-  card.scrollIntoView({ behavior: "smooth", block: "center" });
-  // Prefer the free-text answer field; only fall back to the first option /
-  // focusable when there's no textarea (option buttons render before it in DOM
-  // order, so a plain "first focusable" would skip the textarea). preventScroll
-  // so focusing doesn't fight the smooth scroll above.
-  const target =
-    card.querySelector<HTMLElement>("textarea, input") ??
-    card.querySelector<HTMLElement>('button, [tabindex]:not([tabindex="-1"])');
-  target?.focus({ preventScroll: true });
 }
 
 /** Live wall-clock elapsed since `startedAt`, re-rendering each second. */
@@ -222,9 +209,8 @@ function nameFor(agents: ChatParticipantDetail[]) {
   return (id: string) => agents.find((a) => a.agentId === id)?.displayName ?? id.slice(0, 8);
 }
 
-/** One rail line: a clickable text region (→ jump to timeline) plus, for
- *  needs-you, a [Reply] action. The two are separate targets so a jump click
- *  never lands on Reply. */
+/** One rail line: a single clickable text region that jumps to the agent's
+ *  timeline anchor (working → WorkingTurn, failed → ErrorRow). */
 function RailRow({
   status,
   nameOf,
@@ -251,45 +237,41 @@ function RailRow({
         <Sep />
         <LeadDetail status={status} />
       </TimelineJumpButton>
-      {/* Reply ↩ only when the question card is actually mounted — otherwise it
-          would be a clickable no-op, same gate as the row text. */}
-      {status.main === "needs_you" && jumpable ? (
-        <button
-          type="button"
-          onClick={() => scrollToQuestionAnswer(status.agentId)}
-          className="text-caption inline-flex shrink-0 items-center transition-opacity hover:opacity-70"
-          style={{
-            gap: 2,
-            border: 0,
-            background: "transparent",
-            padding: 0,
-            cursor: "pointer",
-            color: "var(--state-needs-you)",
-          }}
-        >
-          Reply
-          <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-      ) : null}
     </div>
   );
 }
 
-/** The detail after the name: a short reason (needs-you / failed) or the live
- *  activity (working). */
+/** The detail after the name: a short reason (failed) or the live activity
+ *  (working). */
 function LeadDetail({ status }: { status: AgentChatStatus }) {
-  if (status.main === "needs_you") return <span className="truncate">needs reply</span>;
   if (status.main === "failed") return <span className="truncate">failed</span>;
   return <WorkingDetail activity={status.activity} />;
 }
 
-/** working detail: `Using Bash · npm test · 12s` (live ticker). */
+/**
+ * working detail, goal-first: `<goal> · 🔧 Bash · npm test · 12s`.
+ *
+ * The agent's running narration (`turnText`) is its *goal* — what it's trying
+ * to do — and leads, flexing to fill the rail (truncating first when space is
+ * tight so the means + ticker survive). The live action (kind/detail) is the
+ * *means* and trails with a kind icon; the wall-clock ticker is last. When the
+ * turn has produced no prose yet (`turnText` absent — common when an agent opens
+ * with tool calls), the means leads instead, so the line is never blank.
+ */
 function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   const elapsed = useLiveElapsed(activity?.startedAt ?? null);
   if (!activity) return <span className="truncate">Working</span>;
+  const goal = activity.turnText ? stripInlineMarkdown(activity.turnText) : null;
+  const action = activityAction(activity, goal !== null);
   return (
-    <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
-      <ActivityText activity={activity} />
+    <span className="inline-flex min-w-0 flex-1 items-center" style={{ gap: 4 }}>
+      {goal ? (
+        <span className="min-w-0 flex-1 truncate" title={goal}>
+          {goal}
+        </span>
+      ) : null}
+      {goal && action ? <Sep /> : null}
+      {action}
       {elapsed ? (
         <>
           <Sep />
@@ -302,42 +284,74 @@ function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   );
 }
 
-/** The current turn's running narration (`turnText`, sticky across tool calls)
- *  when present; else "Thinking", the latest assistant reply preview (falling
- *  back to "Writing"), or "Using <tool> · <arg>" (sans word + mono tool/arg).
- *  The narration / reply previews are truncated server-side and width-capped
- *  here so they read as a glance. */
-function ActivityText({ activity }: { activity: LiveActivity }) {
-  // Sticky narration: the current turn's running reply text takes precedence
-  // over the tool_call / thinking indicator, so a tool call fired right after a
-  // sentence doesn't bury what the agent is saying.
-  if (activity.turnText)
+/** Per-kind glyph for the live action: tool → wrench, thinking → brain,
+ *  writing → pencil. Muted + small so it reads as a quiet "means" marker, not
+ *  a button. */
+function ActionIcon({ kind }: { kind: LiveActivity["kind"] }) {
+  const Icon = kind === "tool_call" ? Wrench : kind === "thinking" ? Brain : Pencil;
+  return <Icon className="h-3 w-3 shrink-0" style={{ color: "var(--fg-4)" }} aria-hidden="true" />;
+}
+
+/**
+ * The live action segment (the *means*): `🔧 Bash · npm test`, `🧠 Thinking`,
+ * or `✏ Writing`. Returns null when there's nothing to add beyond the goal —
+ * i.e. the agent is writing prose and that prose IS the goal already shown, so
+ * a redundant "Writing" is suppressed. Tool/arg render in the mono face; the
+ * arg is path-aware-trimmed and width-capped server-side.
+ */
+function activityAction(activity: LiveActivity, hasGoal: boolean) {
+  if (activity.kind === "thinking") {
     return (
-      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
-        {activity.turnText}
+      <span className="inline-flex shrink-0 items-center" style={{ gap: 4 }}>
+        <ActionIcon kind="thinking" />
+        <span>Thinking</span>
       </span>
     );
-  if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
-  if (activity.kind === "assistant_text")
+  }
+  if (activity.kind === "assistant_text") {
+    // Prose IS the goal — when it's already shown, don't repeat it as "Writing".
+    if (hasGoal) return null;
+    const text = activity.detail ? stripInlineMarkdown(activity.detail) : null;
     return (
-      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
-        {activity.detail ?? "Writing"}
+      <span className="inline-flex min-w-0 flex-1 items-center" style={{ gap: 4 }}>
+        <ActionIcon kind="assistant_text" />
+        <span className="truncate">{text || "Writing"}</span>
       </span>
     );
+  }
+  // tool_call
+  const arg = smartToolArg(activity.detail);
   return (
-    <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
-      <span className="shrink-0">Using</span>
+    <span className="inline-flex shrink-0 items-center" style={{ gap: 4 }}>
+      <ActionIcon kind="tool_call" />
       <span className="mono shrink-0">{activity.label}</span>
-      {activity.detail ? (
+      {arg ? (
         <>
           <Sep />
-          <span className="mono truncate" style={{ color: "var(--fg-4)" }}>
-            {activity.detail}
+          <span className="mono shrink-0" style={{ color: "var(--fg-4)" }}>
+            {arg}
           </span>
         </>
       ) : null}
     </span>
   );
+}
+
+/**
+ * Path-aware trim for a tool arg: collapse a lone filesystem path to its
+ * basename (`packages/web/src/foo.tsx` → `foo.tsx`) so the meaningful end shows
+ * instead of a head-truncated prefix. Conservative — only fires for a single
+ * token (no whitespace) that holds a `/`, isn't a URL, and wasn't already
+ * truncated server-side (no trailing ellipsis); commands like `npm test` and
+ * URLs pass through untouched.
+ */
+function smartToolArg(detail: string | undefined): string | undefined {
+  if (!detail) return undefined;
+  if (!detail.endsWith("…") && !/\s/.test(detail) && detail.includes("/") && !detail.includes("://")) {
+    const base = detail.replace(/\/+$/, "").split("/").pop();
+    if (base) return base;
+  }
+  return detail;
 }
 
 /** Muted "·" segment separator. */
