@@ -176,7 +176,17 @@ function entityTitlePrefix(entity: GithubEntity, eventType: string, action: stri
   if (eventType === "pull_request" && action === "review_requested") return "PR Review";
   if (eventType === "pull_request_review") return "PR Review";
   if (eventType === "pull_request_review_comment") return "PR Review";
-  switch (entity.type) {
+  return baseTypePrefix(entity.type);
+}
+
+/**
+ * Prefix derived purely from the entity type, with no review-flow
+ * special-casing. Used both as the fallback inside `entityTitlePrefix` and to
+ * enumerate the legal title heads when refreshing a topic (see
+ * `refreshEntityTitle`).
+ */
+function baseTypePrefix(type: GithubEntity["type"]): string {
+  switch (type) {
     case "issue":
       return "Issue";
     case "pull_request":
@@ -216,4 +226,37 @@ export function formatEntityTitle(entity: GithubEntity, eventType: string, actio
     return `${head}: ${entity.title}`;
   }
   return head;
+}
+
+/**
+ * Recompute a github chat topic when the upstream entity title changes, while
+ * *preserving* the original prefix + anchor head. The prefix ("PR" vs
+ * "PR Review", "Issue", …) is decided once at chat creation from the
+ * first-touch event and must NOT drift when a later event with a different
+ * `(eventType, action)` arrives — so we reuse the head already baked into the
+ * stored topic rather than re-deriving it from this event.
+ *
+ * Returns the new topic, or `null` when `storedTopic` is not a recognised
+ * github-format title for `entity` (e.g. an agent renamed the chat off-spec,
+ * or the payload carries no title). The caller leaves such topics untouched.
+ *
+ *   refreshEntityTitle("PR Review repo#307: old", { type: "pull_request", key: "o/repo#307", title: "new" })
+ *     → "PR Review repo#307: new"
+ *   refreshEntityTitle("my custom name", <pr>) → null
+ */
+export function refreshEntityTitle(storedTopic: string, entity: GithubEntity): string | null {
+  if (!entity.title || entity.title.length === 0) return null;
+  const shortKey = shortEntityKey(entity.key);
+  // For a PR the original head could be either the plain "PR" prefix or the
+  // review-flow "PR Review" prefix; every other type has a single legal head.
+  const heads =
+    entity.type === "pull_request"
+      ? [`PR Review ${shortKey}`, `PR ${shortKey}`]
+      : [`${baseTypePrefix(entity.type)} ${shortKey}`];
+  // Longest first so "PR Review repo#7" is matched before "PR repo#7".
+  const head = heads
+    .sort((a, b) => b.length - a.length)
+    .find((h) => storedTopic === h || storedTopic.startsWith(`${h}: `));
+  if (!head) return null;
+  return `${head}: ${entity.title}`;
 }

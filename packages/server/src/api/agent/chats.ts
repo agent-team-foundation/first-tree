@@ -1,5 +1,7 @@
-import { addParticipantSchema, createChatSchema, paginationQuerySchema } from "@first-tree/shared";
+import { addParticipantSchema, createChatSchema, paginationQuerySchema, updateChatSchema } from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { chats } from "../../db/schema/chats.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
@@ -76,6 +78,24 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       avatarColorToken: r.avatarColorToken ?? null,
       avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
     }));
+  });
+
+  // Update chat metadata (currently: `topic` only). Mirrors the user-scope
+  // PATCH /api/v1/chats/:chatId so agent-token callers (e.g. `chat set-topic`
+  // from inside an agent session) can rename a chat they participate in.
+  // Auth: must be a speaker in the chat — same gate as message send.
+  app.patch<{ Params: { chatId: string } }>("/:chatId", { config: { otelRecordBody: true } }, async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    const body = updateChatSchema.parse(request.body);
+    const nextTopic = body.topic && body.topic.length > 0 ? body.topic : null;
+    const [updated] = await app.db
+      .update(chats)
+      .set({ topic: nextTopic, updatedAt: new Date() })
+      .where(eq(chats.id, request.params.chatId))
+      .returning();
+    if (!updated) throw new Error("Unexpected: chat missing after update");
+    return serializeChat(updated);
   });
 
   // Participant management

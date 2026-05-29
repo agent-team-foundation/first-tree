@@ -113,4 +113,63 @@ describe("Agent Chats API", () => {
     const res = await a3.request("GET", `/api/v1/agent/chats/${chatId}/participants`);
     expect(res.statusCode).toBe(403);
   });
+
+  describe("PATCH /chats/:id (set topic)", () => {
+    it("updates topic and persists; null clears", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `topic-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `topic-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const setRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "ship plan" });
+      expect(setRes.statusCode).toBe(200);
+      expect(setRes.json().topic).toBe("ship plan");
+
+      const detailRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
+      expect(detailRes.json().topic).toBe("ship plan");
+
+      const clearRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: null });
+      expect(clearRes.statusCode).toBe(200);
+      expect(clearRes.json().topic).toBeNull();
+    });
+
+    it("rejects non-participants with 403", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `topic-deny-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `topic-deny-a2-${uid}` });
+      const a3 = await createTestAgent(app, { name: `topic-deny-a3-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const res = await a3.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "intrusion" });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("rejects malformed body (topic missing)", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `topic-bad-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `topic-bad-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const res = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {});
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });
