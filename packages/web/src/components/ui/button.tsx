@@ -9,6 +9,11 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
+        // Brand-green CTA. Reserve for the one hero/creation moment per surface
+        // (onboarding "Get started", "Create agent", marketing) — NOT for dense
+        // or repeated actions, which stay neutral (`default`). Green-on-buttons
+        // beyond hero moments slides back into the green-primary (E2) collision.
+        cta: "bg-brand text-[color:var(--fg-on-vivid)] hover:bg-brand-dim",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",

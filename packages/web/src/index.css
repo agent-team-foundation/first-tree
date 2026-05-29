@@ -193,6 +193,7 @@
 
   --color-state-idle: var(--state-idle);
   --color-state-working: var(--state-working);
+  --color-state-needs-you: var(--state-needs-you);
   --color-state-blocked: var(--state-blocked);
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
@@ -246,12 +247,19 @@
      alpha so it reads in both themes without introducing a hue. */
   --ring: oklch(0.21 0 0 / 0.4);
 
-  /* idle = neutral cool "standby" tone. Deliberately NOT the brand/success
-     green (see --success) and distinct from --state-offline's dim gray, so an
-     idle agent reads as "present, at rest" rather than "healthy/success". */
-  --state-idle: oklch(0.7 0.03 240);
-  --state-working: oklch(0.78 0.16 195);
-  --state-blocked: oklch(0.82 0.18 75);
+  /* Agent-state vocabulary — "green-liveness" model. The system's living
+     states are COOL (green = alive+working, blue = present/idle); the states
+     that want your attention are WARM (amber = needs-you, orange = blocked,
+     red = error) so problems pop against the live baseline. Offline is gray
+     (absent — falls out of both families). working == brand green at the token
+     level; it is told apart from the success ✓ by FORM (pulsing dot + halo for
+     working, a static ✓ glyph for done), not by hue. */
+  --state-working: oklch(0.72 0.17 150); /* alive + working — brand green, pulses */
+  --state-idle: oklch(0.62 0.14 245); /* present, at rest — calm blue */
+  --state-needs-you: oklch(0.82 0.18 75); /* waiting for you — amber */
+  --state-blocked: oklch(
+    0.74 0.18 58
+  ); /* stuck / blocked + the shared caution/warning hue — a warmer orange than needs-you, still clearly not error-red */
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
   /* Unread / attention semantic. Aliased to --state-error today because
@@ -321,8 +329,8 @@
      separate border color — one saturated tone covers both roles. */
   --bg-error-soft: oklch(0.97 0.02 25);
   --fg-error-strong: oklch(0.42 0.17 25);
-  --bg-warn-soft: oklch(0.97 0.04 75);
-  --fg-warn-strong: oklch(0.48 0.14 75);
+  --bg-warn-soft: oklch(0.97 0.04 58);
+  --fg-warn-strong: oklch(0.48 0.14 58);
   --bg-success-soft: oklch(0.96 0.04 150);
   --fg-success-strong: oklch(0.42 0.12 150);
 
@@ -460,8 +468,8 @@
   /* State pairs — dark-mode variants (softer bg, higher-L fg for contrast). */
   --bg-error-soft: oklch(0.28 0.06 25);
   --fg-error-strong: oklch(0.82 0.14 25);
-  --bg-warn-soft: oklch(0.3 0.06 75);
-  --fg-warn-strong: oklch(0.86 0.14 75);
+  --bg-warn-soft: oklch(0.3 0.06 58);
+  --fg-warn-strong: oklch(0.86 0.14 58);
   --bg-success-soft: oklch(0.28 0.05 150);
   --fg-success-strong: oklch(0.82 0.14 150);
 }
@@ -952,7 +960,7 @@
 }
 
 .context-change-breakdown span[data-change-type="edited"] {
-  background: oklch(0.82 0.18 75 / 0.14);
+  background: oklch(0.74 0.18 58 / 0.14);
   color: var(--warning);
 }
 

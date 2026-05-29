@@ -5,7 +5,7 @@ import { type AgentStatusView, sessionStateToMain, viewOf } from "../agent-statu
 const ALL: AgentMainStatus[] = ["offline", "failed", "needs_you", "working", "paused", "ready"];
 
 describe("viewOf — §9.1 visual vocabulary", () => {
-  it("working = blue solid dot with the working pulse", () => {
+  it("working = green solid dot with the working pulse", () => {
     const v = viewOf("working");
     expect(v.colorVar).toBe("var(--state-working)");
     expect(v.shape).toBe("dot");
@@ -15,7 +15,7 @@ describe("viewOf — §9.1 visual vocabulary", () => {
 
   it("needs_you = amber solid dot with the calm pulse", () => {
     const v = viewOf("needs_you");
-    expect(v.colorVar).toBe("var(--state-blocked)");
+    expect(v.colorVar).toBe("var(--state-needs-you)");
     expect(v.shape).toBe("dot");
     expect(v.pulse).toBe("needs-you");
     expect(v.animationClass).toBe("agent-status-pulse--needs-you");
@@ -35,7 +35,7 @@ describe("viewOf — §9.1 visual vocabulary", () => {
     expect(v.pulse).toBeNull();
   });
 
-  it("ready = green solid dot, static", () => {
+  it("ready = blue (idle/present) solid dot, static", () => {
     const v = viewOf("ready");
     expect(v.colorVar).toBe("var(--state-idle)");
     expect(v.shape).toBe("dot");

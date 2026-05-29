@@ -648,14 +648,14 @@ export function ConversationList({
                         style={{
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2_5)",
-                          background: isSelected ? "var(--bg-active)" : "transparent",
+                          background: isSelected ? "var(--brand-bg)" : "transparent",
                           borderLeft: `var(--hairline-bold) solid ${
                             isSelected
-                              ? "var(--primary)"
+                              ? "var(--brand)"
                               : failed
                                 ? "var(--state-error)"
                                 : needsYou
-                                  ? "var(--state-blocked)"
+                                  ? "var(--state-needs-you)"
                                   : "transparent"
                           }`,
                         }}

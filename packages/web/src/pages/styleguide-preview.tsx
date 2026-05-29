@@ -93,18 +93,21 @@ const BRAND_COLORS: SwatchDef[] = [
   { name: "--brand-ring", token: "var(--brand-ring)", note: "selection band" },
 ];
 
+// Green-liveness model: cool = alive (green working / blue idle); warm = wants
+// attention (amber needs-you / orange blocked / red error); gray = offline.
 const STATE_COLORS: SwatchDef[] = [
-  { name: "--state-idle", token: "var(--state-idle)", note: "neutral standby" },
-  { name: "--state-working", token: "var(--state-working)" },
-  { name: "--state-blocked", token: "var(--state-blocked)" },
-  { name: "--state-error", token: "var(--state-error)" },
-  { name: "--state-offline", token: "var(--state-offline)" },
+  { name: "--state-working", token: "var(--state-working)", note: "alive · green (pulses)" },
+  { name: "--state-idle", token: "var(--state-idle)", note: "present · blue" },
+  { name: "--state-needs-you", token: "var(--state-needs-you)", note: "waiting for you · amber" },
+  { name: "--state-blocked", token: "var(--state-blocked)", note: "stuck · orange" },
+  { name: "--state-error", token: "var(--state-error)", note: "error · red" },
+  { name: "--state-offline", token: "var(--state-offline)", note: "offline · gray" },
 ];
 
 // Feedback / severity vocabulary — distinct names, aliased to shared base hues.
 const FEEDBACK_COLORS: SwatchDef[] = [
   { name: "--success", token: "var(--success)", note: "= brand green" },
-  { name: "--warning", token: "var(--warning)", note: "= blocked amber" },
+  { name: "--warning", token: "var(--warning)", note: "= blocked orange" },
   { name: "--danger", token: "var(--danger)", note: "= error red" },
 ];
 
@@ -498,6 +501,7 @@ export function StyleguidePreviewPage() {
           <Subhead>Variants</Subhead>
           <Row>
             <Button>Default</Button>
+            <Button variant="cta">CTA (hero)</Button>
             <Button variant="destructive">Destructive</Button>
             <Button variant="outline">Outline</Button>
             <Button variant="secondary">Secondary</Button>
@@ -562,7 +566,12 @@ export function StyleguidePreviewPage() {
               <StatusGlyph colorVar="var(--state-offline)" shape="hollow" ariaLabel="hollow" />
               <StatusGlyph colorVar="var(--state-blocked)" shape="pause" ariaLabel="pause" />
               <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" ariaLabel="working pulse" />
-              <StatusGlyph colorVar="var(--state-error)" shape="dot" pulse="needs-you" ariaLabel="needs-you pulse" />
+              <StatusGlyph
+                colorVar="var(--state-needs-you)"
+                shape="dot"
+                pulse="needs-you"
+                ariaLabel="needs-you pulse"
+              />
             </span>
           </Row>
           <Subhead>FilterPill</Subhead>

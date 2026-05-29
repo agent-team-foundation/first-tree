@@ -618,7 +618,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                   style={{
                     color:
                       availability.status === "ok"
-                        ? "var(--state-idle)"
+                        ? "var(--success)"
                         : availability.status === "checking"
                           ? "var(--fg-3)"
                           : "var(--fg-4)",
@@ -804,7 +804,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
           )}
 
           <DialogFooter>
-            <Button type="submit" disabled={!canSubmit}>
+            <Button type="submit" variant="cta" disabled={!canSubmit}>
               {createMut.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>

@@ -22,13 +22,20 @@
 
 1. **Near-monochrome, content-first.** The UI is grays + near-black / near-white.
    Color is rare and always *means* something — it never decorates.
-2. **Neutral primary.** Primary actions (buttons, send, primary CTAs, selected
-   state) use a **neutral** tone — near-black in light, near-white in dark
-   (auto-inverting). Not green, not blue. (Linear / Vercel restraint.)
-3. **Green = signature + success only.** The brand green lives on the logo, on
-   Context-Tree surfaces (node glyphs, "writing to tree"), and on `success`
-   semantics. It is **never** the generic button / link / selected color — that
-   collision (brand == success == idle) is exactly what this strategy retires.
+2. **Neutral primary, green hero.** Everyday actions (buttons, send, menus,
+   selected tabs, links) use a **neutral** tone — near-black in light,
+   near-white in dark (auto-inverting). The one exception is the *hero /
+   creation* moment per surface ("Create agent", onboarding "Start", marketing
+   CTA), which uses the brand-green `cta` button variant. Dense or repeated
+   actions never go green — that's the green-primary (E2) collision.
+3. **Green = the living system.** Brand green carries three related jobs —
+   brand signature (logo, Context-Tree nodes, @mentions), **success** (✓,
+   "ready to merge"), and **liveness** (a working agent pulses green; live
+   arrivals — the new-message pill + divider — are green). Working-green is told
+   apart from success-green by **form** (pulsing dot + glow vs a static ✓
+   glyph), not hue. The states that want your attention are **warm** so they pop
+   against the green/blue live baseline: needs-you = amber, blocked = orange,
+   error = red. Present-but-idle = blue; offline = gray.
 4. **Lark / Arco craft, not Lark color.** Borrow the *discipline* — a neutral
    gray token ramp, hairline borders, soft low-opacity elevation, thin line
    icons, search + underline tabs, rounded-square avatars, comfortable aligned
@@ -38,14 +45,17 @@
 
 | Meaning | Color |
 |---------|-------|
-| primary action / selected | neutral (near-black ↔ near-white) |
-| brand / Context-Tree | green (`--brand`) |
-| success / passing | green (`--success`) |
-| working / processing | blue |
-| blocked / waiting | amber |
-| error / attention | red |
-| idle / standby | neutral |
-| offline | dim neutral |
+| everyday action / selected tab | neutral (near-black ↔ near-white) |
+| hero / creation CTA | green (`cta` variant — sparingly) |
+| brand / Context-Tree / @mention | green (`--brand`) |
+| success / passing / done | green (`--success`) |
+| working / alive (pulses + glow) | green (`--state-working`) |
+| live arrival (new-message pill + divider) | green |
+| idle / present | blue (`--state-idle`) |
+| needs-you | amber (`--state-needs-you`) |
+| blocked / stuck | orange (`--state-blocked`) |
+| error / failed | red (`--state-error`) |
+| offline | dim gray (`--state-offline`) |
 
 Per-agent **avatars** keep their own identity hues (wayfinding, not brand).
 
@@ -100,11 +110,12 @@ ever touch the semantic layer.
 ### Primary & brand
 | Token | Value | Role |
 |-------|-------|------|
-| `--primary` | neutral — near-black (light) / near-white (dark), auto-inverting | primary actions, send, primary CTAs, selected state |
-| `--brand` | green `oklch(0.72 0.17 150)` | logo, Context-Tree surfaces, brand moments — **never** a generic action / link / selected color |
+| `--primary` | neutral — near-black (light) / near-white (dark), auto-inverting | everyday actions, send, selected tabs, links |
+| `--brand` | green `oklch(0.72 0.17 150)` | logo, Context-Tree, @mentions, success, liveness (working / arrival), and the hero `cta` button — **never** a dense / repeated action color |
 
 Color is sparse and meaningful: most of the UI is neutral, and the green only
-appears where it signals brand or success.
+appears where it signals brand, success, or a *living* system (a working agent,
+a fresh arrival).
 
 The short `--fg*` / `--bg*` / `--border*` names below are canonical; write those.
 
@@ -123,16 +134,17 @@ for text sitting on a saturated colored surface (badges, avatars) and does
 ### State / status (agent-centric)
 | Token | Hue | Meaning |
 |-------|-----|---------|
-| `--state-idle` | cool neutral `240` | idle / standby |
-| `--state-working` | cyan `195` | actively working |
-| `--state-blocked` | amber `75` | blocked |
-| `--state-error` | red `25` | error |
-| `--state-offline` | neutral | offline |
+| `--state-working` | green `150` | alive / working — pulses (+ glow on the chat chip); told apart from success by form, not hue |
+| `--state-idle` | blue `245` | present / idle (at rest) |
+| `--state-needs-you` | amber `75` | waiting for you |
+| `--state-blocked` | orange `58` | blocked / stuck — also the shared caution / warning hue |
+| `--state-error` | red `25` | error / failed |
+| `--state-offline` | dim gray | offline |
 | `--state-unread` | = error | notification/attention (kept separate identifier on purpose) |
 
 ### Feedback / severity
 A named set, aliased to shared base hues (one value per color):
-`--success` (green, = brand hue) · `--warning` (amber) · `--danger` (red).
+`--success` (green, = brand hue) · `--warning` (orange, = `--state-blocked`; the caution/blocked hue, distinct from needs-you amber) · `--danger` (red).
 
 ### Inline callouts (notices)
 Each state ships a **soft** background + a **strong** text/border tone, so you

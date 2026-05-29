@@ -142,7 +142,7 @@ export function OptionDropdown({
                 >
                   <Check
                     className="h-3.5 w-3.5 flex-shrink-0"
-                    style={{ visibility: active ? "visible" : "hidden", color: "var(--state-idle)" }}
+                    style={{ visibility: active ? "visible" : "hidden", color: "var(--success)" }}
                   />
                   <span className="flex-1 truncate">{o.label}</span>
                   {o.hint && (
