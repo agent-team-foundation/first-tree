@@ -177,9 +177,11 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   `--color-border-*` were each referenced once (only the styleguide). **DONE (#662):** deleted the alias
   layer; `--fg`/`--bg-*`/`--border` are canonical. Kept only the shadcn-compat aliases the primitives
   need (`--color-primary`, `--color-destructive`, `--color-ring`, etc.).
-- [ ] **Marketing surface contrast gap.** `.landing-marketing` overrides `--bg`/`--fg`/`--border` but
-  not the callout soft/strong pairs or `--state-*` — a notice on the near-black marketing canvas
-  resolves to light-mode values. Define them in scope or guard against callouts there.
+- [x] **Marketing surface contrast gap.** **DONE:** `.landing-marketing` now overrides the inline-callout
+  pairs (`--bg/--fg-{error,warn,success,info}-*`) to their dark variants, so a notice on the near-black
+  marketing canvas reads as a dark-surface notice instead of a bright light-mode card. The agent-state
+  hues (`--state-*`) and `--state-*-soft` fills are mode-independent (alpha-composited), so they need no
+  override. Styleguide marketing section now includes an inline-notice demo.
 - [x] **No `info` (blue) callout pair.** **DONE:** added `--color-info` / `--color-info-soft` (blue hue
   245 — the presence-idle hue, following the same callout↔state hue pairing as error/warn/success),
   light + dark.
