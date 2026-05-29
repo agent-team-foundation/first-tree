@@ -11,9 +11,10 @@ import type { ToolCallEventPayload } from "@first-tree/shared";
  * API lands, prefer adding callers there over expanding this file.
  *
  * Detect "the agent just created a PR or Issue" from a tool_call session
- * event. Phase 1 allowlist only — `Bash gh pr create` / `Bash gh issue
- * create`. These two tools emit a single-line URL on stdout (well under
- * the 400-char `resultPreview` cap), so detection is lossless. curl /
+ * event. Phase 1 allowlist only — shell-backed `gh pr create` / `gh issue
+ * create`. Claude Code reports shell calls as `Bash`; Codex reports command
+ * executions as `command`. These two tools emit a single-line URL on stdout
+ * (well under the 400-char `resultPreview` cap), so detection is lossless. curl /
  * GitHub MCP tools are out of scope until Phase 2 (their JSON responses
  * can overflow the preview).
  *
@@ -34,10 +35,11 @@ const PR_COMMAND_RE = /\bgh\s+pr\s+create\b/;
 const ISSUE_COMMAND_RE = /\bgh\s+issue\s+create\b/;
 const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/;
 const ISSUE_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+)/;
+const SHELL_TOOL_NAMES = new Set(["Bash", "command"]);
 
 export function extractGithubEntity(payload: ToolCallEventPayload): ExtractedEntity | null {
   if (payload.status !== "ok") return null;
-  if (payload.name !== "Bash") return null;
+  if (!SHELL_TOOL_NAMES.has(payload.name)) return null;
 
   const args = payload.args;
   if (typeof args !== "object" || args === null) return null;
