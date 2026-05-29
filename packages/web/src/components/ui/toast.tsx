@@ -111,7 +111,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         alignItems: "flex-start",
         gap: "var(--sp-2)",
         padding: "var(--sp-3) var(--sp-3_5)",
-        background: "var(--surface-1)",
+        background: "var(--bg-raised)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-input)",
         boxShadow: "var(--shadow-md)",
@@ -134,14 +134,14 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               toast.action?.onClick();
               onDismiss();
             }}
-            className="text-label font-medium hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="text-label font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
             style={{
               alignSelf: "flex-start",
               marginTop: "var(--sp-1)",
               padding: 0,
               background: "transparent",
               border: "none",
-              color: "var(--accent)",
+              color: "var(--primary)",
               cursor: "pointer",
             }}
           >
@@ -153,7 +153,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
         style={{
           padding: "var(--sp-1)",
           background: "transparent",

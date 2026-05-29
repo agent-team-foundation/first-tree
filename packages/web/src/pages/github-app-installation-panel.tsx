@@ -111,8 +111,8 @@ function NotInstalledState({ organizationId }: { organizationId: string | null }
             style={{
               gap: "var(--sp-1)",
               padding: "var(--sp-2) var(--sp-3)",
-              background: "var(--accent)",
-              color: "var(--accent-fg, white)",
+              background: "var(--primary)",
+              color: "var(--primary-on)",
               border: "none",
               borderRadius: "var(--radius-input)",
               cursor: disabled ? "default" : "pointer",

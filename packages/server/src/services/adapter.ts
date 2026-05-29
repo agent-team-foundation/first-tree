@@ -59,10 +59,6 @@ export async function listAdapterConfigs(db: Database) {
  *   - admin: every adapter config whose agent belongs to the caller's org.
  *   - non-admin: only adapter configs bound to agents the caller manages
  *     (Rule: bindings follow manageability).
- *
- * Kept as a separate function so internal self-service callers
- * (`agent/feishu-bot.ts`) that only need a raw read don't accidentally pay
- * for the join.
  */
 export async function listAdapterConfigsForMember(db: Database, scope: OrgScope) {
   const conditions = [eq(agents.organizationId, scope.organizationId), ne(agents.status, "deleted")];

@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
+const KAEL_CREDS = { kaelUserId: "user_test", kaelProjectId: "proj_test" };
+
 describe("Admin Adapters API", () => {
   const getApp = useTestApp();
 
@@ -23,13 +25,13 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-create-agent" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_test", app_secret: "secret" },
+      credentials: KAEL_CREDS,
     });
     expect(createRes.statusCode).toBe(201);
     const config = createRes.json();
-    expect(config.platform).toBe("feishu");
+    expect(config.platform).toBe("kael");
     expect(config.agentId).toBe(agent.uuid);
     expect(config.hasCredentials).toBe(true);
     // Credentials must NOT be returned in the response
@@ -48,15 +50,15 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-get-agent" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "slack",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { bot_token: "xoxb-test" },
+      credentials: KAEL_CREDS,
     });
     const created = createRes.json();
 
     const getRes = await req("GET", `/api/v1/adapters/${created.id}`);
     expect(getRes.statusCode).toBe(200);
-    expect(getRes.json().platform).toBe("slack");
+    expect(getRes.json().platform).toBe("kael");
     expect(getRes.json().agentId).toBe(agent.uuid);
   });
 
@@ -66,9 +68,9 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-upd-agent" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_upd", app_secret: "secret" },
+      credentials: KAEL_CREDS,
     });
     const created = createRes.json();
 
@@ -86,9 +88,9 @@ describe("Admin Adapters API", () => {
     const { agent: agent2 } = await createTestAgent(app, { name: "adapter-switch-2" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent1.uuid,
-      credentials: { app_id: "cli_switch", app_secret: "secret" },
+      credentials: KAEL_CREDS,
     });
     const created = createRes.json();
 
@@ -105,9 +107,9 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-del-agent" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_del", app_secret: "secret" },
+      credentials: KAEL_CREDS,
     });
     const created = createRes.json();
 
@@ -149,7 +151,7 @@ describe("Admin Adapters API", () => {
     const req = await authedRequest(app);
 
     const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: "some-agent",
     });
     expect(res.statusCode).toBe(400);
@@ -160,8 +162,8 @@ describe("Admin Adapters API", () => {
     const req = await authedRequest(app);
 
     const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
-      credentials: { app_id: "x", app_secret: "y" },
+      platform: "kael",
+      credentials: KAEL_CREDS,
     });
     expect(res.statusCode).toBe(400);
   });
@@ -172,14 +174,14 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-reencrypt-agent" });
 
     const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "old_id", app_secret: "old_secret" },
+      credentials: { kaelUserId: "user_old", kaelProjectId: "proj_old" },
     });
     const created = createRes.json();
 
     const updateRes = await req("PATCH", `/api/v1/adapters/${created.id}`, {
-      credentials: { app_id: "new_id", app_secret: "new_secret" },
+      credentials: { kaelUserId: "user_new", kaelProjectId: "proj_new" },
     });
     expect(updateRes.statusCode).toBe(200);
     expect(updateRes.json().hasCredentials).toBe(true);
@@ -192,9 +194,9 @@ describe("Admin Adapters API", () => {
     const req = await authedRequest(app);
 
     const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: "does-not-exist",
-      credentials: { app_id: "x", app_secret: "y" },
+      credentials: KAEL_CREDS,
     });
     expect(res.statusCode).toBe(404);
   });
@@ -205,9 +207,9 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "human-adapter-reject", type: "human" });
 
     const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_human", app_secret: "s" },
+      credentials: KAEL_CREDS,
     });
     expect(res.statusCode).toBe(400);
   });
@@ -238,38 +240,18 @@ describe("Admin Adapters API", () => {
     const { agent } = await createTestAgent(app, { name: "adapter-unique-agent" });
 
     const res1 = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_u1", app_secret: "s1" },
+      credentials: { kaelUserId: "user_u1", kaelProjectId: "proj_u1" },
     });
     expect(res1.statusCode).toBe(201);
 
     // Same agent + same platform should fail with 409
     const res2 = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_u2", app_secret: "s2" },
+      credentials: { kaelUserId: "user_u2", kaelProjectId: "proj_u2" },
     });
     expect(res2.statusCode).toBe(409);
-  });
-
-  it("allows same agent on different platforms", async () => {
-    const app = getApp();
-    const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { name: "adapter-cross-plat-agent" });
-
-    const res1 = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "feishu",
-      agentId: agent.uuid,
-      credentials: { app_id: "cli_cross", app_secret: "s1" },
-    });
-    expect(res1.statusCode).toBe(201);
-
-    const res2 = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
-      platform: "slack",
-      agentId: agent.uuid,
-      credentials: { bot_token: "xoxb-cross" },
-    });
-    expect(res2.statusCode).toBe(201);
   });
 });

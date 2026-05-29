@@ -21,36 +21,19 @@ export {
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
-  ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
   ADAPTER_STATUSES,
-  type AdapterBindMethod,
   type AdapterConfig,
   type AdapterPlatform,
   type AdapterStatus,
-  adapterBindMethodSchema,
   adapterConfigSchema,
   adapterPlatformSchema,
   adapterStatusSchema,
   type CreateAdapterConfig,
   createAdapterConfigSchema,
-  type SelfServiceFeishuBot,
-  selfServiceFeishuBotSchema,
   type UpdateAdapterConfig,
   updateAdapterConfigSchema,
 } from "./schemas/adapter.js";
-export {
-  type AdapterMapping,
-  adapterMappingSchema,
-  type CreateAdapterMapping,
-  createAdapterMappingSchema,
-  type DelegateFeishuUser,
-  delegateFeishuUserSchema,
-} from "./schemas/adapter-mapping.js";
-export {
-  type AdapterBotStatus,
-  adapterBotStatusSchema,
-} from "./schemas/adapter-status.js";
 export {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
@@ -91,6 +74,7 @@ export {
 export {
   type AgentRuntimeConfig,
   type AgentRuntimeConfigDryRunResult,
+  type AgentRuntimeConfigPatch,
   type AgentRuntimeConfigPayload,
   agentRuntimeConfigDryRunResultSchema,
   agentRuntimeConfigPayloadSchema,
@@ -138,6 +122,15 @@ export {
   MAIN_STATUS_PRIORITY,
   RUNTIME_STALE_MS,
 } from "./schemas/agent-status.js";
+export {
+  ATTACHMENT_FILENAME_HEADER,
+  ATTACHMENT_MIME_HEADER,
+  type AttachmentMetadata,
+  attachmentMetadataSchema,
+  MAX_ATTACHMENT_BYTES,
+  type UploadAttachmentResponse,
+  uploadAttachmentResponseSchema,
+} from "./schemas/attachment.js";
 export {
   ATTENTION_STATES,
   type Attention,
@@ -219,8 +212,6 @@ export {
   type ChatSource,
   chatMetadataSchema,
   chatSourceSchema,
-  type FeishuChatMetadata,
-  feishuChatMetadataSchema,
   GITHUB_ENTITY_TYPES,
   type GithubChatMetadata,
   type GithubEntityType,
@@ -605,9 +596,11 @@ export {
   sessionEventRowSchema,
   sessionEventSchema,
   type ThinkingEventPayload,
+  type TokenUsageEventPayload,
   type ToolCallEventPayload,
   type TurnEndEventPayload,
   thinkingEventPayload,
+  tokenUsageEventPayload,
   toolCallEventPayload,
   turnEndEventPayload,
 } from "./schemas/session-event.js";
@@ -635,6 +628,24 @@ export {
   type Stats,
   statsSchema,
 } from "./schemas/stats.js";
+export {
+  type UsageAgentSummary,
+  type UsageByAgentResponse,
+  type UsageByAgentRow,
+  type UsageDailyBucket,
+  type UsageTurnRow,
+  type UsageTurnsQuery,
+  type UsageTurnsResponse,
+  type UsageWindowQuery,
+  usageAgentSummary,
+  usageByAgentResponse,
+  usageByAgentRow,
+  usageDailyBucket,
+  usageTurnRow,
+  usageTurnsQuery,
+  usageTurnsResponse,
+  usageWindowQuery,
+} from "./schemas/usage.js";
 export {
   type CreateUser,
   createUserSchema,

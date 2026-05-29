@@ -151,10 +151,10 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
                     key={provider}
                     className={
                       checked
-                        ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
+                        ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
                         : enabled
-                          ? "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                          : "flex items-start gap-3 rounded-md border border-border p-3 opacity-60"
+                          ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
+                          : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 opacity-60"
                     }
                   >
                     <input
@@ -177,7 +177,7 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
           </div>
 
           {(clientChanged || providerChanged) && (
-            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-caption space-y-1">
+            <div className="rounded-[var(--radius-panel)] border border-border bg-muted/30 px-3 py-2 text-caption space-y-1">
               <p>
                 <span className="font-medium">Heads up:</span> active sessions on the previous computer are suspended at
                 re-bind. Chat history is preserved.
@@ -202,7 +202,7 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
           )}
 
           {errorMessage && (
-            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
+            <div className="rounded-[var(--radius-panel)] border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
               {errorMessage}
             </div>
           )}

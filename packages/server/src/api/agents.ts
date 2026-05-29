@@ -138,6 +138,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {
     await requireAgentAccess(request, app.db, "manage");
     const agent = await agentService.suspendAgent(app.db, request.params.uuid);
+    forceDisconnect(request.params.uuid, "agent_suspended");
+    await presenceService.setOffline(app.db, request.params.uuid);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
     return serializeAgent(agent, userAvatarUrl);
   });
@@ -145,6 +147,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
     await requireAgentAccess(request, app.db, "manage");
     const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
+    notifyClientAgentPinned(agent);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
     return serializeAgent(agent, userAvatarUrl);
   });

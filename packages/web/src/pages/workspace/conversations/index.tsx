@@ -380,20 +380,20 @@ export function ConversationList({
             aria-current={isDraftActive ? "page" : undefined}
             className={cn(
               "inline-flex items-center text-label font-medium cursor-pointer transition-colors",
-              !isDraftActive && "hover:bg-[var(--accent-bg)]",
+              !isDraftActive && "hover:bg-[var(--bg-active)]",
             )}
             style={{
               // Slightly larger leading icon than the Unread bell, and
-              // both icon + label rendered in `--accent`. The colour
-              // delta (accent vs Unread's fg-3) is the only thing
+              // both icon + label rendered in `--primary`. The colour
+              // delta (primary ink vs Unread's fg-3) is the only thing
               // lifting New chat above the toolbar's other ghost
               // actions — no border, no fill, no size bump.
               gap: "var(--sp-1)",
               padding: "var(--sp-0_5) var(--sp-1_5)",
               border: 0,
               borderRadius: 4,
-              background: isDraftActive ? "var(--accent-bg)" : "transparent",
-              color: "var(--accent)",
+              background: isDraftActive ? "var(--bg-active)" : "transparent",
+              color: "var(--primary)",
             }}
             title="New chat"
           >
@@ -569,7 +569,7 @@ export function ConversationList({
                   background: "transparent",
                   border: 0,
                   padding: 0,
-                  color: "var(--accent)",
+                  color: "var(--primary)",
                 }}
               >
                 Clear
@@ -648,14 +648,14 @@ export function ConversationList({
                         style={{
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2_5)",
-                          background: isSelected ? "var(--bg-active)" : "transparent",
+                          background: isSelected ? "var(--brand-bg)" : "transparent",
                           borderLeft: `var(--hairline-bold) solid ${
                             isSelected
-                              ? "var(--accent)"
+                              ? "var(--brand)"
                               : failed
                                 ? "var(--state-error)"
                                 : needsYou
-                                  ? "var(--state-blocked)"
+                                  ? "var(--state-needs-you)"
                                   : "transparent"
                           }`,
                         }}

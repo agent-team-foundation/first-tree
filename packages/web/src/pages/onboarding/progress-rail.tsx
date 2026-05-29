@@ -46,19 +46,19 @@ export function ProgressRail() {
                   borderRadius: 999,
                   background:
                     state === "active"
-                      ? "var(--accent)"
+                      ? "var(--primary)"
                       : state === "complete"
-                        ? "color-mix(in oklch, var(--accent) 12%, var(--bg))"
+                        ? "color-mix(in oklch, var(--primary) 12%, var(--bg))"
                         : "var(--bg)",
                   border:
                     state === "pending"
                       ? "var(--hairline) solid var(--border-faint)"
-                      : "var(--hairline) solid var(--accent)",
+                      : "var(--hairline) solid var(--primary)",
                   color:
                     state === "active"
-                      ? "var(--primary-foreground, var(--color-primary-foreground))"
+                      ? "var(--color-primary-foreground)"
                       : state === "complete"
-                        ? "var(--accent)"
+                        ? "var(--primary)"
                         : "var(--fg-4)",
                 }}
               >
@@ -74,7 +74,7 @@ export function ProgressRail() {
                     margin: "var(--sp-1) 0",
                     background:
                       state === "complete"
-                        ? "var(--accent)"
+                        ? "var(--primary)"
                         : "color-mix(in oklch, var(--border-faint) 60%, transparent)",
                   }}
                 />

@@ -17,7 +17,7 @@ import { formatElapsed } from "./working-chip.js";
 /**
  * ComposeStatusBar — a light inline rail just above the composer that reads out
  * *what's happening in this chat right now*. Not a roster (that's the sidebar's
- * AgentStatusPanel); not the timeline's WorkingBubble (which scrolls away).
+ * AgentStatusPanel); not the timeline's WorkingTurn (which scrolls away).
  * No box / no fill — it reads as part of the composer, with one faint hairline.
  *
  * Single line = lead + N:
@@ -264,7 +264,7 @@ function RailRow({
             background: "transparent",
             padding: 0,
             cursor: "pointer",
-            color: "var(--state-blocked)",
+            color: "var(--state-needs-you)",
           }}
         >
           Reply

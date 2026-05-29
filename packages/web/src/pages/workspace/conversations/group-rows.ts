@@ -119,7 +119,6 @@ function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArra
 const SOURCE_BUCKETS: ReadonlyArray<{ key: ChatSource; label: string }> = [
   { key: "manual", label: "Manual" },
   { key: "github", label: "GitHub" },
-  { key: "feishu", label: "Feishu" },
 ];
 
 function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket> {

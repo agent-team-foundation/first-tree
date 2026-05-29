@@ -111,9 +111,9 @@ export type ImagePayloadFrame = z.infer<typeof imagePayloadFrameSchema>;
  * through these on render. The shape contract here mirrors the schemas
  * above; if either schema gains a required field the guard must match.
  *
- * These live in shared so the 5 consumers (claude-code handler, agent-io
- * renderer, web chat-view, Feishu adapter, server message service) can't
- * drift from each other on what counts as a valid ref / batch.
+ * These live in shared so consumers (claude-code handler, agent-io
+ * renderer, web chat-view, server message service) can't drift from each
+ * other on what counts as a valid ref / batch.
  */
 const SUPPORTED_MIMES_SET = new Set<string>(SUPPORTED_IMAGE_MIMES);
 

@@ -620,7 +620,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                   style={{
                     color:
                       availability.status === "ok"
-                        ? "var(--state-idle)"
+                        ? "var(--success)"
                         : availability.status === "checking"
                           ? "var(--fg-3)"
                           : "var(--fg-4)",
@@ -644,8 +644,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               <label
                 className={
                   visibility === "organization"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                    ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
+                    : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
                 }
               >
                 <input
@@ -665,8 +665,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               <label
                 className={
                   visibility === "private"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                    ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
+                    : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
                 }
               >
                 <input
@@ -735,8 +735,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                       key={client.id}
                       className={
                         picked
-                          ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                          : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                          ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
+                          : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
                       }
                     >
                       <input
@@ -782,8 +782,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                           key={provider}
                           className={
                             active
-                              ? "inline-flex items-center gap-2 rounded-md border border-primary bg-primary/5 px-3 py-1.5 cursor-pointer"
-                              : "inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 cursor-pointer hover:bg-accent/30"
+                              ? "inline-flex items-center gap-2 rounded-[var(--radius-panel)] border border-primary bg-primary/5 px-3 py-1.5 cursor-pointer"
+                              : "inline-flex items-center gap-2 rounded-[var(--radius-panel)] border border-border px-3 py-1.5 cursor-pointer hover:bg-accent/30"
                           }
                         >
                           <input type="radio" name="runtime" checked={active} onChange={() => setRuntime(provider)} />
@@ -800,13 +800,13 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
           </div>
 
           {fieldErrors._root && (
-            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
+            <div className="rounded-[var(--radius-panel)] border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
               {fieldErrors._root}
             </div>
           )}
 
           <DialogFooter>
-            <Button type="submit" disabled={!canSubmit}>
+            <Button type="submit" variant="cta" disabled={!canSubmit}>
               {createMut.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
@@ -832,7 +832,7 @@ function ZeroComputerBlock({
   onCopy: () => void;
 }) {
   return (
-    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+    <div className="rounded-[var(--radius-panel)] border border-border bg-muted/30 p-3 space-y-2">
       <div className="text-body font-medium">No computer connected yet.</div>
       <div className="text-caption text-muted-foreground">
         Run this on the machine where this agent should live. We&apos;ll pick it up here automatically.
@@ -872,7 +872,7 @@ function ZeroComputerBlock({
 function SingleComputerCard({ client }: { client: HubClient | undefined }) {
   if (!client) return null;
   return (
-    <div className="rounded-md border border-primary bg-primary/5 p-3">
+    <div className="rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3">
       <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
       <div className="text-caption text-muted-foreground">
         {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
@@ -891,7 +891,7 @@ function SingleComputerCard({ client }: { client: HubClient | undefined }) {
 function ComputerCardSkeleton({ label }: { label: string }) {
   return (
     <div
-      className="rounded-md border border-border bg-muted/20 p-3"
+      className="rounded-[var(--radius-panel)] border border-border bg-muted/20 p-3"
       role="status"
       aria-live="polite"
       aria-label={label}
@@ -915,7 +915,7 @@ function RuntimeChipsSkeleton() {
   return (
     <div className="flex flex-wrap gap-2" role="status" aria-live="polite" aria-label="Detecting installed runtimes">
       <span
-        className="inline-flex items-center rounded-md border border-border bg-muted/30 px-3 py-1.5 text-body"
+        className="inline-flex items-center rounded-[var(--radius-panel)] border border-border bg-muted/30 px-3 py-1.5 text-body"
         style={{ color: "var(--fg-4)" }}
       >
         Detecting installed runtimes…

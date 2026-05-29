@@ -11,6 +11,7 @@ import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
 import { SetupTab } from "./pages/agent-detail/setup-tab.js";
 import { ToolsTab } from "./pages/agent-detail/tools-tab.js";
+import { UsageTab } from "./pages/agent-detail/usage-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
@@ -19,7 +20,6 @@ import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
-import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
@@ -44,6 +44,17 @@ const ChatRowAvatarPreviewPage = import.meta.env.DEV
       import("./pages/chat-row-avatar-preview.js").then((module) => ({ default: module.ChatRowAvatarPreviewPage })),
     )
   : null;
+
+const OnboardingPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
+  : null;
+
+// Living design-system reference (companion to DESIGN.md). Unlike the previews
+// above this ships in prod too, so it can be opened on a deployed URL — it has
+// no auth-gated data, only tokens and `components/ui` primitives.
+const StyleguidePreviewPage = lazy(() =>
+  import("./pages/styleguide-preview.js").then((module) => ({ default: module.StyleguidePreviewPage })),
+);
 
 export function App() {
   return (
@@ -78,6 +89,24 @@ export function App() {
                   }
                 />
               ) : null}
+              {OnboardingPreviewPage ? (
+                <Route
+                  path="/preview/onboarding"
+                  element={
+                    <Suspense fallback={null}>
+                      <OnboardingPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              <Route
+                path="/preview/styleguide"
+                element={
+                  <Suspense fallback={null}>
+                    <StyleguidePreviewPage />
+                  </Suspense>
+                }
+              />
               {/* Auth-required pages. Onboarding is a standalone full-screen
                 /onboarding route (below); the workspace root redirects users
                 who haven't finished setup into it. */}
@@ -98,6 +127,7 @@ export function App() {
                   <Route path="agents/:uuid" element={<AgentDetailPage />}>
                     <Route index element={<Navigate to="profile" replace />} />
                     <Route path="profile" element={<ProfileTab />} />
+                    <Route path="usage" element={<UsageTab />} />
                     <Route path="setup" element={<SetupTab />} />
                     <Route path="prompt" element={<PromptTab />} />
                     <Route path="tools" element={<ToolsTab />} />
@@ -117,17 +147,17 @@ export function App() {
                     <Route path="team" element={<TeamSettingsPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
                     <Route path="github" element={<SettingsGithubPage />} />
-                    <Route path="integrations" element={<SettingsIntegrationsPage />} />
                     <Route path="onboarding" element={<SettingsOnboardingPage />} />
                     {/* Old name was "setup" — keep the redirect so existing
                         in-app links / saved bookmarks keep working. */}
                     <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
+                    <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}
                   <Route path="agents" element={<Navigate to="/team" replace />} />
                   <Route path="clients" element={<Navigate to="/settings/computers" replace />} />
-                  <Route path="integrations" element={<Navigate to="/settings/integrations" replace />} />
+                  <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />
@@ -145,8 +175,5 @@ export function App() {
 
 function AdminRedirect() {
   const location = useLocation();
-  if (location.hash === "#bindings") {
-    return <Navigate to={`/settings/integrations${location.search}`} replace />;
-  }
   return <Navigate to={`/team${location.hash}`} replace />;
 }

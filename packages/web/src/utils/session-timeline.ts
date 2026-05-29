@@ -31,6 +31,10 @@ export function filterEventsForTimeline(events: SessionEventRow[]): SessionEvent
     if (e.kind === "turn_end") return false;
     if (e.kind === "context_tree_usage") return false;
     if (e.kind === "error") return true;
+    // `token_usage` is the per-turn audit pill — keep across turns so a
+    // completed turn's pill stays visible in the timeline (always-on
+    // audit). All other transient kinds are dropped once their turn ends.
+    if (e.kind === "token_usage") return true;
     return e.seq > lastTurnEndSeq;
   });
 

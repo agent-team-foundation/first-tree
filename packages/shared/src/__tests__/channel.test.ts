@@ -17,6 +17,7 @@ describe("getChannelConfig", () => {
       serviceUnitFile: "first-tree.service",
       launchdLabel: "first-tree",
       launchdPlistFile: "first-tree.plist",
+      displayName: "First Tree",
     });
   });
 
@@ -30,6 +31,7 @@ describe("getChannelConfig", () => {
     expect(c.serviceUnitFile).toBe("first-tree-staging.service");
     expect(c.launchdLabel).toBe("first-tree-staging");
     expect(c.launchdPlistFile).toBe("first-tree-staging.plist");
+    expect(c.displayName).toBe("First Tree (Staging)");
   });
 
   it("maps dev to packageName=null + 127.0.0.1 server", () => {
@@ -41,6 +43,7 @@ describe("getChannelConfig", () => {
     expect(c.defaultServerUrl).toBe("http://127.0.0.1:8000");
     expect(c.serviceUnitFile).toBe("first-tree-dev.service");
     expect(c.launchdLabel).toBe("first-tree-dev");
+    expect(c.displayName).toBe("First Tree (Dev)");
   });
 
   it("never returns the same defaultHome for two distinct channels", () => {

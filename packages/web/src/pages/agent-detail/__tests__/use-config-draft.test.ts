@@ -11,6 +11,7 @@ const config: AgentRuntimeConfig = {
     kind: "claude-code",
     prompt: { append: "Be precise." },
     model: "sonnet",
+    reasoningEffort: "high",
     mcpServers: [{ name: "demo", transport: "stdio", command: "echo", args: ["ok"] }],
     env: [{ key: "FOO", value: "bar", sensitive: false }],
     gitRepos: [{ url: "https://github.com/acme/repo.git", localPath: "repo" }],
@@ -23,6 +24,7 @@ describe("createConfigDraft", () => {
 
     expect(draft.promptAppend).toBe("Be precise.");
     expect(draft.model).toBe("sonnet");
+    expect(draft.reasoningEffort).toBe("high");
     expect(draft.mcp).toEqual([
       {
         key: "mcp-1",

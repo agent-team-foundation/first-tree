@@ -39,6 +39,8 @@ async function initRepoAt(cwd: string): Promise<string> {
   await git(cwd, ["init", "--initial-branch=main"]);
   await git(cwd, ["config", "user.name", "Context Reviewer"]);
   await git(cwd, ["config", "user.email", "context-reviewer@example.com"]);
+  await git(cwd, ["config", "commit.gpgsign", "false"]);
+  await git(cwd, ["config", "tag.gpgSign", "false"]);
   return cwd;
 }
 

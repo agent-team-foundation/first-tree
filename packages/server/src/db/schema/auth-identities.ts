@@ -35,7 +35,7 @@ export const authIdentities = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    /** "github" | "google" | "email" | "feishu" (extend as needed). */
+    /** "github" | "google" | "email" (extend as needed). */
     provider: text("provider").notNull(),
     /** Provider-stable identifier (numeric id, sub claim, email address, …). */
     identifier: text("identifier").notNull(),

@@ -1,6 +1,5 @@
 import type { Database } from "./db/connection.js";
 import type { UserScope } from "./scope/types.js";
-import type { AdapterManager } from "./services/adapter-manager.js";
 import type { ConfigService } from "./services/config-service.js";
 import type { Notifier } from "./services/notifier.js";
 
@@ -15,7 +14,6 @@ declare module "fastify" {
   interface FastifyInstance {
     db: Database;
     config: import("./config.js").Config;
-    adapterManager: AdapterManager;
     notifier: Notifier;
     configService: ConfigService;
     /**

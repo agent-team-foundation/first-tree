@@ -4,13 +4,13 @@
  * Pins two pieces of behavior:
  *
  *   1. `listMeChats({ origin })` filters down to one or more ChatSource
- *      values — `manual` / `github` / `feishu` — by inspecting
- *      `chats.metadata` (no schema migration; the field already existed
- *      and was only written by the github-entity-chat and feishu adapter
- *      paths). Phase C collapsed the GitHub entity types (PR / Issue /
- *      Discussion / Commit) into a single `github` origin; the
- *      per-entity granularity lives on `MeChatRow.entityType` (drives
- *      the leading icon, not the filter dimension).
+ *      values — `manual` / `github` — by inspecting `chats.metadata`
+ *      (no schema migration; the field already existed and was only
+ *      written by the github-entity-chat path). Phase C collapsed the
+ *      GitHub entity types (PR / Issue / Discussion / Commit) into a
+ *      single `github` origin; the per-entity granularity lives on
+ *      `MeChatRow.entityType` (drives the leading icon, not the filter
+ *      dimension).
  *
  *   2. `listMeChatSourceCounts` returns one row per source the caller has
  *      at least one chat in, plus an always-present `manual` row, so the
@@ -18,10 +18,10 @@
  *      chatCount is 0).
  *
  * The seeding here goes around `createMeChat` because that helper writes
- * `metadata: '{}'` — to exercise the github / feishu arms we need to plant
- * the same shape the entity-chat resolver and the adapter persist. The
- * participant rows still go through `addChatParticipants` so membership
- * stays consistent with the production path.
+ * `metadata: '{}'` — to exercise the github arm we need to plant the same
+ * shape the entity-chat resolver persists. The participant rows still go
+ * through `addChatParticipants` so membership stays consistent with the
+ * production path.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -88,11 +88,11 @@ describe("conversation-list source tags", () => {
     return ids as { -readonly [K in keyof Specs]: string };
   }
 
-  it("listMeChats filters by source.manual / github_* / feishu", async () => {
+  it("listMeChats filters by source.manual / github", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    const [manualChatId, issueChatId, prChatId, feishuChatId] = await seedChats(
+    const [manualChatId, issueChatId, prChatId] = await seedChats(
       app,
       admin.organizationId,
       admin.memberId,
@@ -107,22 +107,18 @@ describe("conversation-list source tags", () => {
           metadata: { source: "github", entityType: "pull_request", entityKey: "owner/repo#2" },
           topic: "pr chat",
         },
-        {
-          metadata: { source: "feishu", externalChannelId: "feishu-channel-1" },
-          topic: "feishu chat",
-        },
       ],
     );
 
-    // Default (no source param) returns all four.
+    // Default (no source param) returns all three.
     const all = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
     });
-    expect(all.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId, feishuChatId].sort());
+    expect(all.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId].sort());
 
-    // manual: must NOT leak github / feishu chats — that was the regression
+    // manual: must NOT leak github chats — that was the regression
     // risk when this filter was first wired.
     const manualOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
@@ -149,14 +145,6 @@ describe("conversation-list source tags", () => {
     const issueRow = githubOnly.rows.find((r) => r.chatId === issueChatId);
     expect(prRow?.entityType).toBe("pull_request");
     expect(issueRow?.entityType).toBe("issue");
-
-    const feishuOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["feishu"],
-    });
-    expect(feishuOnly.rows.map((r) => r.chatId)).toEqual([feishuChatId]);
   });
 
   it("listMeChatSourceCounts: chatCount + unreadChatCount, manual always present", async () => {
@@ -198,10 +186,6 @@ describe("conversation-list source tags", () => {
     // single `github` bucket. Two PRs (both unread) + one Issue (read)
     // all count under `github` — 3 chats, 2 unread.
     expect(counts.github).toEqual({ chatCount: 3, unreadChatCount: 2 });
-    // Sources the caller is NOT in must be absent from the map — the
-    // web filter popover uses key presence to decide whether to render
-    // the option at all.
-    expect(counts.feishu).toBeUndefined();
   });
 
   it("listMeChatSourceCounts: empty workspace still surfaces manual at zero", async () => {
@@ -214,7 +198,6 @@ describe("conversation-list source tags", () => {
 
     expect(counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
     expect(counts.github).toBeUndefined();
-    expect(counts.feishu).toBeUndefined();
   });
 
   /**

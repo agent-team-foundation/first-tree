@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
-import type { AdapterManager } from "./adapter-manager.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
@@ -18,12 +17,10 @@ export type BackgroundTasks = {
 export function createBackgroundTasks(
   app: FastifyInstance,
   instanceId: string,
-  adapterManager: AdapterManager,
   kaelRuntime?: KaelRuntime,
 ): BackgroundTasks {
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -72,15 +69,6 @@ export function createBackgroundTasks(
         }
       }, 30_000);
 
-      // Adapter outbound processing — runs every 5 seconds
-      adapterOutboundTimer = setInterval(async () => {
-        try {
-          await adapterManager.processOutbound();
-        } catch (err) {
-          log.error({ err }, "adapter outbound processing failed");
-        }
-      }, 5_000);
-
       // Kael outbound processing — runs every 5 seconds
       if (kaelRuntime) {
         kaelOutboundTimer = setInterval(async () => {
@@ -119,12 +107,9 @@ export function createBackgroundTasks(
         log.error({ err }, "failed initial heartbeat");
       });
 
-      // Initial adapter / kael reload — fire-and-forget so server.listen() is not
+      // Initial kael reload — fire-and-forget so server.listen() is not
       // blocked by remote handshakes. Subsequent reloads come from PG NOTIFY
       // (hot reload path). See docs/server-bootstrap-resilience-design.md.
-      adapterManager.reload().catch((err) => {
-        log.error({ err }, "initial adapter reload failed");
-      });
       kaelRuntime?.reload().catch((err) => {
         log.error({ err }, "initial kael reload failed");
       });
@@ -138,10 +123,6 @@ export function createBackgroundTasks(
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
-      }
-      if (adapterOutboundTimer) {
-        clearInterval(adapterOutboundTimer);
-        adapterOutboundTimer = null;
       }
       if (kaelOutboundTimer) {
         clearInterval(kaelOutboundTimer);

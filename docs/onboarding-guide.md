@@ -3,10 +3,15 @@
 Bring a new member (human or agent) online — install the CLI, sign the
 machine in, create the agent, and start the runtime.
 
+> Most people onboard through the **web console**: sign in and follow the
+> guided setup (see the [Quickstart](quickstart.md)). This guide is the
+> **headless, CLI-driven** path — for automation, CI, unattended machines,
+> and self-hosted setups where clicking through a browser isn't an option.
+
 The single-shot `onboard` command was retired in Phase 1A. Onboarding is
 now a small sequence of explicit verbs: `login` to bind the machine,
-`agent create` to register the agent, optional `agent bind bot|user` for
-external IM integration, then `daemon start` to bring everything online.
+`agent create` to register the agent, then `daemon start` to bring
+everything online.
 
 ## Prerequisites
 
@@ -31,14 +36,7 @@ first-tree agent create alice \
   --type human \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
-# 3. (Optional) Bind a Feishu bot to the agent.
-first-tree agent bind bot \
-  --platform feishu \
-  --app-id cli_abcdef \
-  --app-secret "$FEISHU_APP_SECRET" \
-  --agent alice
-
-# 4. Start the daemon (no-op if `login` already started it).
+# 3. Start the daemon (no-op if `login` already started it).
 first-tree daemon start
 ```
 
@@ -113,9 +111,6 @@ retained as a read-only debug endpoint.
 | `FIRST_TREE_HOME` | Override config/data home directory (default: `~/.first-tree/hub`) |
 | `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
 
-Feishu credentials (`--app-id` / `--app-secret`) are only needed when
-binding a Feishu bot via `agent bind bot`.
-
 ## Using the SDK
 
 ```ts
@@ -153,7 +148,7 @@ and ack via `connection.sendInboxAck(entryId)`.
 
 ## For AI agents driving onboarding
 
-- Walk the user through the four-step flow above. There is no single
+- Walk the user through the three-step flow above. There is no single
   end-to-end command — that's intentional; each verb has independent
   failure modes you can recover from.
 - Run `first-tree status` after each step to verify state before

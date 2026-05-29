@@ -93,6 +93,7 @@ function makeSdk(options?: { agent?: RegisterResult; configError?: unknown }): F
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "",
         },
         updatedAt: "2026-01-01T00:00:00.000Z",
         updatedBy: "user-1",
@@ -311,14 +312,36 @@ describe("AgentSlot", () => {
   });
 
   it("wraps runtime config fetch failures with a bind-aborted error", async () => {
-    const { slot, state } = await makeSlot({ configError: new Error("hub offline") });
+    const { slot, connection, state } = await makeSlot({ configError: new Error("hub offline") });
 
     await expect(slot.start()).rejects.toThrow("Hub unreachable while loading agent config: hub offline");
 
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
     expect(state.logger.error).toHaveBeenCalledWith(
       { err: new Error("hub offline") },
       "failed to fetch agent config — bind aborted",
     );
+  });
+
+  it("cleans pre-bind listeners after a failed bind so the same slot can retry", async () => {
+    const { slot, connection } = await makeSlot();
+    connection.bindAgent.mockRejectedValueOnce(new Error("agent:bind rejected (agent_suspended)"));
+
+    await expect(slot.start()).rejects.toThrow("agent_suspended");
+
+    expect(connection.unbindAgent).not.toHaveBeenCalled();
+    expect(connection.listenerCount("inbox:deliver")).toBe(0);
+    expect(connection.listenerCount("agent:bound")).toBe(0);
+    expect(connection.listenerCount("agent:unbound")).toBe(0);
+    expect(connection.listenerCount("session:reconcile:result")).toBe(0);
+
+    await expect(slot.start()).resolves.toMatchObject({ agentId: "agent-1" });
+
+    expect(connection.bindAgent).toHaveBeenCalledTimes(2);
+    expect(connection.listenerCount("inbox:deliver")).toBe(1);
+    expect(connection.listenerCount("agent:bound")).toBe(1);
+    expect(connection.listenerCount("agent:unbound")).toBe(1);
+    expect(connection.listenerCount("session:reconcile:result")).toBe(1);
   });
 
   it("stringifies non-Error runtime config fetch failures", async () => {
@@ -428,6 +451,27 @@ describe("AgentSlot", () => {
 
     connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
     expect(session.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops only the matching slot when the server force-unbounds an agent", async () => {
+    const { slot, connection, state } = await makeSlot();
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    connection.emit("agent:unbound", "other-agent", "agent_suspended");
+    await Promise.resolve();
+    expect(connection.unbindAgent).not.toHaveBeenCalled();
+    expect(session.shutdown).not.toHaveBeenCalled();
+
+    connection.emit("agent:unbound", "agent-1", "agent_suspended");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+    expect(session.shutdown).toHaveBeenCalled();
+    connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
+    expect(session.dispatch).not.toHaveBeenCalled();
   });
 
   it("logs optional context-tree, push-dispatch, and session-command failures without crashing", async () => {

@@ -48,3 +48,25 @@ export async function listAttentionsInChat(chatId: string): Promise<Attention[]>
   const qs = new URLSearchParams({ chat: chatId, state: "all" });
   return api.get<Attention[]>(`/attention?${qs.toString()}`);
 }
+
+/** React-Query key for the cross-chat "Attentions waiting on me" list. */
+export const myAttentionsQueryKey = ["attentions", "me"] as const;
+
+/**
+ * `GET /attention?state=open&limit=200` — every open Attention visible to
+ * the caller across all of their chats. The server's user-JWT route in
+ * `api/attention.ts` already scopes by the caller's human agent
+ * identities, so no `target` / `chat` filter is needed for the "needs my
+ * reply" set.
+ *
+ * `limit=200` is the server-enforced max (`listAttentionsQuerySchema`);
+ * the default of 50 would silently truncate the jump-to candidate list
+ * for multi-chat users.
+ *
+ * Used by the topbar Jump-to palette to surface waiting NHAs alongside
+ * chats and agents.
+ */
+export async function listMyAttentions(): Promise<Attention[]> {
+  const qs = new URLSearchParams({ state: "open", limit: "200" });
+  return api.get<Attention[]>(`/attention?${qs.toString()}`);
+}

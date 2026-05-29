@@ -94,6 +94,39 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(payload.mcpServers).toEqual([{ name: "demo", transport: "stdio", command: "echo" }]);
   });
 
+  it("reasoning effort: defaults to '', persists a valid value, rejects a codex-only value with 400", async () => {
+    const app = getApp();
+    const req = await authedRequest(app);
+    const agent = await (await seedAgentFactory(app))({
+      name: `cfg-effort-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+    });
+
+    // A fresh claude-code agent defaults to "" (inherit the local effortLevel).
+    const before = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
+    expect(before.json().payload.reasoningEffort).toBe("");
+
+    // A valid claude value is accepted and persisted.
+    const ok = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 1,
+      payload: { reasoningEffort: "max" },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().payload.reasoningEffort).toBe("max");
+    await app.configService.flush(agent.uuid);
+
+    const after = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
+    expect(after.json().payload.reasoningEffort).toBe("max");
+
+    // A codex-only value is rejected for a claude agent: the merged payload
+    // fails the tagged-union re-parse in commitWrite → ZodError → 400.
+    const bad = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 2,
+      payload: { reasoningEffort: "xhigh" },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("PATCH with stale expectedVersion returns 409", async () => {
     const app = getApp();
     const req = await authedRequest(app);

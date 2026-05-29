@@ -118,11 +118,6 @@ first-tree agent create alice \
 first-tree agent create alice-assistant \
   --server <url> --type agent \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
-
-# 3. (Optional) Bind a Feishu bot to the assistant:
-first-tree agent bind bot --platform feishu \
-  --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
-  --agent alice-assistant
 ```
 
 If the machine should also run the assistant, run `first-tree daemon start` (or rely on the already-installed background service started by `login`).
@@ -132,7 +127,6 @@ If the machine should also run the assistant, run `first-tree daemon start` (or 
 - The single-shot `onboard` command was retired in Phase 1A. Onboarding is now a sequence of explicit verbs that can each fail and recover independently.
 - Each verb depends on a valid credential file. If `credentials.json` is missing, the command exits pointing at `login <token>`.
 - Pass the server URL explicitly (`--server`) whenever the user / automation supplied one — do not silently fall back to defaults.
-- Humans with a Feishu bot configured still need to send `/bind <id>` in Feishu afterwards to attach the human user to the assistant.
 
 ## 4. "Onboard a standalone autonomous agent"
 
@@ -154,7 +148,6 @@ first-tree daemon start                                 # bring it online (no-op
 ### What to remember
 
 - A standalone autonomous `agent` does not pair with a personal-assistant `agent` — skip step 2 of the human flow.
-- Feishu bot binding is optional here (no `/bind` follow-up needed).
 - Thread through `--server <url>` whenever supplied.
 
 ## 5. "Change an agent's model / prompt / MCP / env / repos"

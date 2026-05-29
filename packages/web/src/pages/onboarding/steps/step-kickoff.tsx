@@ -29,7 +29,7 @@ const LINK_STYLE = {
   border: 0,
   padding: 0,
   cursor: "pointer",
-  color: "var(--accent)",
+  color: "var(--primary)",
 } as const;
 
 function repoLabel(url: string): string {
@@ -192,7 +192,7 @@ function AdminKickoff() {
           <FlowNote tone="info">{COPY.kickoff.noProjectBody}</FlowNote>
           {error && <FlowNote>{error}</FlowNote>}
           <div className="flex">
-            <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
+            <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
               <span>{COPY.kickoff.start}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
@@ -455,7 +455,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
                   padding: "var(--sp-2) var(--sp-2_5)",
                   borderRadius: "var(--radius-input)",
                   cursor: "pointer",
-                  background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+                  background: active ? "color-mix(in oklch, var(--primary) 8%, transparent)" : "transparent",
                   color: active ? "var(--fg)" : "var(--fg-2)",
                 }}
               >
@@ -469,10 +469,10 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
                     flexShrink: 0,
                     borderRadius: "var(--radius-input)",
                     border: active
-                      ? "var(--hairline) solid var(--accent)"
+                      ? "var(--hairline) solid var(--primary)"
                       : "var(--hairline) solid var(--border-strong)",
-                    background: active ? "var(--accent)" : "transparent",
-                    color: "var(--bg)",
+                    background: active ? "var(--primary)" : "transparent",
+                    color: "var(--primary-on)",
                   }}
                 >
                   {active && <Check className="h-3 w-3" />}
@@ -487,7 +487,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
             preserves the "continue with intro only" path so users can't
             soft-lock themselves. */}
         <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-          <Button type="button" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
+          <Button type="button" variant="cta" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
             <span>{COPY.kickoff.start}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
@@ -559,7 +559,7 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
               <a
                 href="/api/v1/auth/github/start?next=/onboarding"
                 className="font-medium self-start"
-                style={{ color: "var(--accent)" }}
+                style={{ color: "var(--primary)" }}
               >
                 {COPY.connectCode.reconnect}
               </a>

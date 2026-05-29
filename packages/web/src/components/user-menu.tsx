@@ -107,7 +107,7 @@ export function UserMenu() {
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-30 mt-2 rounded-md border bg-popover shadow-md"
+            className="absolute right-0 z-30 mt-2 rounded-[var(--radius-panel)] border bg-popover shadow-md"
             style={{ width: 280 }}
           >
             {/* User header */}
@@ -221,9 +221,9 @@ function RoleBadge({ role }: { role: string | null | undefined }) {
       style={{
         padding: "var(--hairline) var(--sp-1_75)",
         borderRadius: "var(--radius-chip)",
-        color: role === "admin" ? "var(--accent-dim)" : "var(--fg-3)",
+        color: role === "admin" ? "var(--brand-dim)" : "var(--fg-3)",
         border: "var(--hairline) solid var(--border)",
-        background: role === "admin" ? "var(--accent-bg)" : "var(--bg-sunken)",
+        background: role === "admin" ? "var(--brand-bg)" : "var(--bg-sunken)",
       }}
     >
       {role}

@@ -80,9 +80,9 @@ describe("Admin DELETE Agent API", () => {
     const { agent } = await createTestAgent(app, { name: "del-adapter-agent" });
 
     await req("POST", `/api/v1/orgs/${ctx.organizationId}/adapters`, {
-      platform: "feishu",
+      platform: "kael",
       agentId: agent.uuid,
-      credentials: { app_id: "cli_del_test", app_secret: "secret" },
+      credentials: { kaelUserId: "user_del_test", kaelProjectId: "proj_del_test" },
     });
 
     await suspendAgent(app.db, agent.uuid);

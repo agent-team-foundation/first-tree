@@ -5,6 +5,7 @@ import { registerAgentConfigAppendPromptCommand } from "./append-prompt.js";
 import { registerAgentConfigDryRunCommand } from "./dry-run.js";
 import { registerAgentConfigSetEnvCommand } from "./set-env.js";
 import { registerAgentConfigSetModelCommand } from "./set-model.js";
+import { registerAgentConfigSetReasoningEffortCommand } from "./set-reasoning-effort.js";
 import { registerAgentConfigShowCommand } from "./show.js";
 
 /**
@@ -16,6 +17,7 @@ export function registerAgentConfigCommands(parent: Command): void {
   const config = parent.command("config").description("Manage agent runtime configuration (Step 8)");
   registerAgentConfigShowCommand(config);
   registerAgentConfigSetModelCommand(config);
+  registerAgentConfigSetReasoningEffortCommand(config);
   registerAgentConfigAppendPromptCommand(config);
   registerAgentConfigAddMcpCommand(config);
   registerAgentConfigSetEnvCommand(config);

@@ -207,14 +207,18 @@ describe("connection-manager: forceDisconnect M1 mode", () => {
     bindAgentToClient(clientId, agent2);
 
     // Force disconnect only agent1
-    const result = forceDisconnect(agent1);
+    const result = forceDisconnect(agent1, "agent_suspended");
 
     expect(result).toBe(true);
     // WS should NOT be closed
     expect(closeCalled).toBe(false);
     // Should have sent force_disconnect message
     expect(sentMessages).toHaveLength(1);
-    expect(JSON.parse(sentMessages[0] as string)).toEqual({ type: "agent:force_disconnect", agentId: agent1 });
+    expect(JSON.parse(sentMessages[0] as string)).toEqual({
+      type: "agent:force_disconnect",
+      agentId: agent1,
+      reason: "agent_suspended",
+    });
     // agent1 unbound, agent2 still bound
     expect(getAgentClientId(agent1)).toBeUndefined();
     expect(getAgentClientId(agent2)).toBe(clientId);

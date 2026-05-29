@@ -29,6 +29,22 @@ describe("extractGithubEntity", () => {
     });
   });
 
+  it("extracts a pull_request entity from Codex command_execution events", () => {
+    const result = extractGithubEntity(
+      basePayload({
+        name: "command",
+        args: { command: 'gh pr create --title "Codex PR" --body "body"' },
+        resultPreview: "https://github.com/agent-team-foundation/first-tree/pull/456\n",
+      }),
+    );
+    expect(result).toEqual({
+      entityType: "pull_request",
+      entityKey: "agent-team-foundation/first-tree#456",
+      entityUrl: "https://github.com/agent-team-foundation/first-tree/pull/456",
+      source: "bash-gh-pr",
+    });
+  });
+
   it("extracts an issue entity from `gh issue create` output", () => {
     const result = extractGithubEntity(
       basePayload({
@@ -68,7 +84,7 @@ describe("extractGithubEntity", () => {
     ).toBeNull();
   });
 
-  it("returns null when tool name is not Bash", () => {
+  it("returns null when tool name is not a supported shell tool", () => {
     expect(
       extractGithubEntity(
         basePayload({

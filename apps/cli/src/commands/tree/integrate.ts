@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { deriveDefaultEntrypoint, removeSourceState, type SourceBindingMode, type TreeMode } from "./binding-state.js";
 import { readGitRemoteUrl, repoNameForRoot, resolveRepoRoot } from "./shared.js";
@@ -121,6 +122,7 @@ function runIntegrateCommand(context: CommandContext): void {
     ensureWhitepaperSymlink(sourceRoot);
     upsertLocalTreeGitIgnore(sourceRoot);
     upsertSourceIntegrationFiles(sourceRoot, treeRepoName, {
+      binName: channelConfig.binName,
       bindingMode,
       entrypoint,
       treeMode,

@@ -32,7 +32,7 @@ export function registerAgentCommands(program: Command): void {
   // Workspace housekeeping.
   registerAgentWorkspaceCommands(agent);
 
-  // Binding (machine / Feishu).
+  // Binding (machine).
   registerAgentBindCommands(agent);
 
   // Runtime status & control.

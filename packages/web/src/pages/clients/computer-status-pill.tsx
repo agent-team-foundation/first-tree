@@ -13,7 +13,7 @@ type ComputerStatusPillProps = {
  * chip's DOM) can drive the same normalization.
  */
 export const PILL_VIEW: Record<PillName, { label: string; color: string }> = {
-  ready: { label: "Ready", color: "var(--state-idle)" },
+  ready: { label: "Ready", color: "var(--success)" },
   auth_expired: { label: "Auth expired", color: "var(--state-error)" },
   setup_incomplete: { label: "Setup incomplete", color: "var(--state-blocked)" },
   offline: { label: "Offline", color: "var(--fg-3)" },

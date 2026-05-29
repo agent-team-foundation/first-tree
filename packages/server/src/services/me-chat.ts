@@ -161,8 +161,8 @@ export async function getCallerEngagement(
 // ---------------------------------------------------------------------------
 //
 // The conversation-list filter popover splits chats by coarse-grained
-// origin — Manual / GitHub / Feishu (one per integration, not one per
-// entity type within an integration). The per-entity GitHub granularity
+// origin — Manual / GitHub (one per integration, not one per entity
+// type within an integration). The per-entity GitHub granularity
 // (PR / Issue / Discussion / Commit) is preserved on the row via the
 // separate `entity_type` SELECT so the rail's leading icon can still
 // render the right glyph.
@@ -179,14 +179,10 @@ export async function getCallerEngagement(
 // `github` bucket — by design, since the popover-level filter doesn't
 // care about the entity sub-type.
 
-const KNOWN_NON_MANUAL_PREDICATE = sql`(
-     c.metadata->>'source' = 'github'
-  OR c.metadata->>'source' = 'feishu'
-)`;
+const KNOWN_NON_MANUAL_PREDICATE = sql`(c.metadata->>'source' = 'github')`;
 
 const chatSourceSqlExpression = sql`CASE
     WHEN c.metadata->>'source' = 'github' THEN 'github'
-    WHEN c.metadata->>'source' = 'feishu' THEN 'feishu'
     ELSE 'manual'
   END`;
 
@@ -215,8 +211,6 @@ function sourceFilterSql(source: ChatSource): SQL {
       return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
     case "github":
       return sql`(c.metadata->>'source' = 'github')`;
-    case "feishu":
-      return sql`(c.metadata->>'source' = 'feishu')`;
   }
 }
 

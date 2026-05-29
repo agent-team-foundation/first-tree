@@ -147,21 +147,11 @@
   --font-sans: var(--font-sans-stack);
   --font-mono: var(--font-mono-stack);
 
-  /* ---- Semantic color aliases --------------------------------------------- */
-  /* Preferred in new code. Raw --fg / --bg remain for back-compat but new
-     components should reference semantic names for readability. */
-  --color-text-primary: var(--fg);
-  --color-text-secondary: var(--fg-2);
-  --color-text-tertiary: var(--fg-3);
-  --color-text-disabled: var(--fg-4);
-  --color-surface: var(--bg);
-  --color-surface-raised: var(--bg-raised);
-  --color-surface-sunken: var(--bg-sunken);
-  --color-surface-hover: var(--bg-hover);
-  --color-surface-active: var(--bg-active);
-  --color-border-subtle: var(--border-faint);
-  --color-border-default: var(--border);
-  --color-border-emphasis: var(--border-strong);
+  /* Canonical color tokens are the short --fg* / --bg* / --border* names (defined
+     on :root below, exposed to Tailwind via the --color-fg-* / --color-bg-* /
+     --color-border-* utility aliases further down). The old --color-text-* /
+     --color-surface-* / --color-border-subtle|default|emphasis "semantic" layer
+     was removed in the 2026-05-28 cleanup — it was unadopted (see DESIGN-AUDIT.md). */
 
   /* ---- shadcn-compatible aliases (preserved) ------------------------------ */
   --color-background: var(--bg);
@@ -170,19 +160,26 @@
   --color-card-foreground: var(--fg);
   --color-popover: var(--bg-raised);
   --color-popover-foreground: var(--fg);
-  --color-primary: var(--accent);
-  --color-primary-foreground: oklch(0.14 0.01 150);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-on);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--bg-hover);
   --color-secondary-foreground: var(--fg);
   --color-muted: var(--bg-sunken);
   --color-muted-foreground: var(--fg-3);
+  /* shadcn "accent" = the NEUTRAL hover/active surface (bg-accent / hover:bg-accent /
+     aria-selected:bg-accent). Unrelated to the retired brand-green token — the brand
+     color is now --brand / --color-brand. Keep this name for shadcn-primitive compat. */
   --color-accent: var(--bg-hover);
   --color-accent-foreground: var(--fg);
+  /* Brand green — signature surfaces only (logo / tree nodes / mentions / success). */
+  --color-brand: var(--brand);
+  --color-brand-dim: var(--brand-dim);
   --color-destructive: var(--state-error);
   --color-destructive-foreground: oklch(0.985 0 0);
   --color-border: var(--border);
   --color-input: var(--border);
-  --color-ring: var(--accent-ring);
+  --color-ring: var(--ring);
 
   --color-fg-2: var(--fg-2);
   --color-fg-3: var(--fg-3);
@@ -196,6 +193,7 @@
 
   --color-state-idle: var(--state-idle);
   --color-state-working: var(--state-working);
+  --color-state-needs-you: var(--state-needs-you);
   --color-state-blocked: var(--state-blocked);
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
@@ -215,12 +213,6 @@
 
   /* Overlay scrim for dialogs / lightboxes — replaces hardcoded rgba(0,0,0,...). */
   --color-overlay-scrim: var(--overlay-scrim);
-
-  /* shadcn radius aliases (legacy — prefer --radius-chip/input/panel/dialog) */
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
 }
 
 :root {
@@ -235,14 +227,39 @@
   --font-mono-stack:
     "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Code", "Liberation Mono", monospace;
 
-  --accent: oklch(0.72 0.17 150);
-  --accent-dim: oklch(0.62 0.14 150);
-  --accent-bg: oklch(0.72 0.17 150 / 0.12);
-  --accent-ring: oklch(0.72 0.17 150 / 0.3);
+  /* Brand green — the cross-product signature color (leaf logo, Live-context
+     tree nodes, @mention chips, success). Identical in light + dark; NOT used
+     as the generic button / active-state color (see --primary). */
+  --brand: oklch(0.72 0.17 150);
+  --brand-dim: oklch(0.62 0.14 150);
+  --brand-bg: oklch(0.72 0.17 150 / 0.12);
+  --brand-ring: oklch(0.72 0.17 150 / 0.3);
 
-  --state-idle: oklch(0.72 0.17 150);
-  --state-working: oklch(0.78 0.16 195);
-  --state-blocked: oklch(0.82 0.18 75);
+  /* Primary — the neutral action/active color. Near-black ink in light mode,
+     near-white in dark (inverts in .dark below). Drives primary buttons,
+     active tabs/rows, selection borders, links. Strategy A: the UI is
+     near-monochrome, so "the active thing" reads as ink, not as a hue. */
+  --primary: oklch(0.21 0 0);
+  --primary-hover: oklch(0.32 0 0);
+  --primary-on: oklch(0.99 0 0);
+
+  /* Neutral focus ring (keyboard / focus-visible). Tracks --primary at ~40%
+     alpha so it reads in both themes without introducing a hue. */
+  --ring: oklch(0.21 0 0 / 0.4);
+
+  /* Agent-state vocabulary — "green-liveness" model. The system's living
+     states are COOL (green = alive+working, blue = present/idle); the states
+     that want your attention are WARM (amber = needs-you, orange = blocked,
+     red = error) so problems pop against the live baseline. Offline is gray
+     (absent — falls out of both families). working == brand green at the token
+     level; it is told apart from the success ✓ by FORM (pulsing dot + halo for
+     working, a static ✓ glyph for done), not by hue. */
+  --state-working: oklch(0.72 0.17 150); /* alive + working — brand green, pulses */
+  --state-idle: oklch(0.62 0.14 245); /* present, at rest — calm blue */
+  --state-needs-you: oklch(0.82 0.18 75); /* waiting for you — amber */
+  --state-blocked: oklch(
+    0.74 0.18 58
+  ); /* stuck / blocked + the shared caution/warning hue — a warmer orange than needs-you, still clearly not error-red */
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
   /* Unread / attention semantic. Aliased to --state-error today because
@@ -251,9 +268,13 @@
      destructive-action warning" at the consumer site. */
   --state-unread: var(--state-error);
 
-  --ok: oklch(0.72 0.17 150);
-  --warn: oklch(0.82 0.18 75);
-  --danger: oklch(0.68 0.22 25);
+  /* Feedback / severity vocabulary (success / warning / error). Aliased to the
+     shared base hues so there is ONE value per color — distinct *names* from the
+     agent-state vocabulary (--state-*), same underlying tones. Replaces the old
+     --ok / --warn / --danger raw duplicates. */
+  --success: var(--brand);
+  --warning: var(--state-blocked);
+  --danger: var(--state-error);
 
   /* Near-white text for content rendered on top of a vivid colored
      surface (state-error badges, hashed-hue avatars, etc). Stable in
@@ -279,22 +300,25 @@
 
   --radius: 0.5rem;
 
-  /* Light theme (default when .dark class is absent) */
-  --bg: oklch(0.985 0.005 150);
+  /* Light theme (default when .dark class is absent).
+     Pure-neutral gray ramp (chroma 0) — Strategy A decision 1. The former
+     hue-150 tint was dropped so neutrals never read as faintly green next to
+     the brand color. */
+  --bg: oklch(0.985 0 0);
   --bg-raised: oklch(1 0 0);
-  --bg-sunken: oklch(0.965 0.006 150);
+  --bg-sunken: oklch(0.965 0 0);
   --bg-card: oklch(1 0 0);
-  --bg-hover: oklch(0.95 0.008 150);
-  --bg-active: oklch(0.92 0.01 150);
+  --bg-hover: oklch(0.95 0 0);
+  --bg-active: oklch(0.92 0 0);
 
-  --fg: oklch(0.18 0.01 150);
-  --fg-2: oklch(0.36 0.01 150);
-  --fg-3: oklch(0.52 0.008 150);
-  --fg-4: oklch(0.68 0.005 150);
+  --fg: oklch(0.18 0 0);
+  --fg-2: oklch(0.36 0 0);
+  --fg-3: oklch(0.52 0 0);
+  --fg-4: oklch(0.68 0 0);
 
-  --border: oklch(0.9 0.006 150);
-  --border-strong: oklch(0.82 0.008 150);
-  --border-faint: oklch(0.94 0.005 150);
+  --border: oklch(0.9 0 0);
+  --border-strong: oklch(0.82 0 0);
+  --border-faint: oklch(0.94 0 0);
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
@@ -305,8 +329,8 @@
      separate border color — one saturated tone covers both roles. */
   --bg-error-soft: oklch(0.97 0.02 25);
   --fg-error-strong: oklch(0.42 0.17 25);
-  --bg-warn-soft: oklch(0.97 0.04 75);
-  --fg-warn-strong: oklch(0.48 0.14 75);
+  --bg-warn-soft: oklch(0.97 0.04 58);
+  --fg-warn-strong: oklch(0.48 0.14 58);
   --bg-success-soft: oklch(0.96 0.04 150);
   --fg-success-strong: oklch(0.42 0.12 150);
 
@@ -374,7 +398,7 @@
    palette regardless of the dashboard's light/dark toggle. The cloud /
    collaboration layer (formerly first-tree-hub) is part of First Tree, so
    the marketing entry point should always read as the parent brand:
-   near-black canvas + cool-light text + the shared green accent. Scoped to
+   near-black canvas + cool-light text + the shared green brand. Scoped to
    `.landing-marketing` so the dashboard chrome (when an authenticated user
    happens to land on a marketing-styled route) is untouched. Same `--bg`
    / `--fg` variable names — every component utility (bg-background,
@@ -399,27 +423,44 @@
   --border-strong: oklch(0.3 0.005 240);
   --border-faint: oklch(0.13 0.005 240);
 
-  /* Accent green stays identical — it's the cross-product brand color. */
+  /* Brand green stays identical — it's the cross-product signature color. */
+
+  /* Marketing is a brand-forward surface (not the dashboard's neutral language):
+     the primary CTA is the brand green, not near-black ink. The dashboard's
+     --primary would resolve to the :root light value here (near-black on a
+     near-black canvas = invisible), so it is re-pointed at --brand for this scope. */
+  --primary: var(--brand);
+  --primary-hover: var(--brand-dim);
+  --primary-on: var(--fg-on-vivid);
+  --ring: var(--brand-ring);
 
   color-scheme: dark;
 }
 
 .dark {
-  --bg: oklch(0.145 0.005 150);
-  --bg-raised: oklch(0.175 0.005 150);
-  --bg-sunken: oklch(0.115 0.005 150);
-  --bg-card: oklch(0.175 0.005 150);
-  --bg-hover: oklch(0.22 0.008 150);
-  --bg-active: oklch(0.26 0.012 150);
+  /* Pure-neutral gray ramp (chroma 0) — see light-mode note above. */
+  --bg: oklch(0.145 0 0);
+  --bg-raised: oklch(0.175 0 0);
+  --bg-sunken: oklch(0.115 0 0);
+  --bg-card: oklch(0.175 0 0);
+  --bg-hover: oklch(0.22 0 0);
+  --bg-active: oklch(0.26 0 0);
 
-  --fg: oklch(0.96 0.005 150);
-  --fg-2: oklch(0.78 0.006 150);
-  --fg-3: oklch(0.58 0.006 150);
-  --fg-4: oklch(0.42 0.005 150);
+  --fg: oklch(0.96 0 0);
+  --fg-2: oklch(0.78 0 0);
+  --fg-3: oklch(0.58 0 0);
+  --fg-4: oklch(0.42 0 0);
 
-  --border: oklch(0.26 0.008 150);
-  --border-strong: oklch(0.34 0.01 150);
-  --border-faint: oklch(0.2 0.006 150);
+  --border: oklch(0.26 0 0);
+  --border-strong: oklch(0.34 0 0);
+  --border-faint: oklch(0.2 0 0);
+
+  /* Primary inverts to near-white ink on dark surfaces (brand green stays
+     constant, so it is NOT redefined here). */
+  --primary: oklch(0.93 0 0);
+  --primary-hover: oklch(0.85 0 0);
+  --primary-on: oklch(0.17 0 0);
+  --ring: oklch(0.93 0 0 / 0.4);
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.4);
@@ -427,8 +468,8 @@
   /* State pairs — dark-mode variants (softer bg, higher-L fg for contrast). */
   --bg-error-soft: oklch(0.28 0.06 25);
   --fg-error-strong: oklch(0.82 0.14 25);
-  --bg-warn-soft: oklch(0.3 0.06 75);
-  --fg-warn-strong: oklch(0.86 0.14 75);
+  --bg-warn-soft: oklch(0.3 0.06 58);
+  --fg-warn-strong: oklch(0.86 0.14 58);
   --bg-success-soft: oklch(0.28 0.05 150);
   --fg-success-strong: oklch(0.82 0.14 150);
 }
@@ -459,7 +500,7 @@
     font-synthesis: none;
   }
   ::selection {
-    background: var(--accent-bg);
+    background: var(--brand-bg);
     color: var(--fg);
   }
   ::-webkit-scrollbar {
@@ -843,7 +884,7 @@
   place-items: center;
   border-radius: 50%;
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
 }
 
 .context-network-summary-title {
@@ -875,7 +916,7 @@
   padding: var(--sp-0_5) var(--sp-2);
   border-radius: var(--radius-chip);
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -886,7 +927,7 @@
   width: var(--sp-3);
   height: var(--sp-3);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   box-shadow: 0 0 0 var(--sp-0_75) oklch(0.72 0.17 150 / 0.18);
 }
 
@@ -915,12 +956,12 @@
 
 .context-change-breakdown span[data-change-type="added"] {
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
 }
 
 .context-change-breakdown span[data-change-type="edited"] {
-  background: oklch(0.82 0.18 75 / 0.14);
-  color: var(--warn);
+  background: oklch(0.74 0.18 58 / 0.14);
+  color: var(--warning);
 }
 
 .context-change-breakdown span[data-change-type="removed"] {
@@ -980,13 +1021,13 @@
   width: var(--sp-1);
   height: var(--sp-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   animation: context-usage-feed-pulse 2.4s ease-in-out infinite;
   flex: 0 0 auto;
 }
 
 .context-usage-feed-live-label {
-  color: var(--ok);
+  color: var(--success);
   font-weight: 700;
   letter-spacing: 0.1em;
 }
@@ -998,10 +1039,10 @@
 @keyframes context-usage-feed-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 50%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 50%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 var(--sp-1) color-mix(in oklch, var(--ok) 0%, transparent);
+    box-shadow: 0 0 0 var(--sp-1) color-mix(in oklch, var(--success) 0%, transparent);
   }
 }
 
@@ -1025,7 +1066,7 @@
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 1.5px dashed color-mix(in oklch, var(--ok) 25%, transparent);
+  border-left: 1.5px dashed color-mix(in oklch, var(--success) 25%, transparent);
 }
 
 .context-usage-feed-row {
@@ -1042,7 +1083,7 @@
   width: var(--sp-1);
   height: var(--sp-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   margin-left: 3px;
   position: relative;
   z-index: 1;
@@ -1166,7 +1207,7 @@
 
 @keyframes context-usage-feed-flash {
   0% {
-    background: color-mix(in oklch, var(--ok) 18%, transparent);
+    background: color-mix(in oklch, var(--success) 18%, transparent);
   }
   100% {
     background: transparent;
@@ -1176,11 +1217,11 @@
 @keyframes context-usage-feed-dot-pop {
   0% {
     transform: scale(0.3);
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 60%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 60%, transparent);
   }
   60% {
     transform: scale(1.3);
-    box-shadow: 0 0 0 8px color-mix(in oklch, var(--ok) 0%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in oklch, var(--success) 0%, transparent);
   }
   100% {
     transform: scale(1);
@@ -1262,7 +1303,7 @@
  * next to its input. Rest state is just the outline so the row stays
  * light; hover lifts ink + fills with the sunken bg so the active state
  * reads as clearly clickable. Focus-visible swaps the border for the
- * accent ring (subtle but unmistakable for keyboard users).
+ * neutral focus ring (subtle but unmistakable for keyboard users).
  */
 .settings-save-button:hover:not(:disabled) {
   color: var(--fg);
@@ -1271,7 +1312,7 @@
 }
 
 .settings-save-button:focus-visible {
-  outline: var(--hairline-bold) solid var(--accent-ring);
+  outline: var(--hairline-bold) solid var(--ring);
   outline-offset: var(--sp-0_5);
 }
 
@@ -1292,8 +1333,8 @@
 }
 
 .onboarding-runtime-option:focus-within {
-  color: color-mix(in oklch, var(--accent) 30%, var(--fg));
-  outline-color: var(--accent-ring);
+  color: color-mix(in oklch, var(--primary) 30%, var(--fg));
+  outline-color: var(--ring);
 }
 
 .onboarding-name-input::placeholder {
@@ -1355,7 +1396,7 @@ tr[data-interactive]:hover {
    a surrogate box; without this, keyboard focus lands on an invisible
    control. Surface a visible ring on the label when its input is focused. */
 .onboarding-choice:focus-within {
-  outline: var(--hairline) solid var(--accent-ring);
+  outline: var(--hairline) solid var(--ring);
   outline-offset: var(--sp-0_5);
 }
 
@@ -1405,7 +1446,7 @@ tr[data-interactive]:hover {
  * shape without touching the shared chip radius. */
 .mention-chip {
   display: inline;
-  background: var(--accent);
+  background: var(--brand);
   color: var(--fg-on-vivid);
   padding: 0 6px;
   border-radius: 999px;
@@ -1424,7 +1465,7 @@ tr[data-interactive]:hover {
  * bug this class was created to fix. `color` is the only property
  * that's metric-neutral, so it's the only differentiator we use. */
 .mention-text {
-  color: var(--accent);
+  color: var(--brand);
 }
 
 /* Selection inside the mention composer: textarea text is rendered
@@ -1435,11 +1476,11 @@ tr[data-interactive]:hover {
  * overlay's chips/text underneath, the textarea's selected text on
  * top). Holding the textarea's selection color transparent keeps the
  * overlay's chips legible while the selection band still shows. The
- * `accent-ring` (30% alpha) band tints chips slightly darker but the
+ * `brand-ring` (30% alpha) band tints chips slightly darker but the
  * chip's foreground glyphs in the overlay layer below stay readable —
  * the overlay is `pointer-events: none` and not part of the textarea's
  * selection range, so no chip-scoped `::selection` rule is needed. */
 .mention-composer-textarea::selection {
-  background: var(--accent-ring);
+  background: var(--brand-ring);
   color: transparent;
 }

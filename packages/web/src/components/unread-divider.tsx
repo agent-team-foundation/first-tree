@@ -33,14 +33,14 @@ export const UnreadDivider = forwardRef<HTMLDivElement>(function UnreadDivider(_
       style={{
         margin: "var(--sp-2) 0",
         gap: "var(--sp-2)",
-        color: "var(--accent)",
+        color: "var(--brand)",
       }}
     >
-      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--accent)" }} />
+      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--brand)" }} />
       <span className="text-caption font-medium" style={{ whiteSpace: "nowrap" }}>
         New Messages
       </span>
-      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--accent)" }} />
+      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--brand)" }} />
     </div>
   );
 });

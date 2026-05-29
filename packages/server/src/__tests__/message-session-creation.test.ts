@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
+import { suspendAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -118,5 +119,25 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     });
     expect(await readSessionState(app, mentioned.uuid, chat.id)).toBe("active");
     expect(await readSessionState(app, silent.uuid, chat.id)).toBeNull();
+  });
+
+  it("does not predictively activate a suspended recipient", async () => {
+    const app = getApp();
+    const { agent: sender } = await createTestAgent(app, { name: `sus-src-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: suspended } = await createTestAgent(app, { name: `sus-target-${crypto.randomUUID().slice(0, 6)}` });
+    const chat = await createChat(app.db, sender.uuid, {
+      type: "group",
+      participantIds: [suspended.uuid],
+    });
+    await suspendAgent(app.db, suspended.uuid);
+
+    await sendMessage(app.db, chat.id, sender.uuid, {
+      source: "api",
+      format: "text",
+      content: "history only",
+      purpose: "agent-final-text",
+    });
+
+    expect(await readSessionState(app, suspended.uuid, chat.id)).toBeNull();
   });
 });

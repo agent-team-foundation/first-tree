@@ -86,7 +86,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **Agent identity is managed by the server:** Agents are created, updated, suspended, and deleted via the Admin API. Agent profile (markdown self-description) is stored in the `agents.profile` column. Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
 
-**Adapter 1:1 identity binding:** External IM users (Feishu/Slack) map to human agents. Adapter credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
+**Adapter credentials:** Adapter (e.g. Kael) bot credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
 
 **UUID v7 as Message ID:** Time-ordered; messages are immutable after creation.
 
@@ -170,7 +170,7 @@ FIRST-TREE-SOURCE-STATE: `.first-tree/local-tree.json`
 
 ### After every task
 
-- Always ask whether the tree needs updating.
-- If the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, open a PR in the tree repo first. Then open the source/workspace code PR.
-- If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.
+- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, raise a Need-Human-Attention request (`first-tree attention raise --requires-response`) to confirm whether the tree needs updating before opening any code PR — a tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. See `.claude/skills/attention/SKILL.md` for body shape and waiting behaviour.
+- If the attention confirms a tree update is needed (or the change is obviously tree-relevant), open the tree PR first, then the source/workspace code PR.
+- If the task changed only implementation details, skip both the attention and the tree PR — open only the source/workspace code PR.
 <!-- END FIRST-TREE-SOURCE-INTEGRATION -->

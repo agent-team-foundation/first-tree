@@ -351,7 +351,7 @@ export function DocPreviewDrawer() {
       aria-modal={isMobile}
       data-doc-preview-drawer=""
       className={cn(
-        "z-40 flex flex-col bg-surface-raised text-text-primary",
+        "z-40 flex flex-col bg-card text-foreground",
         "animate-in slide-in-from-right duration-200",
         isMobile
           ? "fixed inset-0 w-full border-l border-border"
@@ -384,7 +384,7 @@ export function DocPreviewDrawer() {
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-body font-medium">{title}</div>
-          {subtitle ? <div className="truncate text-caption text-text-tertiary">{subtitle}</div> : null}
+          {subtitle ? <div className="truncate text-caption text-fg-3">{subtitle}</div> : null}
         </div>
         <Button
           aria-label="Close document preview"
@@ -404,7 +404,7 @@ export function DocPreviewDrawer() {
         ) : (
           <>
             {previewQuery.isLoading ? (
-              <div className="flex h-full items-center justify-center text-body text-text-secondary">
+              <div className="flex h-full items-center justify-center text-body text-fg-2">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                 Loading preview
               </div>

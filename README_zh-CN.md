@@ -9,11 +9,17 @@
 first-tree 把工作分派给合适的 Agent，给它和团队同一份上下文，只在
 规则要求时把人类拉进流程。常驻在你的 GitHub 里。开源。
 
-## 安装
+## 开始使用
+
+打开 <https://first-tree.ai>（或你自己的部署）登录，引导式 setup 会带你从头
+走完整个流程——给团队命名、连接一台电脑、创建第一个 Agent、开始第一条对话。
+完整步骤见 [Quickstart](docs/quickstart.md)。
+
+走到"连接一台电脑"这步时，setup 会给你安装 CLI、把这台机器登入的命令：
 
 ```bash
 npm install -g first-tree
-first-tree --help
+first-tree login <connect-token>
 ```
 
 二进制名为 `first-tree`；同时安装短别名 `ft`。

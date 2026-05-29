@@ -317,18 +317,15 @@ export async function isParticipant(db: Database, chatId: string, agentId: strin
 /**
  * Idempotent "ensure this agent is a speaker of this chat" admit.
  *
+
  * **Caller-responsibility contract — read before using.** This helper does
  * NO authorisation. It is a Layer-1.5 wrapper for `applyMembershipWrite`
  * whose only job is the short-circuit "already a speaker → return without
  * opening a tx". Use it only when the caller has already verified that the
- * given agent has a legitimate reason to be in the chat. The two legitimate
- * callers today are:
+ * given agent has a legitimate reason to be in the chat. The legitimate
+ * caller today is:
  *
- *   1. `adapter-mapping.ts` (Feishu/Slack bridge) — IM platform has already
- *      authenticated the sender / bot. The hub side has no separate notion
- *      of "did this user choose to enter the chat" — joining is implicit by
- *      sending a message on the platform.
- *   2. `api/chats.ts` HTTP message + question-answer routes — the `scope`
+ *   1. `api/chats.ts` HTTP message + question-answer routes — the `scope`
  *      middleware has already gated the request through `requireChatAccess`
  *      before reaching the handler that calls this.
  *

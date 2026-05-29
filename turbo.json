@@ -18,6 +18,7 @@
       "inputs": ["$TURBO_DEFAULT$"]
     },
     "coverage": {
+      "dependsOn": ["^build"],
       "cache": false,
       "passThroughEnv": ["CI_DATABASE_URL", "DATABASE_URL", "DOCKER_HOST", "TESTCONTAINERS_*"],
       "outputs": ["coverage/**"]

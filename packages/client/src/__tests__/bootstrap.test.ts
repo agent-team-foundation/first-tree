@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +10,7 @@ import {
   type ContextTreeBinding,
   deepEqualIdentity,
   type InstallFirstTreeIntegrationExec,
+  installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
   readCachedContextTreeHead,
@@ -759,6 +760,105 @@ describe("installFirstTreeIntegration", () => {
   });
 });
 
+describe("installCoreSkills", () => {
+  it("shells out to `first-tree tree skill install-core --root <workspace>`", () => {
+    const workspace = join(tmpBase, "core-skills-happy");
+    mkdirSync(workspace, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec();
+    const logs: string[] = [];
+
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("first-tree");
+    expect(calls[0]?.args).toEqual(["tree", "skill", "install-core", "--root", workspace]);
+    expect(calls[0]?.options.cwd).toBe(workspace);
+    expect(logs.join("\n")).toContain("Core skills installed via first-tree (PATH)");
+  });
+
+  it("falls back to npx when the channel binary is missing", () => {
+    const workspace = join(tmpBase, "core-skills-fallback");
+    mkdirSync(workspace, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        const err = new Error("spawn first-tree ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.command).toBe("npx");
+    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
+    expect(calls[1]?.args.slice(3)).toEqual(["skill", "install-core", "--root", workspace]);
+  });
+
+  it("uses the channel-resolved binary name", () => {
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    try {
+      const workspace = join(tmpBase, "core-skills-staging");
+      mkdirSync(workspace, { recursive: true });
+
+      const { exec, calls } = makeRecordingExec();
+      const result = installCoreSkills({
+        workspacePath: workspace,
+        log: () => {},
+        exec,
+      });
+
+      expect(result).toBe(true);
+      expect(calls[0]?.command).toBe("first-tree-staging");
+      expect(calls[0]?.args).toContain("install-core");
+    } finally {
+      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    }
+  });
+
+  it("returns false and logs gracefully when the binary itself is missing on dev channel (no npx fallback)", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    try {
+      const workspace = join(tmpBase, "core-skills-dev-miss");
+      mkdirSync(workspace, { recursive: true });
+
+      const { exec } = makeRecordingExec(() => {
+        const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      });
+
+      const logs: string[] = [];
+      const result = installCoreSkills({
+        workspacePath: workspace,
+        log: (m) => logs.push(m),
+        exec,
+      });
+
+      expect(result).toBe(false);
+      expect(logs.join("\n")).toContain("Core skill install skipped");
+      expect(logs.join("\n")).not.toContain("npx");
+    } finally {
+      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    }
+  });
+});
+
 describe("buildChatSystemPrompt", () => {
   const AGENT_HOME = "/var/lib/agent-hub/workspaces/test-agent";
 
@@ -807,6 +907,13 @@ describe("buildChatSystemPrompt", () => {
     expect(text).toContain(`\`${AGENT_HOME}/web\``);
     // For the second entry — only url should appear, ref/branch lines omitted.
     expect(text).not.toMatch(/url=git@github.com:example\/web\.git,\s*ref=/);
+    // The pre-checked-out source repo is on a never-advanced hub-session
+    // branch — the prompt must warn the agent NOT to reuse it for new
+    // work and instead branch a fresh worktree from a freshly-fetched
+    // origin ref (issue #655).
+    expect(text).toContain("refreshed during this chat");
+    expect(text).toContain("git fetch origin");
+    expect(text).toContain("origin/main");
   });
 
   it("appends the Current Chat Context block when chatContext is provided", () => {
@@ -956,6 +1063,57 @@ describe("Bundled CLI version drift helpers", () => {
     writeFileSync(join(tmpBase, "cli-version-corrupt", "package.json"), "{not-json");
 
     expect(resolveBundledCliVersion(`file://${join(dir, "module.js")}`)).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("dev channel: appends a build fingerprint to the version", () => {
+    // Switch to the dev binding so the resolver appends the mtime
+    // suffix. Default moduleUrl points at this test bundle's own file,
+    // which exists, so statSync succeeds and the suffix is present.
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const version = resolveBundledCliVersion();
+    expect(version).toMatch(/\+build\.\d+$/u);
+  });
+
+  it("prod and staging channels: bare version, no fingerprint suffix", () => {
+    // CI bumps the package manifest's version on every release, so the
+    // fingerprint would be redundant noise in the `.agent/cli-version`
+    // pin. Assert both published channels explicitly.
+    setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    expect(resolveBundledCliVersion()).not.toMatch(/\+build\./u);
+
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    expect(resolveBundledCliVersion()).not.toMatch(/\+build\./u);
+  });
+
+  it("dev channel: build fingerprint changes when the module file's mtime changes", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const dir = join(tmpBase, "cli-version-fingerprint");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    const modulePath = join(dir, "module.js");
+    writeFileSync(modulePath, "// stub");
+    const moduleUrl = `file://${modulePath}`;
+
+    utimesSync(modulePath, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+    const first = resolveBundledCliVersion(moduleUrl);
+
+    utimesSync(modulePath, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+    const second = resolveBundledCliVersion(moduleUrl);
+
+    expect(first).toMatch(/^9\.9\.9\+build\.\d+$/u);
+    expect(second).toMatch(/^9\.9\.9\+build\.\d+$/u);
+    expect(first).not.toBe(second);
+  });
+
+  it("dev channel: falls back to bare version when the module file is missing (statSync throws)", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const dir = join(tmpBase, "cli-version-no-mtime");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.0.1" }));
+    // Synthetic module URL — statSync throws and the resolver must
+    // degrade to the bare version (still drift-comparable, just not
+    // build-sensitive).
+    expect(resolveBundledCliVersion(`file://${join(dir, "ghost.js")}`)).toBe("0.0.1");
   });
 
   it("write/read roundtrip pins the CLI version for drift comparison", () => {

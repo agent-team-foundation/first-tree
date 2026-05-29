@@ -32,7 +32,6 @@ import { cn } from "../lib/utils.js";
  *                   entry point — placed first)
  *   Team          — org-scoped Identity / Context Tree / Source repos
  *   GitHub        — admin-only platform integration
- *   Messaging     — IM bridges (Feishu / Slack)
  *   Onboarding    — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
@@ -47,7 +46,6 @@ const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
   { to: "/settings/team", label: "Team" },
   { to: "/settings/github", label: "GitHub", adminOnly: true },
-  { to: "/settings/integrations", label: "Messaging" },
   { to: "/settings/onboarding", label: "Onboarding" },
 ];
 

@@ -56,7 +56,6 @@ import { cacheMessages, getCachedMessages } from "../../../api/message-store.js"
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
-  asAssistantTextPayload,
   asErrorPayload,
   listSessionEvents,
   type SessionEventRow,
@@ -73,7 +72,8 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { WorkingBubble } from "../../../components/chat/working-bubble.js";
+import { TokenUsagePill } from "../../../components/chat/token-usage-pill.js";
+import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
   MentionAutocompletePopover,
@@ -150,7 +150,7 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
   const status = msg.deliveryStatus ?? "sent";
   if (status === "acked") {
     return (
-      <span className="mono text-caption" style={{ color: "var(--accent)" }} title="Agent has started processing">
+      <span className="mono text-caption" style={{ color: "var(--primary)" }} title="Agent has started processing">
         ✓✓ read
       </span>
     );
@@ -166,70 +166,6 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
     <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
-  );
-}
-
-/**
- * Intermediate assistant reply text surfaced while a turn is still running.
- * These rows are hidden by the turn-grouping filter once the turn ends —
- * the final result is delivered as a regular chat message.
- */
-function AssistantTextRow({
-  event,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-  agentId,
-}: {
-  event: SessionEventRow;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-  agentId: string;
-}) {
-  const payload = asAssistantTextPayload(event.payload);
-  if (!payload || payload.text.length === 0) return null;
-  const senderName = agentNameFn(agentId);
-  return (
-    <div
-      className="grid"
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1) 0",
-        opacity: 0.85,
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(agentId)}
-        seed={agentId}
-        colorToken={agentColorTokenFn(agentId)}
-      />
-      <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(event.createdAt)}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            · streaming
-          </span>
-        </div>
-        <div
-          className="text-body"
-          style={{
-            color: "var(--fg-2)",
-            whiteSpace: "pre-wrap",
-            marginTop: 2,
-          }}
-        >
-          {payload.text}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -519,7 +455,7 @@ function TextRow({
           <span
             className="mono text-body font-semibold"
             style={{
-              color: isSelf ? "var(--fg)" : "var(--accent)",
+              color: isSelf ? "var(--fg)" : "var(--primary)",
             }}
           >
             {senderName}
@@ -1116,6 +1052,20 @@ export function ChatView({
     null,
   );
 
+  // Bundles the optimistic-insert + watermark pre-advance pair into
+  // one call so every own-send entry point (text, image, text-after-
+  // image, and any future variant like resend or forward) keeps the
+  // invariant "the same render that adds an own optimistic row also
+  // moves the watermark past it". Avoids the per-call-site copy that
+  // a reviewer flagged as easy to skip when adding a new send path.
+  const insertOwnOptimisticMessage = useCallback(
+    (msg: MessageWithDelivery) => {
+      insertOptimisticMessage(msg);
+      setPendingHighWaterAdvance({ chatId, messageId: msg.id });
+    },
+    [insertOptimisticMessage, chatId],
+  );
+
   const sendMut = useMutation({
     mutationFn: ({ content, mentions }: { content: string; mentions: string[] }) =>
       sendChatMessage(chatId, content, mentions),
@@ -1129,7 +1079,7 @@ export function ChatView({
       setDraft("");
       const optimistic = buildOptimisticTextMessage(content);
       if (!optimistic) return { tempId: null, previousDraft };
-      insertOptimisticMessage(optimistic);
+      insertOwnOptimisticMessage(optimistic);
       return { tempId: optimistic.id, previousDraft };
     },
     onSuccess: (saved, _content, ctx) => {
@@ -1202,7 +1152,7 @@ export function ChatView({
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
-    // Slack/Discord/Feishu. This avoids false positives like npm scoped
+    // Slack/Discord. This avoids false positives like npm scoped
     // package names (`@scope/pkg`) or quoted handles in the body. The
     // `enforceGroupMention` constraint (group chat must address at least
     // one member) is reflected via `requiresMention` + `draftMentions`
@@ -1300,7 +1250,10 @@ export function ChatView({
           };
           batchTempId = optimistic.id;
           pendingTempIds.add(batchTempId);
-          insertOptimisticMessage(optimistic);
+          // Pre-advance the watermark before the batched POST resolves so
+          // the pill never counts the optimistic file batch as new
+          // (parallel to sendMut.onMutate's pre-advance for text).
+          insertOwnOptimisticMessage(optimistic);
         }
 
         const saved = await sendFileMessageBatch(
@@ -1399,11 +1352,12 @@ export function ChatView({
    * turn-grouping filter so completed turns collapse to just their result
    * message. See `filterEventsForTimeline` for the full rules.
    *
-   * Second pass collapses adjacent `tool_call` + `thinking` rows into a
-   * single `workgroup` entry — these become the inline WorkingBubble. Any
-   * non-bubble item (message, assistant_text, error) flushes the current
-   * bucket, so intermediate streamed text stays visible as its own row
-   * even when surrounded by tool calls.
+   * Second pass collapses an agent's adjacent `assistant_text` + `tool_call` +
+   * `thinking` rows into a single `workgroup` entry — these become the inline
+   * WorkingTurn (latest narration as the body, tool/thinking as a
+   * de-emphasized process lane). A real message, an error, or an agent switch
+   * flushes the current bucket, so each card stays single-agent and a turn's
+   * result message lands as its own row.
    */
   // Merge cached + server messages, dedup by id (server wins so updated
   // delivery status / metadata overrides any older cached copy), and
@@ -1426,53 +1380,53 @@ export function ChatView({
     const rawEvents = eventsData?.items ?? [];
     const visibleEvents = filterEventsForTimeline(rawEvents);
 
-    // Turn id = the seq of the last turn_end seen across all events, including
-    // ones filterEventsForTimeline dropped. Every visible transient event has
-    // seq > lastTurnEndSeq, so each turn gets a unique stable anchor that
-    // survives toolUseId dedupe (where individual event ids change as
-    // pending → final updates flow in). Used to build remount-safe bubble
-    // keys so the user's manual open/closed toggle isn't reset when a single
-    // tool call's pending row gets replaced by its final-status row.
+    // Turn anchor: the seq of the last turn_end across all events (including
+    // ones filterEventsForTimeline dropped). Every surviving transient event
+    // has seq > lastTurnEndSeq, so the agent's current turn gets one stable,
+    // remount-safe key that survives toolUseId dedupe (pending → final swaps).
     let lastTurnEndSeq = -1;
     for (const e of rawEvents) {
       if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
     }
 
-    // Feed `mergedMessages` (IDB cache ∪ server) into the timeline, not the
-    // raw server window. Otherwise cached messages outside the server's
-    // "last 50" window would silently disappear on chat re-open until the
-    // server fetch lands.
-    const flat: TimelineItem[] = [
-      ...mergedMessages.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
-      ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
-    ];
-    flat.sort((a, b) => a.at.localeCompare(b.at));
+    // Collapse each agent's surviving transient events into ONE workgroup.
+    // filterEventsForTimeline already narrows them to that agent's current
+    // (un-ended) turn, so one workgroup == one in-progress turn. We deliberately
+    // do NOT split on interleaved chat messages: a message landing mid-turn must
+    // not fracture the turn into duplicate "working" cards. Each workgroup is
+    // anchored at its earliest event so it sorts into the timeline where the
+    // turn began; messages and error rows keep their own chronological slots.
+    //
+    // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
+    // window — otherwise cached messages outside the "last 50" window would
+    // vanish on chat re-open until the server fetch lands.
+    const out: TimelineItem[] = mergedMessages.map((m) => ({
+      kind: "message" as const,
+      at: m.createdAt,
+      key: `m-${m.id}`,
+      data: m,
+    }));
 
-    const grouped: TimelineItem[] = [];
-    let bucket: SessionEventRow[] = [];
-    let bucketIndex = 0;
-    const flushBucket = () => {
-      const first = bucket[0];
-      if (!first) return;
-      grouped.push({
-        kind: "workgroup",
-        at: first.createdAt,
-        key: `wg-${lastTurnEndSeq}-${bucketIndex}`,
-        events: bucket,
-      });
-      bucketIndex += 1;
-      bucket = [];
-    };
-    for (const item of flat) {
-      if (item.kind === "event" && (item.data.kind === "tool_call" || item.data.kind === "thinking")) {
-        bucket.push(item.data);
-        continue;
+    const turnEventsByAgent = new Map<string, SessionEventRow[]>();
+    for (const e of visibleEvents) {
+      if (e.kind === "tool_call" || e.kind === "thinking" || e.kind === "assistant_text") {
+        const existing = turnEventsByAgent.get(e.agentId);
+        if (existing) existing.push(e);
+        else turnEventsByAgent.set(e.agentId, [e]);
+      } else {
+        // error rows stay standalone and visible across turns.
+        out.push({ kind: "event", at: e.createdAt, key: `e-${e.id}`, data: e });
       }
-      flushBucket();
-      grouped.push(item);
     }
-    flushBucket();
-    return grouped;
+    for (const [agentId, events] of turnEventsByAgent) {
+      events.sort((a, b) => a.seq - b.seq);
+      const first = events[0];
+      if (!first) continue;
+      out.push({ kind: "workgroup", at: first.createdAt, key: `wg-${lastTurnEndSeq}-${agentId}`, events });
+    }
+
+    out.sort((a, b) => a.at.localeCompare(b.at));
+    return out;
   }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
@@ -1522,11 +1476,6 @@ export function ChatView({
   // "pill never shows on return-to-chat-with-injected-messages" and
   // root-caused it to the live readState read in the pill baseline.
   const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
-  // Dismiss when the divider has scrolled out the top of the
-  // viewport (IntersectionObserver below). Kept as state so the
-  // render path can drop the divider once dismissed. Reset on chat
-  // switch.
-  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
   // Tracks which chatId we have already snapshotted the divider
   // anchor for. Without this guard, the snapshot would re-fire on
   // every tracker IDB write (each one updates the React Query
@@ -1536,7 +1485,6 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
   useLayoutEffect(() => {
     setDividerAnchorMessageId(null);
-    setDividerDismissed(false);
     dividerSnapshotChatIdRef.current = null;
   }, [chatId]);
   // Snapshot once the read-state query for this chatId has resolved
@@ -1686,18 +1634,32 @@ export function ChatView({
     return Math.max(sessionIdx, unreadAnchorIdx);
   }, [sessionHighestId, mergedMessages, unreadAnchorIdx]);
 
-  // Pill count = messages strictly newer than the effective high
-  // watermark. Hides (count = 0) whenever the user has had every
-  // currently-rendered message at viewport bottom at some point
-  // (either this session or a prior one persisted in IDB).
+  // Pill count = NON-SELF messages strictly newer than the effective
+  // high watermark. Own sends never contribute even if the pre-advance
+  // hasn't drained yet (e.g. the optimistic→saved replace step
+  // briefly invalidates `sessionHighestId` between renders) — the
+  // pill is semantically "remote arrivals you haven't seen", not
+  // "anything past the watermark".
   const pillCount = useMemo<number>(() => {
     if (mergedMessages.length === 0) return 0;
     if (sessionHighestIdx < 0) return 0;
-    return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
-  }, [mergedMessages, sessionHighestIdx]);
+    let count = 0;
+    for (let i = sessionHighestIdx + 1; i < mergedMessages.length; i++) {
+      const msg = mergedMessages[i];
+      if (!msg) continue;
+      if (myAgentId && msg.senderId === myAgentId) continue;
+      count++;
+    }
+    return count;
+  }, [mergedMessages, sessionHighestIdx, myAgentId]);
 
-  // Index of the first message strictly newer than the snapshotted
-  // anchor — i.e., where the "New Messages" line slots in.
+  // Index of the first NON-SELF message strictly newer than the
+  // snapshotted anchor — i.e., where the "New Messages" line slots
+  // in. Own sends are skipped so the divider only marks the boundary
+  // between "what I had seen" and "what arrived from someone else".
+  // Without this skip, the user's own optimistic row (which is also
+  // an `idx > unreadAnchorIdx` message) would re-trigger the divider
+  // immediately after the user sends, which is not the intent.
   //
   // Comparison is by index in `mergedMessages` (which is sorted by
   // `createdAt` ascending). DO NOT compare by lex order on the
@@ -1709,7 +1671,7 @@ export function ChatView({
   // anchor's — the bug code-reviewer reproduced in rev 8.
   //
   // Returns -1 when the divider should not render (no anchor, anchor
-  // has aged out of the window, or no newer messages).
+  // has aged out of the window, or no newer non-self messages).
   const firstNewItemIdx = useMemo<number>(() => {
     if (unreadAnchorIdx < 0) return -1;
     const idxById = new Map<string, number>();
@@ -1721,19 +1683,39 @@ export function ChatView({
       const item = items[i];
       if (!item || item.kind !== "message") continue;
       const idx = idxById.get(item.data.id);
-      if (idx !== undefined && idx > unreadAnchorIdx) return i;
+      if (idx === undefined || idx <= unreadAnchorIdx) continue;
+      if (myAgentId && item.data.senderId === myAgentId) continue;
+      return i;
     }
     return -1;
-  }, [items, mergedMessages, unreadAnchorIdx]);
+  }, [items, mergedMessages, unreadAnchorIdx, myAgentId]);
 
-  // Hide the divider the moment it scrolls past the top of the
-  // viewport — but keep it visible while the user is still looking
-  // at it, even after they have read every new message below.
-  // Dismissal is one-way during a visit; the next chat open
-  // re-evaluates from the fresh snapshot.
+  // Re-arm semantics: when the divider scrolls past the viewport
+  // top, advance `dividerAnchorMessageId` to what the user has
+  // actually reached. The next render then has `firstNewItemIdx`
+  // fall back to -1 for messages they've already passed — the
+  // divider unmounts naturally (no jitter / reflow mid-list, since
+  // it was already off-screen). Any subsequent NON-SELF arrival
+  // strictly newer than the new anchor re-renders the divider at
+  // the right slot. The divider is a recurring marker, not a
+  // one-shot ribbon — dismissal is encoded entirely in the anchor.
+  //
+  // Latest `mergedMessages` / `liveBottomVisibleId` are read through
+  // refs so the observer only rebuilds when the divider's mount
+  // state flips (`firstNewItemIdx` crossing -1). Otherwise every
+  // poll-driven message append and every sub-frame scroll tick
+  // would disconnect + recreate the IntersectionObserver. Reviewer
+  // R3 on PR 652.
   const dividerRef = useRef<HTMLDivElement | null>(null);
+  const liveBottomVisibleIdRef = useRef<string | null>(liveBottomVisibleId);
+  const mergedMessagesRef = useRef<readonly MessageWithDelivery[]>(mergedMessages);
   useEffect(() => {
-    if (dividerDismissed) return;
+    liveBottomVisibleIdRef.current = liveBottomVisibleId;
+  }, [liveBottomVisibleId]);
+  useEffect(() => {
+    mergedMessagesRef.current = mergedMessages;
+  }, [mergedMessages]);
+  useEffect(() => {
     if (firstNewItemIdx < 0) return;
     const node = dividerRef.current;
     const container = scrollContainerRef.current;
@@ -1744,7 +1726,46 @@ export function ChatView({
           const rootBounds = entry.rootBounds;
           if (!rootBounds) continue;
           if (entry.boundingClientRect.bottom < rootBounds.top) {
-            setDividerDismissed(true);
+            // Advance the anchor to what the user has ACTUALLY
+            // reached (live bottom-visible), NOT the chat tip. When
+            // a batch of remote messages is taller than the
+            // viewport, the divider can scroll past the top while
+            // the user has only reached part-way down the batch —
+            // anchoring at the tip would mark the still-below-the-
+            // fold messages as already seen, suppressing both the
+            // divider and `pillCount` for them. The live bottom-
+            // visible message id is the boundary between "I have
+            // seen this" and "still below the fold" at the moment
+            // of dismissal. Codex P2 review on PR 652.
+            //
+            // Race guard: if the live bottom-visible is currently
+            // an `optimistic-*` row (user scrolled to it during a
+            // mid-flight own send) we skip it and walk back to the
+            // last server-acked id. Without this guard, the
+            // optimistic id gets replaced by the saved id moments
+            // later → `unreadAnchorIdx = findIndex(...) = -1` →
+            // `firstNewItemIdx` permanently falls through to -1 for
+            // the rest of the visit, silently killing the divider
+            // until the user switches chats. Reviewer R4 on PR 652.
+            //
+            // Fallback to the chat tip only when nothing usable is
+            // available (very first paint, before the tracker has
+            // emitted a bottom-visible). `firstNewItemIdx`
+            // transiently stays -1 until the tracker catches up; no
+            // harmful flash.
+            const live = liveBottomVisibleIdRef.current;
+            const msgs = mergedMessagesRef.current;
+            let reached: string | null = live && !live.startsWith("optimistic-") ? live : null;
+            if (!reached) {
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (m && !m.id.startsWith("optimistic-")) {
+                  reached = m.id;
+                  break;
+                }
+              }
+            }
+            setDividerAnchorMessageId(reached);
             return;
           }
         }
@@ -1753,7 +1774,7 @@ export function ChatView({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [firstNewItemIdx, dividerDismissed]);
+  }, [firstNewItemIdx]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
@@ -2406,7 +2427,7 @@ export function ChatView({
                       disabled={renameMut.isPending}
                       title="Save"
                       className="inline-flex items-center"
-                      style={{ color: "var(--accent)", padding: 2 }}
+                      style={{ color: "var(--primary)", padding: 2 }}
                     >
                       <Check className="h-3.5 w-3.5" />
                     </button>
@@ -2581,38 +2602,36 @@ export function ChatView({
                     let node: ReactNode = null;
                     if (item.kind === "workgroup") {
                       // Default to folded while chatDetail is still loading —
-                      // opening a group chat's bubble for one frame and then
+                      // opening a group chat's card for one frame and then
                       // folding it after chatDetail resolves is worse than
                       // under-opening direct chats by the same one-frame window.
                       node = (
-                        <WorkingBubble
+                        <WorkingTurn
                           key={item.key}
                           events={item.events}
                           defaultOpen={chatDetail?.type === "direct"}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
                         />
                       );
                     } else if (item.kind === "event") {
                       const ev = item.data;
                       switch (ev.kind) {
-                        case "assistant_text":
-                          node = (
-                            <AssistantTextRow
-                              key={item.key}
-                              event={ev}
-                              agentId={agentId}
-                              agentNameFn={chatScopedAgentName}
-                              agentAvatarFn={agentAvatar}
-                              agentColorTokenFn={agentColorToken}
-                            />
-                          );
-                          break;
                         case "error":
                           node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
                           break;
+                        case "token_usage":
+                          // Inline per-turn audit pill — see token-usage
+                          // design doc (sociocurrency + audit). Kept by
+                          // `filterEventsForTimeline` across turn_end so
+                          // historical turns retain their cost stamp.
+                          node = <TokenUsagePill key={item.key} event={ev} />;
+                          break;
                         default:
-                          // tool_call / thinking are folded into the workgroup
-                          // above; turn_end is filtered upstream; anything else
-                          // is dropped.
+                          // assistant_text / tool_call / thinking are folded into
+                          // the workgroup card above; turn_end is filtered
+                          // upstream; anything else is dropped.
                           node = null;
                       }
                     } else {
@@ -2634,10 +2653,11 @@ export function ChatView({
                     // server window.
                     const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
                     // Insert the "New Messages" divider before the first item
-                    // whose message id is strictly newer than the snapshot
-                    // taken at chat-open. Dismissed once it has scrolled past
-                    // the top of the viewport (IntersectionObserver above).
-                    const showDivider = !dividerDismissed && idx === firstNewItemIdx;
+                    // whose message id is strictly newer than the current
+                    // anchor (snapshotted at chat-open; re-armed when the
+                    // divider scrolls past the viewport top — see the
+                    // IntersectionObserver above).
+                    const showDivider = idx === firstNewItemIdx;
                     const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
                     const epilogue =
                       isGapAnchor && item.kind === "message" ? (
@@ -2972,7 +2992,7 @@ export function ChatView({
                               // Insert `@` at the cursor (or replace the current selection)
                               // and re-focus. The mention autocomplete will pick it up
                               // from the resulting `value`/`cursor` state — same path as
-                              // typing `@` directly. Mirrors the Feishu / Slack
+                              // typing `@` directly. Mirrors the Slack
                               // explicit-button affordance for users who don't know the
                               // keyboard trick.
                               const el = textareaRef.current;
@@ -3032,7 +3052,7 @@ export function ChatView({
                         </span>
                         <span className="flex items-center" style={{ gap: 8 }}>
                           {uploading && (
-                            <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                            <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                               uploading…
                             </span>
                           )}

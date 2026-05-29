@@ -6,17 +6,16 @@ import {
   GitPullRequest,
   type LucideIcon,
   MessageCircle,
-  MessageSquare,
   MessagesSquare,
 } from "lucide-react";
 
 /**
  * Per-origin Lucide glyph for the conversation-row leading icon.
  *
- * Phase C collapsed the origin axis to three values (`manual` / `github`
- * / `feishu`) so the filter popover stays simple, but the rail's visual
- * vocabulary still wants per-entity icons inside GitHub — a PR row should
- * read differently from an Issue row at a glance. The renderer therefore
+ * Phase C collapsed the origin axis to two values (`manual` / `github`)
+ * so the filter popover stays simple, but the rail's visual vocabulary
+ * still wants per-entity icons inside GitHub — a PR row should read
+ * differently from an Issue row at a glance. The renderer therefore
  * looks at `(source, entityType)` together: github + a known entityType
  * picks the entity-specific glyph; github with `entityType === null` (or
  * a future entity type we haven't mapped yet) falls back to the
@@ -34,7 +33,6 @@ import {
 const SOURCE_ICON_MAP: Record<ChatSource, LucideIcon> = {
   manual: MessagesSquare,
   github: Github,
-  feishu: MessageSquare,
 };
 
 const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
@@ -47,7 +45,6 @@ const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
 const SOURCE_LABEL_MAP: Record<ChatSource, string> = {
   manual: "Manual chat",
   github: "GitHub",
-  feishu: "Feishu",
 };
 
 const GITHUB_ENTITY_LABEL_MAP: Record<GithubEntityType, string> = {
@@ -66,8 +63,8 @@ export function SourceIcon({
   source: ChatSource | undefined;
   /**
    * Within-origin sub-type from `MeChatRow.entityType`. Only consulted
-   * when `source === "github"`. Null / undefined for `manual` and
-   * `feishu` rows; the renderer falls through to the source-level icon.
+   * when `source === "github"`. Null / undefined for `manual` rows; the
+   * renderer falls through to the source-level icon.
    */
   entityType?: GithubEntityType | null;
   /** When true, render at full `--fg` (used on rows with unread mentions). */
@@ -77,8 +74,7 @@ export function SourceIcon({
   // Three-layer fallback:
   //   1. `source === "github"` + a known `entityType` → entity glyph.
   //   2. Otherwise → source-level glyph (`Github` for github with null
-  //      entityType, `MessagesSquare` for manual, `MessageSquare` for
-  //      feishu).
+  //      entityType, `MessagesSquare` for manual).
   //   3. `source` itself is missing (old server build that doesn't yet
   //      include the field) → Manual placeholder, matches Phase A's
   //      defence-in-depth narrowing.

@@ -7,8 +7,7 @@ Use this file when an external agent receives an onboarding task such as:
 The single-shot `onboard` command was retired in Phase 1A of the
 repo-merge refactor. Onboarding is now a sequence of explicit verbs:
 `login` to bind the machine, `agent create` to register the agent on the
-Hub, optional `agent bind bot|user` for Feishu, then `daemon start` to
-bring the agent online.
+Hub, then `daemon start` to bring the agent online.
 
 ## Core Rules
 
@@ -49,15 +48,7 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
      --client-id "$(first-tree config get client.id | awk '{print $2}')"
    ```
 
-6. (Optional) Bind a Feishu bot to the agent:
-
-   ```bash
-   first-tree agent bind bot --platform feishu \
-     --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
-     --agent <name>
-   ```
-
-7. Start the daemon if this machine should host the agent and no service is installed:
+6. Start the daemon if this machine should host the agent and no service is installed:
 
    ```bash
    first-tree daemon start
@@ -79,7 +70,7 @@ Interpret it as:
 - Fetch the onboarding guide with `gh` rather than relying on a browser.
 - If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree login <token>` first (paste a connect token from the Hub web console's *Computers → New Connection* dialog — its `iss` claim carries the hub URL).
 - Thread `https://first-tree.staging.unispark.dev/` through `--server` in every command.
-- Use the supported `agent create` + `agent bind` + `daemon start` sequence instead of hand-rolling Admin API calls.
+- Use the supported `agent create` + `daemon start` sequence instead of hand-rolling Admin API calls.
 
 ## Minimal Inputs to Collect
 
@@ -91,17 +82,14 @@ Interpret it as:
 - **Optional**
   - `display-name` (defaults to `name`)
   - `runtime` (defaults to `claude-code`)
-  - Feishu bot credentials (`--app-id`, `--app-secret`) — passed to `agent bind bot`, not `agent create`
   - `org` (only when the member belongs to multiple organizations)
 
 ## Type-Specific Notes
 
 - **`human`**
   - After creating the human agent, create a separate `agent` (with `visibility=private`) if a personal assistant is desired (`agent create <assistant-name> --type agent`).
-  - If a Feishu bot is bound, remind the human to send `/bind <name>` in Feishu after the command completes.
 - **`agent`** (autonomous, `visibility=organization`)
   - Standalone bot — no companion human required.
-  - Feishu bot binding is optional; no `/bind` follow-up.
 - **`agent`** (personal assistant, `visibility=private`)
   - Usually paired with a human agent on the same machine.
 
@@ -121,10 +109,6 @@ first-tree agent create alice \
 first-tree agent create alice-assistant \
   --server https://first-tree.staging.unispark.dev/ \
   --type agent --client-id "$CLIENT_ID"
-
-first-tree agent bind bot --platform feishu \
-  --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
-  --agent alice-assistant
 
 first-tree daemon start
 ```

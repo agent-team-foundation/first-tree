@@ -128,7 +128,7 @@ describe("parseOriginList", () => {
   });
 
   it("parses comma-joined multi-value", () => {
-    expect(parseOriginList(paramsOf("origin=manual,github,feishu"))).toEqual(["manual", "github", "feishu"]);
+    expect(parseOriginList(paramsOf("origin=manual,github"))).toEqual(["manual", "github"]);
   });
 
   it("silently drops unknown / future-rolled-back ChatSource literals", () => {
@@ -138,7 +138,7 @@ describe("parseOriginList", () => {
     // pre-Phase-C names like `github_pull_request` that used to be
     // valid ChatSource values but no longer are; they decay to "no
     // filter" so the rail shows every origin instead of erroring.
-    expect(parseOriginList(paramsOf("origin=manual,unknown,github_pull_request,feishu"))).toEqual(["manual", "feishu"]);
+    expect(parseOriginList(paramsOf("origin=manual,unknown,github_pull_request"))).toEqual(["manual"]);
   });
 
   it("trims whitespace and dedupes", () => {

@@ -46,12 +46,6 @@ Defaults to `https://api.github.com`, strips trailing `/`. All three service fil
 
 **Status**: ✅ implemented under M0.3 in this same commit. Existing in-process tests (`__tests__/github-app*.test.ts`) still pass because the default is identical to the literal they assert against. Independently useful for GHE / mirrored deployments.
 
-## F4 — Lark SDK has no endpoint override → feishu-mock is OUT of scope
-
-Confirmed via inspecting `@larksuiteoapi/node-sdk` usage in `services/adapter-manager.ts`: `new Client({ appId, appSecret })` and `new WSClient({...})` constructors don't accept `domain` / `baseUrl`. Combined with the documented SDK quirk of ignoring `NO_PROXY`, every interception path (mitmproxy, monkey-patch, SDK fork) is too brittle for an "always-on" framework.
-
-**Status**: ✅ M2 plan honours this — no `feishu-mock` will be added. Feishu coverage stays where it is: `packages/server/src/__tests__/feishu-adapter.test.ts` + staging. Blind-spot is recorded in proposal §十一.5.
-
 ## F5 — readiness probe uses `/healthz` (M1) not admin/clients
 
 The proposal v4 suggested `GET /api/v1/admin/clients` to confirm the client actually connected. Grep shows **no such endpoint** — owner-facing surfaces are `/api/v1/me/clients` (user-JWT-gated) and `/api/v1/orgs/:orgId/clients` (org-admin-gated). Both require auth that the M1 smoke run hasn't yet provisioned.

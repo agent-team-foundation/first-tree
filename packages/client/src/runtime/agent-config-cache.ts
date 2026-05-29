@@ -87,6 +87,7 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
             mcpServers: [],
             env: [],
             gitRepos: [],
+            reasoningEffort: "",
           },
           updatedAt: "",
           updatedBy: "",

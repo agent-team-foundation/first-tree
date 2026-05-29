@@ -8,15 +8,15 @@ import { PILL_VIEW } from "../computer-status-pill.js";
  * a regression. Matches the convention used by `presence-chip.test.ts`.
  */
 describe("PILL_VIEW — 4-state computer pill view model", () => {
-  it("ready maps to 'Ready' + idle (green) color", () => {
-    expect(PILL_VIEW.ready).toEqual({ label: "Ready", color: "var(--state-idle)" });
+  it("ready maps to 'Ready' + success (green) color", () => {
+    expect(PILL_VIEW.ready).toEqual({ label: "Ready", color: "var(--success)" });
   });
 
   it("auth_expired maps to 'Auth expired' + error (red) color", () => {
     expect(PILL_VIEW.auth_expired).toEqual({ label: "Auth expired", color: "var(--state-error)" });
   });
 
-  it("setup_incomplete maps to 'Setup incomplete' + blocked (amber) color", () => {
+  it("setup_incomplete maps to 'Setup incomplete' + blocked (orange) color", () => {
     expect(PILL_VIEW.setup_incomplete).toEqual({ label: "Setup incomplete", color: "var(--state-blocked)" });
   });
 

@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
@@ -11,6 +12,35 @@ import { renderChatContextSection } from "./chat-context-section.js";
 import { getCliBinding } from "./cli-binding.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
+
+/**
+ * Promisified `execFile` used by the Context Tree sync path. The sync path
+ * runs at startup while N agents are concurrently issuing `agent:bind` and
+ * `/api/v1/agent/config` requests; `execFileSync` froze the event loop for the
+ * full duration of `git pull` (~7s on a typical home connection), which made
+ * `AbortSignal.timeout(5_000)` on those in-flight HTTP calls fire spuriously —
+ * server-side traces showed the requests completing in <10ms — and stretched
+ * boot to ≈7s × N because each blocking pull also stalled the dedup window in
+ * {@link withContextTreeSyncLock}: only the very first slot to reach the lock
+ * collapsed onto the leader's promise, every later slot arrived after the
+ * leader's pull had already resolved and acquired a fresh lock of its own.
+ * Async exec lets the event loop keep servicing HTTP responses, lets all N
+ * slots reach the lock during the leader's pull, and collapses startup to a
+ * single shared sync (~10s total instead of ~7s × N).
+ */
+const execFileAsync = promisify(execFile);
+
+/**
+ * `execFile` defaults `maxBuffer` to 1MB; once child output exceeds that it
+ * rejects with `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` and the whole sync path
+ * falls through. `git clone` of a small Context Tree is typically harmless,
+ * but the verbose / progress lines of an unusually large or slow clone (or a
+ * future debug flag) can creep past the default. Reserve 10MB on the three
+ * clone call sites — cheap defence against a rare but high-blast-radius
+ * failure mode, since hitting it cascades into the SSH-fallback and
+ * re-clone branches and finally leaves the agent with no Context Tree.
+ */
+const GIT_CLONE_MAX_BUFFER = 10 * 1024 * 1024;
 
 // Function rather than top-level const: see CLI's `channel-env.ts`
 // history note — locking a path at module load re-introduces the bundle
@@ -90,7 +120,7 @@ async function resolveContextTreeBinding(
 ): Promise<ContextTreeBinding | null> {
   // 1. Check git is available
   try {
-    execFileSync("git", ["--version"], { stdio: "ignore" });
+    await execFileAsync("git", ["--version"]);
   } catch {
     log("Context Tree sync skipped: git is not installed");
     return null;
@@ -127,33 +157,31 @@ async function syncContextTreeRepo(
   try {
     if (existsSync(join(cloneDir, ".git"))) {
       // Ensure we're on the expected branch before pulling
-      const currentBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      const { stdout: headRef } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
         cwd: cloneDir,
         encoding: "utf-8",
         timeout: 5_000,
-      }).trim();
-      if (currentBranch !== branch) {
-        execFileSync("git", ["checkout", branch], {
+      });
+      if (headRef.trim() !== branch) {
+        await execFileAsync("git", ["checkout", branch], {
           cwd: cloneDir,
-          stdio: "pipe",
           timeout: 10_000,
         });
         log(`Context Tree switched to branch ${branch}`);
       }
 
       // Pull latest changes
-      execFileSync("git", ["pull", "--ff-only"], {
+      await execFileAsync("git", ["pull", "--ff-only"], {
         cwd: cloneDir,
-        stdio: "pipe",
         timeout: 30_000,
       });
       log(`Context Tree updated (pull)`);
     } else {
       // First clone
       mkdirSync(cloneDir, { recursive: true });
-      execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-        stdio: "pipe",
+      await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
         timeout: 60_000,
+        maxBuffer: GIT_CLONE_MAX_BUFFER,
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
@@ -177,9 +205,9 @@ async function syncContextTreeRepo(
       try {
         rmSync(cloneDir, { recursive: true, force: true });
         mkdirSync(cloneDir, { recursive: true });
-        execFileSync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
-          stdio: "pipe",
+        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
           timeout: 60_000,
+          maxBuffer: GIT_CLONE_MAX_BUFFER,
         });
         log("Context Tree cloned via SSH fallback");
         // Report the SSH URL as ground truth — `git remote get-url origin`
@@ -204,9 +232,9 @@ async function syncContextTreeRepo(
       try {
         rmSync(cloneDir, { recursive: true, force: true });
         mkdirSync(cloneDir, { recursive: true });
-        execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-          stdio: "pipe",
+        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
           timeout: 60_000,
+          maxBuffer: GIT_CLONE_MAX_BUFFER,
         });
         log("Context Tree re-cloned successfully");
         return { path: cloneDir, repoUrl: repo, branch };
@@ -324,42 +352,58 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
 export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
 
 /**
- * Walk up from the current module to find the closest `package.json` with
- * a `version` field.
+ * Resolve a stable identifier for the bundled CLI that the handler can
+ * compare against the cached `.agent/cli-version` to detect upgrades.
  *
- * - **Published / `dev-install.sh` bundle** (the path that actually matters
- *   for the drift trigger): `bootstrap.ts` is inlined into an `apps/cli/
- *   dist/<chunk>.mjs` chunk, so the walk goes `dist/<chunk>.mjs` → `dist/`
- *   → the CLI manifest. CI publish rewrites that manifest's `name`/`bin`
- *   to the channel before `pnpm build`, so the version we read is the
- *   consumer-facing CLI version (`first-tree` / `first-tree-staging` /
- *   `first-tree-dev`). This is what `first-tree upgrade` bumps.
- * - **Source-tree `tsx` / vitest runs**: there is no bundle; the walk
- *   from `packages/client/src/runtime/bootstrap.ts` hits the
- *   `@first-tree/client` manifest first. That package is `private`
- *   (no published release bumps it), so the pin doesn't track CLI
- *   versions in dev mode. Drift detection still works correctly because
- *   each invocation reads the same value; the dev-mode pin just won't
- *   tick when the operator runs a real `pnpm install -g first-tree@...`.
- *   Acceptable: dev iteration is the wrong place to validate CLI-upgrade
- *   refresh semantics anyway.
+ * Behaviour by channel:
+ *
+ *   - **prod / staging** — returns the bare `<pkgVersion>` from the
+ *     closest ancestor `package.json`. CI bumps that manifest's `version`
+ *     on every release, so version alone is the unique build identifier.
+ *   - **dev** — returns `<pkgVersion>+build.<mtime>`, where `<mtime>` is
+ *     the integer `mtimeMs` of the file backing `moduleUrl`. Dev iteration
+ *     never bumps `apps/cli/package.json` (CLAUDE.md forbids touching
+ *     `version` fields), so a bare version would be constant across every
+ *     `scripts/dev-install.sh` cycle and `cliDrifted` would never fire.
+ *     `pnpm build` rewrites `dist/cli/index.mjs` and updates its mtime,
+ *     so the appended suffix changes on every build → handler triggers
+ *     a full re-bootstrap and the agent home picks up the new
+ *     CLAUDE.md / tools.md / shipped skills payload.
+ *
+ * Channel is read from `getCliBinding().packageName`: `null` is the dev
+ * channel (dev binaries are not published — see
+ * `runtime/cli-binding.ts`), everything else is a published channel.
+ *
+ * If `getCliBinding()` has not been initialised yet (e.g. an early
+ * bootstrap call before `apps/cli` wired the binding), we fall through
+ * to the bare-version path so the caller still gets something
+ * drift-comparable.
+ *
+ * Walk source: the closest ancestor `package.json` with a non-empty
+ * `version`. For the **published bundle**, `bootstrap.ts` is inlined
+ * into `apps/cli/dist/<chunk>.mjs`, so the walk lands on the CLI
+ * manifest. For **source-tree `tsx` / vitest runs** it lands on the
+ * private `@first-tree/client` manifest — that version is constant in
+ * dev too, which is exactly why dev needs the mtime suffix.
  *
  * Imported from here (not from `apps/cli`) to keep the client → CLI
  * dependency direction one-way.
  *
- * Returns `null` if the walk exhausts every parent — we treat that as
- * "version unknown" and fall back to the sentinel-only path, never as
- * "drifted".
+ * Returns `null` only when the walk exhausts every parent without
+ * finding any `version` — drift detection then falls back to "unknown",
+ * never to "drifted".
  */
 export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): string | null {
   let dir = dirname(fileURLToPath(moduleUrl));
+  let version: string | null = null;
   for (let i = 0; i < 10; i += 1) {
     const candidate = resolve(dir, "package.json");
     if (existsSync(candidate)) {
       try {
         const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown };
         if (typeof parsed.version === "string" && parsed.version.length > 0) {
-          return parsed.version;
+          version = parsed.version;
+          break;
         }
       } catch {
         // Corrupt or unreadable — keep walking; finding *some* version is
@@ -370,7 +414,33 @@ export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): s
     if (parent === dir) break;
     dir = parent;
   }
-  return null;
+  if (version === null) return null;
+
+  // Channel gate: only the dev channel needs the build fingerprint.
+  // packageName === null is the published-channel-absent marker (see
+  // CliBinding's docblock). Anywhere else (prod / staging / uninitialised)
+  // we keep the bare version — staging/prod have a release-bumped
+  // version that already changes per build, so a fingerprint would just
+  // be noise in the `.agent/cli-version` pin.
+  let isDevChannel = false;
+  try {
+    isDevChannel = getCliBinding().packageName === null;
+  } catch {
+    // Binding not initialised — treat as non-dev. Safer default: skip
+    // the suffix rather than emit a fingerprint into a sentinel that a
+    // later boot (with binding set) would reject as drifted.
+  }
+  if (!isDevChannel) return version;
+
+  // Wrapped in try/catch so a synthetic `moduleUrl` pointing at a
+  // non-existent path still produces a usable version string for callers
+  // (and tests) that hand in dummy URLs.
+  try {
+    const mtimeMs = Math.floor(statSync(fileURLToPath(moduleUrl)).mtimeMs);
+    return `${version}+build.${mtimeMs}`;
+  } catch {
+    return version;
+  }
 }
 
 /** Read the cached CLI version that last ran bootstrap, if any. */
@@ -508,7 +578,45 @@ export type InstallFirstTreeIntegrationOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
+export type InstallCoreSkillsOptions = {
+  workspacePath: string;
+  log: (msg: string) => void;
+  /**
+   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
+   * ESM-module spying limitations.
+   */
+  exec?: InstallFirstTreeIntegrationExec;
+};
+
+/**
+ * Test-mode override for `defaultInstallExec`. Set via {@link __setTestInstallExec}
+ * from `vitest.setup.ts` to a no-op so handler-level tests that go through
+ * `handler.start()` do not actually shell out to the channel binary or `npx`
+ * for `installCoreSkills` / `installFirstTreeIntegration`. Production leaves
+ * this `null` and `defaultInstallExec` runs `execFileSync` normally.
+ */
+let testInstallExecOverride: InstallFirstTreeIntegrationExec | null = null;
+
+/**
+ * Install (or clear) a global test override for the install-exec backend.
+ * Only call this from test setup files — the override is process-wide and
+ * persists until cleared with `null`.
+ */
+export function __setTestInstallExec(exec: InstallFirstTreeIntegrationExec | null): void {
+  testInstallExecOverride = exec;
+}
+
+// Kept synchronous (cf. the `execFileAsync` migration in this file): runs on
+// the per-session bootstrap path inside the handler, not the per-agent-bind
+// boot hot path, so even if `npx -y <package>@latest` stalls (cold download
+// can be 10s+) it cannot pile up across the 6-slot startup window the way
+// `syncContextTreeRepo` did. Re-evaluate if `installFirstTreeIntegration` is
+// ever moved to a code path that runs N times in parallel at process start.
 function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
+  if (testInstallExecOverride) {
+    testInstallExecOverride(command, args, options);
+    return;
+  }
   execFileSync(command, args, {
     cwd: options.cwd,
     stdio: "pipe",
@@ -598,6 +706,71 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
         continue;
       }
       log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
+      return false;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Install the **core** (Context-Tree-independent) first-tree skill payloads
+ * — currently just `attention` — into the workspace by shelling out to
+ * `<bin> tree skill install-core`. Called unconditionally by every session
+ * bootstrap so the slimmed `tools.md` pointer at `attention/SKILL.md`
+ * resolves on disk even for agents without a Context Tree binding.
+ *
+ * Tree-bound agents will also receive `attention` via the subsequent
+ * `installFirstTreeIntegration` → `copyCanonicalSkills` flow; the duplicate
+ * copy is idempotent (cp -r overwrite) and the two paths are kept
+ * independently robust so a failure in one does not silently weaken the
+ * other.
+ *
+ * Resolution and degradation match `installFirstTreeIntegration`: try the
+ * channel-resolved binary on PATH, fall back to `npx -y <pkg>@latest` when
+ * a published package exists, log + return false on terminal failure.
+ */
+export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
+  const { workspacePath, log } = options;
+  const exec = options.exec ?? defaultInstallExec;
+  const { binName, packageName } = getCliBinding();
+
+  const args = ["tree", "skill", "install-core", "--root", workspacePath];
+
+  const attempts: Array<{ command: string; args: string[]; label: string }> = [
+    { command: binName, args, label: `${binName} (PATH)` },
+    ...(packageName
+      ? [
+          {
+            command: "npx",
+            args: ["-y", `${packageName}@latest`, ...args],
+            label: `npx ${packageName}@latest`,
+          },
+        ]
+      : []),
+  ];
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    if (!attempt) continue;
+    try {
+      exec(attempt.command, attempt.args, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+      log(`Core skills installed via ${attempt.label}`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
+      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
+      const shouldRetry = binaryMissing || unsupportedByThisCli;
+      const isLastAttempt = index === attempts.length - 1;
+      if (shouldRetry && !isLastAttempt) {
+        log(`Core skill install via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
+        continue;
+      }
+      log(`Core skill install skipped (${attempt.label}): ${msg.slice(0, 200)}`);
       return false;
     }
   }
@@ -728,9 +901,13 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
     lines.push("");
     lines.push(
       "The following repositories are pre-checked-out at the top level of your",
-      "working directory. Treat them as **read-only / browse-only baselines** —",
-      "they are shared with every chat of this agent, so do **not** modify them",
-      "in place or switch their branches:",
+      "working directory. They sit on a long-lived hub-session branch that is",
+      "**not** refreshed during this chat — the code may be many commits behind",
+      "`origin/main`. Use them only for read-only orientation (grep, file layout,",
+      "`git log`); for anything that must reflect current `main` (review, analysis,",
+      "code changes), do not reuse this checkout — create a fresh worktree off",
+      "`origin/<base>` (see below). Shared across every chat of this agent; do",
+      "not modify them in place or switch their branches.",
     );
     lines.push("");
     for (const repo of sourceRepos) {
@@ -753,21 +930,22 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
   worktreeBlock.push("## Creating Worktrees On Demand");
   worktreeBlock.push("");
   worktreeBlock.push(
-    "**No worktrees are pre-created.** When you need to modify code, branch off",
-    `into a new worktree under \`${agentHome}/worktrees/<task-name>/\` and work there:`,
+    "**No worktrees are pre-created.** Every new task starts by branching a",
+    `fresh worktree under \`${agentHome}/worktrees/<task-name>/\` off a freshly-`,
+    "fetched `origin/<base>` — do not reuse the pre-checked-out path above.",
   );
   worktreeBlock.push("");
   worktreeBlock.push(
     "```bash",
     `# from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}`,
-    `git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch>`,
+    "git fetch origin",
+    `git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main`,
     "```",
   );
   worktreeBlock.push("");
   worktreeBlock.push(
-    "Replace `<task-name>` with something descriptive (e.g. `<repo>-<short-task-id>`)",
-    "and `<new-branch>` with a real branch name. When finished, the operator can",
-    "clean up worktrees with `git worktree remove`.",
+    "Replace `<task-name>`, `<new-branch>`, and `origin/main` to fit. When",
+    "finished, the operator cleans up with `git worktree remove`.",
   );
   sections.push(worktreeBlock.join("\n"));
 
@@ -874,51 +1052,8 @@ this command.
 
 ## When You Need a Human (Need-Human-Attention)
 
-**Hard rule:** if you need a human to decide, endorse, clarify, or just know —
-use the **Need-Human-Attention (NHA)** primitive, NOT a plain \`chat send\` that
-asks "could you confirm…" / "please decide…". NHA gives the ask a target, a
-state machine, a typed response slot, and a UI surface the human cannot miss.
-A plain chat send asking for a decision is easy to lose in the scroll and
-gives your turn no clean place to resume.
+Use \`${bin} attention raise --requires-response\` before any irreversible or externally-visible action that needs the human's go-ahead (ask), use \`${bin} attention raise\` without the flag right after such an action completes while the human is not watching (notify), and use plain \`chat send\` for everything else — full trigger lists, body templates, and waiting behaviour live in the attention skill (\`.claude/skills/attention/SKILL.md\` or \`.agents/skills/attention/SKILL.md\`).
 
-\`\`\`bash
-# Ask (expects a reply) — your turn resumes when the human responds.
-${bin} attention raise \\
-  --chat <chat-id-of-this-conversation> \\
-  --target <human-agent-name> \\
-  --subject "<one-line summary>" \\
-  --body "<context, options, what you'll do on each path>" \\
-  --requires-response
-
-# Notify (fire-and-forget) — closes on creation, no response slot.
-${bin} attention raise --chat <id> --target <name> \\
-  --subject "deployed v1.4.2" --body "..."
-\`\`\`
-
-**Trigger checklist — use NHA, not \`chat send\`, when any of:**
-
-- You're about to ask a human to **decide**, **approve**, **endorse**, or
-  **clarify ambiguous intent** before you can continue.
-- You need to **escalate** because a guardrail / blocker fires (cannot
-  self-resolve safely).
-- You need to **inform** a human of a state change that affects them
-  (deploy done, PR merged, incident detected) — use \`--requires-response\`
-  off for the notification variant.
-
-**When \`chat send\` is still correct:**
-
-- Coordinating with another **agent** in the chat.
-- Narrative / progress updates that don't need any action.
-- Sending the actual answer / result the human asked for (NHA is for the
-  *ask*; the *delivery* is normal chat).
-
-**Skill reference:** read \`.claude/skills/attention/SKILL.md\` (or
-\`.agents/skills/attention/SKILL.md\`) for the full playbook — body
-template, waiting behaviour, no-response handling, and the four lenses
-(Endorse / Information / Direction / Inform).
-
-## Source Repos
-
-For development tasks, prefer the repo worktrees already present in this workspace.
+**\`AskUserQuestion\` is NOT available in this Hub — it is denied on call.** If you ever invoke \`AskUserQuestion\` (or any built-in "ask the user" tool) and it is denied, you MUST re-issue the request as a request-type NHA via \`${bin} attention raise --requires-response\`. Do NOT fall back to asking the question as plain final-text or a \`chat send\`: a request-NHA is the only mechanism that targets a specific human, carries a response expectation, and resumes your turn when they reply. Convert each choice you would have offered into the NHA body (and \`metadata.options\` / \`metadata.questions\` when the human should click rather than type).
 `;
 }

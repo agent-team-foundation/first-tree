@@ -36,7 +36,7 @@ export const messages = pgTable(
     /** Original message ID; threads replies in the same chat. */
     inReplyTo: text("in_reply_to"),
     /**
-     * Entry point that created this message: web / cli / feishu / github / api.
+     * Entry point that created this message: web / cli / github / api.
      * NOT NULL after migration 0047 — every write path declares its
      * caller-stack origin so observability / loop / egress diagnostics can
      * group on it without a backfilling join.

@@ -25,6 +25,14 @@ type ChannelDef = {
   /** Bare service identifier — `.service` / `.plist` suffix added by callers. */
   serviceUnitName: string;
   launchdLabel: string;
+  /**
+   * Human-readable name surfaced to the OS service manager. macOS lists
+   * background items by the launched program's filename, so the launchd
+   * wrapper script is named after this (see `renderLaunchdWrapper` in the
+   * CLI). Keep each channel distinct so parallel installs are
+   * distinguishable in System Settings → Login Items & Extensions.
+   */
+  displayName: string;
 };
 
 const TABLE = {
@@ -36,6 +44,7 @@ const TABLE = {
     defaultServerUrl: "http://127.0.0.1:8000",
     serviceUnitName: "first-tree-dev",
     launchdLabel: "first-tree-dev",
+    displayName: "First Tree (Dev)",
   },
   staging: {
     binName: "first-tree-staging",
@@ -45,6 +54,7 @@ const TABLE = {
     defaultServerUrl: "https://dev.cloud.first-tree.ai",
     serviceUnitName: "first-tree-staging",
     launchdLabel: "first-tree-staging",
+    displayName: "First Tree (Staging)",
   },
   prod: {
     binName: "first-tree",
@@ -54,6 +64,7 @@ const TABLE = {
     defaultServerUrl: "https://cloud.first-tree.ai",
     serviceUnitName: "first-tree",
     launchdLabel: "first-tree",
+    displayName: "First Tree",
   },
 } as const satisfies Record<ChannelName, ChannelDef>;
 
@@ -67,6 +78,7 @@ export type ChannelConfig = {
   serviceUnitFile: string;
   launchdLabel: string;
   launchdPlistFile: string;
+  displayName: string;
 };
 
 export function getChannelConfig(channel: ChannelName): ChannelConfig {
@@ -81,6 +93,7 @@ export function getChannelConfig(channel: ChannelName): ChannelConfig {
     serviceUnitFile: `${def.serviceUnitName}.service`,
     launchdLabel: def.launchdLabel,
     launchdPlistFile: `${def.launchdLabel}.plist`,
+    displayName: def.displayName,
   };
 }
 

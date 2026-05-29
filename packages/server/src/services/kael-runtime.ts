@@ -149,8 +149,7 @@ export function createKaelRuntime(
 
       // Claim before opening a span: an empty tick (no pending entries)
       // produces nothing to monitor. Without this short-circuit each Kael
-      // tick lights up an idle span every 5s — same noise pattern as the
-      // adapter.outbound feishu worker fixed alongside this change.
+      // tick lights up an idle span every 5s.
       let claimed: Array<{
         id: number;
         inbox_id: string;

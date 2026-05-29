@@ -12,21 +12,20 @@ import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
-import { adapterMappingRoutes } from "./api/adapter-mappings.js";
 import { adapterRoutes } from "./api/adapters.js";
 import { agentAttentionRoutes } from "./api/agent/attention.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
-import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
-import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes } from "./api/agent/messages.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
+import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
+import { attachmentRoutes } from "./api/attachments.js";
 import { attentionRoutes } from "./api/attention.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -42,10 +41,9 @@ import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
-import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
-import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
 import { orgAdapterRoutes } from "./api/orgs/adapters.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
+import { orgAttachmentRoutes } from "./api/orgs/attachments.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
@@ -56,6 +54,7 @@ import { orgMemberRoutes } from "./api/orgs/members.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
+import { orgUsageRoutes } from "./api/orgs/usage.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { readyzRoutes } from "./api/readyz.js";
 import { sessionRoutes } from "./api/sessions.js";
@@ -78,7 +77,6 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
-import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -96,7 +94,6 @@ import "./types.js";
 export type AppContext = {
   notifier: Notifier;
   backgroundTasks: BackgroundTasks;
-  adapterManager: AdapterManager;
   kaelRuntime: KaelRuntime | undefined;
 };
 
@@ -334,6 +331,16 @@ export async function buildApp(config: Config) {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
   });
 
+  // Body parser for `application/octet-stream` — needed by the attachment
+  // upload route. Fastify's built-in parsers cover json / text only; without
+  // this registration `request.body` would be undefined on an octet-stream
+  // POST and the route would 415. Registered globally because Fastify only
+  // supports global content-type parsers; the route still owns its own
+  // `bodyLimit` so the byte cap is route-local.
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
+
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
   const isDev = process.env.NODE_ENV !== "production";
@@ -455,8 +462,8 @@ export async function buildApp(config: Config) {
 
   // Root-level health checks for container orchestration (outside /api/v1).
   // `/healthz` checks process + DB reachability (used by Docker HEALTHCHECK).
-  // `/readyz` checks full readiness — all bootstrap stages done + all adapter
-  // bots connected. See docs/server-bootstrap-resilience-design.md §3 (T6).
+  // `/readyz` checks full readiness — all bootstrap stages done.
+  // See docs/server-bootstrap-resilience-design.md §3 (T6).
   await app.register(healthzRoutes);
   await app.register(readyzRoutes);
 
@@ -503,6 +510,17 @@ export async function buildApp(config: Config) {
         { prefix: "/attention" },
       );
 
+      // Object-storage primitive — download surface (user-JWT). Generic
+      // binary blob download; not bound to any business surface. Auth is a
+      // capability model: valid JWT + knowledge of the unguessable id. Upload
+      // lives under the org scope below. See api/attachments.ts.
+      await api.register(
+        userScope("attachmentRoutesScope", async (scope) => {
+          await scope.register(attachmentRoutes);
+        }),
+        { prefix: "/attachments" },
+      );
+
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
       await api.register(
         userScope("orgsScope", async (scope) => {
@@ -510,10 +528,9 @@ export async function buildApp(config: Config) {
           await scope.register(orgAgentRoutes, { prefix: "/agents" });
           await scope.register(orgChatRoutes, { prefix: "/chats" });
           await scope.register(orgAdapterRoutes, { prefix: "/adapters" });
-          await scope.register(orgAdapterMappingRoutes, { prefix: "/adapter-mappings" });
-          await scope.register(orgAdapterStatusRoutes, { prefix: "/adapters/status" });
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
+          await scope.register(orgUsageRoutes, { prefix: "/usage" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
@@ -521,6 +538,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
+          await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
         }),
         { prefix: "/orgs/:orgId" },
       );
@@ -534,10 +552,10 @@ export async function buildApp(config: Config) {
           await scope.register(agentRoutes, { prefix: "/agents" });
           await scope.register(agentConfigRoutes, { prefix: "/agents" });
           await scope.register(agentActivityRoutes, { prefix: "/agents" });
+          await scope.register(agentUsageRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(adapterRoutes, { prefix: "/adapters" });
-          await scope.register(adapterMappingRoutes, { prefix: "/adapter-mappings" });
           await scope.register(clientRoutes, { prefix: "/clients" });
         }),
         { prefix: "" },
@@ -553,9 +571,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentAttentionRoutes, { prefix: "/attention" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
-
-          await scope.register(agentFeishuBotRoutes);
-          await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });
         }),
         { prefix: "/agent" },
       );
@@ -623,10 +638,6 @@ export async function buildApp(config: Config) {
   });
   app.decorate("configService", configService);
 
-  // Adapter manager — decorated so admin routes can trigger reload
-  const adapterManager = createAdapterManager(db, config.secrets.encryptionKey, app.log, notifier);
-  app.decorate("adapterManager", adapterManager);
-
   // Kael runtime — server-embedded forwarding to Kael API
   const contextTreeDir = join(defaultDataDir(), "context-tree");
   const kaelRuntime = config.kael?.endpoint
@@ -642,7 +653,7 @@ export async function buildApp(config: Config) {
     : undefined;
 
   // Background tasks
-  const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager, kaelRuntime);
+  const backgroundTasks = createBackgroundTasks(app, config.instanceId, kaelRuntime);
 
   // NC1 pulse aggregator — 32-bucket rolling window over runtime state
   // transitions. Broadcasts a per-org `pulse:tick` frame every 5s to admin
@@ -654,7 +665,6 @@ export async function buildApp(config: Config) {
   const hotReloadLog = createLogger("HotReload");
   notifier.onConfigChange((configType) => {
     if (configType === "adapter_configs") {
-      adapterManager.reload().catch((err) => hotReloadLog.error({ err }, "adapter hot-reload failed (PG NOTIFY)"));
       kaelRuntime?.reload().catch((err) => hotReloadLog.error({ err }, "kael hot-reload failed (PG NOTIFY)"));
     }
   });
@@ -670,7 +680,7 @@ export async function buildApp(config: Config) {
   });
 
   // Start notifier and background tasks on server start.
-  // Adapter / kael initial reload happens inside backgroundTasks.start() as a
+  // Kael initial reload happens inside backgroundTasks.start() as a
   // fire-and-forget task so app.listen() is not blocked by remote handshakes —
   // see docs/server-bootstrap-resilience-design.md (T1/T2).
   app.addHook("onReady", async () => {
@@ -687,7 +697,6 @@ export async function buildApp(config: Config) {
     commandVersionPoller.stop();
     pulseAggregator.stop();
     backgroundTasks.stop();
-    adapterManager.shutdown();
     kaelRuntime?.shutdown();
     await notifier.stop();
     await listenClient.end();

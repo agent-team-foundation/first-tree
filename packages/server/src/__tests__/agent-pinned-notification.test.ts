@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
-import { createAgent } from "../services/agent.js";
+import { createAgent, suspendAgent } from "../services/agent.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestApp } from "./helpers.js";
@@ -335,6 +335,121 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       const b = seenPinned.get(offlineCreated2.uuid);
       expect(b).toBeDefined();
       expect(b?.name).toBe(offlineCreated2.name);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("does not backfill suspended pinned agents", async () => {
+    const seed = await seedConnectedClient("suspended-backfill");
+    const active = await createAgent(app.db, {
+      name: `pin-active-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Active Pinned",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+    const suspended = await createAgent(app.db, {
+      name: `pin-suspended-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Suspended Pinned",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+    await suspendAgent(app.db, suspended.uuid);
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    try {
+      const seenPinned = new Set<string>();
+      ws.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString()) as { type?: string; agentId?: string };
+          if (msg.type === "agent:pinned" && typeof msg.agentId === "string") seenPinned.add(msg.agentId);
+        } catch {
+          // ignore
+        }
+      });
+
+      ws.send(JSON.stringify({ type: "auth", token: seed.token }));
+      await waitForFrame(ws, (m) => (m as { type?: string }).type === "auth:ok");
+      ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId }));
+      await waitForFrame(ws, (m) => (m as { type?: string }).type === "client:registered");
+      await waitForFrame(
+        ws,
+        (m) => (m as { type?: string; agentId?: string }).type === "agent:pinned" && seenPinned.has(active.uuid),
+        2000,
+      );
+      await new Promise((r) => setTimeout(r, 100));
+      expect(seenPinned.has(active.uuid)).toBe(true);
+      expect(seenPinned.has(suspended.uuid)).toBe(false);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("suspend sends force-disconnect reason and rejects later runtime frames", async () => {
+    const seed = await seedConnectedClient("suspend-force");
+    const agent = await createAgent(app.db, {
+      name: `pin-force-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Force Suspended",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: "bind-force",
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+          runtimeVersion: "test",
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) => (m as { type?: string; agentId?: string }).type === "agent:force_disconnect",
+      );
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/agents/${agent.uuid}/suspend`,
+        headers: { authorization: `Bearer ${seed.token}` },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const frame = await forcePromise;
+      expect(frame).toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_suspended",
+      });
+
+      ws.send(
+        JSON.stringify({ type: "session:state", agentId: agent.uuid, chatId: "chat-after-suspend", state: "active" }),
+      );
+      const error = await waitForFrame(ws, (m) => (m as { type?: string }).type === "error");
+      expect(error.message).toBe("Agent not bound");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

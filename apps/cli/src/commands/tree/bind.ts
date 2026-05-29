@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
   type BoundTreeReference,
@@ -213,6 +214,7 @@ export function bindSourceRoot(sourceRoot: string, options: BindOptions, command
   ensureWhitepaperSymlink(sourceRoot);
   upsertLocalTreeGitIgnore(sourceRoot);
   upsertSourceIntegrationFiles(sourceRoot, treeResolution.treeRepoName, {
+    binName: channelConfig.binName,
     bindingMode: binding.bindingMode,
     entrypoint: binding.entrypoint,
     treeMode: binding.treeMode,

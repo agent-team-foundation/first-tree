@@ -4,11 +4,11 @@ import { listMeChatsQuerySchema } from "../schemas/me-chat.js";
 describe("listMeChatsQuerySchema", () => {
   it("coerces comma-separated origin and participant filters", () => {
     const parsed = listMeChatsQuerySchema.parse({
-      origin: "manual, github, ,feishu",
+      origin: "manual, github, ,",
       with: "agent-a, agent-b,",
     });
 
-    expect(parsed.origin).toEqual(["manual", "github", "feishu"]);
+    expect(parsed.origin).toEqual(["manual", "github"]);
     expect(parsed.with).toEqual(["agent-a", "agent-b"]);
   });
 

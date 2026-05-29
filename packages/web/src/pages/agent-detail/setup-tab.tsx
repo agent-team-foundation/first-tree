@@ -1,6 +1,7 @@
 import { Navigate } from "react-router";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ModelSection } from "./model-section.js";
+import { ReasoningEffortSection } from "./reasoning-effort-section.js";
 import { SetupSection } from "./setup-section.js";
 
 export function SetupTab() {
@@ -38,6 +39,16 @@ export function SetupTab() {
               baseline={ctx.config?.payload.model ?? ""}
               onChange={ctx.draft.setModel}
               onRevert={ctx.draft.revertModel}
+              disabled={ctx.agent.status !== "active"}
+              provider={ctx.setupRuntimeProvider}
+            />
+          }
+          effortSlot={
+            <ReasoningEffortSection
+              value={ctx.draft.draft.reasoningEffort}
+              baseline={ctx.config?.payload.reasoningEffort ?? ""}
+              onChange={ctx.draft.setReasoningEffort}
+              onRevert={ctx.draft.revertReasoningEffort}
               disabled={ctx.agent.status !== "active"}
               provider={ctx.setupRuntimeProvider}
             />

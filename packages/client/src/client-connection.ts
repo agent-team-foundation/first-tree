@@ -122,7 +122,7 @@ type ClientConnectionEvents = {
   reconnected: [];
   error: [error: Error];
   "agent:bound": [agent: BoundAgent];
-  "agent:unbound": [agentId: string];
+  "agent:unbound": [agentId: string, reason?: string];
   /**
    * Server pushed a fully-assembled inbox entry over the WS data plane.
    * Listeners must call `connection.sendInboxAck(frame.entryId)` once the
@@ -994,7 +994,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const agentId = msg.agentId as string;
       if (agentId && this.boundAgents.has(agentId)) {
         this.boundAgents.delete(agentId);
-        this.emit("agent:unbound", agentId);
+        this.emit("agent:unbound", agentId, typeof msg.reason === "string" ? msg.reason : "server_forced");
       }
       return;
     }

@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt,
   deepEqualIdentity,
   FIRST_TREE_WORKSPACE_MARKER,
+  installCoreSkills,
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
@@ -250,12 +251,22 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // matches the user's auth mode (e.g. ChatGPT-account auth rejects the
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
+  // Sandbox: codex is the agent's primary local-execution surface (docker,
+  // cross-directory writes, host tools all flow through it). `workspace-write`
+  // blocks unix sockets outside the workspace (notably ~/.docker/run/docker.sock)
+  // and any out-of-tree write the agent legitimately needs. We run with
+  // `danger-full-access` and rely on the agent to gate irreversible actions
+  // via Need-Human-Attention (NHA) instead of a sandbox-level wall.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: "workspace-write",
+    sandboxMode: "danger-full-access",
     approvalPolicy: "never",
-    modelReasoningEffort: "high",
+    // Operator-configured reasoning effort. Defaults to "high" (the value this
+    // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
+    // is a subset of the SDK's ModelReasoningEffort and deliberately omits
+    // "minimal", which is incompatible with the default tool set (footgun F3).
+    modelReasoningEffort: payload.kind === "codex" ? payload.reasoningEffort : "high",
     webSearchEnabled: false,
     additionalDirectories,
   };
@@ -293,6 +304,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let codex: Codex | null = null;
   let thread: Thread | null = null;
   let threadId: string | null = null;
+  // Best-effort label for the current Codex thread's model — recorded from the
+  // last `buildCodexThreadOptions` call so `token_usage` events can carry a
+  // model name. The SDK does not echo back the actual model used (the CLI may
+  // pick a default when `payload.model` is empty), so this is whatever the
+  // operator configured; absence is surfaced as the placeholder below.
+  let currentModel = "";
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
@@ -796,6 +813,29 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
 
     const succeeded = !turnFailed && !forwardFailed;
+    // Emit `token_usage` just before `turn_end` so the wire-order matches the
+    // claude-code handler (consumers can group all usage events for a turn
+    // between the previous and current `turn_end`). `usage` is null when the
+    // turn never reached `turn.completed` (abort / unrecoverable failure) —
+    // in that case the SDK has no totals to share and we skip the emit
+    // rather than ship zeros.
+    const usageForEvent = usageBox.value;
+    if (usageForEvent) {
+      try {
+        sessionCtx.emitEvent({
+          kind: "token_usage",
+          payload: {
+            provider: "codex",
+            model: currentModel || "codex-default",
+            inputTokens: usageForEvent.input_tokens,
+            cachedInputTokens: usageForEvent.cached_input_tokens,
+            outputTokens: usageForEvent.output_tokens,
+          },
+        });
+      } catch (err) {
+        sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     sessionCtx.emitEvent({
       kind: "turn_end",
       payload: { status: succeeded ? "success" : "error" },
@@ -994,6 +1034,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
     });
+    // Core skills (`attention`) ship with every agent, with or without a
+    // Context Tree. Slow path runs on first start or CLI-version drift —
+    // both moments when the on-disk skill payload could be missing or
+    // stale, so refresh unconditionally here. Tree-bound agents also
+    // receive `attention` via `ensureFirstTreeBinding` below; the
+    // duplicate copy is idempotent and the two paths stay independent.
+    installCoreSkills({
+      workspacePath: workspace,
+      log: (msg) => sessionCtx.log(msg),
+    });
     const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
     writeContextTreeHead(workspace, currentTreeHead);
     // Only pin the CLI version when integrate actually succeeded — pinning
@@ -1023,6 +1073,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "high",
         };
       }
 
@@ -1038,6 +1089,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
+      currentModel = payload.model || "";
 
       const input = await toCodexInput(message, sessionCtx);
       await runTurn(input, sessionCtx, 1);
@@ -1069,6 +1121,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "high",
         };
       }
 
@@ -1088,6 +1141,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
       threadId = sessionId;
+      currentModel = payload.model || "";
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);

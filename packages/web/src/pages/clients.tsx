@@ -778,7 +778,7 @@ function ProviderRow({
           <span className="font-medium" style={{ minWidth: 140 }}>
             {label}
           </span>
-          <span className="text-caption" style={{ color: "var(--state-idle)" }}>
+          <span className="text-caption" style={{ color: "var(--success)" }}>
             ✓{entry.sdkVersion ? ` v${entry.sdkVersion}` : " authenticated"}
           </span>
         </div>

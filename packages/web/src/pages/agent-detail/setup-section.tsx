@@ -27,6 +27,8 @@ export type SetupSectionProps = {
   onRebind?: () => void;
   /** Slot for the Model dropdown — we reuse the existing ModelSection via composition. */
   modelSlot: ReactNode;
+  /** Slot for the Reasoning effort dropdown — same composition pattern as the model slot. */
+  effortSlot?: ReactNode;
 };
 
 const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
@@ -59,6 +61,7 @@ export function SetupSection(props: SetupSectionProps) {
       />
       <RuntimeRow name={copy.name} caption={copy.caption} locked />
       {props.modelSlot}
+      {props.effortSlot}
     </Section>
   );
 }

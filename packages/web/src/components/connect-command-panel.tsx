@@ -156,10 +156,10 @@ export function ConnectCommandPanel({
           style={{
             gap: "var(--sp-2_5)",
             padding: "var(--sp-2_5) var(--sp-3)",
-            background: "color-mix(in oklch, var(--state-idle) 14%, transparent)",
-            border: "var(--hairline) solid color-mix(in oklch, var(--state-idle) 35%, transparent)",
+            background: "color-mix(in oklch, var(--success) 14%, transparent)",
+            border: "var(--hairline) solid color-mix(in oklch, var(--success) 35%, transparent)",
             borderRadius: "var(--radius-input)",
-            color: "color-mix(in oklch, var(--state-idle) 45%, var(--fg))",
+            color: "color-mix(in oklch, var(--success) 45%, var(--fg))",
           }}
         >
           <Check className="h-3.5 w-3.5" style={{ flexShrink: 0 }} />

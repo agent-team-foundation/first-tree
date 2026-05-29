@@ -61,7 +61,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       // NOTE: `sendMessageSchema.source` defaults to "api" when omitted
       // (see shared/schemas/message.ts). This is an intentional HTTP-
       // boundary tolerance for SDK callers; production callers all set
-      // source explicitly (web/cli/api/feishu/github). Do not "fix" this
+      // source explicitly (web/cli/api/github). Do not "fix" this
       // to require explicit source — it would break unaudited third-
       // party integrations.
       const body = sendMessageSchema.parse(request.body);
@@ -110,10 +110,6 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
         identity.uuid,
         body,
       );
-
-      app.adapterManager
-        .editOutboundMessage(msg.id, msg.format, msg.content)
-        .catch((err) => log.error({ err, messageId: msg.id }, "failed to edit outbound message"));
 
       return {
         ...msg,

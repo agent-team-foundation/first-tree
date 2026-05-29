@@ -26,7 +26,7 @@
 
 Every CLI command that talks to the Hub reaches for `~/.first-tree/hub/credentials.json`. The file is written by `connect <token>` and contains `{ accessToken, refreshToken, serverUrl }` (mode `0600`). `ensureFreshAccessToken()` auto-refreshes against `/api/v1/auth/refresh` when the token is within 30 seconds of expiry, silently re-persists the result, and then returns the fresh access token.
 
-There are no separate admin or agent tokens. The member's JWT is used for every authenticated call — admin endpoints, Feishu binding, agent creation, agent config, messaging, SDK debugging, everything. The old `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` environment variables and the `agent token bootstrap` subcommand have been removed.
+There are no separate admin or agent tokens. The member's JWT is used for every authenticated call — admin endpoints, agent creation, agent config, messaging, SDK debugging, everything. The old `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` environment variables and the `agent token bootstrap` subcommand have been removed.
 
 If `credentials.json` is missing or refresh fails, the CLI exits with a message pointing at `first-tree login <token>`. Do not paper over this with manual env vars — run `connect <token>`.
 
@@ -75,8 +75,6 @@ All `agent config` subcommands call `GET`/`PATCH`/`POST dry-run` on `/api/v1/adm
 **Bindings**
 
 - `agent bind client <agentName> --client-id <id>` — first-time bind of an agent to a client machine. The `clientId` field on the agent is immutable once set, so this is a one-shot operation; use it for seeding, scripting, or recovery.
-- `agent bind bot --platform feishu --app-id <id> --app-secret <s>` — binds a Feishu bot to this agent (self-service via the adapter API).
-- `agent bind user <humanAgentId> --platform feishu --feishu-id <ou_xxx>` — binds a Feishu user to a human agent for `delegate_mention` routing.
 
 **Sessions**
 
@@ -129,7 +127,6 @@ independently:
 ```bash
 first-tree login <token>                                   # bind this machine
 first-tree agent create <name> --type <t> --client-id <id> # create the agent on the Hub
-first-tree agent bind bot --platform feishu ...            # optional: Feishu bot
 first-tree daemon start                                    # bring the agent online
 ```
 
@@ -169,7 +166,6 @@ returns null, the command errors out and points at `first-tree login
 
 **Onboard**
 - `FIRST_TREE_SERVER_URL`
-- `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
 
 No agent-specific token env vars exist anymore. If you see a guide or old script setting `FIRST_TREE_AGENT_TOKEN` or `FIRST_TREE_AGENT`, it's stale — the CLI ignores both.
 
@@ -190,4 +186,4 @@ Useful when debugging or when a user wants to script around the CLI. All calls a
 ## When to Read Other Docs
 
 - `docs/cli-reference.md` — the canonical public flag/env reference.
-- `docs/onboarding-guide.md` — end-to-end onboarding walkthrough, type-specific notes, claim + Feishu binding details.
+- `docs/onboarding-guide.md` — end-to-end onboarding walkthrough, type-specific notes, claim details.

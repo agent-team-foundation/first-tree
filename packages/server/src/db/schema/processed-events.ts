@@ -1,9 +1,9 @@
 import { pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 /**
- * Webhook event deduplication.
- * Multiple bots in the same group chat receive the same event from Feishu,
- * so we use INSERT ... ON CONFLICT DO NOTHING to ensure single processing.
+ * Webhook event deduplication. External webhook sources (e.g. GitHub) can
+ * deliver the same event multiple times; we use INSERT ... ON CONFLICT DO
+ * NOTHING to ensure single processing.
  */
 export const processedEvents = pgTable(
   "processed_events",

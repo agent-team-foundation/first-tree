@@ -31,6 +31,35 @@ export class Deduplicator {
     return false;
   }
 
+  /**
+   * Drop every recorded id that starts with `prefix`. Used by the runtime
+   * when a chat is LRU-evicted: the in-flight entries for that chat won't
+   * be acked (no handler will run `markCompleted`), and the server will
+   * resend the same `(chatId, messageId)` pairs against a fresh session.
+   * Leaving the keys in the dedup set would cause the resend to be
+   * mis-classified as a duplicate — and (post-#1-fix) re-acked, which
+   * would shortcut the documented recovery path. Dropping the keys
+   * synchronously with eviction keeps "dedup hit = previous turn already
+   * handled this" as a true statement at the call site.
+   *
+   * O(n) over the recorded set — n is bounded by the deduplicator's
+   * capacity (1000 by default) and LRU eviction is a per-chat event, so
+   * the linear scan is fine.
+   */
+  dropByPrefix(prefix: string): void {
+    if (this.order.length === 0) return;
+    const kept: string[] = [];
+    for (const id of this.order) {
+      if (id.startsWith(prefix)) {
+        this.seen.delete(id);
+      } else {
+        kept.push(id);
+      }
+    }
+    this.order.length = 0;
+    this.order.push(...kept);
+  }
+
   get size(): number {
     return this.seen.size;
   }
