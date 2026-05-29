@@ -60,7 +60,7 @@ const ROW_GRID =
 const ROW_GAP = "var(--sp-5)";
 // Agent middle band sub-grid: Owner | Runs on | Usage. Usage carries a min wide
 // enough for its "Usage 7d 30d" header control so it never crowds Status.
-const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-20) + var(--sp-8)), 1fr)";
+const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-20) + var(--sp-10)), 1fr)";
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
@@ -189,7 +189,9 @@ function AgentColumnHeader({
       <div className="grid items-center" style={{ gridTemplateColumns: AGENT_MIDDLE_GRID, gap: "var(--sp-4)" }}>
         <HeaderLabel>Owner</HeaderLabel>
         <HeaderLabel>Runs on</HeaderLabel>
-        <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+        {/* Right-aligned: Usage is a numeric column, so it reads as one and
+            sits clear of the Runs-on column to its left. */}
+        <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)", justifySelf: "end" }}>
           <HeaderLabel>Usage</HeaderLabel>
           <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
         </span>
@@ -420,31 +422,33 @@ function RunsOnCell({ provider, host }: { provider: string; host: string | null 
   );
 }
 
+// Right-aligned numeric cell (textAlign on the block grid item pushes the
+// value to the right of its track, clear of the Runs-on column on its left).
 function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading: boolean }) {
   if (loading && !usage) {
     return (
-      <span className="text-caption mono" style={{ color: "var(--fg-4)" }}>
+      <div className="text-caption mono" style={{ color: "var(--fg-4)", textAlign: "right" }}>
         …
-      </span>
+      </div>
     );
   }
   if (!usage || usage.turns === 0) {
     return (
-      <span className="text-caption mono" style={{ color: "var(--fg-4)" }}>
+      <div className="text-caption mono" style={{ color: "var(--fg-4)", textAlign: "right" }}>
         —
-      </span>
+      </div>
     );
   }
   const totalTokens = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens;
   return (
-    <span
+    <div
       className="text-caption mono truncate"
-      style={{ color: "var(--fg-2)" }}
+      style={{ color: "var(--fg-2)", textAlign: "right" }}
       title={`Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · ${usage.turns} turns`}
     >
       {formatCompactCount(totalTokens)}
-      <span style={{ color: "var(--fg-4)" }}>{` · ${formatCompactCount(usage.turns)}t`}</span>
-    </span>
+      <span style={{ color: "var(--fg-4)" }}>{` · ${usage.turns} turn${usage.turns === 1 ? "" : "s"}`}</span>
+    </div>
   );
 }
 
@@ -892,7 +896,7 @@ function agentMetaLine(
   const owner = isSelf ? "You" : (managerLabel ?? "—");
   const usageStr =
     usage && usage.turns > 0
-      ? `${formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)} · ${formatCompactCount(usage.turns)}t`
+      ? `${formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)} · ${usage.turns} turn${usage.turns === 1 ? "" : "s"}`
       : "—";
   return `${owner} · ${provider} · ${usageStr}`;
 }
