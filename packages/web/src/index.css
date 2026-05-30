@@ -413,32 +413,27 @@
   --sp-2: 0.5rem; /* 8px */
   --sp-2_25: 0.5625rem; /* 9px */
   --sp-2_5: 0.625rem; /* 10px */
-  --sp-2_75: 0.6875rem; /* 11px */
   --sp-3: 0.75rem; /* 12px */
-  --sp-3_25: 0.8125rem; /* 13px */
   --sp-3_5: 0.875rem; /* 14px */
-  --sp-3_75: 0.9375rem; /* 15px */
   --sp-4: 1rem; /* 16px */
-  --sp-4_5: 1.125rem; /* 18px */
   --sp-5: 1.25rem; /* 20px */
   --sp-6: 1.5rem; /* 24px */
   --sp-6_5: 1.625rem; /* 26px */
   --sp-7: 1.75rem; /* 28px */
   --sp-7_5: 1.875rem; /* 30px */
   --sp-8: 2rem; /* 32px */
-  --sp-8_5: 2.125rem; /* 34px */
   --sp-10: 2.5rem; /* 40px */
   --sp-11: 2.75rem; /* 44px */
   --sp-12: 3rem; /* 48px */
-  --sp-15: 3.75rem; /* 60px */
   --sp-16: 4rem; /* 64px */
   --sp-20: 5rem; /* 80px */
   --sp-45: 11.25rem; /* 180px */
   --sp-60: 15rem; /* 240px */
   --sp-75: 18.75rem; /* 300px */
-  --sp-80: 20rem; /* 320px */
-  --sp-90: 22.5rem; /* 360px */
-  --sp-240: 60rem; /* 960px */
+
+  /* Default color-scheme so native form controls, scrollbars, and the
+     canvas match the light theme (.dark flips this to dark below). */
+  color-scheme: light;
 
   /* Default color-scheme so native form controls, scrollbars, and the
      canvas match the light theme (.dark flips this to dark below). */
