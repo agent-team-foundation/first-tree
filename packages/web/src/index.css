@@ -365,6 +365,31 @@
   /* Dialog / lightbox scrim (both modes — uniformly dark). */
   --overlay-scrim: oklch(0 0 0 / 0.55);
 
+  /* ── Context-tree "live" page palette (/context hero) ─────────────────────
+     A bespoke set — cool blue "ink" + faint-green card surfaces — lifted here
+     from the hardcoded oklch in the .context-live-* rules below so the page's
+     palette lives in one place. Value-preserving 1:1 lift (a later pass can
+     rationalize the near-duplicate inks). Light-only: the page predates dark
+     theming and these values are mode-independent (unchanged behavior). */
+  --context-ink: oklch(0.2 0.04 265);
+  --context-ink-em: oklch(0.25 0.04 265);
+  --context-ink-dim: oklch(0.52 0.035 255);
+  --context-ink-summary: oklch(0.2 0.035 255);
+  --context-ink-scale: oklch(0.18 0.04 255);
+  --context-ink-node: oklch(0.23 0.025 255);
+  --context-ink-mark: oklch(0.22 0.04 255);
+  --context-mark-bg: oklch(0.91 0.01 255 / 0.72);
+  --context-shadow: oklch(0.25 0.04 255 / 0.08);
+  --context-card-edge: oklch(0.89 0.008 150);
+  --context-card-edge-hover: oklch(0.78 0.09 150);
+  --context-card-edge-live: oklch(0.78 0.13 150);
+  --context-card-bg: oklch(0.98 0.003 150 / 0.9);
+  --context-card-bg-live: oklch(0.985 0.012 150 / 0.94);
+  --context-summary-edge: oklch(0.88 0.008 150);
+  --context-summary-bg: oklch(1 0 0 / 0.86);
+  --context-halo: oklch(0.72 0.17 150 / 0.34);
+  --context-pin-glow: oklch(0.72 0.17 150 / 0.18);
+
   /* Hairline widths. Exposing these as vars lets component inline styles
      reference --hairline / --hairline-bold instead of writing "1px" /
      "2px" literals — keeps the src/ tree free of raw px strings. */
@@ -808,18 +833,18 @@
 }
 
 .context-live-title {
-  color: oklch(0.2 0.04 265);
+  color: var(--context-ink);
   font-size: 44px;
   font-weight: 700;
   line-height: 1.05;
 }
 
 .context-live-subtitle {
-  color: oklch(0.52 0.035 255);
+  color: var(--context-ink-dim);
 }
 
 .context-live-subtitle strong {
-  color: oklch(0.25 0.04 265);
+  color: var(--context-ink-em);
   font-weight: 700;
 }
 
@@ -837,7 +862,7 @@
 }
 
 .context-map-kicker {
-  color: oklch(0.52 0.035 255);
+  color: var(--context-ink-dim);
   font-size: 12px;
   font-weight: 700;
 }
@@ -862,7 +887,7 @@
   transform-box: fill-box;
   transform-origin: center;
   fill: transparent;
-  stroke: oklch(0.72 0.17 150 / 0.34);
+  stroke: var(--context-halo);
   stroke-width: 1.25;
   animation: context-live-halo-breathe 3.6s ease-in-out infinite;
 }
@@ -877,10 +902,10 @@
   justify-content: center;
   gap: var(--sp-1);
   padding: var(--sp-3) var(--sp-4);
-  border: var(--hairline) solid oklch(0.89 0.008 150);
+  border: var(--hairline) solid var(--context-card-edge);
   border-radius: var(--radius-dialog);
-  background: oklch(0.98 0.003 150 / 0.9);
-  box-shadow: 0 8px 28px oklch(0.25 0.04 255 / 0.08);
+  background: var(--context-card-bg);
+  box-shadow: 0 8px 28px var(--context-shadow);
   color: var(--fg);
   text-align: left;
   transition:
@@ -891,12 +916,12 @@
 
 .context-network-card:hover {
   transform: translateY(-1px);
-  border-color: oklch(0.78 0.09 150);
+  border-color: var(--context-card-edge-hover);
 }
 
 .context-network-card.is-live {
-  border-color: oklch(0.78 0.13 150);
-  background: oklch(0.985 0.012 150 / 0.94);
+  border-color: var(--context-card-edge-live);
+  background: var(--context-card-bg-live);
 }
 
 .context-network-summary-card {
@@ -907,10 +932,10 @@
   align-items: center;
   justify-content: center;
   gap: var(--sp-1);
-  border: var(--hairline) solid oklch(0.88 0.008 150);
+  border: var(--hairline) solid var(--context-summary-edge);
   border-radius: var(--radius-dialog);
-  background: oklch(1 0 0 / 0.86);
-  box-shadow: 0 14px 36px oklch(0.25 0.04 255 / 0.08);
+  background: var(--context-summary-bg);
+  box-shadow: 0 14px 36px var(--context-shadow);
   color: var(--fg);
   text-align: center;
 }
@@ -921,12 +946,12 @@
   height: var(--sp-11);
   place-items: center;
   border-radius: 50%;
-  background: oklch(0.72 0.17 150 / 0.12);
+  background: var(--brand-bg);
   color: var(--success);
 }
 
 .context-network-summary-title {
-  color: oklch(0.2 0.035 255);
+  color: var(--context-ink-summary);
   font-size: 13px;
   font-weight: 700;
   line-height: 1.15;
@@ -938,14 +963,14 @@
   align-items: baseline;
   justify-content: center;
   gap: var(--sp-1);
-  color: oklch(0.18 0.04 255);
+  color: var(--context-ink-scale);
   font-size: 40px;
   font-weight: 500;
   line-height: 1;
 }
 
 .context-network-summary-scale span {
-  color: oklch(0.52 0.035 255);
+  color: var(--context-ink-dim);
   font-size: 12px;
   font-weight: 500;
 }
@@ -953,7 +978,7 @@
 .context-network-summary-badge {
   padding: var(--sp-0_5) var(--sp-2);
   border-radius: var(--radius-chip);
-  background: oklch(0.72 0.17 150 / 0.12);
+  background: var(--brand-bg);
   color: var(--success);
   font-weight: 600;
 }
@@ -966,12 +991,12 @@
   height: var(--sp-3);
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 var(--sp-0_75) oklch(0.72 0.17 150 / 0.18);
+  box-shadow: 0 0 0 var(--sp-0_75) var(--context-pin-glow);
 }
 
 .context-network-title {
   max-width: 100%;
-  color: oklch(0.23 0.025 255);
+  color: var(--context-ink-node);
   text-transform: uppercase;
   letter-spacing: 0;
 }
@@ -993,17 +1018,17 @@
 }
 
 .context-change-breakdown span[data-change-type="added"] {
-  background: oklch(0.72 0.17 150 / 0.12);
+  background: var(--brand-bg);
   color: var(--success);
 }
 
 .context-change-breakdown span[data-change-type="edited"] {
-  background: oklch(0.74 0.18 58 / 0.14);
+  background: var(--state-blocked-soft);
   color: var(--warning);
 }
 
 .context-change-breakdown span[data-change-type="removed"] {
-  background: oklch(0.68 0.22 25 / 0.12);
+  background: var(--state-error-soft);
   color: var(--danger);
 }
 
@@ -1022,8 +1047,8 @@
   margin: 0 var(--sp-0_5);
   padding: 0 var(--sp-1);
   border-radius: var(--radius-input);
-  background: oklch(0.91 0.01 255 / 0.72);
-  color: oklch(0.22 0.04 255);
+  background: var(--context-mark-bg);
+  color: var(--context-ink-mark);
   font-weight: 700;
 }
 
