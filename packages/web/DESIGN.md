@@ -15,7 +15,7 @@
 ## Design language
 
 > Implementation status, the gap vs the current build, and the step-by-step
-> migration plan live in **[DESIGN-AUDIT.md](DESIGN-AUDIT.md)**. This document
+> migration plan live in **[DESIGN-AUDIT.md](docs/DESIGN-AUDIT.md)**. This document
 > describes the design system itself.
 
 **Four pillars:**
@@ -351,7 +351,7 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
   custom radio/checkbox cards surface a ring on `:focus-within` (the real input
   is `sr-only`). *(Some page-level form controls still carry the older `ring-1` —
   extending the `ring-2` recipe to the remaining primitives is a tracked
-  follow-up; see DESIGN-AUDIT.md.)*
+  follow-up; see docs/DESIGN-AUDIT.md.)*
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---
@@ -373,7 +373,7 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 ## Status & roadmap
 
 Current implementation status, the gap vs this design language, the phased
-migration plan, and known gaps all live in **[DESIGN-AUDIT.md](DESIGN-AUDIT.md)**.
+migration plan, and known gaps all live in **[DESIGN-AUDIT.md](docs/DESIGN-AUDIT.md)**.
 
 **Visual reference:** the living styleguide at `/preview/styleguide`
 (`src/pages/styleguide-preview.tsx`).

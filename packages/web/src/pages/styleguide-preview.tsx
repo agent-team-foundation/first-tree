@@ -52,7 +52,7 @@ type SwatchDef = { name: string; token: string; note?: string };
 
 // Canonical names = the short tokens the codebase actually uses. The parallel
 // --color-text-* / --color-surface-* / --color-border-* alias layer is unadopted
-// (see DESIGN-AUDIT.md P2), so the styleguide shows the real names.
+// (see docs/DESIGN-AUDIT.md P2), so the styleguide shows the real names.
 const TEXT_COLORS: SwatchDef[] = [
   { name: "--fg", token: "var(--fg)", note: "primary ink" },
   { name: "--fg-2", token: "var(--fg-2)", note: "secondary" },
