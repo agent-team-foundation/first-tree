@@ -49,12 +49,13 @@ export const TONE_STYLES: Record<Tone, ToneStyle> = {
     bd: "color-mix(in oklch, var(--brand) 30%, transparent)",
   },
   warn: {
-    bg: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+    // bg normalized 16% → the canonical --state-blocked-soft (14%).
+    bg: "var(--state-blocked-soft)",
     fg: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
     bd: "color-mix(in oklch, var(--state-blocked) 30%, transparent)",
   },
   error: {
-    bg: "color-mix(in oklch, var(--state-error) 14%, transparent)",
+    bg: "var(--state-error-soft)",
     fg: "var(--state-error)",
     bd: "color-mix(in oklch, var(--state-error) 30%, transparent)",
   },
@@ -64,27 +65,27 @@ export const TONE_STYLES: Record<Tone, ToneStyle> = {
     bd: "var(--border)",
   },
   idle: {
-    bg: "color-mix(in oklch, var(--state-idle) 14%, transparent)",
+    bg: "var(--state-idle-soft)",
     fg: "var(--state-idle)",
     bd: "color-mix(in oklch, var(--state-idle) 30%, transparent)",
   },
   working: {
-    bg: "color-mix(in oklch, var(--state-working) 14%, transparent)",
+    bg: "var(--state-working-soft)",
     fg: "var(--state-working)",
     bd: "color-mix(in oklch, var(--state-working) 30%, transparent)",
   },
   "needs-you": {
-    bg: "color-mix(in oklch, var(--state-needs-you) 14%, transparent)",
+    bg: "var(--state-needs-you-soft)",
     fg: "color-mix(in oklch, var(--state-needs-you) 50%, var(--fg))",
     bd: "color-mix(in oklch, var(--state-needs-you) 30%, transparent)",
   },
   blocked: {
-    bg: "color-mix(in oklch, var(--state-blocked) 14%, transparent)",
+    bg: "var(--state-blocked-soft)",
     fg: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
     bd: "color-mix(in oklch, var(--state-blocked) 30%, transparent)",
   },
   offline: {
-    bg: "color-mix(in oklch, var(--state-offline) 14%, transparent)",
+    bg: "var(--state-offline-soft)",
     fg: "var(--state-offline)",
     bd: "color-mix(in oklch, var(--state-offline) 30%, transparent)",
   },

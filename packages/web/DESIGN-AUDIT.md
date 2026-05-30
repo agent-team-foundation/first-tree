@@ -160,8 +160,14 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 
 - [x] **No `--state-*-soft` companions.** **DONE:** added
   `--state-{working,idle,needs-you,blocked,error,offline}-soft` (one canonical 14% translucent mix; raw
-  on `:root`, `--color-state-*-soft` aliases in `@theme`). Migrating `lib/tones.ts` /
-  `.context-change-breakdown` onto them is the follow-up cleanup PR.
+  on `:root`, `--color-state-*-soft` aliases in `@theme`). **`lib/tones.ts` + the ad-hoc call-site
+  background fills (connect/disconnect chips, clients retire/load banners, agent-detail changed-chips)
+  migrated onto them** — normalizing those fills to the canonical 14% (the only deltas: `tones.ts` warn
+  16→14, and the call sites 12→14). Borders (28–38%) and `fg` (50–80%) stay `color-mix` — no `-line`/
+  strong soft token exists yet (see P2 follow-up below). Still TODO: `.context-change-breakdown` (raw
+  `oklch(.../0.12)` literals, and its "edited" swatch is hue 58) — folded into the `.context-*` palette PR.
+  One deliberate hold-out: `chat-view` keeps a 6% error wash (fainter than `--state-error-soft`, by a
+  solid error border), commented in place.
 - [x] **`.dark` missing `color-scheme: dark`.** **DONE:** added `color-scheme: dark` to `.dark` (and
   `color-scheme: light` to `:root`); native form controls / scrollbars now match the canvas in both modes.
 - [x] **`--color-*` semantic alias layer is unadopted.** `--color-text-*` / `--color-surface-*` /
@@ -272,7 +278,7 @@ fold into the phases below.
 
 **Phase 3 — rollout + folded cleanup:**
 - [ ] Apply across remaining pages (Team roster, Settings, onboarding, …).
-- [x] Add `--state-*-soft` tokens — DONE (definitions). *(Migrating `tones.ts` / call sites onto them is the follow-up cleanup PR.)*
+- [x] Add `--state-*-soft` tokens — DONE (definitions + `tones.ts`/call-site migration). *(`.context-change-breakdown` still raw — folded into the `.context-*` palette PR. Follow-up idea: add `--state-*-line` (~30%) border tokens so the borders that still hand-roll `color-mix` can converge too.)*
 - [~] `color-scheme: dark` on `.dark` — DONE; bringing the off-palette `.context-live-*` blues into tokens — still open.
 
 **Phase 4 — close-out:**
