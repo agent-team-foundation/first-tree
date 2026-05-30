@@ -147,7 +147,7 @@
      on :root below, exposed to Tailwind via the --color-fg-* / --color-bg-* /
      --color-border-* utility aliases further down). The old --color-text-* /
      --color-surface-* / --color-border-subtle|default|emphasis "semantic" layer
-     was removed in the 2026-05-28 cleanup — it was unadopted (see DESIGN-AUDIT.md). */
+     was removed in the 2026-05-28 cleanup — it was unadopted (see docs/DESIGN-AUDIT.md). */
 
   /* ---- shadcn-compatible aliases (preserved) ------------------------------ */
   --color-background: var(--bg);

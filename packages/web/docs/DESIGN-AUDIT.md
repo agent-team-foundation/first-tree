@@ -1,7 +1,7 @@
 # Design System Audit & Fix Log
 
 > Recorded 2026-05-28 from a source-grounded review of `src/index.css` + `src/components/ui/*`.
-> Companion to [DESIGN.md](DESIGN.md) (the spec) and `/preview/styleguide` (the visual reference).
+> Companion to [DESIGN.md](../DESIGN.md) (the spec) and `/preview/styleguide` (the visual reference).
 >
 > **This doc owns:** current implementation state, the gap vs DESIGN.md's adopted design
 > language, the phased migration plan, the audit/fix log, and known structural gaps.
