@@ -110,10 +110,6 @@
   --text-title--letter-spacing: -0.2px;
   --text-title--font-weight: 600;
 
-  --text-live: 32px;
-  --text-live--line-height: 1.08;
-  --text-live--font-weight: 600;
-
   /* Marketing-tier typography — used by the public landing page only.
      Dashboard surfaces should keep using the dense scale above (eyebrow → title);
      these three tiers exist so the landing hero / section headings / lead
@@ -198,6 +194,17 @@
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
 
+  /* Soft state-tinted surface fills. Translucent (alpha-composited), so each
+     reads correctly over any background and needs no .dark override. Replaces
+     the ad-hoc color-mix(... var(--state-*) ..., transparent) hand-rolled in
+     lib/tones.ts and .context-change-breakdown; raw values defined on :root. */
+  --color-state-idle-soft: var(--state-idle-soft);
+  --color-state-working-soft: var(--state-working-soft);
+  --color-state-needs-you-soft: var(--state-needs-you-soft);
+  --color-state-blocked-soft: var(--state-blocked-soft);
+  --color-state-error-soft: var(--state-error-soft);
+  --color-state-offline-soft: var(--state-offline-soft);
+
   /* ---- Semantic inline-callout tokens ------------------------------------- */
   /* Each state exposes two Tailwind-addressable colors: the strong variant
      (for text and border utilities) and the soft variant (for background
@@ -210,6 +217,11 @@
   --color-warn-soft: var(--bg-warn-soft);
   --color-success: var(--fg-success-strong);
   --color-success-soft: var(--bg-success-soft);
+  /* info — blue (hue 245, matching the presence-idle state so the callout set
+     follows the same callout↔state hue pairing as error/warn/success). For
+     STATIC informational notices, not the dynamic working/idle agent state. */
+  --color-info: var(--fg-info-strong);
+  --color-info-soft: var(--bg-info-soft);
 
   /* Overlay scrim for dialogs / lightboxes — replaces hardcoded rgba(0,0,0,...). */
   --color-overlay-scrim: var(--overlay-scrim);
@@ -267,6 +279,18 @@
      "this is a notification" stays distinguishable from "this is a
      destructive-action warning" at the consumer site. */
   --state-unread: var(--state-error);
+
+  /* Soft state-tinted fills — one canonical 14% mix per state so lib/tones.ts,
+     .context-change-breakdown, and other state surfaces stop hand-rolling
+     color-mix at the call site. Alpha-composited, so this single definition
+     resolves correctly in both light and dark (the --state-* hues are not
+     redefined under .dark). */
+  --state-working-soft: color-mix(in oklch, var(--state-working) 14%, transparent);
+  --state-idle-soft: color-mix(in oklch, var(--state-idle) 14%, transparent);
+  --state-needs-you-soft: color-mix(in oklch, var(--state-needs-you) 14%, transparent);
+  --state-blocked-soft: color-mix(in oklch, var(--state-blocked) 14%, transparent);
+  --state-error-soft: color-mix(in oklch, var(--state-error) 14%, transparent);
+  --state-offline-soft: color-mix(in oklch, var(--state-offline) 14%, transparent);
 
   /* Feedback / severity vocabulary (success / warning / error). Aliased to the
      shared base hues so there is ONE value per color — distinct *names* from the
@@ -333,6 +357,10 @@
   --fg-warn-strong: oklch(0.48 0.14 58);
   --bg-success-soft: oklch(0.96 0.04 150);
   --fg-success-strong: oklch(0.42 0.12 150);
+  /* info — blue (hue 245, the presence-idle hue). Matched L/C to the other
+     callout pairs so the set reads with even weight. */
+  --bg-info-soft: oklch(0.96 0.03 245);
+  --fg-info-strong: oklch(0.45 0.14 245);
 
   /* Dialog / lightbox scrim (both modes — uniformly dark). */
   --overlay-scrim: oklch(0 0 0 / 0.55);
@@ -386,6 +414,10 @@
   --sp-80: 20rem; /* 320px */
   --sp-90: 22.5rem; /* 360px */
   --sp-240: 60rem; /* 960px */
+
+  /* Default color-scheme so native form controls, scrollbars, and the
+     canvas match the light theme (.dark flips this to dark below). */
+  color-scheme: light;
 
   /* Firefox / Windows scrollbar hint — keeps widths visually close to
      macOS overlay scrollbars so layout doesn't jump between platforms. */
@@ -472,6 +504,12 @@
   --fg-warn-strong: oklch(0.86 0.14 58);
   --bg-success-soft: oklch(0.28 0.05 150);
   --fg-success-strong: oklch(0.82 0.14 150);
+  --bg-info-soft: oklch(0.28 0.06 245);
+  --fg-info-strong: oklch(0.82 0.14 245);
+
+  /* Flip native form controls / scrollbars to dark to match the canvas
+     (previously only .landing-marketing set this). */
+  color-scheme: dark;
 }
 
 @layer base {

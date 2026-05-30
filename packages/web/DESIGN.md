@@ -147,6 +147,11 @@ for text sitting on a saturated colored surface (badges, avatars) and does
 | `--state-offline` | dim gray | offline |
 | `--state-unread` | = error | notification/attention (kept separate identifier on purpose) |
 
+Each state also ships a **soft** companion fill — `--state-working-soft` …
+`--state-offline-soft` (one canonical 14% translucent mix). Use these for
+state-tinted surfaces (chips, wells, `.context-change-breakdown`) instead of
+hand-rolling `color-mix(... var(--state-*) ..., transparent)` at the call site.
+
 ### Feedback / severity
 A named set, aliased to shared base hues (one value per color):
 `--success` (green, = brand hue) · `--warning` (orange, = `--state-blocked`; the caution/blocked hue, distinct from needs-you amber) · `--danger` (red).
@@ -155,7 +160,10 @@ A named set, aliased to shared base hues (one value per color):
 Each state ships a **soft** background + a **strong** text/border tone, so you
 never reach for `bg-red-50 / text-red-900`:
 `--color-error` / `--color-error-soft`, `--color-warn` / `--color-warn-soft`,
-`--color-success` / `--color-success-soft`.
+`--color-success` / `--color-success-soft`, and `--color-info` /
+`--color-info-soft` (blue, hue 245 — the presence-idle hue, following the same
+callout↔state hue pairing; for **static** informational notices, not the
+dynamic working/idle agent state).
 
 ### Overlay
 `--color-overlay-scrim` — dialog/lightbox scrim (`oklch(0 0 0 / 0.55)`,
@@ -182,7 +190,6 @@ Three marketing tiers for the public landing page only.
 | `text-body` | 12px | 400 | body copy, buttons |
 | `text-subtitle` | 13px | 600 | row titles (**default body size**) |
 | `text-title` | 16px | 600 | section / page titles |
-| `text-live` | 32px | 600 | the "live" status hero number |
 | — marketing — | | | |
 | `text-lead` | 18px | 400 | landing lead copy |
 | `text-headline` | 24px | 600 | landing section headings |
@@ -300,6 +307,10 @@ automatically):
 3. **Marketing** (`.landing-marketing`) — pinned to the first-tree.ai brand:
    near-black `#040404` canvas + cool-tinted light text, regardless of the
    dashboard toggle. `color-scheme: dark`. Same green brand.
+
+Each palette declares `color-scheme` (`light` on `:root`, `dark` on `.dark` and
+`.landing-marketing`) so native form controls, scrollbars, and `<input>` widgets
+render in the matching mode.
 
 ---
 

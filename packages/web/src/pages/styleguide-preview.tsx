@@ -104,6 +104,17 @@ const STATE_COLORS: SwatchDef[] = [
   { name: "--state-offline", token: "var(--state-offline)", note: "offline · gray" },
 ];
 
+// Soft state fills — the canonical translucent tint per state (replaces ad-hoc
+// color-mix at call sites). Swatches sit on the page bg so the tint reads true.
+const STATE_SOFT_COLORS: SwatchDef[] = [
+  { name: "--state-working-soft", token: "var(--state-working-soft)" },
+  { name: "--state-idle-soft", token: "var(--state-idle-soft)" },
+  { name: "--state-needs-you-soft", token: "var(--state-needs-you-soft)" },
+  { name: "--state-blocked-soft", token: "var(--state-blocked-soft)" },
+  { name: "--state-error-soft", token: "var(--state-error-soft)" },
+  { name: "--state-offline-soft", token: "var(--state-offline-soft)" },
+];
+
 // Feedback / severity vocabulary — distinct names, aliased to shared base hues.
 const FEEDBACK_COLORS: SwatchDef[] = [
   { name: "--success", token: "var(--success)", note: "= brand green" },
@@ -118,6 +129,8 @@ const CALLOUT_COLORS: SwatchDef[] = [
   { name: "--color-warn-soft", token: "var(--color-warn-soft)" },
   { name: "--color-success", token: "var(--color-success)" },
   { name: "--color-success-soft", token: "var(--color-success-soft)" },
+  { name: "--color-info", token: "var(--color-info)", note: "static notices" },
+  { name: "--color-info-soft", token: "var(--color-info-soft)" },
 ];
 
 const AVATAR_HUES: SwatchDef[] = Array.from({ length: 8 }, (_, i) => ({
@@ -136,7 +149,6 @@ const APP_TIERS: TypeTier[] = [
   { cls: "text-body", name: "text-body", meta: "12 / 400", sample: "Body copy and button text." },
   { cls: "text-subtitle", name: "text-subtitle", meta: "13 / 600 · default", sample: "Row title / subtitle" },
   { cls: "text-title", name: "text-title", meta: "16 / 600", sample: "Section & page title" },
-  { cls: "text-live", name: "text-live", meta: "32 / 600", sample: "Live" },
 ];
 
 const MARKETING_TIERS: TypeTier[] = [
@@ -407,6 +419,8 @@ export function StyleguidePreviewPage() {
           <SwatchGrid items={BRAND_COLORS} />
           <Subhead>State (agent vocabulary)</Subhead>
           <SwatchGrid items={STATE_COLORS} />
+          <Subhead>State soft fills (tinted surfaces)</Subhead>
+          <SwatchGrid items={STATE_SOFT_COLORS} />
           <Subhead>Feedback / severity</Subhead>
           <SwatchGrid items={FEEDBACK_COLORS} />
           <Subhead>Callout pairs (soft fill + strong text/border)</Subhead>
