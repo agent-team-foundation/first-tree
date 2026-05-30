@@ -765,6 +765,17 @@ export function StyleguidePreviewPage() {
             <div style={{ marginTop: "var(--sp-4)" }}>
               <Button size="sm">Get started</Button>
             </div>
+            <div
+              className="text-label border border-error bg-error-soft text-error"
+              style={{
+                marginTop: "var(--sp-4)",
+                padding: "var(--sp-2) var(--sp-3)",
+                borderRadius: "var(--radius-input)",
+              }}
+            >
+              Inline notice — the callout (via the bg-error-soft / text-error utilities) is scoped to its dark variant
+              here, so it reads as a dark-surface notice rather than a bright light-mode card on the near-black canvas.
+            </div>
           </div>
         </Section>
       </div>

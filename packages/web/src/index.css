@@ -435,10 +435,6 @@
      canvas match the light theme (.dark flips this to dark below). */
   color-scheme: light;
 
-  /* Default color-scheme so native form controls, scrollbars, and the
-     canvas match the light theme (.dark flips this to dark below). */
-  color-scheme: light;
-
   /* Firefox / Windows scrollbar hint — keeps widths visually close to
      macOS overlay scrollbars so layout doesn't jump between platforms. */
   scrollbar-width: thin;
@@ -485,6 +481,21 @@
   --primary-hover: var(--brand-dim);
   --primary-on: var(--fg-on-vivid);
   --ring: var(--brand-ring);
+
+  /* Inline-callout pairs use the DARK variants here: .landing-marketing is a
+     dark surface (near-black canvas) but does not carry `.dark`, so without
+     this override an inline notice would resolve to the light-mode callout
+     values and read as a bright card on the dark canvas. The agent-state hues
+     (`--state-*`) and the `--state-*-soft` fills are mode-independent
+     (alpha-composited), so they need no override here. */
+  --bg-error-soft: oklch(0.28 0.06 25);
+  --fg-error-strong: oklch(0.82 0.14 25);
+  --bg-warn-soft: oklch(0.3 0.06 58);
+  --fg-warn-strong: oklch(0.86 0.14 58);
+  --bg-success-soft: oklch(0.28 0.05 150);
+  --fg-success-strong: oklch(0.82 0.14 150);
+  --bg-info-soft: oklch(0.28 0.06 245);
+  --fg-info-strong: oklch(0.82 0.14 245);
 
   color-scheme: dark;
 }
