@@ -1,7 +1,6 @@
 import type { Agent, PresenceStatus, UsageByAgentRow } from "@first-tree/shared";
 import { Bot, ChevronDown, Lock, type LucideIcon, User } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import type { UsageWindow } from "../../api/usage.js";
 import { Avatar } from "../../components/avatar.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
@@ -78,8 +77,9 @@ function rowOpenProps(onOpen: () => void, label: string) {
   } as const;
 }
 const ROW_GAP = "var(--sp-5)";
-// Agent middle band sub-grid: Owner | Runs on | Usage. Usage carries a min wide
-// enough for its "Usage 7d 30d" header control so it never crowds Status.
+// Agent middle band sub-grid: Owner | Runs on | Usage. The Usage min width is
+// kept generous to fit "1.24M · 142t" cells without ellipsis at the dominant
+// content density.
 const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-20) + var(--sp-10)), 1fr)";
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
@@ -145,8 +145,6 @@ export type TeamTableProps = {
   /** clientId → hostname; agents on unknown clients show provider alone. */
   clientHostMap: Map<string, string>;
   usageByAgentId: Map<string, UsageByAgentRow> | null;
-  usageWindow: UsageWindow;
-  onUsageWindowChange: (next: UsageWindow) => void;
   usageLoading: boolean;
   onChat: (uuid: string) => void;
   onAgentDetails: (uuid: string) => void;
@@ -175,16 +173,7 @@ export function TeamTable(props: TeamTableProps) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function AgentSection(props: TeamTableProps & { compact: boolean }) {
-  const {
-    publicAgents,
-    privateAgents,
-    agentFilter,
-    onAgentFilter,
-    agentCount,
-    usageWindow,
-    onUsageWindowChange,
-    compact,
-  } = props;
+  const { publicAgents, privateAgents, agentFilter, onAgentFilter, agentCount, compact } = props;
   return (
     <section>
       <div className="flex items-center justify-between" style={{ padding: "var(--sp-5) var(--sp-1) var(--sp-3)" }}>
@@ -207,11 +196,7 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
         />
       </div>
 
-      {compact ? (
-        <UsageWindowBar usageWindow={usageWindow} onUsageWindow={onUsageWindowChange} />
-      ) : (
-        <AgentColumnHeader usageWindow={usageWindow} onUsageWindow={onUsageWindowChange} />
-      )}
+      {compact ? null : <AgentColumnHeader />}
 
       <AgentGroup
         icon={Bot}
@@ -233,13 +218,12 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
   );
 }
 
-function AgentColumnHeader({
-  usageWindow,
-  onUsageWindow,
-}: {
-  usageWindow: UsageWindow;
-  onUsageWindow: (next: UsageWindow) => void;
-}) {
+// Usage aggregation window is fixed at 7 days — the header is a plain
+// "Usage" label with no picker. Compact viewport omits the header row
+// entirely (the row's value still renders, just no column legend), which
+// matches the prior behavior where the compact UsageWindowBar was the only
+// place the window choice surfaced.
+function AgentColumnHeader() {
   return (
     <div
       className="grid items-center"
@@ -256,9 +240,8 @@ function AgentColumnHeader({
         <HeaderLabel>Runs on</HeaderLabel>
         {/* Right-aligned: Usage is a numeric column, so it reads as one and
             sits clear of the Runs-on column to its left. */}
-        <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)", justifySelf: "end" }}>
+        <span className="inline-flex items-center" style={{ justifySelf: "end" }}>
           <HeaderLabel>Usage</HeaderLabel>
-          <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
         </span>
       </div>
       <span className="text-eyebrow" style={{ color: "var(--fg-4)", justifySelf: "end" }}>
@@ -266,87 +249,6 @@ function AgentColumnHeader({
       </span>
       <span />
     </div>
-  );
-}
-
-function UsageWindowBar({
-  usageWindow,
-  onUsageWindow,
-}: {
-  usageWindow: UsageWindow;
-  onUsageWindow: (next: UsageWindow) => void;
-}) {
-  return (
-    <div
-      className="flex items-center justify-end"
-      style={{ gap: "var(--sp-1_5)", padding: "0 var(--sp-2) var(--sp-1)" }}
-    >
-      <span className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
-        Usage
-      </span>
-      <UsageWindowSelect value={usageWindow} onChange={onUsageWindow} />
-    </div>
-  );
-}
-
-/**
- * Compact window picker for the Usage column header. Shows the current window
- * (7d / 30d) with a caret and opens a small popover to switch — narrower and
- * quieter than a two-button segmented control, which crowded the column header.
- */
-function UsageWindowSelect({ value, onChange }: { value: UsageWindow; onChange: (next: UsageWindow) => void }) {
-  const options: { value: UsageWindow; label: string; short: string }[] = [
-    { value: "7d", label: "Last 7 days", short: "7d" },
-    { value: "30d", label: "Last 30 days", short: "30d" },
-  ];
-  const current = value === "7d" ? { short: "7d", label: "Last 7 days" } : { short: "30d", label: "Last 30 days" };
-  return (
-    <Popover
-      align="end"
-      panelStyle={{ minWidth: "var(--sp-45)" }}
-      trigger={({ open, toggle }) => (
-        <button
-          type="button"
-          onClick={toggle}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-label={`Usage window: ${current.label}`}
-          className="inline-flex items-center transition-colors hover:bg-[var(--bg-hover)]"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-0_5) var(--sp-1_5)",
-            borderRadius: "var(--radius-chip)",
-            border: 0,
-            background: open ? "var(--bg-hover)" : "transparent",
-            cursor: "pointer",
-            color: "var(--fg-2)",
-          }}
-        >
-          <span className="mono text-caption">{current.short}</span>
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden style={{ color: "var(--fg-4)" }} />
-        </button>
-      )}
-    >
-      {({ close }) => (
-        <div style={{ padding: "var(--sp-1)" }}>
-          {options.map((o) => (
-            <DelegateOption
-              key={o.value}
-              active={o.value === value}
-              onClick={() => {
-                onChange(o.value);
-                close();
-              }}
-              primary={
-                <span className="text-body" style={{ color: "var(--fg)" }}>
-                  {o.label}
-                </span>
-              }
-            />
-          ))}
-        </div>
-      )}
-    </Popover>
   );
 }
 
