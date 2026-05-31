@@ -110,4 +110,68 @@ describe("api client request flow", () => {
     setApiSelectedOrganizationId(null);
     expect(() => withOrg("/agents")).toThrow(/before an organization is selected/);
   });
+
+  it("surfaces plain request errors and direct refresh failures", async () => {
+    const { api, refreshAccessToken, setStoredTokens } = await import("../client.js");
+
+    await expect(refreshAccessToken()).resolves.toBeNull();
+
+    setStoredTokens({ accessToken: "access-1", refreshToken: "refresh-1" });
+    fetchMock.mockRejectedValueOnce(new Error("network down"));
+    await expect(refreshAccessToken()).resolves.toBeNull();
+
+    fetchMock.mockResolvedValueOnce(new Response("plain failure", { status: 500 }));
+    await expect(api.get("/plain-error")).rejects.toMatchObject({ status: 500, message: "plain failure" });
+  });
+
+  it("fetches raw payloads with refresh retry and fallback refresh token persistence", async () => {
+    const { apiFetchRaw, getStoredTokens, setStoredTokens } = await import("../client.js");
+    setStoredTokens({ accessToken: "expired", refreshToken: "refresh-1" });
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: "expired" }))
+      .mockResolvedValueOnce(response(200, { accessToken: "access-2" }))
+      .mockResolvedValueOnce(new Response("raw ok", { status: 200 }));
+
+    const res = await apiFetchRaw("/attachments/image-1", {
+      method: "PUT",
+      body: "raw-body",
+      headers: { "Content-Type": "text/plain" },
+    });
+
+    await expect(res.text()).resolves.toBe("raw ok");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      headers: { Authorization: "Bearer expired", "Content-Type": "text/plain" },
+      body: "raw-body",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/auth/refresh");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: "PUT",
+      headers: { Authorization: "Bearer access-2", "Content-Type": "text/plain" },
+      body: "raw-body",
+    });
+    expect(getStoredTokens()).toEqual({ accessToken: "access-2", refreshToken: "refresh-1" });
+  });
+
+  it("reports raw fetch errors and clears auth state on unrecovered raw 401", async () => {
+    const { apiFetchRaw, getStoredTokens, setStoredTokens } = await import("../client.js");
+
+    fetchMock.mockResolvedValueOnce(response(503, { error: "raw failed" }));
+    await expect(apiFetchRaw("/raw-json-error")).rejects.toMatchObject({ status: 503, message: "raw failed" });
+
+    fetchMock.mockResolvedValueOnce(new Response("raw text failed", { status: 500 }));
+    await expect(apiFetchRaw("/raw-text-error")).rejects.toMatchObject({ status: 500, message: "raw text failed" });
+
+    setStoredTokens({ accessToken: "bad", refreshToken: "" });
+    const logout = vi.fn();
+    window.addEventListener("auth:logout", logout);
+    fetchMock.mockResolvedValueOnce(response(401, { error: "raw unauthorized" }));
+
+    await expect(apiFetchRaw("/raw-unauthorized")).rejects.toMatchObject({
+      status: 401,
+      message: "raw unauthorized",
+    });
+    expect(logout).toHaveBeenCalled();
+    expect(getStoredTokens()).toBeNull();
+  });
 });
