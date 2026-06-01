@@ -428,7 +428,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 type: "server:welcome",
                 serverCommandVersion: app.commandVersion(),
                 serverTimeMs: Date.now(),
-                capabilities: { wsInboxDeliver: true },
+                capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
               }),
             );
           } catch (err) {
@@ -914,7 +914,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 socket.send(JSON.stringify({ type: "error", message: "Malformed inbox:ack frame" }));
                 return;
               }
-              const { entryId } = payloadResult.data;
+              const { entryId, ref } = payloadResult.data;
 
               // Find the agent / inbox this entry belongs to from the bind
               // map. We never trust an `agentId` from the wire here — that
@@ -922,29 +922,61 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // we resolve the inbox via the DB (one round-trip) and check
               // the resulting inboxId is in this socket's bound set.
               try {
-                const ackedEntry = await inboxService.ackEntryByIdForBoundAgents(
+                const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                   app.db,
                   entryId,
                   [...boundAgents.values()].map((a) => a.inboxId),
                 );
-                if (!ackedEntry) {
-                  // Either the entry doesn't exist, or it's not in 'delivered'
-                  // status, or it belongs to an inbox this socket hasn't bound.
-                  // All three are non-fatal — the client may be ack'ing a
-                  // stale entry from a previous run, or racing a `delivered →
-                  // pending` reset triggered by another socket binding the
-                  // same inbox. Debug-level only — every reconnect can race
-                  // here at low volume; promoting to warn would flood logs.
+                if (!ackResult.ok) {
+                  if (ref) {
+                    socket.send(
+                      JSON.stringify({
+                        type: "inbox:ack:rejected",
+                        entryId,
+                        ref,
+                        reason: ackResult.reason,
+                      }),
+                    );
+                  }
                   app.log.debug(
-                    { clientId, entryId, boundInboxes: boundAgents.size },
-                    "inbox:ack matched no row — stale ack or bind-reset race",
+                    {
+                      clientId,
+                      entryId,
+                      ref,
+                      agentId: null,
+                      boundInboxes: boundAgents.size,
+                      reason: ackResult.reason,
+                      ackEvent: "inbox_ack_rejected",
+                    },
+                    "inbox:ack rejected",
                   );
                   return;
                 }
                 // Find the agentId that owns this inbox to decrement the
                 // counter and trigger backlog drain.
-                const owner = [...boundAgents.values()].find((a) => a.inboxId === ackedEntry.inboxId);
-                if (owner) {
+                const owner = [...boundAgents.values()].find((a) => a.inboxId === ackResult.entry.inboxId);
+                if (ref) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "inbox:ack:accepted",
+                      entryId,
+                      ref,
+                      disposition: ackResult.disposition,
+                    }),
+                  );
+                }
+                app.log.debug(
+                  {
+                    clientId,
+                    entryId,
+                    ref,
+                    agentId: owner?.agentId ?? null,
+                    disposition: ackResult.disposition,
+                    ackEvent: "inbox_ack_accepted",
+                  },
+                  "inbox:ack accepted",
+                );
+                if (owner && ackResult.transitionedFromDelivered) {
                   inboxInFlight.set(owner.agentId, Math.max(0, (inboxInFlight.get(owner.agentId) ?? 1) - 1));
                   // Slot freed → top up. Cheap when no backlog (single SQL
                   // statement returning 0 rows). Critical when the cap was

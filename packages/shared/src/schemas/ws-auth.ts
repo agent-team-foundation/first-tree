@@ -35,6 +35,12 @@ export const serverCapabilitiesSchema = z
      * 0.10.4 ~ 0.14.2 clients suppress their local 5s HTTP poll.
      */
     wsInboxDeliver: z.boolean().default(false),
+    /**
+     * Server confirms `inbox:ack` frames that include a client-generated
+     * `ref` with `inbox:ack:accepted` / `inbox:ack:rejected`. New clients use
+     * this to retry ACKs until the database transition is known durable.
+     */
+    wsInboxAckConfirm: z.boolean().default(false),
   })
   .partial();
 export type ServerCapabilities = z.infer<typeof serverCapabilitiesSchema>;

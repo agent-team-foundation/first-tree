@@ -17,6 +17,7 @@ type PendingBind = {
 type ClientConnectionPrivate = {
   ws: FakeWebSocket | null;
   closing: boolean;
+  registered: boolean;
   pausedReason: "auth_rejected" | "auth_refresh_failed" | null;
   nextReconnectMinDelayMs: number;
   desiredBindings: Map<string, { agentId: string; runtimeType: string; runtimeVersion?: string }>;
@@ -118,6 +119,31 @@ async function makeConnection(overrides: Partial<ClientConnectionConfig> = {}): 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function parseSent(socket: FakeWebSocket, index: number): Record<string, unknown> {
+  return JSON.parse(socket.sent[index] ?? "{}") as Record<string, unknown>;
+}
+
+async function openRegisteredConnection(
+  connection: ClientConnectionInstance,
+  capabilities: Record<string, boolean> = {},
+) {
+  const internal = priv(connection);
+  const openPromise = internal.openWebSocket();
+  const socket = FakeWebSocket.instances.at(-1);
+  if (!socket) throw new Error("missing fake socket");
+  socket.emitOpen();
+  await flushMicrotasks();
+  socket.emitMessage({
+    type: "server:welcome",
+    serverCommandVersion: "1.0.0",
+    serverTimeMs: Date.now(),
+    capabilities,
+  });
+  socket.emitMessage({ type: "client:registered" });
+  await openPromise;
+  return socket;
 }
 
 describe("ClientConnection — WebSocket edge coverage", () => {
@@ -294,5 +320,172 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     await internal.runProactiveAuthRefresh();
 
     expect(internal.nextReconnectMinDelayMs).toBe(30_000);
+  });
+
+  it("sends confirmed inbox ACKs with refs and resolves on accepted", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(42);
+    const frame = parseSent(socket, socket.sent.length - 1);
+    expect(frame).toMatchObject({ type: "inbox:ack", entryId: 42 });
+    expect(typeof frame.ref).toBe("string");
+
+    socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: 42,
+      ref: frame.ref,
+      disposition: "acked",
+    });
+    await expect(ackPromise).resolves.toBeUndefined();
+  });
+
+  it("falls back to legacy inbox ACKs when the server does not advertise confirmations", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, { wsInboxDeliver: true });
+
+    await expect(connection.sendInboxAck(43)).resolves.toBeUndefined();
+    expect(parseSent(socket, socket.sent.length - 1)).toEqual({ type: "inbox:ack", entryId: 43 });
+  });
+
+  it("coalesces duplicate confirmed inbox ACKs and rejects on server rejection", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const first = connection.sendInboxAck(44);
+    const second = connection.sendInboxAck(44);
+    expect(second).toBe(first);
+    const ackFrames = socket.sent
+      .map((raw) => JSON.parse(raw) as { type?: string })
+      .filter((m) => m.type === "inbox:ack");
+    expect(ackFrames).toHaveLength(1);
+    const frame = parseSent(socket, socket.sent.length - 1);
+
+    socket.emitMessage({
+      type: "inbox:ack:rejected",
+      entryId: 44,
+      ref: frame.ref,
+      reason: "not_found_or_not_bound",
+    });
+    await expect(first).rejects.toThrow("not_found_or_not_bound");
+  });
+
+  it("retries confirmed inbox ACKs after timeout using the same ref", async () => {
+    vi.useFakeTimers();
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(45);
+    const first = parseSent(socket, socket.sent.length - 1);
+    await vi.advanceTimersByTimeAsync(3000);
+    const retry = parseSent(socket, socket.sent.length - 1);
+
+    expect(retry).toEqual(first);
+    socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: 45,
+      ref: first.ref,
+      disposition: "acked",
+    });
+    await expect(ackPromise).resolves.toBeUndefined();
+  });
+
+  it("holds agent-scoped confirmed inbox ACKs until that agent is rebound on the current socket", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(47, "agent-1");
+    const ackFramesBeforeBind = socket.sent
+      .map((raw) => JSON.parse(raw) as { type?: string })
+      .filter((m) => m.type === "inbox:ack");
+    expect(ackFramesBeforeBind).toHaveLength(0);
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const ackFrame = parseSent(socket, socket.sent.length - 1);
+    expect(ackFrame).toMatchObject({ type: "inbox:ack", entryId: 47 });
+    socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: 47,
+      ref: ackFrame.ref,
+      disposition: "acked",
+    });
+    await expect(ackPromise).resolves.toBeUndefined();
+  });
+
+  it("rejects held agent-scoped ACKs when the bind is rejected", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(48, "agent-1");
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bind:rejected",
+      ref: bindFrame.ref,
+      reason: "wrong_client",
+    });
+
+    await expect(bindPromise).rejects.toThrow("wrong_client");
+    await expect(ackPromise).rejects.toThrow("agent_bind_rejected:wrong_client");
+  });
+
+  it("rejects held agent-scoped ACKs when unbinding on a closed socket", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(49, "agent-1");
+    internal.closing = true;
+    socket.close(1006, "test close");
+
+    await connection.unbindAgent("agent-1");
+
+    await expect(ackPromise).rejects.toThrow("agent_unbound");
+  });
+
+  it("flushes pending confirmed inbox ACKs after reconnect and bind", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const firstSocket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const ackPromise = connection.sendInboxAck(46);
+    const firstAck = parseSent(firstSocket, firstSocket.sent.length - 1);
+    internal.closing = true;
+    firstSocket.close(1006, "test close");
+    internal.closing = false;
+
+    const secondSocket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(secondSocket, secondSocket.sent.length - 1);
+    secondSocket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const resentAck = parseSent(secondSocket, secondSocket.sent.length - 1);
+    expect(resentAck).toEqual(firstAck);
+    secondSocket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: 46,
+      ref: firstAck.ref,
+      disposition: "already_acked",
+    });
+    await expect(ackPromise).resolves.toBeUndefined();
   });
 });

@@ -200,13 +200,7 @@ export class AgentSlot {
       // concurrent worktree adds for the same URL (PRD §5.1.5).
       const gitMirrorManager = this.config.gitMirrorManager;
 
-      // Ack is fire-and-forget over WS: `ws.send` doesn't block on flush and
-      // SessionManager treats ack as advisory. Wrap in a resolved Promise so
-      // the `(id) => Promise<void>` config signature is satisfied.
-      const ackEntry = (entryId: number) => {
-        this.clientConnection.sendInboxAck(entryId);
-        return Promise.resolve();
-      };
+      const ackEntry = (entryId: number) => this.clientConnection.sendInboxAck(entryId, agent.agentId);
 
       this.sessionManager = new SessionManager({
         session: this.config.session,

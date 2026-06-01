@@ -82,11 +82,18 @@ describe("WS server:welcome — wire-additive frame after auth:ok", () => {
     ws.close();
 
     expect(frames[0]).toEqual({ type: "auth:ok" });
-    const welcome = frames[1] as { type: string; serverCommandVersion: string; serverTimeMs: number };
+    const welcome = frames[1] as {
+      type: string;
+      serverCommandVersion: string;
+      serverTimeMs: number;
+      capabilities?: { wsInboxDeliver?: boolean; wsInboxAckConfirm?: boolean };
+    };
     expect(welcome.type).toBe("server:welcome");
     expect(typeof welcome.serverCommandVersion).toBe("string");
     expect(welcome.serverCommandVersion.length).toBeGreaterThan(0);
     expect(typeof welcome.serverTimeMs).toBe("number");
     expect(welcome.serverTimeMs).toBeGreaterThan(0);
+    expect(welcome.capabilities?.wsInboxDeliver).toBe(true);
+    expect(welcome.capabilities?.wsInboxAckConfirm).toBe(true);
   });
 });

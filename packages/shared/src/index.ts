@@ -337,11 +337,22 @@ export {
   inboxPollQuerySchema,
 } from "./schemas/inbox.js";
 export type {
+  InboxAckAcceptedDisposition,
+  InboxAckAcceptedFrame,
   InboxAckFrame,
+  InboxAckRejectedFrame,
+  InboxAckRejectedReason,
   InboxDeliverFrame,
 } from "./schemas/inbox-frames.js";
 // -- WebSocket inbox data-plane frames --
-export { inboxAckFrameSchema, inboxDeliverFrameSchema } from "./schemas/inbox-frames.js";
+export {
+  inboxAckAcceptedDispositionSchema,
+  inboxAckAcceptedFrameSchema,
+  inboxAckFrameSchema,
+  inboxAckRejectedFrameSchema,
+  inboxAckRejectedReasonSchema,
+  inboxDeliverFrameSchema,
+} from "./schemas/inbox-frames.js";
 export {
   INVITATION_DEFAULT_TTL_DAYS,
   type InvitationPreview,

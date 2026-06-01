@@ -199,15 +199,18 @@ describe("inbox WS data-plane claim helpers", () => {
     // server treats this as 'no-op', preventing one socket from acking
     // another agent's deliveries.
     const denied = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, ["inbox_other"]);
-    expect(denied).toBeNull();
+    expect(denied).toEqual({ ok: false, reason: "not_found_or_not_bound" });
 
     const stillDelivered = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
     expect(stillDelivered[0]?.status).toBe("delivered");
 
     // Right scope: ack succeeds and flips status.
     const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(accepted).not.toBeNull();
-    expect(accepted?.status).toBe("acked");
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack unexpectedly rejected");
+    expect(accepted.disposition).toBe("acked");
+    expect(accepted.transitionedFromDelivered).toBe(true);
+    expect(accepted.entry.status).toBe("acked");
   });
 
   it("ackEntryByIdForBoundAgents accepts when the inbox list contains the owner alongside other inboxes", async () => {
@@ -228,14 +231,65 @@ describe("inbox WS data-plane claim helpers", () => {
       a2.agent.inboxId,
       "inbox_other_b",
     ]);
-    expect(accepted).not.toBeNull();
-    expect(accepted?.status).toBe("acked");
-    expect(accepted?.inboxId).toBe(a2.agent.inboxId);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack unexpectedly rejected");
+    expect(accepted.entry.status).toBe("acked");
+    expect(accepted.entry.inboxId).toBe(a2.agent.inboxId);
+  });
+
+  it("ackEntryByIdForBoundAgents accepts duplicate ACKs idempotently", async () => {
+    const app = getApp();
+    const { a2, messageId } = await seedDeliverable(app);
+
+    const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
+    const entry = claimed[0];
+    if (!entry) throw new Error("seed claim failed");
+
+    const first = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
+    expect(first.ok).toBe(true);
+
+    const second = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw new Error("duplicate ack unexpectedly rejected");
+    expect(second.disposition).toBe("already_acked");
+    expect(second.transitionedFromDelivered).toBe(false);
+    expect(second.entry.status).toBe("acked");
+  });
+
+  it("ackEntryByIdForBoundAgents accepts an owned pending row to close bind-reset races", async () => {
+    const app = getApp();
+    const { a2, messageId } = await seedDeliverable(app);
+
+    const [entry] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, messageId)).limit(1);
+    if (!entry) throw new Error("seed entry missing");
+    expect(entry.status).toBe("pending");
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("pending ack unexpectedly rejected");
+    expect(accepted.disposition).toBe("accepted_from_pending");
+    expect(accepted.transitionedFromDelivered).toBe(false);
+    expect(accepted.entry.status).toBe("acked");
+  });
+
+  it("ackEntryByIdForBoundAgents rejects terminal failed rows", async () => {
+    const app = getApp();
+    const { a2, messageId } = await seedDeliverable(app);
+
+    const [entry] = await app.db
+      .update(inboxEntries)
+      .set({ status: "failed" })
+      .where(eq(inboxEntries.messageId, messageId))
+      .returning();
+    if (!entry) throw new Error("seed entry missing");
+
+    const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
+    expect(rejected).toEqual({ ok: false, reason: "failed_or_dead" });
   });
 
   it("ackEntryByIdForBoundAgents short-circuits on empty inbox list", async () => {
     const app = getApp();
     const res = await inboxService.ackEntryByIdForBoundAgents(app.db, 1, []);
-    expect(res).toBeNull();
+    expect(res).toEqual({ ok: false, reason: "not_found_or_not_bound" });
   });
 });

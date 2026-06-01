@@ -29,5 +29,28 @@ export type InboxDeliverFrame = z.infer<typeof inboxDeliverFrameSchema>;
 export const inboxAckFrameSchema = z.object({
   type: z.literal("inbox:ack"),
   entryId: z.number().int().nonnegative(),
+  ref: z.string().min(1).optional(),
 });
 export type InboxAckFrame = z.infer<typeof inboxAckFrameSchema>;
+
+export const inboxAckAcceptedDispositionSchema = z.enum(["acked", "already_acked", "accepted_from_pending"]);
+export type InboxAckAcceptedDisposition = z.infer<typeof inboxAckAcceptedDispositionSchema>;
+
+export const inboxAckRejectedReasonSchema = z.enum(["not_found_or_not_bound", "failed_or_dead"]);
+export type InboxAckRejectedReason = z.infer<typeof inboxAckRejectedReasonSchema>;
+
+export const inboxAckAcceptedFrameSchema = z.object({
+  type: z.literal("inbox:ack:accepted"),
+  entryId: z.number().int().nonnegative(),
+  ref: z.string().min(1),
+  disposition: inboxAckAcceptedDispositionSchema,
+});
+export type InboxAckAcceptedFrame = z.infer<typeof inboxAckAcceptedFrameSchema>;
+
+export const inboxAckRejectedFrameSchema = z.object({
+  type: z.literal("inbox:ack:rejected"),
+  entryId: z.number().int().nonnegative(),
+  ref: z.string().min(1),
+  reason: inboxAckRejectedReasonSchema,
+});
+export type InboxAckRejectedFrame = z.infer<typeof inboxAckRejectedFrameSchema>;
