@@ -138,6 +138,9 @@
   --radius-input: 4px;
   --radius-panel: 6px;
   --radius-dialog: 8px;
+  /* Fully-round — pills, circular discs/dots, avatar rings. The one radius that
+     isn't surface-importance-ascending; it means "capsule/circle", not a size. */
+  --radius-full: 9999px;
 
   /* ---- Font families ------------------------------------------------------- */
   --font-sans: var(--font-sans-stack);
@@ -1418,22 +1421,6 @@
  */
 .computer-card-stack > * + * {
   border-top: var(--hairline) solid var(--border-faint);
-}
-
-.onboarding-runtime-option {
-  border-radius: var(--radius-input);
-  outline: var(--hairline) solid transparent;
-  outline-offset: var(--sp-0_75);
-}
-
-.onboarding-runtime-option:focus-within {
-  color: color-mix(in oklch, var(--primary) 30%, var(--fg));
-  outline-color: var(--ring);
-}
-
-.onboarding-name-input::placeholder {
-  color: var(--fg-4);
-  opacity: 0.72;
 }
 
 /* Dense table row hover — used by DenseTableRow[data-interactive] */

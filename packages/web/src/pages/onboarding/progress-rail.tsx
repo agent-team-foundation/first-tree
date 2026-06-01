@@ -1,4 +1,5 @@
 import { Bot, Check, GitBranch, type LucideIcon, MonitorSmartphone, Rocket, Sparkles, Users } from "lucide-react";
+import { cn } from "../../lib/utils.js";
 import { resolveStepLabel } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 import { type StepId, stepVisualState } from "./steps.js";
@@ -43,7 +44,7 @@ export function ProgressRail() {
                   width: "var(--sp-6)",
                   height: "var(--sp-6)",
                   flexShrink: 0,
-                  borderRadius: 999,
+                  borderRadius: "var(--radius-full)",
                   background:
                     state === "active"
                       ? "var(--primary)"
@@ -101,12 +102,9 @@ export function ProgressRail() {
                 </button>
               ) : (
                 <span
-                  className="text-label"
+                  className={cn("text-label", state === "active" ? "font-semibold" : "font-normal")}
                   aria-current={state === "active" ? "step" : undefined}
-                  style={{
-                    color: state === "active" ? "var(--fg)" : "var(--fg-4)",
-                    fontWeight: state === "active" ? 600 : 400,
-                  }}
+                  style={{ color: state === "active" ? "var(--fg)" : "var(--fg-4)" }}
                 >
                   {label}
                 </span>
