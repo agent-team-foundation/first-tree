@@ -2,8 +2,9 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createChat } from "../services/chat.js";
+import { createMeChat, listMeChats } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * `purpose: "agent-final-text"` bypass channel.
@@ -164,6 +165,192 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       purpose: "agent-final-text",
     });
     expect(res.statusCode).toBe(201);
+  });
+
+  /*
+   * Unread badge propagation on `agent-final-text`.
+   *
+   * The original symptom (production bug, 2026-06-01): after PR #633 retired
+   * implicit routing, an agent's final-text turn output stopped bumping the
+   * human peer's `chat_user_state.unread_mention_count`, because the message
+   * carries empty `metadata.mentions` and `chat-projection.applyAfterFanOut`
+   * early-returned on `mentionedAgentIds.length === 0`. The chat list lost
+   * its red dot when an agent finished a turn — the "agent done" signal
+   * humans rely on.
+   *
+   * The fix opts the projection into a final-text-specific bump branch that
+   * targets only human stakeholders:
+   *   - speaker branch: human speakers in this chat (the 1:1 peer)
+   *   - watcher branch: watchers whose managed agent IS the sender (the
+   *     group case where the manager doesn't speak)
+   * Other agent speakers are NOT bumped — final-text never wakes another
+   * agent, and we don't want to pollute their unread state either.
+   */
+  it("bumps the human peer's unread counter in a 1:1 chat (regression for the lost red dot)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `ft1-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "i am done — turn ended",
+      purpose: "agent-final-text",
+    });
+
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 10,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("bumps the manager-watcher's unread when the watched agent emits final text in a group chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { createAgent } = await import("../services/agent.js");
+    const managed = await createAgent(app.db, {
+      name: `ftw-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Watched",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    // Peer is owned by a different admin, so admin is a watcher of `managed`
+    // only — not a speaker of this chat.
+    const peer = await createTestAgent(app, { name: `ftp-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+
+    await sendMessage(app.db, chatId, managed.uuid, {
+      source: "api",
+      format: "text",
+      content: "turn done from managed",
+      purpose: "agent-final-text",
+    });
+
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 10,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("counts +1 per message even when final-text also names the human peer explicitly (no double-bump)", async () => {
+    // Regression guard for the codex review point on PR #728:
+    // `agent-final-text` + explicit `metadata.mentions: [human]` previously
+    // hit both the final-text speaker branch AND the mention speaker
+    // branch in two separate UPSERTs, incrementing the human's counter
+    // twice for a single message. The UNION'd UPSERT collapses the
+    // duplicate target row so the counter advances by exactly +1.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `ftd-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "done",
+      metadata: { mentions: [admin.humanAgentUuid] },
+      purpose: "agent-final-text",
+    });
+
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 10,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row?.unreadMentionCount).toBe(1);
+  });
+
+  it("does NOT bump on a human-sender send that smuggles `purpose: agent-final-text` (sender-type gate)", async () => {
+    // Regression guard for the codex review point on PR #728:
+    // `purpose` lives on the shared sendMessage schema, so nothing at
+    // the route layer forbids a human sender from setting
+    // `agent-final-text`. The unread-bump branch is gated on
+    // `senderRow.type !== "human"` so a human's send never lands
+    // unread-bumps on co-speakers from this code path; mention-driven
+    // unread (the explicit path) is unaffected and still works.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `fth-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Human sends with the agent-final-text marker but NO mentions. The
+    // bump should not fire because the sender is human.
+    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "api",
+      format: "text",
+      content: "human-flavoured 'final text'",
+      purpose: "agent-final-text",
+    });
+
+    // Peer is an agent — query chat_user_state directly. The lazy-
+    // materialised row should be absent (or 0) since neither branch
+    // fired.
+    const { sql } = await import("drizzle-orm");
+    const rows = (await app.db.execute(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${peer.agent.uuid}`,
+    )) as unknown as Array<{ unread_mention_count: number }>;
+    expect(rows[0]?.unread_mention_count ?? 0).toBe(0);
+  });
+
+  it("does NOT bump non-human speaker peers' unread state on final text (avoid polluting agent unread state)", async () => {
+    // Two agents under one admin; admin watches both. The sender's final
+    // text should bump the watcher (admin) but NOT the other agent peer.
+    // Pins the narrow target set: humans + watchers-of-sender only.
+    const app = getApp();
+    const a = await createTestAgent(app, { name: `ftns-${crypto.randomUUID().slice(0, 6)}` });
+    const { createAgent } = await import("../services/agent.js");
+    const b = await createAgent(app.db, {
+      name: `ftnp-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Other",
+      managerId: a.memberId,
+      organizationId: a.organizationId,
+      clientId: undefined,
+    });
+
+    const chat = await createChat(app.db, a.agent.uuid, {
+      type: "group",
+      participantIds: [b.uuid],
+    });
+
+    await sendMessage(app.db, chat.id, a.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "final from a",
+      purpose: "agent-final-text",
+    });
+
+    // Lookup `b`'s row directly via the chat_user_state — listMeChats is
+    // user-scoped and `b` doesn't have a human-side identity, so query
+    // the table directly.
+    const { sql } = await import("drizzle-orm");
+    const rows = (await app.db.execute(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chat.id} AND agent_id = ${b.uuid}`,
+    )) as unknown as Array<{ unread_mention_count: number }>;
+    // Either no row (lazy-materialised, 0 by default) or a row with 0.
+    expect(rows[0]?.unread_mention_count ?? 0).toBe(0);
   });
 
   it("API integration: same endpoint without `purpose` still rejects no-mention sends with 400 (regression)", async () => {

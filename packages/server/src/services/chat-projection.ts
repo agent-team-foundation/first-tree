@@ -13,9 +13,15 @@
  *      from `archived` → `active` for everyone watching this chat. `deleted`
  *      rows are sticky and intentionally untouched.
  *
- *   3. Mention propagation: increment `unread_mention_count` for mentioned
- *      speaking participants AND for watcher rows whose managed agent was
- *      mentioned. Sender row is excluded.
+ *   3. Unread counter propagation: increment `unread_mention_count` via a
+ *      single UNION'd UPSERT. Branches: mentioned speakers (≠ sender),
+ *      watchers whose managed non-human agent was mentioned, plus —
+ *      when `bumpForAgentFinalText` is set — human speakers (≠ sender)
+ *      and watchers whose managed agent IS the sender. UNION dedupes any
+ *      target row that satisfies more than one branch so the counter
+ *      advances by exactly +1 per message. The final-text branch
+ *      restores the "agent finished → red dot" UX that PR #633 retired
+ *      along with the 1:1 dmAuto projection.
  *
  *   4. Realtime kick: fire-and-forget `pg_notify('chat_message_events', …)`
  *      so admin WS sockets can translate it into a `chat:message` frame.
@@ -92,6 +98,19 @@ export type ApplyAfterFanOutInput = {
   contentPreview: string;
   /** When set, used as the `last_message_at` instead of NOW(). */
   messageCreatedAt?: Date;
+  /**
+   * When the send is an agent's final-text turn output (`purpose ===
+   * "agent-final-text"` upstream), bump the unread counter for human
+   * stakeholders of this chat even though the message has no `@`-mentions.
+   * Targets:
+   *   - human speakers (≠ sender) in this chat — the 1:1 human peer case.
+   *   - watcher rows whose managed agent IS the sender — the group-chat
+   *     case where the manager is a watcher, not a speaker.
+   * Restores the "agent finished → red dot for the human" UX that the
+   * previous 1:1 dmAuto + extractMentionsFromContent path provided before
+   * PR #633 retired implicit routing.
+   */
+  bumpForAgentFinalText?: boolean;
 };
 
 /**
@@ -100,7 +119,7 @@ export type ApplyAfterFanOutInput = {
  * is empty (degenerate case skips the mention UPDATEs).
  */
 export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput): Promise<void> {
-  const { chatId, senderId, mentionedAgentIds, contentPreview, messageCreatedAt } = input;
+  const { chatId, senderId, mentionedAgentIds, contentPreview, messageCreatedAt, bumpForAgentFinalText } = input;
   const previewClipped = contentPreview.length > 0 ? contentPreview.slice(0, 200) : null;
   const ts = messageCreatedAt ?? new Date();
 
@@ -130,56 +149,96 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
        AND engagement_status = ${ARCHIVED}
   `);
 
-  if (mentionedAgentIds.length === 0) return;
+  // 3. Unread counter propagation — single UPSERT into chat_user_state.
+  //
+  // Two source signals feed the same counter and must be merged before
+  // the UPSERT to keep `+1 per message` semantics intact:
+  //
+  //   A. Mention propagation (always on when the message has explicit
+  //      mentions). Speaker branch: mentioned ∩ chat speakers, sender
+  //      excluded. Watcher branch: watchers whose managed non-human
+  //      agent was mentioned.
+  //
+  //   B. Agent-final-text bump (only when `bumpForAgentFinalText`).
+  //      `purpose === "agent-final-text"` carries empty mentions by
+  //      construction — PR #633's explicit-only contract made it the
+  //      one legal mentions-empty path, which incidentally retired the
+  //      1:1 dmAuto projection that used to bump the human peer's red
+  //      dot when their agent finished a turn. We restore that signal
+  //      here without re-introducing implicit wake-up (inbox stays
+  //      `notify=false` via `purposeProfile.forceSilentFanOut`).
+  //      Speaker branch: human speakers (≠ sender) in this chat —
+  //      covers 1:1 human-↔-agent. Watcher branch: watchers whose
+  //      managed agent IS the sender — covers group chats where the
+  //      manager doesn't speak.
+  //
+  // All applicable branches are UNIONed into a single SELECT. UNION is
+  // set-distinct, so a target row that satisfies more than one branch
+  // (e.g. final-text + explicit mention of the same human peer)
+  // collapses to a single row → `unread_mention_count` advances by
+  // exactly +1 per message regardless of how many branches hit it.
+  // ON CONFLICT semantics mirror the prior implementation: missing
+  // row → INSERT count=1; existing → UPDATE count = count + 1.
+  const wantsMentionBump = mentionedAgentIds.length > 0;
+  if (!wantsMentionBump && !bumpForAgentFinalText) return;
 
-  // 3. Mention counter propagation — single UPSERT into chat_user_state.
-  //
-  // The target set is built via a UNION of two disjoint queries
-  // (access_mode='speaker' XOR access_mode='watcher' is enforced by the
-  // chat_membership table structure), so the same (chat_id, agent_id)
-  // row never appears twice in the VALUES list — safe for ON CONFLICT
-  // DO UPDATE.
-  //
-  // Speaker branch:
-  //   - target = mentioned ∩ chat speakers, sender excluded
-  //   - these agents were directly @-mentioned in the message
-  //
-  // Watcher branch:
-  //   - target = (manager's human-agent) of any mentioned non-human,
-  //     restricted to watchers of this chat (i.e. the manager itself
-  //     is NOT a speaker — otherwise their counter is already bumped
-  //     by the speaker branch via the explicit @ on themselves).
-  //   - sender exclusion is not needed here: the sender is by
-  //     definition a speaker, never a watcher row.
-  //
-  // chat_user_state rows are lazily materialised: missing → INSERT
-  // with count=1; existing → UPDATE count = count + 1.
-  const mentionedList = sql.join(
-    mentionedAgentIds.map((id) => sql`${id}`),
-    sql`, `,
-  );
+  const branches: ReturnType<typeof sql>[] = [];
+
+  if (wantsMentionBump) {
+    const mentionedList = sql.join(
+      mentionedAgentIds.map((id) => sql`${id}`),
+      sql`, `,
+    );
+    branches.push(sql`
+      SELECT cm.chat_id, cm.agent_id
+        FROM chat_membership cm
+       WHERE cm.chat_id     = ${chatId}
+         AND cm.access_mode = 'speaker'
+         AND cm.agent_id    IN (${mentionedList})
+         AND cm.agent_id   <> ${senderId}
+    `);
+    branches.push(sql`
+      SELECT cm.chat_id, cm.agent_id
+        FROM chat_membership cm
+        JOIN members m  ON m.agent_id    = cm.agent_id
+        JOIN agents  a  ON a.manager_id  = m.id
+       WHERE cm.chat_id     = ${chatId}
+         AND cm.access_mode = 'watcher'
+         AND a.uuid         IN (${mentionedList})
+         AND a.type        <> 'human'
+         AND m.status       = 'active'
+    `);
+  }
+
+  if (bumpForAgentFinalText) {
+    branches.push(sql`
+      SELECT cm.chat_id, cm.agent_id
+        FROM chat_membership cm
+        JOIN agents a ON a.uuid = cm.agent_id
+       WHERE cm.chat_id     = ${chatId}
+         AND cm.access_mode = 'speaker'
+         AND cm.agent_id   <> ${senderId}
+         AND a.type         = 'human'
+    `);
+    branches.push(sql`
+      SELECT cm.chat_id, cm.agent_id
+        FROM chat_membership cm
+        JOIN members m ON m.agent_id    = cm.agent_id
+        JOIN agents  a ON a.manager_id  = m.id
+       WHERE cm.chat_id     = ${chatId}
+         AND cm.access_mode = 'watcher'
+         AND a.uuid         = ${senderId}
+         AND a.type        <> 'human'
+         AND m.status       = 'active'
+    `);
+  }
+
+  const targets = sql.join(branches, sql` UNION `);
 
   await tx.execute(sql`
     INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count)
     SELECT chat_id, agent_id, 1
-      FROM (
-        SELECT cm.chat_id, cm.agent_id
-          FROM chat_membership cm
-         WHERE cm.chat_id     = ${chatId}
-           AND cm.access_mode = 'speaker'
-           AND cm.agent_id    IN (${mentionedList})
-           AND cm.agent_id   <> ${senderId}
-        UNION
-        SELECT cm.chat_id, cm.agent_id
-          FROM chat_membership cm
-          JOIN members m  ON m.agent_id    = cm.agent_id
-          JOIN agents  a  ON a.manager_id  = m.id
-         WHERE cm.chat_id     = ${chatId}
-           AND cm.access_mode = 'watcher'
-           AND a.uuid         IN (${mentionedList})
-           AND a.type        <> 'human'
-           AND m.status       = 'active'
-      ) targets
+      FROM (${targets}) targets
     ON CONFLICT (chat_id, agent_id)
     DO UPDATE SET unread_mention_count = chat_user_state.unread_mention_count + 1
   `);

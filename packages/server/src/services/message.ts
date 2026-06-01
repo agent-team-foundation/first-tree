@@ -459,6 +459,13 @@ async function sendMessageInner(
       mentionedAgentIds: mergedMentions,
       contentPreview: previewText,
       messageCreatedAt: msg.createdAt,
+      // Restrict the final-text unread bump to non-human senders.
+      // `purpose` lives on the shared sendMessage schema, so a human-
+      // authored web send could in principle set it; gating here keeps
+      // the human-as-sender path out of the new projection branch even
+      // if the rest of `agent-final-text` semantics (skipMentionEnforcement,
+      // forceSilentFanOut) happen to fire for that caller.
+      bumpForAgentFinalText: isAgentFinalText && senderRow.type !== "human",
     });
 
     return {
