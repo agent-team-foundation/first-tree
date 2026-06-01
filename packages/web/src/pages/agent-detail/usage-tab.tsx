@@ -11,7 +11,10 @@ const ACTIVITY_GRID_DAYS = 90;
 const RECENT_TURNS_LIMIT = 10;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WEEKDAY_RAIL: readonly string[] = ["Mon", "", "Wed", "", "Fri", "", ""];
+// Calendar columns are Sunday-first (row index 0 = Sunday, matching JS
+// Date.getUTCDay()). GitHub's contribution graph convention labels rows
+// 1/3/5 — Mon, Wed, Fri — and leaves Sun/Tue/Thu/Sat blank.
+const WEEKDAY_RAIL: readonly string[] = ["", "Mon", "", "Wed", "", "Fri", ""];
 
 /**
  * Agent profile Usage tab — the deep view onto one agent's token usage.
