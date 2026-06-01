@@ -1,4 +1,14 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -524,7 +534,7 @@ export function upsertWhitepaperFile(targetRoot: string): ManagedFileAction {
   }
 
   if (existing.kind === "symlink") {
-    rmSync(fullPath, { force: true });
+    unlinkSync(fullPath);
     symlinkSync(WHITEPAPER_SYMLINK_TARGET, fullPath);
     return "updated";
   }
