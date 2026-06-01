@@ -226,8 +226,8 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 ## Strategy A migration (design-language adoption — 2026-05-28)
 
 Adopted direction: **Strategy A** (see DESIGN.md → "Design language"). Migrate the app
-from green-primary to **neutral-primary + green-as-signature/semantic**, at Lark/Arco
-craft level. Reference mockup: `variant-F.html` (light + dark) in the design archive.
+from green-primary to **neutral-primary + green-as-signature/semantic**, with mature
+collaboration-product craft. Reference mockup: `variant-F.html` (light + dark) in the design archive.
 This is a full visual pass — do it phased, not in one shot. The earlier P1–P3 leftovers
 fold into the phases below.
 

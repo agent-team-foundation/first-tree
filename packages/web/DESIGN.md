@@ -36,10 +36,11 @@
    glyph), not hue. The states that want your attention are **warm** so they pop
    against the green/blue live baseline: needs-you = amber, blocked = orange,
    error = red. Present-but-idle = blue; offline = gray.
-4. **Lark / Arco craft, not Lark color.** Borrow the *discipline* — a neutral
-   gray token ramp, hairline borders, soft low-opacity elevation, thin line
-   icons, search + underline tabs, rounded-square avatars, comfortable aligned
-   spacing, a right Session sidebar. Do **not** borrow a saturated blue primary.
+4. **Mature collaboration craft, not borrowed color.** Borrow the *discipline*
+   — a neutral gray token ramp, hairline borders, soft low-opacity elevation,
+   thin line icons, search + underline tabs, rounded-square avatars,
+   comfortable aligned spacing, a right Session sidebar. Do **not** borrow a
+   saturated blue primary.
 
 **Semantic color map — the only places color appears:**
 
