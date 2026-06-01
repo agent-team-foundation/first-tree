@@ -91,7 +91,8 @@ type IdentityDialogProps = {
 };
 
 function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialogProps) {
-  const { memberId, role } = useAuth();
+  const { memberId, role, agentId } = useAuth();
+  const resolveAgent = useAgentIdentityMap();
   const [displayName, setDisplayName] = useState(agent.displayName);
   const [delegateMention, setDelegateMention] = useState(agent.delegateMention ?? "");
   const [visibility, setVisibility] = useState(agent.visibility);
@@ -115,7 +116,13 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
   // A delegate is a personal choice — only the member themselves may set it,
   // NOT an admin acting on their behalf. The backend enforces this (403);
   // mirror it here so the control is disabled when the caller can't persist.
-  const canEditDelegate = isHuman && agent.managerId === memberId;
+  // Use the SAME truth source the server uses (scope.humanAgentId === target
+  // uuid): useAuth().agentId is the caller's own human-agent uuid. A
+  // managerId-based check could drift from this if the manager is reassigned.
+  const canEditDelegate = isHuman && agent.uuid === agentId;
+  // For non-owners the selector is read-only, so resolve the assigned delegate
+  // to show the truth as text instead of a disabled <select>.
+  const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
   const assistantsQuery = useQuery({
     queryKey: ["agents-for-delegate", memberId],
     queryFn: async () => {
@@ -210,20 +217,32 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
           {isHuman && (
             <div className="space-y-2">
               <Label htmlFor="id-delegate">Delegate Mention</Label>
-              <select
-                id="id-delegate"
-                value={delegateMention}
-                onChange={(e) => setDelegateMention(e.target.value)}
-                disabled={!canEditDelegate}
-                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <option value="">Remove delegate</option>
-                {assistantsQuery.data?.map((a) => (
-                  <option key={a.uuid} value={a.uuid}>
-                    {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
-                  </option>
-                ))}
-              </select>
+              {canEditDelegate ? (
+                <select
+                  id="id-delegate"
+                  value={delegateMention}
+                  onChange={(e) => setDelegateMention(e.target.value)}
+                  className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">Remove delegate</option>
+                  {assistantsQuery.data?.map((a) => (
+                    <option key={a.uuid} value={a.uuid}>
+                      {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                // Read-only for non-owners: show the assigned delegate as text.
+                // A disabled <select> would have no matching option (the query
+                // is gated to owners) and misrender the value as "Remove delegate".
+                <div className="flex h-9 w-full items-center rounded-[var(--radius-input)] border border-input bg-transparent px-3 text-body opacity-70">
+                  {delegateIdentity ? (
+                    <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
+                  ) : (
+                    <span className="text-muted-foreground">No delegate</span>
+                  )}
+                </div>
+              )}
               <p className="text-caption text-muted-foreground">
                 {canEditDelegate
                   ? "Assistant that acts on behalf of this agent."
