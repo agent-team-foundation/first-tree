@@ -248,10 +248,8 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     if (promptDirty) patch.prompt = { append: draft.promptAppend };
     if (modelDirty) patch.model = draft.model;
     if (reasoningEffortDirty) patch.reasoningEffort = draft.reasoningEffort;
-    const mcpDirty = summary.counts.mcp > 0;
     const envDirty = summary.counts.env > 0;
     const gitDirty = summary.counts.git > 0;
-    if (mcpDirty) patch.mcpServers = draft.mcp.filter((i) => i.status !== "deleted").map((i) => i.value);
     if (envDirty) {
       patch.env = draft.env
         .filter((i) => i.status !== "deleted")

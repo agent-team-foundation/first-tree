@@ -14,11 +14,13 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agents } from "../db/schema/agents.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { decryptValue, encryptValue, isEncryptedValue } from "./crypto.js";
 import type { Notifier } from "./notifier.js";
 
 const DEBOUNCE_WINDOW_MS = 300;
+const LEGACY_MCP_WRITE_DISABLED_MESSAGE =
+  "Legacy per-agent MCP config writes are disabled. MCP configuration will be managed by Team MCP Resources.";
 
 type PendingWrite = {
   /** All callers waiting on the aggregated write. Each carries its own
@@ -111,6 +113,7 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
    *     for M1 (admins resend the full list — matches the Web form).
    */
   function applyPatch(current: AgentRuntimeConfigPayload, patch: AgentRuntimeConfigPatch): AgentRuntimeConfigPayload {
+    rejectLegacyMcpWrite(patch);
     const next = {
       // `kind` is pinned to `agents.runtime_provider` and never patchable
       // from the config side; preserve the current value here and let
@@ -126,6 +129,12 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
       reasoningEffort: patch.reasoningEffort ?? current.reasoningEffort,
     } as AgentRuntimeConfigPayload;
     return next;
+  }
+
+  function rejectLegacyMcpWrite(patch: AgentRuntimeConfigPatch): void {
+    if (Object.hasOwn(patch, "mcpServers")) {
+      throw new BadRequestError(LEGACY_MCP_WRITE_DISABLED_MESSAGE, { code: "legacy_mcp_config_disabled" });
+    }
   }
 
   function mergeEnv(currentEnv: EnvEntry[], patchEnv: EnvEntry[]): EnvEntry[] {

@@ -75,11 +75,12 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(seed.statusCode).toBe(200);
     await app.configService.flush(agent.uuid);
 
-    // Touch only `mcpServers`. The service must preserve the other 4 fields.
+    // Touch only `reasoningEffort`. The service must preserve the list fields
+    // and prompt/model values.
     const partial = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 2,
       payload: {
-        mcpServers: [{ name: "demo", transport: "stdio", command: "echo" }],
+        reasoningEffort: "high",
       },
     });
     expect(partial.statusCode).toBe(200);
@@ -91,7 +92,31 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(payload.model).toBe("claude-sonnet-4-6");
     expect(payload.env).toEqual([{ key: "FOO", value: "bar", sensitive: false }]);
     expect(payload.gitRepos).toEqual([{ url: "https://example.com/r.git" }]);
-    expect(payload.mcpServers).toEqual([{ name: "demo", transport: "stdio", command: "echo" }]);
+    expect(payload.mcpServers).toEqual([]);
+    expect(payload.reasoningEffort).toBe("high");
+  });
+
+  it("rejects legacy MCP config writes in PATCH and dry-run", async () => {
+    const app = getApp();
+    const req = await authedRequest(app);
+    const agent = await (await seedAgentFactory(app))({
+      name: `cfg-mcp-disabled-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+    });
+    const payload = {
+      mcpServers: [{ name: "demo", transport: "stdio", command: "echo" }],
+    };
+
+    const patch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 1,
+      payload,
+    });
+    expect(patch.statusCode).toBe(400);
+    expect(patch.json<{ error: string }>().error).toContain("Legacy per-agent MCP config writes are disabled");
+
+    const dry = await req("POST", `/api/v1/agents/${agent.uuid}/config/dry-run`, { payload });
+    expect(dry.statusCode).toBe(400);
+    expect(dry.json<{ error: string }>().error).toContain("Team MCP Resources");
   });
 
   it("reasoning effort: defaults to '', persists a valid value, rejects a codex-only value with 400", async () => {

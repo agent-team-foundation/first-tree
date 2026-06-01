@@ -988,6 +988,16 @@ describe("page SSR smoke coverage", () => {
         ),
       ).toContain(expected);
     }
+    expect(
+      renderPage(
+        <Routes>
+          <Route path="/agents/:uuid" element={<AgentDetailPage />}>
+            <Route path="tools" element={<ToolsTab />} />
+          </Route>
+        </Routes>,
+        "/agents/agent-1/tools",
+      ),
+    ).toContain("Legacy per-agent MCP editing is disabled");
   });
 
   it("renders agent detail sections with populated draft rows", async () => {
