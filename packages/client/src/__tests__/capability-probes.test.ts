@@ -2,7 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClaudeExecutableResolution } from "../handlers/claude-executable.js";
 import { probeClaudeCodeCapability } from "../runtime/capabilities/claude-code.js";
+import { parseTmuxVersion, probeClaudeCodeTuiCapability } from "../runtime/capabilities/claude-code-tui.js";
 import { probeCodexCapability } from "../runtime/capabilities/codex.js";
 import { probeCapabilities } from "../runtime/capabilities/index.js";
 
@@ -301,6 +303,158 @@ describe("probeCodexCapability", () => {
   });
 });
 
+describe("probeClaudeCodeTuiCapability", () => {
+  const onPath = (): ClaudeExecutableResolution => ({ path: "/usr/local/bin/claude", source: "path" });
+  const notOnPath = (): ClaudeExecutableResolution => ({ path: undefined, source: "default" });
+  const tmux34 = () => ({ raw: "tmux 3.4", major: 3, minor: 4 });
+  const authed = () => ({ authenticated: true, method: "oauth" as const });
+  const noAuth = () => ({ authenticated: false, method: "none" as const });
+  const claudeVer = () => "1.0.42";
+
+  it("`ok` when claude is on PATH, tmux >= 3.0, and authenticated", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: tmux34,
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("ok");
+    expect(entry.available).toBe(true);
+    expect(entry.authenticated).toBe(true);
+    expect(entry.authMethod).toBe("oauth");
+    // sdkVersion carries the claude CLI version (the runtime engine), not tmux.
+    expect(entry.sdkVersion).toBe("1.0.42");
+  });
+
+  it("`unauthenticated` when claude + tmux are present but not logged in", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: tmux34,
+      probeClaudeVersion: claudeVer,
+      detectAuth: noAuth,
+    });
+    expect(entry.state).toBe("unauthenticated");
+    expect(entry.available).toBe(true);
+    expect(entry.authenticated).toBe(false);
+    expect(entry.authMethod).toBe("none");
+  });
+
+  it("`missing` when claude resolves only to the SDK bundle (source=default)", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: notOnPath,
+      probeTmux: tmux34,
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toContain("`claude` not found");
+  });
+
+  it("`missing` when claude resolves but cannot be executed (`claude --version` fails)", async () => {
+    // existsSync passed (resolveExecutable found a path) but the binary is
+    // broken / non-executable, so probeClaudeVersion returns null. Must NOT
+    // report `ok` — the runtime could not actually spawn the CLI.
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: tmux34,
+      probeClaudeVersion: () => null,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toContain("could not be executed");
+    expect(entry.sdkVersion).toBeNull();
+  });
+
+  it("`missing` when tmux is absent", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: () => null,
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.error).toContain("tmux not found");
+  });
+
+  it("`missing` when tmux is older than 3.0", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: () => ({ raw: "tmux 2.9", major: 2, minor: 9 }),
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.error).toContain("older than 3.0");
+  });
+
+  it("accepts tmux 3.0 exactly (boundary)", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: () => ({ raw: "tmux 3.0", major: 3, minor: 0 }),
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("ok");
+  });
+
+  it("accepts a future major (e.g. tmux 4.0)", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: () => ({ raw: "tmux 4.0", major: 4, minor: 0 }),
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("ok");
+  });
+
+  it("reports both missing reasons when claude and tmux are absent", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: notOnPath,
+      probeTmux: () => null,
+      probeClaudeVersion: claudeVer,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.error).toContain("`claude` not found");
+    expect(entry.error).toContain("tmux not found");
+  });
+
+  it("surfaces a thrown dependency as state=error", async () => {
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: () => {
+        throw new Error("resolve blew up");
+      },
+    });
+    expect(entry.state).toBe("error");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toBe("resolve blew up");
+  });
+});
+
+describe("parseTmuxVersion", () => {
+  it("parses plain `tmux 3.4`", () => {
+    expect(parseTmuxVersion("tmux 3.4")).toMatchObject({ major: 3, minor: 4 });
+  });
+
+  it("parses a letter-suffixed patch release `tmux 3.2a`", () => {
+    expect(parseTmuxVersion("tmux 3.2a")).toMatchObject({ major: 3, minor: 2 });
+  });
+
+  it("parses a pre-release build `tmux next-3.5`", () => {
+    expect(parseTmuxVersion("tmux next-3.5")).toMatchObject({ major: 3, minor: 5 });
+  });
+
+  it("trims trailing whitespace/newline into `raw`", () => {
+    expect(parseTmuxVersion("tmux 3.4\n")?.raw).toBe("tmux 3.4");
+  });
+
+  it("returns null when no version is present", () => {
+    expect(parseTmuxVersion("tmux: command not found")).toBeNull();
+  });
+});
+
 describe("probeCapabilities (aggregator)", () => {
   let tmpHome: string;
   let tmpCodexHome: string;
@@ -324,8 +478,8 @@ describe("probeCapabilities (aggregator)", () => {
 
   it("returns one entry per built-in provider, each with a valid state", async () => {
     const caps = await probeCapabilities();
-    expect(Object.keys(caps).sort()).toEqual(["claude-code", "codex"]);
-    for (const k of ["claude-code", "codex"] as const) {
+    expect(Object.keys(caps).sort()).toEqual(["claude-code", "claude-code-tui", "codex"]);
+    for (const k of ["claude-code", "claude-code-tui", "codex"] as const) {
       const entry = caps[k];
       if (!entry) throw new Error(`missing entry for ${k}`);
       expect(["ok", "unauthenticated", "missing", "error"]).toContain(entry.state);
@@ -334,7 +488,10 @@ describe("probeCapabilities (aggregator)", () => {
     }
   });
 
-  it("unauthenticated machine reports both providers as state=unauthenticated", async () => {
+  it("unauthenticated machine reports the SDK providers as state=unauthenticated", async () => {
+    // claude-code-tui's state depends on real `claude`/`tmux` presence on the
+    // host, so it is intentionally not asserted here (covered hermetically in
+    // the probeClaudeCodeTuiCapability block above).
     const caps = await probeCapabilities();
     expect(caps["claude-code"]?.state).toBe("unauthenticated");
     expect(caps.codex?.state).toBe("unauthenticated");
@@ -355,6 +512,11 @@ describe("probeCapabilities (aggregator)", () => {
     vi.doMock("../runtime/capabilities/codex.js", () => ({
       probeCodexCapability: vi.fn().mockRejectedValue("codex probe failed"),
     }));
+    // Mock the TUI probe too so the aggregator never spawns a real tmux/claude
+    // in this unit test (keeps it hermetic + fast on any host).
+    vi.doMock("../runtime/capabilities/claude-code-tui.js", () => ({
+      probeClaudeCodeTuiCapability: vi.fn().mockRejectedValue("tui probe failed"),
+    }));
     const mod = await import("../runtime/capabilities/index.js");
 
     const caps = await mod.probeCapabilities();
@@ -373,9 +535,17 @@ describe("probeCapabilities (aggregator)", () => {
       authMethod: "none",
       error: "codex probe failed",
     });
+    expect(caps["claude-code-tui"]).toMatchObject({
+      state: "error",
+      available: false,
+      authenticated: false,
+      authMethod: "none",
+      error: "tui probe failed",
+    });
 
     vi.doUnmock("../runtime/capabilities/claude-code.js");
     vi.doUnmock("../runtime/capabilities/codex.js");
+    vi.doUnmock("../runtime/capabilities/claude-code-tui.js");
     vi.resetModules();
   });
 });
