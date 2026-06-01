@@ -315,6 +315,59 @@ describe("bootstrapWorkspace", () => {
     expect(content).toMatch(/only addresses agents by name/);
   });
 
+  it("tools.md pins the AskUserQuestion-deny → request-NHA constraint (no fallback to final-text / chat send)", () => {
+    // Standing-instruction constraint added in PR #677: the claude-code
+    // handler soft-denies `AskUserQuestion` (NHA M0, #578) and redirects to
+    // `attention raise`. Pin the prompt-layer text so the conversion stays
+    // a hard rule — a future tools.md rewrite that drops it would silently
+    // let agents fall back to plain final-text questions, which do not
+    // target a named human and do not resume the turn on reply.
+    setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    const workspace = join(tmpBase, "ws-tools-askuser-deny");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toContain("`AskUserQuestion` is NOT available in this Hub");
+    expect(content).toContain("denied on call");
+    // Conversion target is the request-type NHA, channel-resolved.
+    expect(content).toContain("first-tree attention raise --requires-response");
+    // The two fallbacks the constraint must explicitly forbid.
+    expect(content).toMatch(/Do NOT fall back to asking the question as plain final-text or a `chat send`/);
+    // Reason clause — why final-text isn't an acceptable substitute.
+    expect(content).toContain("targets a specific human");
+    expect(content).toContain("carries a response expectation");
+    expect(content).toContain("resumes your turn when they reply");
+  });
+
+  it("tools.md AskUserQuestion-deny constraint uses the channel-resolved binary on staging", () => {
+    // Same multi-env regression shape as the existing staging tools.md
+    // test — the deny→NHA constraint must not hardcode the prod binary,
+    // otherwise staging agents would be told to call a binary that does
+    // not exist on the host.
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    const workspace = join(tmpBase, "ws-tools-askuser-deny-staging");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toContain("first-tree-staging attention raise --requires-response");
+    // Prod binary must NOT leak into the deny→NHA paragraph on staging.
+    expect(content).not.toMatch(/\bfirst-tree attention raise\b/);
+  });
+
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
     const workspace = join(tmpBase, "ws-no-self-md");
     mkdirSync(workspace, { recursive: true });
