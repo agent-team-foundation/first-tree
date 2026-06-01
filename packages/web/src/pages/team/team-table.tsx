@@ -6,7 +6,6 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
-import { SegmentedControl } from "../../components/ui/segmented-control.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 
 export type { RowAction };
@@ -84,14 +83,14 @@ const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
-// Indent applied to a section's BODY (column header + groups + member rows),
-// relative to its section header. This is the disclosure "step": a section
-// caret sits at the left edge (x0); everything below — subgroup carets, the
-// Name column header, and every member row — shifts one step right (x1) and
-// shares that single left edge. So the hierarchy reads from the carets only
-// (section at x0, subgroup at x1), while member Name never indents per group:
-// Agent members (under Public/Private) and Human members line up on one column.
-const SECTION_BODY_INDENT = "var(--sp-6)";
+// Section bodies (column header + groups + member rows) share the section
+// header's left edge — no disclosure step. The caret moved to the right edge of
+// each header (accordion pattern), so the old left-indent "step" lost its
+// anchor and read as an arbitrary margin. A flat left edge is tighter, and the
+// section/subgroup hierarchy is carried by type scale (title vs eyebrow), not
+// indentation. Kept as a single knob so the indent can be reintroduced if the
+// disclosure affordance ever returns to the left.
+const SECTION_BODY_INDENT = "0";
 
 /**
  * Per-section collapse state, persisted to localStorage so a member's
@@ -147,8 +146,6 @@ export type TeamTableProps = {
   isAdmin: boolean;
   /** True while a member views their own all-self Private group → soften Owner. */
   dimPrivateOwner: boolean;
-  agentFilter: "all" | "mine";
-  onAgentFilter: (next: "all" | "mine") => void;
   agentCount: number;
   /** clientId → hostname; agents on unknown clients show provider alone. */
   clientHostMap: Map<string, string>;
@@ -181,49 +178,38 @@ export function TeamTable(props: TeamTableProps) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function AgentSection(props: TeamTableProps & { compact: boolean }) {
-  const { publicAgents, privateAgents, agentFilter, onAgentFilter, agentCount, compact } = props;
+  const { publicAgents, privateAgents, agentCount, compact } = props;
   const [collapsed, toggle] = useCollapsed("team.collapse.agents");
   return (
     <section>
-      {/* Section header is now collapsible, matching Human teammates: a caret at
-          the left edge (x0) + a clickable title that toggles the whole section.
-          The All/Mine filter keeps its place at the right of this row — it is a
-          sibling of the toggle button (not nested in it) and the toggle button
-          flex-grows to fill the rest of the row, so most of the row collapses
-          while the filter stays put and still works. */}
-      <div className="flex items-center justify-between" style={{ paddingRight: "var(--sp-1)" }}>
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={!collapsed}
-          className="flex flex-1 items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
-          style={{
-            gap: "var(--sp-2)",
-            padding: "var(--sp-5) var(--sp-1) var(--sp-3)",
-            border: 0,
-            background: "transparent",
-            cursor: "pointer",
-            borderRadius: "var(--radius-input)",
-          }}
-        >
-          <CollapseCaret collapsed={collapsed} />
-          <Bot className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
-          <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Agent teammates
-          </h2>
-          <span className="text-label" style={{ color: "var(--fg-4)" }}>
-            {agentCount}
-          </span>
-        </button>
-        <SegmentedControl
-          value={agentFilter}
-          onChange={onAgentFilter}
-          options={[
-            { value: "all", label: "All" },
-            { value: "mine", label: "Mine" },
-          ]}
-        />
-      </div>
+      {/* Collapsible section header: icon + title + count sit flush-left, the
+          disclosure caret is right-aligned (accordion pattern). The whole row
+          is the toggle. The All/Mine filter lives in the page's filter toolbar
+          now, not here. */}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-5) var(--sp-1) var(--sp-3)",
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+          borderRadius: "var(--radius-input)",
+        }}
+      >
+        <Bot className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
+        <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
+          Agent teammates
+        </h2>
+        <span className="text-label" style={{ color: "var(--fg-4)" }}>
+          {agentCount}
+        </span>
+        <span style={{ flex: 1 }} />
+        <CollapseCaret collapsed={collapsed} />
+      </button>
 
       {collapsed ? null : (
         <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
@@ -312,12 +298,13 @@ function AgentGroup(
           cursor: "pointer",
         }}
       >
-        <CollapseCaret collapsed={collapsed} />
         <Icon className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--fg-4)" }} />
         <span className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
           {title}
         </span>
         <DenseBadge tone="outline">{rows.length}</DenseBadge>
+        <span style={{ flex: 1 }} />
+        <CollapseCaret collapsed={collapsed} />
       </button>
       {collapsed ? null : rows.length === 0 ? (
         <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
@@ -503,7 +490,6 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
           cursor: "pointer",
         }}
       >
-        <CollapseCaret collapsed={collapsed} />
         <User className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
         <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
           Human teammates
@@ -511,11 +497,13 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
         <span className="text-label" style={{ color: "var(--fg-4)" }}>
           {humans.length}
         </span>
+        <span style={{ flex: 1 }} />
+        <CollapseCaret collapsed={collapsed} />
       </button>
 
       {collapsed ? null : (
-        // Same body indent (x1) as the Agent section so Human member Name lines
-        // up with Agent member Name on one column.
+        // Shares the Agent section's body left edge (same SECTION_BODY_INDENT)
+        // so Human member Name lines up with Agent member Name on one column.
         <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
           {compact ? null : <HumanColumnHeader />}
           {humans.length === 0 ? (
