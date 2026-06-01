@@ -93,7 +93,7 @@ export function UserMenu() {
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-ring transition-shadow"
+          className="inline-flex items-center justify-center rounded-full focus:outline-none focus:ring-1 focus:ring-ring transition-shadow"
           style={{
             background: "transparent",
             border: open ? "var(--hairline) solid var(--border)" : "var(--hairline) solid transparent",

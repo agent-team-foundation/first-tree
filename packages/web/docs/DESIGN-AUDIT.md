@@ -25,6 +25,12 @@ note records a colour that green-liveness later changed (notably `--state-workin
 and `--state-idle` neutral→blue), **the green-liveness section wins**; such lines are annotated
 *(superseded by #672)*.
 
+**Focus recipe revised (#734, 2026-06-01):** the single `focus-visible:ring-2 ring-ring
+ring-offset-2` recipe is **superseded**. Focus is now split by whether a control has a
+resting border — bordered controls (`Input` / `OptionCard` / `outline` Button) deepen their
+own border to `--ring` (single line, no offset); borderless controls use `ring-1 ring-offset-1`.
+See DESIGN.md §13. The `ring-2 / offset-2` entries in the #662 log below are historical.
+
 ---
 
 ## Decisions (2026-05-29) — Green-liveness status model — SHIPPED in #672
@@ -158,6 +164,7 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
   `tab-bar` (Tab), and `segmented-control`. `popover` triggers are caller-owned (already ringed via the
   `Button`/`FilterPill` passed in), and `command` (cmdk) uses its `aria-selected` highlight model with an
   always-focused input, so the button-style ring doesn't apply there.
+  *(Superseded by #734 — focus is now split bordered-vs-borderless; see §13 and the shipped-state note above.)*
 
 ## P2 — Omissions
 
@@ -271,6 +278,7 @@ fold into the phases below.
   across Button / Badge / Input / Dialog-close / Toast / settings-field (theme-toggle
   already conformed). Fixes the invisible-ring-on-`--primary`-fill bug; `ring-offset` color
   matches each control's real surface (`--bg-sunken` for settings-field, `--bg-raised` for toast).
+  *(Superseded by #734 — this single recipe was split bordered-vs-borderless; see §13 and the shipped-state note above.)*
 - [ ] **Follow-ups (deferred):**
   - Line-icon set / purge the ✓ ⚠ ✗ ⚙ glyphs in favor of lucide — layout-affecting, spread
     across pages (`runtime-state-line`, `working-turn`); needs a by-eye pass on authed surfaces

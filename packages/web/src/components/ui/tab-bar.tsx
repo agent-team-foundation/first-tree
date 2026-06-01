@@ -39,7 +39,7 @@ export function Tab({ active, onClick, children }: TabProps) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 bg-transparent text-body font-medium rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      className="inline-flex items-center gap-1.5 bg-transparent text-body font-medium rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
       style={{
         padding: "var(--sp-1_75) var(--sp-3)",
         marginBottom: -1,

@@ -40,7 +40,7 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
               if (!active) onChange(opt.value);
             }}
             className={cn(
-              "text-caption cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              "text-caption cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
               !active && "hover:bg-[var(--bg-hover)]",
             )}
             style={{

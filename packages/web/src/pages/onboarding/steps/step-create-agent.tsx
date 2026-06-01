@@ -1,20 +1,23 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
+import { OptionCard } from "../../../components/ui/option-card.js";
 import { COPY } from "../copy.js";
 import { FlowNote, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
+// Copy mirrors the New Agent dialog's Visibility block so the two
+// agent-creation surfaces read identically (see new-agent-dialog.tsx).
 const VISIBILITY_OPTIONS: ReadonlyArray<{ value: AgentVisibility; title: string; description: string }> = [
   {
     value: "organization",
-    title: "Shared with team",
-    description: "Anyone on your team can talk to this agent.",
+    title: "Visible to your team",
+    description: "Anyone on your team can @mention and chat with it.",
   },
   {
     value: "private",
-    title: "Just me",
-    description: "Only you can see and talk to this agent.",
+    title: "Private to you",
+    description: "Only you can see and chat with it.",
   },
 ];
 
@@ -111,67 +114,24 @@ export function StepCreateAgent() {
 
       <fieldset className="flex flex-col" style={{ gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}>
         <legend className="text-label font-medium" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
-          Who can use it?
+          Visibility
         </legend>
-        {VISIBILITY_OPTIONS.map((opt) => {
-          const active = visibility === opt.value;
-          return (
-            <label
-              key={opt.value}
-              className="onboarding-choice flex items-start text-body"
-              style={{
-                gap: "var(--sp-2)",
-                padding: "var(--sp-2) var(--sp-3)",
-                background: active ? "color-mix(in oklch, var(--primary) 8%, var(--bg))" : "var(--bg)",
-                border: active ? "var(--hairline) solid var(--primary)" : "var(--hairline) solid var(--border-faint)",
-                borderRadius: "var(--radius-input)",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="radio"
-                name="onboarding-visibility"
-                value={opt.value}
-                checked={active}
-                onChange={() => setVisibility(opt.value)}
-                className="sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className="inline-flex items-center justify-center"
-                style={{
-                  width: "var(--sp-3_5)",
-                  height: "var(--sp-3_5)",
-                  marginTop: "var(--sp-0_5)",
-                  flexShrink: 0,
-                  borderRadius: "50%",
-                  border: active
-                    ? "var(--hairline) solid var(--primary)"
-                    : "var(--hairline) solid var(--border-strong)",
-                }}
-              >
-                {active && (
-                  <span
-                    style={{
-                      width: "var(--sp-1_5)",
-                      height: "var(--sp-1_5)",
-                      borderRadius: "50%",
-                      background: "var(--primary)",
-                    }}
-                  />
-                )}
-              </span>
-              <span className="flex flex-col" style={{ gap: "var(--sp-0_5)", minWidth: 0 }}>
-                <span className="font-medium" style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>
-                  {opt.title}
-                </span>
-                <span className="text-label" style={{ color: "var(--fg-3)" }}>
-                  {opt.description}
-                </span>
-              </span>
-            </label>
-          );
-        })}
+        {/* Reuses the dialog's OptionCard so the selection visual matches
+            exactly: same faint border selected/unselected, a neutral filled
+            dot + light tint for the active choice — no near-black border. */}
+        {VISIBILITY_OPTIONS.map((opt) => (
+          <OptionCard
+            key={opt.value}
+            name="onboarding-visibility"
+            checked={visibility === opt.value}
+            onSelect={() => setVisibility(opt.value)}
+          >
+            <div className="min-w-0">
+              <div className="text-body font-medium">{opt.title}</div>
+              <div className="text-caption text-muted-foreground">{opt.description}</div>
+            </div>
+          </OptionCard>
+        ))}
       </fieldset>
 
       {agentError && <FlowNote>{COPY.errors.agentFailed}</FlowNote>}

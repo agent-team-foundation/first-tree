@@ -41,6 +41,10 @@
    thin line icons, search + underline tabs, rounded-square avatars,
    comfortable aligned spacing, a right Session sidebar. Do **not** borrow a
    saturated blue primary.
+5. **Card chrome = interactivity.** A filled or bordered card signals that
+   something is selectable or actionable. Read-only / informational states
+   (status readouts, confirmations) render as plain labeled content, **not**
+   wrapped in a filled/bordered card.
 
 **Semantic color map — the only places color appears:**
 
@@ -260,7 +264,7 @@ const buttonVariants = cva("…base classes…", {
 
 **Inventory** (representative):
 - **Actions / inputs:** Button, Input, Label, SegmentedControl, FilterPill,
-  Command (cmdk), RowActionsMenu
+  OptionCard, Command (cmdk), RowActionsMenu
 - **Containers / layout:** Card, Panel, Section, Tile, SettingsField, PageHeader,
   SectionHeader, FlatSectionHeader, TabBar
 - **Data:** Table, DenseTable, Breadcrumb, Markdown
@@ -268,6 +272,14 @@ const buttonVariants = cva("…base classes…", {
   PresenceChip, AgentStatusChip
 - **Overlay / feedback:** Dialog, Popover, Toast
 - **Theming:** ThemeToggle
+
+**Selection state** (`OptionCard` and any radio/option cards): selected and
+unselected share the **same faint `--border` hairline** — selection is signalled
+by a **filled neutral dot (`--fg`) plus a very light `--fg` tint (~5%)**, never a
+heavier or colored border and never a saturated dot. Both cues are
+hue-independent (filled vs hollow dot, presence of tint), so it reads without
+relying on color. The real `<input>` is `sr-only`; focus follows the §13
+bordered-control rule (deepen the card's own border on `:focus-within`).
 
 ---
 
@@ -346,12 +358,18 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 - `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
 - Every animation respects `prefers-reduced-motion: reduce`.
 - Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
-- Focus is visible: the shared primitives (Button / Badge / Input / Dialog-close /
-  Toast / settings-field) use `focus-visible:ring-2 ring-ring ring-offset-2`;
-  custom radio/checkbox cards surface a ring on `:focus-within` (the real input
-  is `sr-only`). *(Some page-level form controls still carry the older `ring-1` —
-  extending the `ring-2` recipe to the remaining primitives is a tracked
-  follow-up; see docs/DESIGN-AUDIT.md.)*
+- Focus is visible but restrained, in two flavors so nothing ever reads as a
+  double frame. The rule is **by whether the control has a visible resting
+  border**, not by component type:
+  - **Anything with its own border** — text inputs (`Input`), radio/checkbox
+    cards (`OptionCard`, on `:focus-within`, real input `sr-only`), and the
+    `outline` Button — darkens that border to `--ring` on focus
+    (`focus-visible:border-ring`, ring cancelled). One line, no offset gap.
+  - **Borderless controls** (filled/ghost Button, Badge, Dialog-close, Toast,
+    settings-field's filled field) use one thin neutral ring —
+    `focus-visible:ring-1 ring-ring ring-offset-1` — which has no resting border
+    to double with.
+  - `--ring` is a neutral near-fg hue, never a saturated accent.
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---

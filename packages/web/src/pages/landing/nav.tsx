@@ -25,7 +25,7 @@ export function LandingNav() {
         <Link
           to="/"
           aria-label="First Tree home"
-          className="flex items-center gap-2 rounded-[var(--radius-input)] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="flex items-center gap-2 rounded-[var(--radius-input)] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <FirstTreeLogo width={18} height={20} />
           <span className="text-title">
@@ -35,7 +35,7 @@ export function LandingNav() {
         <nav aria-label="Primary" className="flex items-center gap-2">
           <Link
             to="/login"
-            className="inline-flex items-center rounded-[var(--radius-input)] px-3 py-1.5 text-body font-medium text-fg-2 transition-colors hover:bg-bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex items-center rounded-[var(--radius-input)] px-3 py-1.5 text-body font-medium text-fg-2 transition-colors hover:bg-bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
             Sign in
           </Link>

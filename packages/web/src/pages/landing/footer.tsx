@@ -20,7 +20,7 @@ export function Footer() {
           href={PARENT_URL}
           target="_blank"
           rel="noreferrer noopener"
-          className="rounded-[var(--radius-input)] text-caption text-fg-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="rounded-[var(--radius-input)] text-caption text-fg-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           @ first-tree
         </a>
@@ -28,7 +28,7 @@ export function Footer() {
           href={REPO_URL}
           target="_blank"
           rel="noreferrer noopener"
-          className="rounded-[var(--radius-input)] text-body text-fg-2 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="rounded-[var(--radius-input)] text-body text-fg-2 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           GitHub →
         </a>
