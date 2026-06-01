@@ -1,8 +1,9 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMemo } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
 import { ConfigRow } from "./flat-section.js";
-import { ChangedChip, OptionDropdown, type SelectOption } from "./option-dropdown.js";
 
 /**
  * Reasoning effort — an inline dropdown mirroring the Model row. Options and
@@ -77,7 +78,7 @@ export function ReasoningEffortSection({
     <ConfigRow
       label="Reasoning effort"
       helpText={EFFORT_HELP_BY_PROVIDER[provider]}
-      meta={dirty ? <ChangedChip /> : null}
+      meta={dirty ? <DraftStatusChip status="modified" /> : null}
       action={
         dirty ? (
           <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
@@ -86,7 +87,14 @@ export function ReasoningEffortSection({
         ) : null
       }
     >
-      <OptionDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
+      <Select
+        options={items}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        placeholder="(unset)"
+        aria-label="Reasoning effort"
+      />
     </ConfigRow>
   );
 }

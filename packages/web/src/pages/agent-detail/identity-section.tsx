@@ -1,7 +1,7 @@
 import { AGENT_VISIBILITY, type Agent, type UpdateAgent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { listAgents } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { AgentChip } from "../../components/agent-chip.js";
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
 import { humanizeAgentType, humanizeVisibility } from "../../lib/agent-labels.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
@@ -138,6 +139,16 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     },
     enabled: open && canEditDelegate,
   });
+  const delegateOptions: SelectOption[] = useMemo(
+    () => [
+      { value: "", label: "Remove delegate" },
+      ...(assistantsQuery.data?.map((a) => ({
+        value: a.uuid,
+        label: a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid,
+      })) ?? []),
+    ],
+    [assistantsQuery.data],
+  );
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -198,16 +209,16 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
           </div>
           <div className="space-y-2">
             <Label htmlFor="id-visibility">Visibility</Label>
-            <select
+            <Select
               id="id-visibility"
               value={visibility}
-              onChange={(e) => setVisibility(e.target.value as typeof visibility)}
+              onChange={(v) => setVisibility(v as typeof visibility)}
               disabled={!canChangeVisibility}
-              className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <option value={AGENT_VISIBILITY.PRIVATE}>Private — only the manager</option>
-              <option value={AGENT_VISIBILITY.ORGANIZATION}>Organization — all members</option>
-            </select>
+              options={[
+                { value: AGENT_VISIBILITY.PRIVATE, label: "Private — only the manager" },
+                { value: AGENT_VISIBILITY.ORGANIZATION, label: "Organization — all members" },
+              ]}
+            />
             <p className="text-caption text-muted-foreground">
               {canChangeVisibility
                 ? "Private agents are only visible to their manager; organization agents appear in every member's list."
@@ -218,19 +229,13 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
             <div className="space-y-2">
               <Label htmlFor="id-delegate">Delegate Mention</Label>
               {canEditDelegate ? (
-                <select
+                <Select
                   id="id-delegate"
                   value={delegateMention}
-                  onChange={(e) => setDelegateMention(e.target.value)}
-                  className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="">Remove delegate</option>
-                  {assistantsQuery.data?.map((a) => (
-                    <option key={a.uuid} value={a.uuid}>
-                      {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setDelegateMention}
+                  options={delegateOptions}
+                  searchable
+                />
               ) : (
                 // Read-only for non-owners: show the assigned delegate as text.
                 // A disabled <select> would have no matching option (the query

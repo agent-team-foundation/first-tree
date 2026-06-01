@@ -1,6 +1,7 @@
 import { Pencil, Trash2, Undo2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
 import { cn } from "../../lib/utils.js";
 import type { DraftListStatus } from "./use-config-draft.js";
 
@@ -23,15 +24,7 @@ export type ListRowProps = {
   disabled?: boolean;
 };
 
-const STATUS_BADGES: Record<DraftListStatus, { label: string; tone: string }> = {
-  unchanged: { label: "", tone: "" },
-  added: { label: "new", tone: "bg-success-soft text-success" },
-  modified: { label: "changed", tone: "bg-warn-soft text-warn" },
-  deleted: { label: "will be removed on save", tone: "bg-error-soft text-error" },
-};
-
 export function ListRow({ status, onEdit, onDelete, onUndo, children, disabled }: ListRowProps) {
-  const badge = STATUS_BADGES[status];
   const isDeleted = status === "deleted";
 
   return (
@@ -46,9 +39,7 @@ export function ListRow({ status, onEdit, onDelete, onUndo, children, disabled }
       }}
     >
       <div className="flex-1 min-w-0 flex items-center gap-2">{children}</div>
-      {badge.label && (
-        <span className={cn("text-caption rounded px-1.5 py-0.5 whitespace-nowrap", badge.tone)}>{badge.label}</span>
-      )}
+      <DraftStatusChip status={status} />
       {!disabled &&
         (isDeleted ? (
           <Button size="sm" variant="ghost" onClick={onUndo}>

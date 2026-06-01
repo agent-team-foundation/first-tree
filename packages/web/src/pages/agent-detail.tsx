@@ -29,6 +29,7 @@ import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
+import { Tab, TabBar } from "./../components/ui/tab-bar.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
 import { cn, formatDate } from "./../lib/utils.js";
@@ -676,73 +677,27 @@ function TabsNav({
 }) {
   const navigate = useNavigate();
   return (
-    <div
-      style={{
-        borderBottom: "var(--hairline) solid var(--border)",
-      }}
-    >
-      <div
-        role="tablist"
-        aria-label="Agent configuration sections"
-        className="flex items-end gap-1"
-        style={{
-          padding: "0 var(--sp-5)",
-          // The full tab set (up to 6) overflows a phone-width row. Let the
-          // row scroll horizontally instead of clipping / wrapping; on
-          // desktop everything fits so no scrollbar appears. Pairs with
-          // `flexShrink: 0` + `whiteSpace: nowrap` on each tab below so the
-          // labels keep their natural width and stay swipeable.
-          overflowX: "auto",
-        }}
-      >
-        {tabs.map((t) => {
-          const active = currentTabKey === t.key;
-          const dirty = dirtyTabs.has(t.key);
-          return (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
-              className={cn(
-                "bg-transparent border-0 cursor-pointer transition-colors text-body",
-                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                !active && "hover:bg-accent",
-              )}
-              style={{
-                padding: "var(--sp-2_5) var(--sp-3)",
-                borderBottom: `var(--hairline-bold) solid ${active ? "var(--primary)" : "transparent"}`,
-                color: active ? "var(--fg)" : "var(--fg-3)",
-                fontWeight: active ? 500 : 400,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "var(--sp-1_5)",
-                // Keep natural width inside the horizontally-scrollable row
-                // (see tablist `overflowX`) so labels never wrap or squish.
-                flexShrink: 0,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <span>{t.label}</span>
-              {dirty && (
-                <span
-                  role="img"
-                  aria-label="unsaved changes"
-                  style={{
-                    width: "var(--sp-1_5)",
-                    height: "var(--sp-1_5)",
-                    borderRadius: "50%",
-                    background: "var(--state-blocked)",
-                    flexShrink: 0,
-                  }}
-                />
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    // The full tab set (up to 6) overflows a phone-width row, so the bar
+    // scrolls horizontally instead of wrapping; `shrink-0 whitespace-nowrap`
+    // on each Tab keeps labels at natural width and swipeable.
+    <TabBar role="tablist" aria-label="Agent configuration sections" style={{ overflowX: "auto" }}>
+      {tabs.map((t) => {
+        const active = currentTabKey === t.key;
+        return (
+          <Tab
+            key={t.key}
+            role="tab"
+            aria-selected={active}
+            active={active}
+            dirty={dirtyTabs.has(t.key)}
+            onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
+            className="shrink-0 whitespace-nowrap"
+          >
+            {t.label}
+          </Tab>
+        );
+      })}
+    </TabBar>
   );
 }
 
