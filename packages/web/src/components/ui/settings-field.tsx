@@ -49,7 +49,7 @@ export function SettingsField({
   pattern?: string;
 }) {
   const inputId = useId();
-  const inputClass = `flex-1 min-w-0 outline-none text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-sunken)] ${mono ? "mono" : ""}`;
+  const inputClass = `flex-1 min-w-0 outline-none text-body focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-sunken)] ${mono ? "mono" : ""}`;
   const inputStyle: React.CSSProperties = {
     padding: "var(--sp-1_5) var(--sp-2_5)",
     background: "var(--bg-sunken)",

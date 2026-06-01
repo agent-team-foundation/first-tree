@@ -10,7 +10,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
-import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
+import { checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
@@ -19,8 +19,15 @@ import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
+import { OptionCard } from "./ui/option-card.js";
 
 const DISPLAY_NAME_MAX = 200;
+
+// How many `-N` suffixes we try when auto-deduping a colliding handle before
+// giving up and asking the user to pick one (the manual fallback). Collisions
+// are rare, so the first probe almost always wins; the cap just bounds the
+// pathological "team has 25 `dev-assistant`s" case.
+const HANDLE_DEDUP_LIMIT = 25;
 
 type FieldKey = "name" | "displayName" | "clientId";
 type FieldErrors = Partial<Record<FieldKey | "_root", string>>;
@@ -46,21 +53,19 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  *
  * Display-name-first layout (see first-tree-context:agent-hub/agent-naming.md §3.6):
  *   - "Display name" is the primary input at the top (required-feeling, unicode).
- *   - The derived @handle previews under the display name as a quiet
- *     `@my-dev-assistant · permanent · Edit` line. Most users never need to
- *     touch it; clicking Edit reveals the full handle editor (input, helper,
- *     availability status). Editing severs the slug-follows-display-name
- *     link so the user stays in control.
- *   - A debounced availability probe calls the server so collisions and
- *     reserved words surface inline before submit; the error shows under
- *     the compact preview too, so the collapsed view never hides a problem.
+ *   - The derived @handle is shown read-only beneath it as a quiet
+ *     `@my-dev-assistant · permanent` line. The slug always follows the display
+ *     name and is auto-deduped on collision, so users never edit it directly.
+ *   - A minimal fallback @handle input appears ONLY when a usable handle can't
+ *     be derived — a pure-CJK / emoji display name (empty slug), or when
+ *     auto-dedup is exhausted. Normal names stay zero-edit, zero-noise.
  *
  * Hidden defaults:
  *   - type = "agent"
  *   - manager = current user
  *   - delegateMention = not surfaced
  *
- * Surfaced choices: visibility (shared with team / private to you), the
+ * Surfaced choices: visibility (visible to your team / private to you), the
  * connected computer the agent will run on, and the runtime provider —
  * filtered to whatever is actually installed and signed-in on that
  * computer (mirrors onboarding step 2).
@@ -71,7 +76,7 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
 // dialog picks them up automatically.
 
 /**
- * Lightweight normalizer applied to every keystroke in the agent-name
+ * Lightweight normalizer applied to every keystroke in the fallback agent-name
  * input: downcase + fold illegal runs to `-`, but keep trailing `-` /
  * `_` so users can type `alice-bot` one character at a time. Leading
  * separators are still stripped because the server regex will reject
@@ -84,6 +89,46 @@ function normalizeNameInput(raw: string): string {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^[-_]+/, "")
     .slice(0, AGENT_NAME_MAX_LENGTH);
+}
+
+/**
+ * Build the `n`th dedup candidate for a base slug. `n <= 1` is the bare base;
+ * higher `n` appends `-n`, trimming the base so the suffix stays within the
+ * length cap (and never leaves a dangling separator before the `-n`).
+ */
+function handleCandidate(base: string, n: number): string {
+  if (n <= 1) return base;
+  const suffix = `-${n}`;
+  const room = Math.max(0, AGENT_NAME_MAX_LENGTH - suffix.length);
+  const trimmed = base.slice(0, room).replace(/[-_]+$/g, "");
+  return `${trimmed}${suffix}`;
+}
+
+/**
+ * Resolve the first available handle derived from `base`: tries `base`,
+ * `base-2`, `base-3`, … up to `HANDLE_DEDUP_LIMIT`, skipping syntactically
+ * invalid / reserved candidates. Returns the winning handle, or `null` when
+ * none is free (→ caller shows the manual fallback). On a network error it
+ * optimistically returns the current candidate — the server validates
+ * authoritatively on submit. `isStale` lets the caller abandon a superseded
+ * run mid-probe.
+ */
+async function resolveAvailableHandle(base: string, isStale: () => boolean): Promise<string | null> {
+  for (let n = 1; n <= HANDLE_DEDUP_LIMIT; n++) {
+    if (isStale()) return null;
+    const candidate = handleCandidate(base, n);
+    if (!candidate || !AGENT_NAME_REGEX.test(candidate) || isReservedAgentName(candidate)) continue;
+    try {
+      const res = await checkAgentNameAvailability(candidate);
+      if (isStale()) return null;
+      if (res.available) return candidate;
+      // `invalid` won't improve by adding a suffix — bail to the fallback.
+      if (res.reason === "invalid") return null;
+    } catch {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 /**
@@ -145,12 +190,14 @@ type AvailabilityState =
   | { status: "ok" }
   | { status: "bad"; reason: "invalid" | "reserved" | "taken" };
 
+// Resolution state for the auto-derived handle. `manual` means we couldn't
+// derive a usable handle and the fallback input is shown.
+type HandleState = { status: "idle" } | { status: "checking" } | { status: "ok" } | { status: "manual" };
+
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
   const { refreshMe, organizationId } = useAuth();
   const [displayName, setDisplayName] = useState("");
-  const [name, setName] = useState("");
-  const [nameDirty, setNameDirty] = useState(false);
   // Default is "private": newly-created agents are scoped to the creator
   // by default, matching the conservative "only I see it" framing. Sharing
   // with the team is an explicit decision the user opts into; the previous
@@ -159,10 +206,14 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // personal until explicitly shared.
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
-  // The @handle editor is collapsed by default — 99% of users keep the
-  // auto-derived slug. The preview line under "Display name" surfaces it
-  // and offers an Edit affordance for the rest.
-  const [editingHandle, setEditingHandle] = useState(false);
+
+  // Handle resolution. The slug follows the display name (auto-deduped on
+  // collision); `resolvedHandle` is the winner. `manualHandle` is only used
+  // when `handleState.status === "manual"` (no derivable handle).
+  const [resolvedHandle, setResolvedHandle] = useState("");
+  const [handleState, setHandleState] = useState<HandleState>({ status: "idle" });
+  const [manualHandle, setManualHandle] = useState("");
+  const [manualAvailability, setManualAvailability] = useState<AvailabilityState>({ status: "idle" });
 
   // Computer + runtime detection — lifted into the form so the user sees
   // which machine will host the agent (and which runtimes are actually
@@ -184,16 +235,16 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [tokenCopied, setTokenCopied] = useState(false);
 
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
-  const [availability, setAvailability] = useState<AvailabilityState>({ status: "idle" });
 
   useEffect(() => {
     if (open) {
       setDisplayName("");
-      setName("");
-      setNameDirty(false);
       setVisibility("private");
       setRuntime("claude-code");
-      setEditingHandle(false);
+      setResolvedHandle("");
+      setHandleState({ status: "idle" });
+      setManualHandle("");
+      setManualAvailability({ status: "idle" });
       setConnectedClients([]);
       setClientsLoaded(false);
       setPickedClientId(null);
@@ -204,60 +255,90 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setConnectTokenExpiresAt(null);
       setTokenCopied(false);
       setClientErrors({});
-      setAvailability({ status: "idle" });
     }
   }, [open]);
 
-  // Keep the agent name following the display name until the user
-  // explicitly edits the agent name. After `nameDirty = true`, changes to
-  // display name no longer rewrite the slug.
-  useEffect(() => {
-    if (nameDirty) return;
-    setName(slugify(displayName));
-  }, [displayName, nameDirty]);
+  const baseSlug = useMemo(() => slugify(displayName), [displayName]);
+  const hasDisplay = displayName.trim().length > 0;
 
-  // Debounced availability probe. Mirrors the client-side format check so
-  // we don't waste a round-trip when the slug can't possibly be valid; once
-  // it passes the local check, a 300ms debounce gates the network call so
-  // typing a full name doesn't fan out into per-keystroke requests.
-  const latestProbeIdRef = useRef(0);
+  // Auto-resolve the @handle from the display name. A syntactically-valid,
+  // non-reserved slug is usable *immediately* (submit isn't gated on the
+  // network) — the dedup probe then runs in the background and quietly swaps
+  // in `base-N` if the base turns out to be taken. Cases that have no usable
+  // handle up front (empty slug from a pure CJK/emoji name → `manual`;
+  // reserved base → `checking` until the probe finds an alternative) wait for
+  // the probe. Keyed on `baseSlug` + `hasDisplay` so typing within a stable
+  // slug doesn't re-probe on every keystroke.
+  const resolveSeqRef = useRef(0);
   useEffect(() => {
-    if (!open || !name) {
-      setAvailability({ status: "idle" });
+    if (!open) return;
+    const seq = ++resolveSeqRef.current;
+    const isStale = () => seq !== resolveSeqRef.current;
+
+    if (!baseSlug) {
+      setResolvedHandle("");
+      setHandleState(hasDisplay ? { status: "manual" } : { status: "idle" });
       return;
     }
-    if (!AGENT_NAME_REGEX.test(name)) {
-      setAvailability({ status: "bad", reason: "invalid" });
-      return;
-    }
-    if (isReservedAgentName(name)) {
-      setAvailability({ status: "bad", reason: "reserved" });
-      return;
-    }
-    const probeId = ++latestProbeIdRef.current;
-    setAvailability({ status: "checking" });
+    // Optimistic: a clean base is immediately submittable; a reserved one
+    // can't be used as-is, so hold submit until the probe resolves a suffix.
+    const usableNow = AGENT_NAME_REGEX.test(baseSlug) && !isReservedAgentName(baseSlug);
+    setResolvedHandle(usableNow ? baseSlug : "");
+    setHandleState(usableNow ? { status: "ok" } : { status: "checking" });
+
     const timer = window.setTimeout(() => {
-      checkAgentNameAvailability(name)
-        .then((res: AgentNameAvailability) => {
-          // Ignore stale responses: the user may have typed more characters
-          // while the in-flight request was pending, in which case this
-          // handler no longer speaks for the current input.
-          if (probeId !== latestProbeIdRef.current) return;
-          if (res.available) {
-            setAvailability({ status: "ok" });
-          } else {
-            setAvailability({ status: "bad", reason: res.reason });
-          }
+      void resolveAvailableHandle(baseSlug, isStale).then((found) => {
+        if (isStale()) return;
+        if (found) {
+          setResolvedHandle(found);
+          setHandleState({ status: "ok" });
+        } else {
+          setResolvedHandle("");
+          setHandleState({ status: "manual" });
+        }
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [open, baseSlug, hasDisplay]);
+
+  // Debounced availability probe for the manual fallback handle. Mirrors the
+  // local format / reserved checks before spending a round-trip; only active
+  // while the fallback input is shown.
+  const manualSeqRef = useRef(0);
+  useEffect(() => {
+    if (!open || handleState.status !== "manual") {
+      setManualAvailability({ status: "idle" });
+      return;
+    }
+    if (!manualHandle) {
+      setManualAvailability({ status: "idle" });
+      return;
+    }
+    if (!AGENT_NAME_REGEX.test(manualHandle)) {
+      setManualAvailability({ status: "bad", reason: "invalid" });
+      return;
+    }
+    if (isReservedAgentName(manualHandle)) {
+      setManualAvailability({ status: "bad", reason: "reserved" });
+      return;
+    }
+    const seq = ++manualSeqRef.current;
+    setManualAvailability({ status: "checking" });
+    const timer = window.setTimeout(() => {
+      checkAgentNameAvailability(manualHandle)
+        .then((res) => {
+          if (seq !== manualSeqRef.current) return;
+          setManualAvailability(res.available ? { status: "ok" } : { status: "bad", reason: res.reason });
         })
         .catch(() => {
-          if (probeId !== latestProbeIdRef.current) return;
-          // Network-level failure shouldn't block submission — the server
-          // validates authoritatively on POST. Fall back to idle.
-          setAvailability({ status: "idle" });
+          if (seq !== manualSeqRef.current) return;
+          // Network failure shouldn't block submission — the server validates
+          // authoritatively on POST.
+          setManualAvailability({ status: "idle" });
         });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [name, open]);
+  }, [open, handleState.status, manualHandle]);
 
   // Poll `listClients` to keep the connected-computer list fresh while the
   // dialog is open. 5s cadence so a computer coming online (or going
@@ -401,12 +482,29 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     });
   }, [activeCapabilities]);
 
+  // The handle that will actually be submitted: the auto-resolved one, or the
+  // user's manual fallback (slugified) when no handle could be derived.
+  const manualSlug = slugify(manualHandle);
+  const effectiveHandle = handleState.status === "manual" ? manualSlug : resolvedHandle;
+
+  // Whether the handle is settled enough to submit. In manual mode we accept
+  // an explicitly-available handle, or (on a probe network failure) any
+  // syntactically-valid one and let the server arbitrate.
+  const handleReady =
+    handleState.status === "ok"
+      ? true
+      : handleState.status === "manual"
+        ? manualAvailability.status === "ok" ||
+          (manualAvailability.status === "idle" &&
+            AGENT_NAME_REGEX.test(manualSlug) &&
+            !isReservedAgentName(manualSlug))
+        : false;
+
   const createMut = useMutation({
     mutationFn: async (opts: { clientId?: string }) => {
-      const effectiveDisplay = displayName.trim() || name.trim() || "Untitled assistant";
-      const effectiveName = name || undefined;
+      const effectiveDisplay = displayName.trim() || effectiveHandle || "Untitled assistant";
       return createAgent({
-        name: effectiveName,
+        name: effectiveHandle || undefined,
         type: "agent",
         displayName: effectiveDisplay,
         clientId: opts.clientId,
@@ -445,30 +543,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     return {};
   }, [createMut.error]);
 
-  const availabilityError = availability.status === "bad" ? availabilityReasonMessage(availability.reason) : undefined;
+  const manualError =
+    handleState.status === "manual" && manualAvailability.status === "bad"
+      ? availabilityReasonMessage(manualAvailability.reason)
+      : undefined;
   const fieldErrors: FieldErrors = {
-    ...(availabilityError ? { name: availabilityError } : {}),
+    ...(manualError ? { name: manualError } : {}),
     ...serverErrors,
     ...clientErrors,
   };
 
   function validateForm(): FieldErrors {
     const errs: FieldErrors = {};
-    if (name) {
-      if (name.length > AGENT_NAME_MAX_LENGTH) {
-        errs.name = `Agent name must be at most ${AGENT_NAME_MAX_LENGTH} characters (got ${name.length}).`;
-      } else if (!AGENT_NAME_REGEX.test(name)) {
-        errs.name =
-          "Agent name must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_).";
-      } else if (isReservedAgentName(name)) {
-        errs.name = "That agent name is reserved — pick a different one.";
-      }
-    } else if (displayName.trim().length > 0) {
-      // Display name had content but slugify collapsed it to nothing (e.g.
-      // pure-symbol or pure-CJK input). Server would auto-generate a name,
-      // but the user probably didn't intend that — surface it.
-      errs.name = "Agent name must contain at least one letter or digit (e.g. a-z, 0-9).";
-    }
     if (displayName.length > DISPLAY_NAME_MAX) {
       errs.displayName = `Display name must be at most ${DISPLAY_NAME_MAX} characters (got ${displayName.length}).`;
     }
@@ -480,7 +566,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     const errs = validateForm();
     setClientErrors(errs);
     if (Object.keys(errs).length > 0) return;
-    if (availability.status === "bad") return;
+    if (!handleReady) return;
     if (!pickedClientId) return;
     // Defense in depth: the Create button is disabled when the picked client
     // has no ok runtime or when the current selection isn't ok on it. Guard
@@ -491,10 +577,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     createMut.mutate({ clientId: pickedClientId });
   }
 
-  const hasBlockingAvailability = availability.status === "bad";
   const canSubmit =
     displayName.trim().length > 0 &&
-    !hasBlockingAvailability &&
+    handleReady &&
     !createMut.isPending &&
     !!pickedClientId &&
     okRuntimes.length > 0 &&
@@ -533,180 +618,120 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 {fieldErrors.displayName}
               </p>
             )}
-            {/* Compact @handle preview. Lives inside the displayName block so
-                it reads as "and here's the handle that comes out of it";
-                appears only once the user has typed something so the dialog
-                opens quietly. */}
-            {!editingHandle && (displayName.trim() || name) && (
-              <div className="flex items-baseline gap-2 text-caption text-muted-foreground">
-                {name ? (
-                  <>
-                    <span className="font-mono">@{name}</span>
-                    <span aria-hidden>·</span>
-                    <span>permanent</span>
-                  </>
-                ) : (
-                  <span className="italic">No @handle from this display name</span>
-                )}
-                <span aria-hidden>·</span>
-                <button
-                  type="button"
-                  onClick={() => setEditingHandle(true)}
-                  className="text-foreground underline underline-offset-2 hover:text-primary focus:outline-none focus-visible:text-primary"
-                >
-                  Edit
-                </button>
-              </div>
-            )}
-            {!editingHandle && fieldErrors.name && <p className="text-caption text-destructive">{fieldErrors.name}</p>}
-          </div>
 
-          {editingHandle && (
-            <div className="space-y-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <Label htmlFor="new-agent-name">Agent name</Label>
-                <button
-                  type="button"
-                  onClick={() => setEditingHandle(false)}
-                  className="text-caption text-muted-foreground underline underline-offset-2 hover:text-primary focus:outline-none focus-visible:text-primary"
-                >
-                  Done
-                </button>
-              </div>
-              <div className="flex items-stretch">
-                <span
-                  aria-hidden
-                  className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
-                >
-                  @
-                </span>
-                <Input
-                  id="new-agent-name"
-                  value={name}
-                  autoFocus
-                  onChange={(e) => {
-                    // `normalizeNameInput` keeps trailing `-`/`_` so users
-                    // can type `alice-bot` one char at a time; the stricter
-                    // `slugify` fires only on blur to tidy a trailing
-                    // separator the user never follows up with a letter.
-                    const next = normalizeNameInput(e.target.value);
-                    setName(next);
-                    setNameDirty(true);
-                    if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
-                  }}
-                  onBlur={(e) => {
-                    const cleaned = slugify(e.target.value);
-                    if (cleaned !== name) setName(cleaned);
-                  }}
-                  placeholder="my-dev-assistant"
-                  className="rounded-l-none font-mono"
-                  maxLength={AGENT_NAME_MAX_LENGTH}
-                  aria-invalid={fieldErrors.name ? true : undefined}
-                  aria-describedby="new-agent-name-help new-agent-name-error new-agent-name-status"
-                />
-              </div>
-              <p id="new-agent-name-help" className="text-caption text-muted-foreground">
-                Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
-                {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
-              </p>
-              {/* availability chip — only renders when there's a status worth
-                  announcing. We skip it for the `idle` case (no name typed, or
-                  the probe network-failed) so screen readers don't land on an
-                  empty paragraph via `aria-describedby`. */}
-              {name && !fieldErrors.name && availability.status !== "idle" && (
-                <p
-                  id="new-agent-name-status"
-                  className="text-caption"
-                  style={{
-                    color:
-                      availability.status === "ok"
-                        ? "var(--success)"
-                        : availability.status === "checking"
-                          ? "var(--fg-3)"
-                          : "var(--fg-4)",
-                  }}
-                >
-                  {availability.status === "checking" && "Checking availability…"}
-                  {availability.status === "ok" && "Available."}
+            {/* Derived @handle. Read-only in the common case (slug follows the
+                display name, auto-deduped on collision). The minimal fallback
+                input appears only when no handle can be derived. */}
+            {handleState.status === "manual" ? (
+              <div className="space-y-1.5 pt-1">
+                <Label htmlFor="new-agent-name">Pick an @handle</Label>
+                <div className="flex items-stretch">
+                  <span
+                    aria-hidden
+                    className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
+                  >
+                    @
+                  </span>
+                  <Input
+                    id="new-agent-name"
+                    value={manualHandle}
+                    autoFocus
+                    onChange={(e) => {
+                      // `normalizeNameInput` keeps trailing `-`/`_` so users can
+                      // type `alice-bot` one char at a time; the stricter
+                      // `slugify` fires on blur to tidy a dangling separator.
+                      setManualHandle(normalizeNameInput(e.target.value));
+                      if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
+                    }}
+                    onBlur={(e) => {
+                      const cleaned = slugify(e.target.value);
+                      if (cleaned !== manualHandle) setManualHandle(cleaned);
+                    }}
+                    placeholder="my-dev-assistant"
+                    className="rounded-l-none font-mono"
+                    maxLength={AGENT_NAME_MAX_LENGTH}
+                    aria-invalid={fieldErrors.name ? true : undefined}
+                    aria-describedby="new-agent-name-help new-agent-name-status new-agent-name-error"
+                  />
+                </div>
+                <p id="new-agent-name-help" className="text-caption text-muted-foreground">
+                  We couldn&apos;t build an @handle from this display name. Pick one — lowercase letters, digits,
+                  hyphens (-), and underscores (_). Permanent after creation.
                 </p>
-              )}
-              {fieldErrors.name && (
-                <p id="new-agent-name-error" className="text-caption text-destructive">
-                  {fieldErrors.name}
-                </p>
-              )}
-            </div>
-          )}
+                {manualHandle && !fieldErrors.name && manualAvailability.status !== "idle" && (
+                  <p
+                    id="new-agent-name-status"
+                    className="text-caption"
+                    style={{ color: manualAvailability.status === "ok" ? "var(--success)" : "var(--fg-3)" }}
+                  >
+                    {manualAvailability.status === "checking" && "Checking availability…"}
+                    {manualAvailability.status === "ok" && "Available."}
+                  </p>
+                )}
+                {fieldErrors.name && (
+                  <p id="new-agent-name-error" className="text-caption text-destructive">
+                    {fieldErrors.name}
+                  </p>
+                )}
+              </div>
+            ) : (
+              handleState.status !== "idle" && (
+                <div className="flex items-baseline gap-2 text-caption text-muted-foreground">
+                  {handleState.status === "checking" ? (
+                    <span className="italic">Reserving @handle…</span>
+                  ) : (
+                    <>
+                      <span className="font-mono text-foreground">@{effectiveHandle}</span>
+                      <span aria-hidden>·</span>
+                      <span>permanent</span>
+                    </>
+                  )}
+                </div>
+              )
+            )}
+            {handleState.status !== "manual" && fieldErrors.name && (
+              <p className="text-caption text-destructive">{fieldErrors.name}</p>
+            )}
+          </div>
 
           <div className="space-y-2">
             <Label>Visibility</Label>
             <div className="space-y-2">
-              <label
-                className={
-                  visibility === "organization"
-                    ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
+              <OptionCard
+                name="visibility"
+                checked={visibility === "organization"}
+                onSelect={() => setVisibility("organization")}
               >
-                <input
-                  type="radio"
-                  name="visibility"
-                  checked={visibility === "organization"}
-                  onChange={() => setVisibility("organization")}
-                  className="mt-1"
-                />
                 <div>
-                  <div className="text-body font-medium">Shared with team</div>
+                  <div className="text-body font-medium">Visible to your team</div>
                   <div className="text-caption text-muted-foreground">
-                    Anyone in your org can @mention and chat with this agent.
+                    Anyone on your team can @mention and chat with it.
                   </div>
                 </div>
-              </label>
-              <label
-                className={
-                  visibility === "private"
-                    ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
+              </OptionCard>
+              <OptionCard
+                name="visibility"
+                checked={visibility === "private"}
+                onSelect={() => setVisibility("private")}
               >
-                <input
-                  type="radio"
-                  name="visibility"
-                  checked={visibility === "private"}
-                  onChange={() => setVisibility("private")}
-                  className="mt-1"
-                />
                 <div>
                   <div className="text-body font-medium">Private to you</div>
-                  <div className="text-caption text-muted-foreground">
-                    Only you can see this agent and chat with it. Others on the team won't see it listed. (default)
-                  </div>
+                  <div className="text-caption text-muted-foreground">Only you can see and chat with it.</div>
                 </div>
-              </label>
+              </OptionCard>
             </div>
           </div>
 
           {/*
-            "Where it runs" block. Reserves a stable minHeight so the dialog
-            doesn't visibly jump as async data (listClients → capabilities)
-            streams in. Three asynchronous loads used to swap a short
-            placeholder paragraph for a tall card, shifting the modal's
-            vertical center on every state transition. The reserved space
-            below covers the common single-computer + runtime-chip case
-            so loading skeletons render *inside* a stable box and
-            the surrounding form stays put. Empty `0 computers` and N-radio
-            states can still grow taller — that's fine, the jump is only
-            from the *initial detection* states which were the visible bug.
-
-            `minHeight: 168` is hand-calibrated to the steady-state height
-            of `SingleComputerCard` (border + 2-line content + p-3) plus
-            the `<Label>` + a single-line "Powered by" + a runtime chip
-            row. KEEP IN SYNC with `SingleComputerCard` /
-            `ComputerCardSkeleton` / `RuntimeChipsSkeleton` below — if any
-            of those grows or shrinks its padding / line count, the value
-            here must move with it or the dialog will jump again.
+            "Where it runs" block. The computer card and runtime row each render
+            a dimension-matched skeleton while their async data loads
+            (`ComputerCardSkeleton` / `RuntimeChipsSkeleton`), so the block
+            holds a stable height through the detect → loaded transition without
+            a hand-tuned `minHeight`. The 0-computer and N-radio states may grow
+            taller — that's expected; the jump we cared about was the initial
+            detection swap, which the skeletons absorb.
           */}
-          <div className="space-y-3" style={{ minHeight: 168 }}>
+          <div className="space-y-3">
             <Label>Where it runs</Label>
 
             {/* Computer picker. 0 / 1 / N branches keep the most common
@@ -728,33 +753,19 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               <SingleComputerCard client={connectedClients[0]} />
             ) : (
               <div className="space-y-2">
-                {connectedClients.map((client) => {
-                  const picked = pickedClientId === client.id;
-                  return (
-                    <label
-                      key={client.id}
-                      className={
-                        picked
-                          ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
-                          : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
-                      }
-                    >
-                      <input
-                        type="radio"
-                        name="picked-client"
-                        checked={picked}
-                        onChange={() => setPickedClientId(client.id)}
-                        className="mt-1"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
-                        <div className="text-caption text-muted-foreground">
-                          {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
-                        </div>
-                      </div>
-                    </label>
-                  );
-                })}
+                {connectedClients.map((client) => (
+                  <OptionCard
+                    key={client.id}
+                    name="picked-client"
+                    checked={pickedClientId === client.id}
+                    onSelect={() => setPickedClientId(client.id)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
+                      <div className="text-caption text-muted-foreground">{client.os ?? "unknown OS"} · online</div>
+                    </div>
+                  </OptionCard>
+                ))}
               </div>
             )}
 
@@ -775,22 +786,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {okRuntimes.map((provider) => {
-                      const active = runtime === provider;
-                      return (
-                        <label
-                          key={provider}
-                          className={
-                            active
-                              ? "inline-flex items-center gap-2 rounded-[var(--radius-panel)] border border-primary bg-primary/5 px-3 py-1.5 cursor-pointer"
-                              : "inline-flex items-center gap-2 rounded-[var(--radius-panel)] border border-border px-3 py-1.5 cursor-pointer hover:bg-accent/30"
-                          }
-                        >
-                          <input type="radio" name="runtime" checked={active} onChange={() => setRuntime(provider)} />
-                          <span className="text-body">{prettyRuntimeLabel(provider)}</span>
-                        </label>
-                      );
-                    })}
+                    {okRuntimes.map((provider) => (
+                      <OptionCard
+                        key={provider}
+                        name="runtime"
+                        layout="pill"
+                        checked={runtime === provider}
+                        onSelect={() => setRuntime(provider)}
+                      >
+                        <span className="text-body">{prettyRuntimeLabel(provider)}</span>
+                      </OptionCard>
+                    ))}
                   </div>
                 )}
               </div>
@@ -832,70 +838,59 @@ function ZeroComputerBlock({
   onCopy: () => void;
 }) {
   return (
-    <div className="rounded-[var(--radius-panel)] border border-border bg-muted/30 p-3 space-y-2">
-      <div className="text-body font-medium">No computer connected yet.</div>
+    <div className="space-y-2">
+      {/* Regular weight + a slightly lighter tone (`--fg-2`) so the section
+          label "Where it runs" stays the heading and this reads as status,
+          not a competing second title. */}
+      <div className="text-body text-fg-2">No computer connected yet.</div>
       <div className="text-caption text-muted-foreground">
         Run this on the machine where this agent should live. We&apos;ll pick it up here automatically.
       </div>
       <div className="flex items-stretch gap-2 min-w-0">
         <code
-          className="block flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded"
+          className="block flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded-[var(--radius-input)]"
           title={command ?? undefined}
         >
           {command ?? "Generating token…"}
         </code>
-        <button
-          type="button"
-          onClick={onCopy}
-          disabled={!command}
-          className="shrink-0 px-3 py-1.5 text-caption font-medium border border-border rounded hover:bg-accent/30 disabled:opacity-50"
-        >
+        <Button type="button" variant="outline" size="sm" onClick={onCopy} disabled={!command} className="shrink-0">
           {copied ? "Copied" : "Copy"}
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
 /**
- * Single-computer card. Used in the common case where the user only has
- * one computer connected — no radio, just a visual confirmation of where
- * the agent will live.
+ * Single-computer confirmation. Used in the common case where the user only
+ * has one computer connected — non-interactive, so it's just a plain two-line
+ * readout of where the agent will live (no card / border / fill; the framed
+ * box was over-packaging for read-only content).
  *
- * Layout note: the "Where it runs" wrapper above reserves a `minHeight`
- * calibrated to this card's steady-state dimensions plus the runtime
- * chip row, so the dialog doesn't jump during async load. If you change
- * this card's padding, border, or line count, also revisit `minHeight`
- * in the wrapper (and `ComputerCardSkeleton` / `RuntimeChipsSkeleton`
- * below, which mirror this card's dimensions).
+ * Layout note: mirrors `ComputerCardSkeleton`'s two-line shape so the
+ * "Where it runs" block holds a stable height across the detect → loaded
+ * swap. If you change this readout's line count, mirror it in the skeleton.
  */
 function SingleComputerCard({ client }: { client: HubClient | undefined }) {
   if (!client) return null;
   return (
-    <div className="rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3">
+    <div>
       <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
-      <div className="text-caption text-muted-foreground">
-        {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
-      </div>
+      <div className="text-caption text-muted-foreground">{client.os ?? "unknown OS"} · online</div>
     </div>
   );
 }
 
 /**
- * Loading placeholder that mirrors `SingleComputerCard`'s dimensions
- * (border + 2-line content + same padding) so the surrounding form keeps
- * a stable height while `listClients` is in flight. The previous
- * placeholder was a single-line paragraph, which is what made the dialog
- * visibly jump when the real card replaced it.
+ * Loading placeholder that mirrors `SingleComputerCard`'s two-line readout
+ * (same plain, borderless shape) so the surrounding form keeps a stable
+ * height while `listClients` is in flight. The previous placeholder was a
+ * single-line paragraph, which is what made the dialog visibly jump when the
+ * real readout replaced it.
  */
 function ComputerCardSkeleton({ label }: { label: string }) {
   return (
-    <div
-      className="rounded-[var(--radius-panel)] border border-border bg-muted/20 p-3"
-      role="status"
-      aria-live="polite"
-      aria-label={label}
-    >
+    <div role="status" aria-live="polite" aria-label={label}>
       <div className="text-body font-medium" style={{ color: "var(--fg-3)" }}>
         {label}
       </div>

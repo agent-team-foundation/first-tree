@@ -346,12 +346,18 @@ White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
 - `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
 - Every animation respects `prefers-reduced-motion: reduce`.
 - Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
-- Focus is visible: the shared primitives (Button / Badge / Input / Dialog-close /
-  Toast / settings-field) use `focus-visible:ring-2 ring-ring ring-offset-2`;
-  custom radio/checkbox cards surface a ring on `:focus-within` (the real input
-  is `sr-only`). *(Some page-level form controls still carry the older `ring-1` —
-  extending the `ring-2` recipe to the remaining primitives is a tracked
-  follow-up; see docs/DESIGN-AUDIT.md.)*
+- Focus is visible but restrained, in two flavors so nothing ever reads as a
+  double frame. The rule is **by whether the control has a visible resting
+  border**, not by component type:
+  - **Anything with its own border** — text inputs (`Input`), radio/checkbox
+    cards (`OptionCard`, on `:focus-within`, real input `sr-only`), and the
+    `outline` Button — darkens that border to `--ring` on focus
+    (`focus-visible:border-ring`, ring cancelled). One line, no offset gap.
+  - **Borderless controls** (filled/ghost Button, Badge, Dialog-close, Toast,
+    settings-field's filled field) use one thin neutral ring —
+    `focus-visible:ring-1 ring-ring ring-offset-1` — which has no resting border
+    to double with.
+  - `--ring` is a neutral near-fg hue, never a saturated accent.
 - Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
 
 ---

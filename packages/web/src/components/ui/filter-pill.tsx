@@ -12,7 +12,7 @@ export function FilterPill({ active, count, warn, className, children, style, ..
     <button
       type="button"
       className={cn(
-        "mono inline-flex items-center gap-1 text-caption leading-[1.6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "mono inline-flex items-center gap-1 text-caption leading-[1.6] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         className,
       )}
       style={{
