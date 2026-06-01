@@ -31,7 +31,7 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("create a brand-new Context Tree");
     expect(message).toContain("Source repo: https://github.com/acme/app");
     expect(message).toContain("Host the new tree as its own GitHub repo under the same owner as the source");
-    expect(message).toContain("record its URL on the Hub");
+    expect(message).toContain("record its URL in First Tree");
   });
 
   it("builds plural new-tree instructions", () => {

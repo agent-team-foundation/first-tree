@@ -42,7 +42,6 @@ const authMock = vi.hoisted(() => {
       restoreOnboarding: vi.fn(async () => undefined),
       markOnboardingCompleted: vi.fn(async () => undefined),
       login: vi.fn(async () => undefined),
-      adoptTokens: vi.fn(async () => undefined),
       selectOrganization: vi.fn(async () => undefined),
       refreshMe: vi.fn(async () => undefined),
       logout: vi.fn(),
@@ -138,7 +137,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
   authMock.value = { ...authMock.value, isAuthenticated: true };
-  authMock.value.adoptTokens.mockClear();
+  authMock.value.selectOrganization.mockClear();
   navigateMock.mockReset();
   clientMocks.get.mockReset();
   clientMocks.post.mockReset();
@@ -152,7 +151,6 @@ beforeEach(() => {
     organizationId: "org-new",
     memberId: "member-new",
     role: "member",
-    tokens: { accessToken: "access-new", refreshToken: "refresh-new" },
   });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -183,10 +181,7 @@ describe("InviteAcceptPage", () => {
 
     await click(buttonByText(container, "Join New Team"));
     expect(clientMocks.post).toHaveBeenCalledWith("/me/organizations/join", { token: "token-1" });
-    expect(authMock.value.adoptTokens).toHaveBeenCalledWith({
-      accessToken: "access-new",
-      refreshToken: "refresh-new",
-    });
+    expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-new");
     expect(onboardingMocks.markOnboardingResume).toHaveBeenCalledWith("invite");
     expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
   });

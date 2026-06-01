@@ -97,56 +97,19 @@ afterEach(() => {
 });
 
 describe("agent config command behavior", () => {
-  it("adds stdio, http, and sse MCP servers and validates required transport options", async () => {
-    await runConfig([
-      "add-mcp",
-      "kael",
-      "--name",
-      "tools",
-      "--transport",
-      "stdio",
-      "--command",
-      "uvx",
-      "--args",
-      "a",
-      "b",
-    ]);
-    expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
-      mcpServers: [
-        { name: "existing", transport: "stdio", command: "node", args: ["server.js"] },
-        { name: "tools", transport: "stdio", command: "uvx", args: ["a", "b"] },
-      ],
-    });
-    expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-1", version: 2, mcpServer: "tools" });
-
-    await runConfig(["add-mcp", "kael", "--name", "api", "--transport", "http", "--url", "https://mcp.example"]);
-    expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
-      mcpServers: [
-        { name: "existing", transport: "stdio", command: "node", args: ["server.js"] },
-        { name: "api", transport: "http", url: "https://mcp.example" },
-      ],
-    });
-
-    await runConfig(["add-mcp", "kael", "--name", "events", "--transport", "sse", "--url", "https://mcp.example/sse"]);
-    expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
-      mcpServers: [
-        { name: "existing", transport: "stdio", command: "node", args: ["server.js"] },
-        { name: "events", transport: "sse", url: "https://mcp.example/sse" },
-      ],
-    });
-
-    await expect(runConfig(["add-mcp", "kael", "--name", "bad", "--transport", "stdio"])).rejects.toMatchObject({
-      code: "MISSING_COMMAND",
+  it("rejects legacy per-agent MCP writes", async () => {
+    await expect(
+      runConfig(["add-mcp", "kael", "--name", "tools", "--transport", "stdio", "--command", "uvx", "--args", "a", "b"]),
+    ).rejects.toMatchObject({
+      code: "LEGACY_MCP_CONFIG_DISABLED",
       exitCode: 2,
     });
-    await expect(runConfig(["add-mcp", "kael", "--name", "bad", "--transport", "http"])).rejects.toMatchObject({
-      code: "MISSING_URL",
-      exitCode: 2,
-    });
-    await expect(runConfig(["add-mcp", "kael", "--name", "bad", "--transport", "pipe"])).rejects.toMatchObject({
-      code: "BAD_TRANSPORT",
-      exitCode: 2,
-    });
+    expect(outputMocks.fail).toHaveBeenCalledWith(
+      "LEGACY_MCP_CONFIG_DISABLED",
+      "Legacy per-agent MCP config writes are disabled. MCP configuration will be managed by Team MCP Resources.",
+      2,
+    );
+    expect(fetcherMocks.patchConfig).not.toHaveBeenCalled();
   });
 
   it("updates git repos, env vars, model, reasoning effort, and prompt append", async () => {

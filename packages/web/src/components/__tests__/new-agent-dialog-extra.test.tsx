@@ -255,26 +255,11 @@ describe("NewAgentDialog extra branches", () => {
     await waitForText(container, "gandy-macbook");
     expect(document.body.textContent).toContain("Claude Code");
     await setValue(inputById("new-agent-display-name"), "Build Bot");
-    await click(buttonByText(document.body, "Edit"));
-    const handleInput = inputById("new-agent-name");
-
-    await setValue(handleInput, "__Bad Name!!");
-    expect(handleInput.value).toBe("bad-name-");
-    await blur(handleInput);
-    expect(handleInput.value).toBe("bad-name");
     await waitForCondition(() => agentMocks.checkAgentNameAvailability.mock.calls.length > 0, "Expected probe");
-    await waitForText(container, "Available.");
-
-    agentMocks.checkAgentNameAvailability.mockResolvedValueOnce({ available: false, reason: "taken" });
-    await setValue(handleInput, "taken-name");
-    await waitForText(container, "already in use");
-
-    agentMocks.checkAgentNameAvailability.mockResolvedValue({ available: true });
-    await setValue(handleInput, "build-bot");
-    await waitForText(container, "Available.");
+    await waitForText(container, "@build-bot");
 
     const sharedRadio = [...document.body.querySelectorAll<HTMLInputElement>('input[name="visibility"]')].find(
-      (input) => input.closest("label")?.textContent?.includes("Shared with team"),
+      (input) => input.closest("label")?.textContent?.includes("Visible to your team"),
     );
     await click(sharedRadio ?? null);
     await click(
@@ -329,12 +314,14 @@ describe("NewAgentDialog extra branches", () => {
     );
     await waitForText(withRuntime, "Claude Code");
 
-    await setValue(inputById("new-agent-display-name"), "Admin");
-    await waitForText(withRuntime, "reserved");
-
     await setValue(inputById("new-agent-display-name"), "只会中文");
-    await click(buttonByText(document.body, "Create"));
-    expect(document.body.textContent).toContain("Agent name must contain at least one letter or digit");
+    const handleInput = inputById("new-agent-name");
+    await setValue(handleInput, "__Bad Name!!");
+    expect(handleInput.value).toBe("bad-name-");
+    await blur(handleInput);
+    expect(handleInput.value).toBe("bad-name");
+    await setValue(handleInput, "admin");
+    await waitForText(withRuntime, "reserved");
 
     await act(async () => root?.unmount());
     root = null;
@@ -342,8 +329,7 @@ describe("NewAgentDialog extra branches", () => {
       <NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />,
     );
     await waitForText(serverErrors, "Claude Code");
-    await setValue(inputById("new-agent-display-name"), "Api Bot");
-    await click(buttonByText(document.body, "Edit"));
+    await setValue(inputById("new-agent-display-name"), "只会中文");
     await setValue(inputById("new-agent-name"), "api-bot");
     agentMocks.createAgent.mockRejectedValueOnce(
       new ApiError(400, "Validation failed", [
@@ -401,8 +387,6 @@ describe("NewAgentDialog extra branches", () => {
 
     await waitForText(container, "Claude Code");
     await setValue(inputById("new-agent-display-name"), "Probe Bot");
-    await click(buttonByText(document.body, "Edit"));
-    await setValue(inputById("new-agent-name"), "probe-bot");
     await waitForCondition(() => agentMocks.checkAgentNameAvailability.mock.calls.length > 0, "Expected probe");
     expect(document.body.textContent).not.toContain("Available.");
     await click(buttonByText(document.body, "Create"));

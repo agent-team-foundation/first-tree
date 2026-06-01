@@ -24,11 +24,14 @@ const fsWatchMocks = vi.hoisted(() => {
     throw new Error("credentials watcher callback missing");
   }
 
+  type Listener = (...args: unknown[]) => void;
   const state = {
     callback: missingCallback,
     registered: false,
   };
+  const on = vi.fn((_event: string, _listener: Listener) => watcher);
   const close = vi.fn();
+  const watcher = { close, on };
   const watch = vi.fn((...args: unknown[]) => {
     const listener = args.find((arg): arg is (eventType: string, filename: string | Buffer | null) => void => {
       return typeof arg === "function";
@@ -37,16 +40,17 @@ const fsWatchMocks = vi.hoisted(() => {
       state.callback = listener;
       state.registered = true;
     }
-    return { close };
+    return watcher;
   });
   const reset = () => {
     state.callback = missingCallback;
     state.registered = false;
     close.mockClear();
+    on.mockClear();
     watch.mockClear();
   };
 
-  return { close, reset, state, watch };
+  return { close, on, reset, state, watch };
 });
 const watchMockProbe = importedWatch;
 const RUNTIME_TEST_TIMEOUT_MS = 15_000;

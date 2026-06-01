@@ -15,6 +15,7 @@ const authMock = vi.hoisted(() => ({
     onboardingStep: "connect" as "connect" | "create_agent" | "completed" | null,
     onboardingDismissedAt: null as string | null,
     onboardingCompletedAt: null as string | null,
+    currentOrgHasUsableAgent: false,
   },
 }));
 
@@ -105,6 +106,7 @@ beforeEach(() => {
     onboardingStep: "connect",
     onboardingDismissedAt: null,
     onboardingCompletedAt: null,
+    currentOrgHasUsableAgent: false,
   };
   flowMock.activeStep = "team";
   document.body.innerHTML = "";
@@ -129,6 +131,7 @@ describe("OnboardingPage", () => {
       ...authMock.value,
       onboardingStep: "completed",
       onboardingCompletedAt: "2026-05-31T00:00:00.000Z",
+      currentOrgHasUsableAgent: true,
     };
 
     const container = await renderRoute(<OnboardingPage />);

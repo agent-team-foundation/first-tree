@@ -13,6 +13,7 @@ const authMock = vi.hoisted(() => ({
     onboardingStep: "completed" as "connect" | "create_agent" | "completed" | null,
     onboardingDismissedAt: null as string | null,
     onboardingCompletedAt: "2026-05-28T00:00:00.000Z" as string | null,
+    currentOrgHasUsableAgent: true,
   },
 }));
 
@@ -227,6 +228,7 @@ beforeEach(() => {
     onboardingStep: "completed",
     onboardingDismissedAt: null,
     onboardingCompletedAt: "2026-05-28T00:00:00.000Z",
+    currentOrgHasUsableAgent: true,
   };
   wsMock.useAdminWs.mockReset();
 });
@@ -347,6 +349,7 @@ describe("WorkspacePage DOM behavior", () => {
       onboardingStep: "connect",
       onboardingDismissedAt: null,
       onboardingCompletedAt: null,
+      currentOrgHasUsableAgent: false,
     };
     const onboarding = await renderDom("/", <WorkspacePage />);
     expect(onboarding.container.textContent).toContain("Onboarding route");
@@ -358,6 +361,7 @@ describe("WorkspacePage DOM behavior", () => {
       onboardingStep: "completed",
       onboardingDismissedAt: null,
       onboardingCompletedAt: "2026-05-28T00:00:00.000Z",
+      currentOrgHasUsableAgent: true,
     };
     const legacyAgent = await renderDom("/?a=agent-1", <WorkspacePage />);
     expect(legacyAgent.container.querySelector('[data-testid="location"]')?.textContent).toBe("/");

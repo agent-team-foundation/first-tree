@@ -13,7 +13,7 @@ const clientMocks = vi.hoisted(() => ({
 
 const authMock = vi.hoisted(() => ({
   value: {
-    adoptTokens: vi.fn(),
+    selectOrganization: vi.fn(),
   },
 }));
 
@@ -79,8 +79,7 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  clientMocks.post.mockResolvedValue({ tokens: { accessToken: "access", refreshToken: "refresh" } });
-  authMock.value.adoptTokens.mockResolvedValue(undefined);
+  authMock.value.selectOrganization.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -89,8 +88,11 @@ afterEach(() => {
 });
 
 describe("TeamSetupModal", () => {
-  it("creates a team with a slugified name, adopts tokens, navigates home, and closes", async () => {
+  it("creates a team with a slugified name, selects it, navigates home, and closes", async () => {
     const onClose = vi.fn();
+    clientMocks.post.mockResolvedValue({
+      organization: { id: "org-new", name: "acme-robotics", displayName: "ACME Robotics!!!", role: "admin" },
+    });
     const { TeamSetupModal } = await import("../team-setup-modal.js");
     const { root } = await renderDom(<TeamSetupModal action="create" onClose={onClose} />);
 
@@ -104,7 +106,7 @@ describe("TeamSetupModal", () => {
       name: "acme-robotics",
       displayName: "ACME Robotics!!!",
     });
-    expect(authMock.value.adoptTokens).toHaveBeenCalledWith({ accessToken: "access", refreshToken: "refresh" });
+    expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-new");
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerMocks.navigate).toHaveBeenCalledWith("/", { replace: true });
 
@@ -113,6 +115,7 @@ describe("TeamSetupModal", () => {
 
   it("joins with a token extracted from a full invite URL", async () => {
     const onClose = vi.fn();
+    clientMocks.post.mockResolvedValue({ organizationId: "org-joined", memberId: "member-new", role: "member" });
     const { TeamSetupModal } = await import("../team-setup-modal.js");
     const { root } = await renderDom(<TeamSetupModal action="join" onClose={onClose} />);
 
@@ -122,6 +125,7 @@ describe("TeamSetupModal", () => {
     await submit(document.body.querySelector("form"));
 
     expect(clientMocks.post).toHaveBeenCalledWith("/me/organizations/join", { token: "token-123" });
+    expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-joined");
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerMocks.navigate).toHaveBeenCalledWith("/", { replace: true });
 

@@ -23,6 +23,7 @@ const authMock = vi.hoisted(() => ({
   value: {
     memberId: "member-self",
     role: "admin",
+    agentId: "human-1",
   },
 }));
 
@@ -177,7 +178,7 @@ function installBrowserStubs(): void {
 beforeEach(() => {
   document.body.innerHTML = "";
   installBrowserStubs();
-  authMock.value = { memberId: "member-self", role: "admin" };
+  authMock.value = { memberId: "member-self", role: "admin", agentId: "human-1" };
   agentApiMocks.deleteAgentAvatar.mockReset();
   agentApiMocks.listAgents.mockReset();
   agentApiMocks.listManagedAgents.mockReset();
@@ -200,8 +201,8 @@ beforeEach(() => {
   ]);
   agentApiMocks.listAgents.mockResolvedValue({
     items: [
-      agent({ uuid: "delegate-1", name: "helper", displayName: "Helper", type: "agent", visibility: "private" }),
-      agent({ uuid: "delegate-2", name: "second", displayName: "Second Helper", type: "agent", visibility: "private" }),
+      agent({ uuid: "delegate-1", name: "helper", displayName: "Helper", type: "agent" }),
+      agent({ uuid: "delegate-2", name: "second", displayName: "Second Helper", type: "agent" }),
       agent({
         uuid: "public-agent",
         name: "public",
@@ -215,7 +216,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 describe("AppearanceSection", () => {
@@ -334,7 +335,7 @@ describe("IdentitySection", () => {
 
   it("disables visibility for non-managers and surfaces save errors", async () => {
     const { IdentitySection } = await import("../identity-section.js");
-    authMock.value = { memberId: "member-other", role: "member" };
+    authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };
     const onSave = vi.fn().mockRejectedValueOnce(new Error("Identity update failed"));
     const { container, root } = await renderDom(
       <IdentitySection
@@ -354,7 +355,6 @@ describe("IdentitySection", () => {
     await click(buttonByText(document.body, "Save"));
     expect(onSave).toHaveBeenCalledWith({
       displayName: "Kael Updated",
-      delegateMention: null,
     });
     expect(document.body.textContent).toContain("Identity update failed");
 

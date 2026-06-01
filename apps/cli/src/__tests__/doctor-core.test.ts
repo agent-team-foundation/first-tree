@@ -94,7 +94,7 @@ describe("doctor core checks", () => {
     await expect(checkServerReachable()).resolves.toEqual({
       label: "Server URL",
       ok: false,
-      detail: "unreachable at http://hub.test",
+      detail: "unreachable at http://first-tree.test",
     });
 
     cliFetchMock.mockRejectedValueOnce(new Error("network"));

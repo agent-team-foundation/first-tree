@@ -242,37 +242,25 @@ afterEach(() => {
 });
 
 describe("UsageTab", () => {
-  it("renders summary, activity, paginated turns, window switching, and chat navigation", async () => {
+  it("renders activity, recent turns, and chat navigation", async () => {
     const { UsageTab } = await import("../usage-tab.js");
 
     const { container, root } = await renderUsageTab(<UsageTab />);
-    expect(container.textContent).toContain("Token Usage");
-    expect(container.textContent).toContain("Tokens (30d)");
-    expect(container.textContent).toContain("3.65M");
-    expect(container.textContent).toContain("42");
-    expect(container.textContent).toContain("Input 1.2M");
-    expect(container.textContent).toContain("Activity (last 90 days)");
-    expect(container.querySelectorAll('span[title*="input tokens"]').length).toBe(90);
-    expect(container.textContent).toContain("Recent turns (30d)");
+    expect(container.textContent).toContain("Activity");
+    expect(container.textContent).toContain("last 90 days");
+    expect(container.querySelectorAll("span.usage-cal-cell[role='img']").length).toBe(90);
+    expect(container.textContent).toContain("Active days");
+    expect(container.textContent).toContain("Peak day");
+    expect(container.textContent).toContain("Recent turns");
+    expect(container.textContent).toContain("30d");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
     expect(container.textContent).toContain("claude-code/sonnet");
-
-    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "7d") ?? null);
-    expect(usageMocks.getAgentUsageSummary).toHaveBeenLastCalledWith("agent-1", "7d");
-    expect(usageMocks.getAgentUsageTurns).toHaveBeenLastCalledWith("agent-1", {
-      window: "7d",
-      cursor: null,
-      limit: 50,
+    expect(usageMocks.getAgentUsageSummary).toHaveBeenCalledWith("agent-1", "30d");
+    expect(usageMocks.getAgentUsageTurns).toHaveBeenCalledWith("agent-1", {
+      window: "30d",
+      limit: 10,
     });
-
-    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "Load more") ?? null);
-    expect(usageMocks.getAgentUsageTurns).toHaveBeenLastCalledWith("agent-1", {
-      window: "7d",
-      cursor: "cursor-2",
-      limit: 50,
-    });
-    expect(container.textContent).toContain("Follow-up");
 
     await click(
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Launch planning") ?? null,
@@ -301,7 +289,6 @@ describe("UsageTab", () => {
     usageMocks.getAgentUsageSummary.mockRejectedValue(new Error("summary failed"));
     usageMocks.getAgentUsageTurns.mockRejectedValue(new Error("turns failed"));
     const errored = await renderUsageTab(<UsageTab />);
-    expect(errored.container.textContent).toContain("Failed to load usage summary.");
     expect(errored.container.textContent).toContain("Failed to load activity.");
     expect(errored.container.textContent).toContain("Failed to load recent turns.");
     await act(async () => errored.root.unmount());

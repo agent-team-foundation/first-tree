@@ -100,12 +100,22 @@ const SECTION_BODY_INDENT = "0";
 function useCollapsed(storageKey: string): [boolean, () => void] {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(storageKey) === "1";
+    try {
+      return window.localStorage?.getItem?.(storageKey) === "1";
+    } catch {
+      return false;
+    }
   });
   const toggle = () => {
     setCollapsed((prev) => {
       const next = !prev;
-      if (typeof window !== "undefined") window.localStorage.setItem(storageKey, next ? "1" : "0");
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage?.setItem?.(storageKey, next ? "1" : "0");
+        } catch {
+          // Ignore unavailable storage; collapse state is a convenience only.
+        }
+      }
       return next;
     });
   };

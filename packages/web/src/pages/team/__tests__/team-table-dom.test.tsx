@@ -134,8 +134,6 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     humans,
     isAdmin: true,
     dimPrivateOwner: false,
-    agentFilter: "all",
-    onAgentFilter: vi.fn(),
     agentCount: 2,
     clientHostMap: new Map([
       ["client-1", "gandy-macbook"],
@@ -145,8 +143,6 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       ["agent-1", usage("agent-1")],
       ["agent-2", usage("agent-2", { turns: 1, inputTokens: 100, cachedInputTokens: 0, outputTokens: 50 })],
     ]),
-    usageWindow: "30d",
-    onUsageWindowChange: vi.fn(),
     usageLoading: false,
     onChat: vi.fn(),
     onAgentDetails: vi.fn(),
@@ -206,7 +202,7 @@ afterEach(() => {
 });
 
 describe("TeamTable", () => {
-  it("renders desktop rows, actions, usage window popover, delegate selector, and row open handlers", async () => {
+  it("renders desktop rows, actions, delegate selector, and row open handlers", async () => {
     const { TeamTable } = await import("../team-table.js");
     const props = createProps();
 
@@ -230,13 +226,8 @@ describe("TeamTable", () => {
     await click(buttonByText(container, "Chat"));
     expect(props.onChat).toHaveBeenCalledWith("agent-1");
 
-    await click(container.querySelector('button[aria-label^="Usage window"]'));
-    expect(document.body.textContent).toContain("Last 7 days");
-    await click(buttonByText(document.body, "Last 7 days"));
-    expect(props.onUsageWindowChange).toHaveBeenCalledWith("7d");
-
     await click(container.querySelector('button[title="Change delegate"]'));
-    expect(document.body.textContent).toContain("None");
+    expect(document.body.textContent).toContain("Remove delegate");
     expect(document.body.textContent).toContain("Scout");
     await click(buttonByText(document.body, "Scout"));
     expect(props.onSetDelegate).toHaveBeenCalledWith("human-self", "agent-3");
@@ -276,7 +267,6 @@ describe("TeamTable", () => {
     });
 
     const { container, root } = await renderDom(<TeamTable {...props} />);
-    expect(container.textContent).toContain("Usage");
     expect(container.textContent).toContain("No agents match this search.");
     expect(container.textContent).toContain("Set delegate");
 
@@ -287,8 +277,8 @@ describe("TeamTable", () => {
     expect(props.onHumanDetails).toHaveBeenCalledWith(props.humans[0]);
 
     await click(container.querySelector('button[title="Set delegate"]'));
-    expect(document.body.textContent).toContain("No personal assistants yet.");
-    await click(buttonByText(document.body, "None"));
+    expect(document.body.textContent).toContain("Only team-visible agents can be a delegate.");
+    await click(buttonByText(document.body, "Remove delegate"));
     expect(props.onSetDelegate).toHaveBeenCalledWith("human-self", null);
 
     await act(async () => {

@@ -51,6 +51,7 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     chatId: overrides.chatId,
     type: overrides.type ?? "group",
     membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
     source: overrides.source ?? "manual",
     entityType: overrides.entityType ?? null,
     title: overrides.title,
@@ -191,7 +192,7 @@ function StatefulList({
   const [watching, setWatching] = useState(false);
   const [origin, setOrigin] = useState<ChatSource[]>([]);
   const [participants, setParticipants] = useState<string[]>([]);
-  const [group, setGroup] = useState<"recency" | "source" | "type" | "none">("source");
+  const [group, setGroup] = useState<"recency" | "source">("source");
   return (
     <ConversationList
       selectedChatId={selectedChatId}
@@ -265,8 +266,8 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("Needs attention");
     expect(container.textContent).toContain("Broken deploy");
     expect(container.textContent).toContain("Waiting approval");
-    expect(container.textContent).toContain("Manual");
-    expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("MANUAL");
+    expect(container.textContent).toContain("GITHUB");
     expect(container.textContent).toContain("Watching · Needs another pass");
     expect(container.querySelector('[aria-label="failed, 3 unread"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="needs you"]')).toBeTruthy();
@@ -323,12 +324,21 @@ describe("ConversationList", () => {
     expect(container.textContent).not.toContain("Filters");
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Type") ?? null);
-    expect(container.textContent).toContain("Team");
+    await click(
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Recency") ?? null,
+    );
+    expect(container.textContent).toContain("Older");
 
     await click(buttonByText(container, "Archived"));
     await flush();
-    expect(container.textContent).toContain("Archived review");
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
+      filter: "all",
+      engagement: "archived",
+      watching: undefined,
+      origin: undefined,
+      with: undefined,
+    });
+    expect(container.textContent).toContain("Older");
   });
 
   it("shows loading, empty, error, and draft-selected states", async () => {

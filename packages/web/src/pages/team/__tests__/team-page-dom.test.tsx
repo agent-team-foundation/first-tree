@@ -507,17 +507,11 @@ describe("TeamPage", () => {
     await click(exactButton(container, "Chat"));
     expect(routerMocks.navigate).toHaveBeenCalledWith("/?c=draft&with=agent-1");
 
-    await click(container.querySelector('button[aria-label^="Usage window"]'));
-    await waitForText(document.body, "Last 7 days");
-    await click(exactButton(document.body, "Last 7 days"));
-    await waitForCondition(
-      () => usageMocks.getOrgUsageByAgent.mock.calls.some((call) => call[0] === "7d"),
-      "Expected usage query for 7d",
-    );
+    expect(usageMocks.getOrgUsageByAgent).toHaveBeenCalledWith("7d");
 
     await click(container.querySelector('button[title="Change delegate"]'));
     await waitForText(document.body, "Scout");
-    await click(exactButton(document.body, "None"));
+    await click(exactButton(document.body, "Remove delegate"));
     await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected delegate update");
     expect(agentMocks.updateAgent).toHaveBeenCalledWith("human-agent-self", { delegateMention: null });
 
@@ -585,7 +579,7 @@ describe("TeamPage", () => {
     expect(container.textContent).not.toContain("Design Critique");
     expect(container.textContent).toContain("Ops Helper");
 
-    await click(container.querySelector('[aria-label="Open Gandy"]'));
+    await click(container.querySelector('[aria-label="Open Alice"]'));
     await waitForText(document.body, "Profile");
     expect(document.body.textContent).not.toContain("Demoting the last admin");
     expect(exactButton(document.body, "Save")).toBeNull();

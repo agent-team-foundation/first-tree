@@ -92,6 +92,7 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     chatId: overrides.chatId ?? "chat-123456789",
     type: overrides.type ?? "group",
     membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
     source: overrides.source ?? "manual",
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? "Launch planning",
