@@ -94,9 +94,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let transcriptTailer: TranscriptTailer | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let turnAborted = false;
+  // True for the whole span a turn is being prepared/run — start/resume
+  // bootstrap through turn completion, or a queued-message turn. This is the
+  // single synchronous gate that serialises turn execution: `pump()` starts a
+  // queued turn only when this is false, so concurrent injects can never run
+  // two turns against one tmux pane.
+  let turnRunning = false;
   let ctx: SessionContext | null = null;
   let configTempDir: string | null = null;
-  let drainScheduled = false;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
   // Per-chat state captured at session start — surfaced into the
@@ -310,9 +315,18 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       command,
       env: buildEnv(sessionCtx, payload),
     });
-    await waitForReady({ name: sessionName, timeoutMs: READY_TIMEOUT_MS });
-
+    // Track the session name immediately so a waitForReady failure still has a
+    // teardown path — otherwise the detached tmux session (and its claude
+    // process) leaks until the next process restart's orphan sweep.
     tmuxSessionName = sessionName;
+    try {
+      await waitForReady({ name: sessionName, timeoutMs: READY_TIMEOUT_MS });
+    } catch (err) {
+      await killSession(sessionName).catch(() => {});
+      tmuxSessionName = null;
+      throw err;
+    }
+
     transcriptTailer = new TranscriptTailer(transcriptPathFor(cwd, sessionId));
     return sessionId;
   }
@@ -381,7 +395,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     }
   }
 
-  async function runTurn(text: string, sessionCtx: SessionContext): Promise<void> {
+  async function runTurn(text: string, sessionCtx: SessionContext, ackCount = 1): Promise<void> {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
@@ -391,6 +405,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const state: TurnState = { finalTexts: [], askUserTexts: [], seenToolUseIds: new Set() };
     let turnFailed = false;
     let everSawWorking = false;
+    let askUserEscapeArmed = false;
+    let brokeOnIdle = false;
 
     try {
       // Pre-flush whatever's already in the transcript (the prior turn's
@@ -410,18 +426,30 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const pane = await capturePane(tmuxSessionName);
         const working = pane.includes(WORKING_MARKER);
         if (working) everSawWorking = true;
+        // A turn that finishes between two polls may never paint the working
+        // marker; treat any produced output as evidence the turn ran so a fast
+        // reply doesn't block until TURN_TIMEOUT.
+        const producedOutput = state.finalTexts.length > 0 || state.askUserTexts.length > 0;
+        const sawActivity = everSawWorking || producedOutput;
 
         if (pane.includes(ASKUSER_MENU_FOOTER)) {
-          // Cancel the TUI selection menu — claude will flush the cancelled
-          // tool_use to the transcript on the next tick.
-          try {
-            await sendKey(tmuxSessionName, "Escape");
-          } catch (err) {
-            sessionCtx.log(`tui Escape failed: ${err instanceof Error ? err.message : String(err)}`);
+          // Cancel the TUI selection menu once per appearance. The footer stays
+          // painted for several polls after Escape, so re-sending it every tick
+          // would land stray Escapes after the menu closes — where Escape
+          // interrupts the very turn that was meant to continue.
+          if (!askUserEscapeArmed) {
+            askUserEscapeArmed = true;
+            try {
+              await sendKey(tmuxSessionName, "Escape");
+            } catch (err) {
+              sessionCtx.log(`tui Escape failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
+        } else {
+          askUserEscapeArmed = false;
         }
 
-        if (everSawWorking && !working) {
+        if (sawActivity && !working) {
           // Final flush grace period — claude writes the closing
           // assistant_text block to the transcript after the working
           // marker disappears.
@@ -430,6 +458,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             await drainAndConsume(sessionCtx, state);
             await sleep(150);
           }
+          brokeOnIdle = true;
           break;
         }
 
@@ -438,6 +467,17 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
       // One last pass in case the timeout-or-break left entries behind.
       await drainAndConsume(sessionCtx, state);
+
+      // Loop hit the TURN_TIMEOUT ceiling (not a clean idle break, not an
+      // explicit abort): claude may still be working. Interrupt it so its
+      // output doesn't bleed into the next turn's pane/transcript.
+      if (!brokeOnIdle && !turnAborted) {
+        try {
+          await sendKey(tmuxSessionName, "Escape");
+        } catch {
+          /* best-effort */
+        }
+      }
     } catch (err) {
       turnFailed = true;
       sessionCtx.emitEvent({
@@ -476,37 +516,60 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       kind: "turn_end",
       payload: { status: !turnFailed && !forwardFailed ? "success" : "error" },
     });
-    sessionCtx.setRuntimeState("idle");
-    resetProcessor();
-
-    if (queuedMessages.length > 0 && !drainScheduled) {
-      drainScheduled = true;
-      setImmediate(() => {
-        drainScheduled = false;
-        const drained = queuedMessages.splice(0);
-        if (drained.length === 0 || !ctx) return;
-        void mergeAndRun(drained, ctx);
-      });
+    // The runtime never auto-acks on turn_end (see SessionContext in
+    // handler.ts) — without this the triggering inbox entries stay in-flight
+    // and the server redelivers them (re-running the turn) on reconnect /
+    // restart. Ack on a clean close even when forwardResult failed (mirroring
+    // the SDK handler's ackTurnClose) to avoid redelivery storms; but NOT when
+    // the turn was aborted by suspend(), so the message is re-run on resume.
+    if (!turnAborted) {
+      sessionCtx.markCompleted(ackCount);
     }
+    // A failed turn loop (e.g. the tmux session died) leaves a broken session —
+    // surface it as `error` rather than advertising `idle`. A forward-only
+    // failure keeps the session healthy, so it stays idle.
+    sessionCtx.setRuntimeState(turnFailed ? "error" : "idle");
+    resetProcessor();
   }
 
-  async function mergeAndRun(drained: SessionMessage[], sessionCtx: SessionContext): Promise<void> {
-    const inputs: string[] = [];
-    for (const m of drained) {
-      try {
-        inputs.push(await sessionCtx.formatInboundContent(m));
-      } catch (err) {
-        sessionCtx.log(`tui inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
+  /**
+   * Start a turn for any queued messages, if the session is live and no turn is
+   * already running. The single serialisation point for turn execution:
+   * `inject()` only ever enqueues + calls `pump()`, and `turnRunning` (a plain
+   * synchronous boolean) guarantees at most one turn runs against the tmux pane
+   * at a time. `currentTurnPromise` is assigned synchronously before any await
+   * so a concurrent `suspend()` awaits the turn instead of tearing it down.
+   */
+  function pump(): void {
+    if (turnRunning || queuedMessages.length === 0) return;
+    const sessionCtx = ctx;
+    if (!sessionCtx || !tmuxSessionName) return;
+    const drained = queuedMessages.splice(0);
+    turnRunning = true;
+    const promise = (async () => {
+      const inputs: string[] = [];
+      for (const m of drained) {
+        try {
+          inputs.push(await sessionCtx.formatInboundContent(m));
+        } catch (err) {
+          sessionCtx.log(`tui inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-    }
-    if (inputs.length === 0) return;
-    const promise = runTurn(inputs.join("\n\n"), sessionCtx);
+      if (inputs.length === 0) return;
+      await runTurn(inputs.join("\n\n"), sessionCtx, drained.length);
+    })();
     currentTurnPromise = promise;
-    try {
-      await promise;
-    } finally {
-      currentTurnPromise = null;
-    }
+    void promise
+      .catch((err) => {
+        sessionCtx.log(`tui queued turn failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        turnRunning = false;
+        currentTurnPromise = null;
+        // Drain anything injected while this turn ran. setImmediate keeps the
+        // recursion off the stack and lets the just-cleared flags settle.
+        setImmediate(pump);
+      });
   }
 
   function sleep(ms: number): Promise<void> {
@@ -541,95 +604,95 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
   return {
     async start(message, sessionCtx) {
-      await orphanSweep();
-      ctx = sessionCtx;
-      cwd = acquireAgentHome(workspaceRoot);
-
-      const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
-
-      // Per-chat material flows through the system-prompt-append channel
-      // built in `buildPromptAppend` — bootstrapWorkspace itself only writes
-      // agent-stable files now (per-agent-home redesign, proposals/2026-05-19).
-      chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-      bootstrapWorkspace({
-        workspacePath: cwd,
-        identity: sessionCtx.agent,
-        contextTreePath,
-        serverUrl: sessionCtx.sdk.serverUrl,
-      });
-      ensureFirstTreeBinding(cwd, sessionCtx);
-      await prepareGitWorktrees(payload, cwd, sessionCtx);
-      markWorkspaceInitComplete(cwd);
-
-      const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
-
-      const inputText = await sessionCtx.formatInboundContent(message);
-      const promise = runTurn(inputText, sessionCtx);
-      currentTurnPromise = promise;
+      // Hold turnRunning across the whole bootstrap so an inject arriving while
+      // the session is still being prepared queues instead of racing pump()
+      // into a second turn the instant startClaude sets tmuxSessionName.
+      turnRunning = true;
       try {
-        await promise;
-      } finally {
-        currentTurnPromise = null;
-      }
-      return sessionId;
-    },
+        await orphanSweep();
+        ctx = sessionCtx;
+        cwd = acquireAgentHome(workspaceRoot);
 
-    async resume(message, sessionId, sessionCtx) {
-      await orphanSweep();
-      ctx = sessionCtx;
-      cwd = acquireAgentHome(workspaceRoot);
+        const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
-      const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
-
-      chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-      bootstrapWorkspace({
-        workspacePath: cwd,
-        identity: sessionCtx.agent,
-        contextTreePath,
-        serverUrl: sessionCtx.sdk.serverUrl,
-      });
-      if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
+        // Per-chat material flows through the system-prompt-append channel
+        // built in `buildPromptAppend` — bootstrapWorkspace itself only writes
+        // agent-stable files now (per-agent-home redesign, proposals/2026-05-19).
+        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
+        bootstrapWorkspace({
+          workspacePath: cwd,
+          identity: sessionCtx.agent,
+          contextTreePath,
+          serverUrl: sessionCtx.sdk.serverUrl,
+        });
         ensureFirstTreeBinding(cwd, sessionCtx);
-      }
-      await prepareGitWorktrees(payload, cwd, sessionCtx);
-      markWorkspaceInitComplete(cwd);
+        await prepareGitWorktrees(payload, cwd, sessionCtx);
+        markWorkspaceInitComplete(cwd);
 
-      const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
+        const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
 
-      if (message) {
         const inputText = await sessionCtx.formatInboundContent(message);
-        const promise = runTurn(inputText, sessionCtx);
-        currentTurnPromise = promise;
+        currentTurnPromise = runTurn(inputText, sessionCtx, 1);
         try {
-          await promise;
+          await currentTurnPromise;
         } finally {
           currentTurnPromise = null;
         }
+        return sessionId;
+      } finally {
+        turnRunning = false;
+        // Drain any messages injected during bootstrap / the first turn.
+        setImmediate(pump);
       }
-      return restartedId;
     },
 
-    inject(message) {
-      if (currentTurnPromise) {
-        queuedMessages.push(message);
-        return;
-      }
-      const sessionCtx = ctx;
-      if (!sessionCtx || !tmuxSessionName) return;
-      void (async () => {
-        try {
-          const text = await sessionCtx.formatInboundContent(message);
-          const promise = runTurn(text, sessionCtx);
-          currentTurnPromise = promise;
+    async resume(message, sessionId, sessionCtx) {
+      turnRunning = true;
+      try {
+        await orphanSweep();
+        ctx = sessionCtx;
+        cwd = acquireAgentHome(workspaceRoot);
+
+        const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
+
+        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
+        bootstrapWorkspace({
+          workspacePath: cwd,
+          identity: sessionCtx.agent,
+          contextTreePath,
+          serverUrl: sessionCtx.sdk.serverUrl,
+        });
+        if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
+          ensureFirstTreeBinding(cwd, sessionCtx);
+        }
+        await prepareGitWorktrees(payload, cwd, sessionCtx);
+        markWorkspaceInitComplete(cwd);
+
+        const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
+
+        if (message) {
+          const inputText = await sessionCtx.formatInboundContent(message);
+          currentTurnPromise = runTurn(inputText, sessionCtx, 1);
           try {
-            await promise;
+            await currentTurnPromise;
           } finally {
             currentTurnPromise = null;
           }
-        } catch (err) {
-          sessionCtx.log(`tui inject failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-      })();
+        return restartedId;
+      } finally {
+        turnRunning = false;
+        setImmediate(pump);
+      }
+    },
+
+    inject(message) {
+      // Always enqueue, then let the single serialised pump() decide when to
+      // run. This removes the prior races where an inject arriving in the
+      // narrow window around turn completion / startup could either start a
+      // second concurrent turn or be stranded with no drain scheduled.
+      queuedMessages.push(message);
+      pump();
     },
 
     async suspend() {
