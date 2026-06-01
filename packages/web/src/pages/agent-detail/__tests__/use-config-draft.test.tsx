@@ -99,7 +99,6 @@ describe("useConfigDraft", () => {
 
     expect(latest?.summary.counts).toMatchObject({ mcp: 1, env: 2, git: 1 });
     expect(latest?.buildPayloadPatch()).toMatchObject({
-      mcpServers: [{ name: "docs", transport: "http", url: "https://docs.example.com/mcp" }],
       env: [
         { key: "MODE", value: "dev", sensitive: false },
         { key: "NEW_FLAG", value: "1", sensitive: false },
@@ -109,6 +108,7 @@ describe("useConfigDraft", () => {
         { url: "git@github.com:acme/api.git", localPath: "api" },
       ],
     });
+    expect(latest?.buildPayloadPatch()).not.toHaveProperty("mcpServers");
 
     act(() => {
       latest?.undoDeleteEnv("env-1");

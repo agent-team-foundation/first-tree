@@ -1,6 +1,17 @@
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerAgentConfigCommands } from "../commands/agent/config/index.js";
+
+const failMock = vi.hoisted(() =>
+  vi.fn((code: string, message: string, exitCode = 1) => {
+    throw Object.assign(new Error(message), { code, exitCode });
+  }),
+);
+
+vi.mock("../cli/output.js", () => ({
+  fail: failMock,
+  success: vi.fn(),
+}));
 
 describe("agent config CLI registration (Step 8)", () => {
   it("registers all 8 subcommands under `config`", () => {
@@ -42,5 +53,21 @@ describe("agent config CLI registration (Step 8)", () => {
     expect(opts).toContain("--command");
     expect(opts).toContain("--url");
     expect(opts).toContain("--args");
+  });
+
+  it("add-mcp is registered but exits before writing legacy MCP config", async () => {
+    const root = new Command();
+    root.exitOverride();
+    const agent = root.command("agent");
+    registerAgentConfigCommands(agent);
+
+    await expect(
+      root.parseAsync(["node", "test", "agent", "config", "add-mcp", "kael", "--name", "docs", "--transport", "http"]),
+    ).rejects.toMatchObject({ code: "LEGACY_MCP_CONFIG_DISABLED", exitCode: 2 });
+    expect(failMock).toHaveBeenCalledWith(
+      "LEGACY_MCP_CONFIG_DISABLED",
+      expect.stringContaining("Team MCP Resources"),
+      2,
+    );
   });
 });

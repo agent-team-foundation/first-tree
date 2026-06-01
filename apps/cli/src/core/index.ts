@@ -58,8 +58,10 @@ export {
 export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
+export type { PinnedAgentRuntimeRecord } from "./runtime-provider-reconcile.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)
 export {
+  listPinnedAgents,
   reconcileLocalRuntimeProviders,
   uploadAgentSkills,
   uploadClientCapabilities,

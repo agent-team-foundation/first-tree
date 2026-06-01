@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
+  listPinnedAgents,
   reconcileLocalRuntimeProviders,
   uploadAgentSkills,
   uploadClientCapabilities,
@@ -11,6 +12,7 @@ import {
 
 /**
  * Two CLI helpers, both fetch-driven against the server:
+ *   - `listPinnedAgents` reads the server-authoritative local-agent set.
  *   - `reconcileLocalRuntimeProviders` rewrites local `agent.yaml::runtime`
  *     when it disagrees with `agents.runtime_provider` (server authoritative).
  *   - `uploadClientCapabilities` PATCHes the per-machine probe results to
@@ -22,6 +24,41 @@ import {
  * `agentId` or rewrites every yaml unconditionally would only surface at
  * production startup.
  */
+describe("listPinnedAgents", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("GETs /me/pinned-agents with the user access token", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-1", clientId: "client-1", runtimeProvider: "claude-code" }]), {
+        status: 200,
+      }),
+    );
+
+    const rows = await listPinnedAgents({ serverUrl: "http://first-tree.test", accessToken: "tok-xyz" });
+
+    expect(rows).toEqual([{ agentId: "agent-1", clientId: "client-1", runtimeProvider: "claude-code" }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://first-tree.test/api/v1/me/pinned-agents",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer tok-xyz" }) }),
+    );
+  });
+
+  it("throws on non-OK status so daemon startup can fall back to best-effort upload", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
+
+    await expect(listPinnedAgents({ serverUrl: "http://first-tree.test", accessToken: "tok" })).rejects.toThrow(/500/);
+  });
+});
+
 describe("reconcileLocalRuntimeProviders", () => {
   let agentsDir: string;
   let fetchMock: ReturnType<typeof vi.fn>;
