@@ -28,7 +28,7 @@ packages and home dirs, one per channel:
 
 Auto-update is now gated on a channel-mismatch guard: a binary refuses
 to install a target version whose channel does not match its own (e.g.
-prod CLI refuses `…-staging.X.Y`). Misconfigured hub servers can no
+prod CLI refuses `…-staging.X.Y`). Misconfigured servers can no
 longer brick a connected daemon by advertising a cross-channel version.
 
 ### Team-member staging migration
