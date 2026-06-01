@@ -13,7 +13,7 @@ export function registerAgentBindClientCommand(bind: Command): void {
       "--client-id <id>",
       "Client (machine) ID — must be owned by you. Run `first-tree login <token>` on that machine first.",
     )
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (agentName: string, options: { clientId: string; server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);

@@ -8,7 +8,7 @@ export function registerAgentResetCommand(agent: Command): void {
   agent
     .command("reset <name>")
     .description("Reset agent error state to idle")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (name: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);

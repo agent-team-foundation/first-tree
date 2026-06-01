@@ -14,7 +14,7 @@ import { print } from "../core/output.js";
 export function registerLogoutCommand(program: Command): void {
   program
     .command("logout")
-    .description("Disconnect from the Hub — stop daemon and clear credentials (symmetric to `login`)")
+    .description("Disconnect from First Tree — stop daemon and clear credentials (symmetric to `login`)")
     .option("--purge", "Also remove client.yaml (server.url etc.); default keeps it")
     .action((options: { purge?: boolean }) => {
       // 1. Stop daemon (best-effort).

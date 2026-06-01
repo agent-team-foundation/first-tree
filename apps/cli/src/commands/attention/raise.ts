@@ -39,7 +39,7 @@ export function registerAttentionRaiseCommand(parent: Command): void {
       [],
     )
     .option("--meta-json <json|@file>", "JSON object merged over flat --meta flags (escape hatch for complex shapes)")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: RaiseOptions) => {
       try {
         const body = await resolveBody(options.body);

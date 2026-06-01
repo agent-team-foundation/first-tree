@@ -899,7 +899,7 @@ function ComputerCardSkeleton({ label }: { label: string }) {
       <div className="text-body font-medium" style={{ color: "var(--fg-3)" }}>
         {label}
       </div>
-      <div className="text-caption text-muted-foreground">Looking for a machine running the Hub client…</div>
+      <div className="text-caption text-muted-foreground">Looking for a machine running the First Tree daemon…</div>
     </div>
   );
 }

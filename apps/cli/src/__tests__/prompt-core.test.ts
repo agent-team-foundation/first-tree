@@ -165,7 +165,7 @@ describe("prompt core", () => {
     await expect(promptAddAgent({ agentId: "missing" })).rejects.toThrow("HTTP 404");
 
     cliFetchMock.mockResolvedValueOnce(response(200, { name: null }));
-    await expect(promptAddAgent({ agentId: "tombstone" })).rejects.toThrow("has no hub name");
+    await expect(promptAddAgent({ agentId: "tombstone" })).rejects.toThrow("has no server-side name");
   });
 
   it("prompts for an agent id when omitted", async () => {

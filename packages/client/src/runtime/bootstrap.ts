@@ -969,9 +969,9 @@ function generateToolsDoc(): string {
   // hardcoding "first-tree" used to leave staging/dev agents calling a
   // binary that wasn't installed on the host.
   const bin = getCliBinding().binName;
-  return `# Agent Hub SDK
+  return `# First Tree Agent Runtime
 
-You are running inside **Agent Hub**, a messaging platform for agent teams.
+You are running inside **First Tree**, a messaging platform for agent teams.
 
 - Messages from other team members arrive as your prompt input. Each message has a
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
@@ -1034,7 +1034,7 @@ echo "long body" | ${bin} chat send <agentName>
   message lands in the current chat and the recipient is woken if they were
   @mentioned (or — for two-speaker chats — implicitly).
 - **Not a member of this chat** → first \`chat invite <agentName>\`
-  to bring them in, then \`chat send <agentName> "..."\` like normal. Hub
+  to bring them in, then \`chat send <agentName> "..."\` like normal. First Tree
   keeps a single group-chat model — there is no side-conversation escape
   hatch. \`@<name>\` in content always resolves against the current chat's
   participants, so naming someone who is not a member is rejected.
@@ -1054,7 +1054,7 @@ this command.
 
 Use \`${bin} attention raise --requires-response\` before any irreversible or externally-visible action that needs the human's go-ahead (ask), use \`${bin} attention raise\` without the flag right after such an action completes while the human is not watching (notify), and use plain \`chat send\` for everything else — full trigger lists, body templates, and waiting behaviour live in the attention skill (\`.claude/skills/attention/SKILL.md\` or \`.agents/skills/attention/SKILL.md\`).
 
-**\`AskUserQuestion\` is NOT available in this Hub — it is denied on call.** If you ever invoke \`AskUserQuestion\` (or any built-in "ask the user" tool) and it is denied, you MUST re-issue the request as a request-type NHA via \`${bin} attention raise --requires-response\`. Do NOT fall back to asking the question as plain final-text or a \`chat send\`: a request-NHA is the only mechanism that targets a specific human, carries a response expectation, and resumes your turn when they reply. Convert each choice you would have offered into the NHA body (and \`metadata.options\` / \`metadata.questions\` when the human should click rather than type).
+**\`AskUserQuestion\` is NOT available in First Tree — it is denied on call.** If you ever invoke \`AskUserQuestion\` (or any built-in "ask the user" tool) and it is denied, you MUST re-issue the request as a request-type NHA via \`${bin} attention raise --requires-response\`. Do NOT fall back to asking the question as plain final-text or a \`chat send\`: a request-NHA is the only mechanism that targets a specific human, carries a response expectation, and resumes your turn when they reply. Convert each choice you would have offered into the NHA body (and \`metadata.options\` / \`metadata.questions\` when the human should click rather than type).
 
 ## Naming this Chat (Topic)
 
@@ -1085,7 +1085,7 @@ either an explicit \`Topic: <value>\` or the sentinel \`Topic: (unset ...)\`.
 
 Topics that look like \`PR repo#307: title\`, \`Issue repo#42\`, \`PR Review
 repo#X: ...\`, \`Discussion repo#X\`, or \`Commit repo@sha\` were auto-set
-by Hub when the chat was minted from a GitHub event, and Hub keeps them in
+by First Tree when the chat was minted from a GitHub event, and First Tree keeps them in
 sync with the upstream PR/issue title. Overriding them with your own label
 loses the repo / entity-id anchor that makes the chat list useful. **Do
 not run \`set-topic\` on a chat whose topic already has that shape.**

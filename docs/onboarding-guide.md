@@ -45,10 +45,10 @@ because an agent is permanently bound to exactly one client machine.
 
 ## What `first-tree login` writes
 
-- `~/.first-tree/hub/config/credentials.json` (mode `0600`) —
+- `~/.first-tree/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL derived from the
   token's `iss` claim.
-- `~/.first-tree/hub/config/client.yaml` — `client.id` (auto-generated
+- `~/.first-tree/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level
   service so the machine stays online across reboots. Pass `--no-start`
@@ -61,7 +61,7 @@ there are no per-agent bearer tokens.
 
 When an admin creates an agent with `--client-id <thisClientId>` (or
 binds an existing one via PATCH), the server pushes an `agent:pinned`
-frame and the running daemon writes `~/.first-tree/hub/config/agents/<name>/agent.yaml`
+frame and the running daemon writes `~/.first-tree/config/agents/<name>/agent.yaml`
 automatically. On reconnect, the server backfills any pins that landed
 while the client was offline.
 
@@ -108,15 +108,15 @@ retained as a read-only debug endpoint.
 
 | Variable | Purpose |
 |---|---|
-| `FIRST_TREE_HOME` | Override config/data home directory (default: `~/.first-tree/hub`) |
+| `FIRST_TREE_HOME` | Override config/data home directory (default: `~/.first-tree`) |
 | `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
 
 ## Using the SDK
 
 ```ts
-import { FirstTreeHubSDK } from "first-tree";
+import { FirstTreeHubSDK as FirstTreeSDK } from "first-tree";
 
-const sdk = new FirstTreeHubSDK({
+const sdk = new FirstTreeSDK({
   serverUrl: process.env.FIRST_TREE_SERVER_URL ?? "http://localhost:8000",
   getAccessToken: async () => process.env.FIRST_TREE_ACCESS_TOKEN ?? "",
 });

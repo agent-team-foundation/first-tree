@@ -83,7 +83,7 @@ const TOKEN_EXPIRY_BUFFER_MS = 2_000;
 /**
  * `NewConnectionDialog` props.
  *
- * Default UX is "pair a brand-new computer with this Hub". The optional
+ * Default UX is "pair a brand-new computer with First Tree". The optional
  * overrides re-purpose the dialog for the re-auth flow triggered from an
  * AuthExpired computer card — same mint + polling machinery, different
  * wording + a `targetClientId` constraint on the success-arrival detector
@@ -258,7 +258,7 @@ export function NewConnectionDialog({
           <DialogTitle>{titleOverride ?? "Connect computer"}</DialogTitle>
           <DialogDescription>
             {descriptionOverride ??
-              "Run this command on the machine you want to pair with this Hub. If first-tree isn't installed yet, the command includes the install step."}
+              "Run this command on the machine you want to pair with First Tree. If first-tree isn't installed yet, the command includes the install step."}
           </DialogDescription>
         </DialogHeader>
 

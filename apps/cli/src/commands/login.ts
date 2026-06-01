@@ -106,7 +106,7 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 export function registerLoginCommand(program: Command): void {
   program
     .command("login <token>")
-    .description("Sign this computer into the Hub using a token from the web console")
+    .description("Sign this computer into First Tree using a token from the web console")
     .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
     .option("--override", "Transfer ownership of this client from a different account (replaces `client claim`)")
     .action(async (token: string, options: { start?: boolean; override?: boolean }) => {
@@ -139,7 +139,7 @@ export function registerLoginCommand(program: Command): void {
 
         const clientConfigPath = join(defaultConfigDir(), "client.yaml");
         setConfigValue(clientConfigPath, "server.url", url);
-        print.line(`\n  ✓ Hub: ${url}\n`);
+        print.line(`\n  ✓ Server: ${url}\n`);
 
         saveCredentials({ ...tokens, serverUrl: url });
         print.line("  ✓ Authenticated\n");

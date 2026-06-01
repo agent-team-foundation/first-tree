@@ -1,6 +1,6 @@
 # First Tree CLI
 
-First Tree is the unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and Hub messaging.
+First Tree is the unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and team messaging.
 
 Install the CLI globally:
 

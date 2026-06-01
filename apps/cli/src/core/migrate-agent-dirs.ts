@@ -7,7 +7,7 @@ import { print } from "./output.js";
 /**
  * Phase 3 of the agent-naming refactor (first-tree-context:agent-hub/agent-naming.md §3.4 + §4):
  * reconcile every local agent directory name with the server-authoritative
- * `agent.name` slug. The free-form local alias concept is gone — the Hub is
+ * `agent.name` slug. The free-form local alias concept is gone — the server is
  * the only namespace authority — so on every client startup we walk the
  * local configs, ask the server what each agentId's canonical name is, and
  * rename the config/workspace/sessions state when they drift.

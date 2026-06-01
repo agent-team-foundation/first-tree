@@ -9,7 +9,7 @@ export function registerAgentSessionListCommand(sessionCmd: Command): void {
   sessionCmd
     .command("list <agent-name>")
     .description("List sessions for an agent")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .option("--state <state>", "Filter by session state (active/suspended/evicted)")
     .action(async (agentName: string, options: { server?: string; state?: string }) => {
       try {

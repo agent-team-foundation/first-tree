@@ -14,9 +14,9 @@ export function registerAgentListCommand(agent: Command): void {
     // design — decouple-client-from-identity §4.5.1 case (b)). --org filters
     // the same response client-side; the server endpoint is unfiltered so
     // the cache works across views without an extra round-trip.
-    .option("--remote", "List every agent you manage on the Hub server (cross-org)")
+    .option("--remote", "List every agent you manage on the First Tree server (cross-org)")
     .option("--org <id>", "When listing remote, restrict to a single organization id")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (options: { remote?: boolean; org?: string; server?: string }) => {
       const wantRemote = options.remote === true || typeof options.org === "string";
       if (!wantRemote) {
@@ -30,7 +30,7 @@ export function registerAgentListCommand(agent: Command): void {
           for (const [name, config] of agents) {
             // Label the UUID column as `uuid` — NOT `agentId` — to discourage
             // agents from copy-pasting the uuid into `chat send <target>`,
-            // which expects the agent name. See the Agent Hub SDK section of
+            // which expects the agent name. See the First Tree agent runtime section of
             // the bootstrap-generated CLAUDE.md.
             print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} uuid: ${config.agentId}\n`);
           }

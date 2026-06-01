@@ -13,7 +13,7 @@ export function registerAttentionCancelCommand(parent: Command): void {
     .command("cancel <id>")
     .description("Cancel an open attention you raised")
     .option("--reason <text>", "Optional cancellation reason recorded on the closed record (max 500 chars)")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (id: string, options: CancelOptions) => {
       try {
         const sdk = createSdk(options.agent);

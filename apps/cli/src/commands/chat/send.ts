@@ -19,7 +19,7 @@ export function registerChatSendCommand(chat: Command): void {
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (agentName: string, message: string | undefined, options: SendOptions) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
@@ -27,7 +27,7 @@ export function registerChatSendCommand(chat: Command): void {
           fail(
             "NO_CHAT_CONTEXT",
             "`chat send` must be run from within an agent session that exports FIRST_TREE_CHAT_ID. " +
-              "Hub keeps a single group-chat model — there is no implicit direct chat to fall back to. " +
+              "First Tree keeps a single group-chat model — there is no implicit direct chat to fall back to. " +
               "To send from a shell, open the chat in the web UI instead.",
             2,
           );

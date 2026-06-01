@@ -2,16 +2,16 @@
 
 Use this file when an external agent receives an onboarding task such as:
 
-> "Install First Tree CLI, read the onboarding guide with `gh`, and add a member. Server URL is `https://hub.example.com`."
+> "Install First Tree CLI, read the onboarding guide with `gh`, and add a member. Server URL is `https://first-tree.example.com`."
 
 The single-shot `onboard` command was retired in Phase 1A of the
 repo-merge refactor. Onboarding is now a sequence of explicit verbs:
 `login` to bind the machine, `agent create` to register the agent on the
-Hub, then `daemon start` to bring the agent online.
+First Tree, then `daemon start` to bring the agent online.
 
 ## Core Rules
 
-- Each verb in the sequence depends on a valid credential file. If this machine is not yet signed in, run `first-tree login <token>` first (paste the connect token from the Hub web console's *Computers → New Connection* dialog).
+- Each verb in the sequence depends on a valid credential file. If this machine is not yet signed in, run `first-tree login <token>` first (paste the connect token from the First Tree web console's *Computers → New Connection* dialog).
 - Ensure `gh` is installed and authenticated (`gh auth login`) — required for GitHub-identity agent creation.
 - Always run `first-tree status` after each verb to verify state before proceeding.
 
@@ -32,7 +32,7 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
      --jq .content | base64 --decode
    ```
 
-4. Sign this machine into the Hub:
+4. Sign this machine into First Tree:
 
    ```bash
    first-tree login <connect-token>
@@ -40,7 +40,7 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
    first-tree login <connect-token> --no-start
    ```
 
-5. Create the agent record on the Hub and bind it to this client:
+5. Create the agent record in First Tree and bind it to this client:
 
    ```bash
    first-tree agent create <name> \
@@ -68,7 +68,7 @@ Interpret it as:
 
 - Install (or `npx`-invoke) the published CLI.
 - Fetch the onboarding guide with `gh` rather than relying on a browser.
-- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree login <token>` first (paste a connect token from the Hub web console's *Computers → New Connection* dialog — its `iss` claim carries the hub URL).
+- If this machine has no `~/.first-tree/config/credentials.json`, run `first-tree login <token>` first (paste a connect token from the First Tree web console's *Computers → New Connection* dialog — its `iss` claim carries the server URL).
 - Thread `https://first-tree.staging.unispark.dev/` through `--server` in every command.
 - Use the supported `agent create` + `daemon start` sequence instead of hand-rolling Admin API calls.
 

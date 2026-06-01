@@ -40,7 +40,7 @@ export type UpdateState = {
 /**
  * Override-able location of the state file. Production code uses the
  * default; tests pass a temp path so they don't stomp on the real
- * `~/.first-tree/hub/state/update-state.json`.
+ * `<FIRST_TREE_HOME>/state/update-state.json`.
  */
 export function defaultUpdateStatePath(): string {
   return join(defaultHome(), "state", "update-state.json");

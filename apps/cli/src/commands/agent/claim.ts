@@ -9,7 +9,7 @@ export function registerAgentClaimCommand(agent: Command): void {
   agent
     .command("claim <agentName>")
     .description("Become the manager of an agent (admin-only, or self-claim an unmanaged agent)")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (agentName: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);

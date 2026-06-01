@@ -41,18 +41,18 @@ export function renderServiceBlock(): void {
 export function renderHubBlock(): void {
   const clientYaml = join(defaultConfigDir(), "client.yaml");
   if (!existsSync(clientYaml)) {
-    print.line("  Hub:      (not configured — run `first-tree login <token>`)\n");
+    print.line("  Server:   (not configured — run `first-tree login <token>`)\n");
     return;
   }
   try {
     const cfg = readConfigFile(clientYaml);
     const serverUrl = getNested(cfg, "server.url");
     const clientId = getNested(cfg, "client.id");
-    print.line(`  Hub:      ${serverUrl ?? "(not configured)"}\n`);
+    print.line(`  Server:   ${serverUrl ?? "(not configured)"}\n`);
     print.line(`  Client:   ${clientId ?? "(not configured)"}\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    print.line(`  Hub:      (could not read ${clientYaml}: ${msg.slice(0, 60)})\n`);
+    print.line(`  Server:   (could not read ${clientYaml}: ${msg.slice(0, 60)})\n`);
   }
 }
 
@@ -75,7 +75,7 @@ export function renderAuthBlock(): void {
   const remainingSec = exp - Math.floor(Date.now() / 1000);
   if (remainingSec <= 0) {
     print.line("  Auth:     ✗ refresh token EXPIRED — re-run `first-tree login <token>`\n");
-    print.line("              (get a fresh token from your Hub's Web admin → Computers → New Connection)\n");
+    print.line("              (get a fresh token from the First Tree web console → Computers → New Connection)\n");
   } else if (remainingSec < 2 * 86400) {
     const hours = Math.floor(remainingSec / 3600);
     print.line(`  Auth:     ⚠ refresh token expires in ~${hours}h — re-login soon to stay online\n`);

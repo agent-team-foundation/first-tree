@@ -9,17 +9,17 @@ import { print } from "../../core/output.js";
 export function registerAgentAddCommand(agent: Command): void {
   agent
     .command("add")
-    .description("Register an existing Hub agent on this client (uses the agent name from the Hub)")
-    .option("--agent-id <id>", "Agent UUID on the Hub")
+    .description("Register an existing First Tree agent on this client (uses the agent name from the server)")
+    .option("--agent-id <id>", "Agent UUID on the First Tree server")
     .action(async (options?: { agentId?: string }) => {
       try {
         // Phase 3 of the agent-naming refactor retired the free-form local
         // alias — the local config dir is always keyed by the server-side
-        // `agent.name`. The prompt helper fetches that name from the Hub
+        // `agent.name`. The prompt helper fetches that name from the server
         // given the agent UUID.
         const { name: agentName, agentId } = await promptAddAgent({ agentId: options?.agentId });
         if (!agentName || !agentId) {
-          fail("MISSING_AGENT_ARGS", "Agent UUID (and a hub name for that UUID) are required.", 2);
+          fail("MISSING_AGENT_ARGS", "Agent UUID (and a server-side name for that UUID) are required.", 2);
         }
 
         const agentDir = join(defaultConfigDir(), "agents", agentName);

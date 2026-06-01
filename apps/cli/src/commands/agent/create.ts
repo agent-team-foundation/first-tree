@@ -7,7 +7,7 @@ import { print } from "../../core/output.js";
 export function registerAgentCreateCommand(agent: Command): void {
   agent
     .command("create <name>")
-    .description("Create an agent on Hub and bind it locally")
+    .description("Create an agent in First Tree and bind it locally")
     .requiredOption("--type <type>", "Agent type (human, agent)")
     .requiredOption(
       "--client-id <id>",
@@ -20,7 +20,7 @@ export function registerAgentCreateCommand(agent: Command): void {
     )
     .option("--display-name <name>", "Display name")
     .option("--org <id>", "Target organization id (required when you belong to multiple orgs)")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(
       async (
         name: string,
