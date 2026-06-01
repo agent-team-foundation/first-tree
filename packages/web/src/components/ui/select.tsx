@@ -224,7 +224,12 @@ export function Select({
         case "Home":
           e.preventDefault();
           // Math.max guards the all-disabled case (findIndex → -1).
-          setActiveIndex(Math.max(0, visible.findIndex((o) => !o.disabled)));
+          setActiveIndex(
+            Math.max(
+              0,
+              visible.findIndex((o) => !o.disabled),
+            ),
+          );
           break;
         case "End":
           e.preventDefault();
@@ -349,7 +354,7 @@ export function Select({
                 const isActive = i === activeIndex;
                 return (
                   <button
-                    key={`${i}-${o.value}`}
+                    key={o.value || "__unset"}
                     id={optionId(i)}
                     type="button"
                     role="option"
