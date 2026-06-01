@@ -79,17 +79,24 @@ export type ClaudeCodeTuiProbeDeps = {
  *
  * Unlike `claude-code` (which can fall back to the SDK's bundled native binary),
  * the TUI runtime spawns the real `claude` CLI inside a tmux pane — so it needs
- * BOTH a resolvable `claude` executable (env override or PATH; the SDK bundle's
- * `source: "default"` does not count) AND tmux >= 3.0. Auth is the same Claude
- * login the SDK path uses, so it reuses the shared detector.
+ * BOTH a resolvable AND runnable `claude` executable (env override or PATH; the
+ * SDK bundle's `source: "default"` does not count) AND tmux >= 3.0. Auth is the
+ * same Claude login the SDK path uses, so it reuses the shared detector.
+ *
+ * "Runnable" matters: `resolveClaudeCodeExecutable` only does `existsSync`, so a
+ * present-but-broken binary (non-executable, wrong arch, or a
+ * `CLAUDE_CODE_EXECUTABLE` pointing at a dud) still resolves. We require a
+ * successful `claude --version` — if it cannot be executed the runtime would
+ * fail to spawn at session time, so we report `missing` here rather than let the
+ * server gate bind a machine that cannot actually run the CLI.
  *
  * `sdkVersion` carries the `claude` CLI version (the runtime engine), matching
  * how `claude-code` reports the SDK version — the web surface renders it as the
  * runtime version. tmux is infrastructure, so its version only surfaces in the
  * failure `error` reason when it is missing or too old.
  *
- * State precedence: missing (no claude / no tmux / tmux too old) > unauthenticated
- * (runtime present, not logged in) > ok.
+ * State precedence: missing (claude absent/not runnable / no tmux / tmux too old)
+ * > unauthenticated (runtime present, not logged in) > ok.
  */
 export async function probeClaudeCodeTuiCapability(deps: ClaudeCodeTuiProbeDeps = {}): Promise<CapabilityEntry> {
   const detectedAt = new Date().toISOString();
@@ -103,34 +110,40 @@ export async function probeClaudeCodeTuiCapability(deps: ClaudeCodeTuiProbeDeps 
     // `source: "default"` means no real binary was found — the SDK bundle is
     // not usable by the tmux runtime, so treat it as missing.
     const claudeBinary = resolution.source === "default" ? undefined : resolution.path;
+    // existsSync is not enough — confirm the binary actually runs. A null here
+    // (absent / non-executable / non-zero `--version`) means the CLI cannot be
+    // spawned, so it fails the gate rather than reporting a false-positive `ok`.
+    const claudeVersion = claudeBinary ? probeClaudeVersion(claudeBinary) : null;
+    const claudeRunnable = claudeBinary !== undefined && claudeVersion !== null;
 
     const tmux = probeTmux();
     const tmuxOk = tmux !== null && tmuxMeetsMinimum(tmux);
 
-    if (!claudeBinary || !tmuxOk) {
+    if (!claudeRunnable || !tmuxOk) {
       const reasons: string[] = [];
       if (!claudeBinary) reasons.push("`claude` not found on PATH (and CLAUDE_CODE_EXECUTABLE unset)");
+      else if (claudeVersion === null)
+        reasons.push(`\`claude\` at ${claudeBinary} could not be executed (\`claude --version\` failed)`);
       if (tmux === null) reasons.push("tmux not found");
       else if (!tmuxOk) reasons.push(`tmux ${tmux.raw} is older than ${MIN_TMUX_MAJOR}.${MIN_TMUX_MINOR}`);
       return {
         state: "missing",
         available: false,
         authenticated: false,
-        sdkVersion: claudeBinary ? probeClaudeVersion(claudeBinary) : null,
+        sdkVersion: claudeVersion,
         authMethod: "none",
         error: reasons.join("; "),
         detectedAt,
       };
     }
 
-    const sdkVersion = probeClaudeVersion(claudeBinary);
     const auth = detectAuth();
     if (!auth.authenticated) {
       return {
         state: "unauthenticated",
         available: true,
         authenticated: false,
-        sdkVersion,
+        sdkVersion: claudeVersion,
         authMethod: "none",
         detectedAt,
       };
@@ -140,7 +153,7 @@ export async function probeClaudeCodeTuiCapability(deps: ClaudeCodeTuiProbeDeps 
       state: "ok",
       available: true,
       authenticated: true,
-      sdkVersion,
+      sdkVersion: claudeVersion,
       authMethod: auth.method,
       detectedAt,
     };

@@ -351,6 +351,22 @@ describe("probeClaudeCodeTuiCapability", () => {
     expect(entry.error).toContain("`claude` not found");
   });
 
+  it("`missing` when claude resolves but cannot be executed (`claude --version` fails)", async () => {
+    // existsSync passed (resolveExecutable found a path) but the binary is
+    // broken / non-executable, so probeClaudeVersion returns null. Must NOT
+    // report `ok` — the runtime could not actually spawn the CLI.
+    const entry = await probeClaudeCodeTuiCapability({
+      resolveExecutable: onPath,
+      probeTmux: tmux34,
+      probeClaudeVersion: () => null,
+      detectAuth: authed,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toContain("could not be executed");
+    expect(entry.sdkVersion).toBeNull();
+  });
+
   it("`missing` when tmux is absent", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: onPath,
