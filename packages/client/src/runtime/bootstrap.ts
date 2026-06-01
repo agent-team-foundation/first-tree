@@ -960,7 +960,7 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
   return sections.join("\n\n");
 }
 
-function generateToolsDoc(): string {
+export function generateToolsDoc(): string {
   // CLI binary name resolved at runtime from the channel-aware binding the
   // CLI entrypoint installs via `setCliBinding`. Prod = "first-tree", staging
   // = "first-tree-staging", dev = "first-tree-dev". Baking the channel-correct

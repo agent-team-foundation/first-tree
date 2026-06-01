@@ -1,8 +1,11 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { buildCodexAgentBriefing } from "../handlers/codex.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
+import type { ChatContext } from "../runtime/chat-context.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 
 // `bootstrapWorkspace` internally writes `.agent/tools.md`, which reads the
@@ -13,6 +16,21 @@ import { setCliBinding } from "../runtime/cli-binding.js";
 beforeAll(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
+
+function codexPayload(
+  overrides: Partial<Extract<AgentRuntimeConfigPayload, { kind: "codex" }>> = {},
+): AgentRuntimeConfigPayload {
+  return {
+    kind: "codex",
+    prompt: { append: "" },
+    model: "",
+    mcpServers: [],
+    env: [],
+    gitRepos: [],
+    reasoningEffort: "high",
+    ...overrides,
+  };
+}
 
 describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
   let workspacePath: string;
@@ -85,5 +103,34 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     });
 
     expect(existsSync(join(workspacePath, "AGENTS.md"))).toBe(false);
+  });
+
+  it("inlines First Tree tools and messaging rules into the Codex AGENTS.md briefing", () => {
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    const chatContext: ChatContext = {
+      chatId: "chat-1",
+      title: "Codex routing",
+      topic: "Codex routing",
+      participants: [
+        { name: "baixiaohang", displayName: "Bai Xiaohang", type: "human" },
+        { name: "codex-developer", displayName: "Codex Developer", type: "agent" },
+      ],
+    };
+
+    const briefing = buildCodexAgentBriefing(
+      codexPayload({ prompt: { append: "Follow the local implementation plan." } }),
+      chatContext,
+      "/workspaces/codex-developer",
+      [],
+    );
+
+    expect(briefing).toContain("Follow the local implementation plan.");
+    expect(briefing).toContain("## Current Chat Context");
+    expect(briefing).toContain("# First Tree Agent Runtime");
+    expect(briefing).toContain("## Communication Rules");
+    expect(briefing).toContain("first-tree-staging chat invite");
+    expect(briefing).toContain("first-tree-staging chat send");
+    expect(briefing).toContain("does NOT wake other agents");
+    expect(briefing).not.toContain("`.agent/tools.md` for the");
   });
 });
