@@ -76,6 +76,11 @@ export class SessionRegistry {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
+    // flush(entries) is authoritative — `entries` is the freshest known
+    // state. Any older debounced snapshot in pendingEntries is now stale,
+    // so drop it; otherwise dispose()'s pending fallback would later
+    // rewrite the stale snapshot on top of what we just persisted.
+    this.pendingEntries = null;
 
     const data: RegistryData = {
       version: REGISTRY_VERSION,
@@ -104,8 +109,15 @@ export class SessionRegistry {
     }
   }
 
-  /** Clean up timers. */
+  /** Flush any pending debounced write, then clean up timers. */
   dispose(): void {
+    if (this.pendingEntries) {
+      // flush() clears writeTimer internally — persist the last debounced
+      // mapping instead of dropping it when torn down inside the 1s window.
+      this.flush(this.pendingEntries);
+      this.pendingEntries = null;
+      return;
+    }
     if (this.writeTimer) {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;

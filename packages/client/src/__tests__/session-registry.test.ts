@@ -138,7 +138,7 @@ describe("SessionRegistry", () => {
     registry.dispose();
   });
 
-  it("dispose cancels a pending debounced save", () => {
+  it("dispose flushes a pending debounced save", () => {
     vi.useFakeTimers();
     const registry = new SessionRegistry(filePath);
     const entries = makeEntries({
@@ -147,9 +147,44 @@ describe("SessionRegistry", () => {
 
     registry.save(entries);
     registry.dispose();
+    // flush() already cancelled the timer — nothing more should fire.
+    vi.advanceTimersByTime(1000);
+
+    expect(existsSync(filePath)).toBe(true);
+    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-x");
+  });
+
+  it("dispose without a pending save writes nothing", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+
+    registry.dispose();
     vi.advanceTimersByTime(1000);
 
     expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("dispose does not roll back a fresher flush — save(old) -> flush(new) -> dispose() leaves new on disk", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+    const oldEntries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-old", lastActivity: 1700000000000, status: "active" },
+    });
+    const newEntries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-new", lastActivity: 1700000999999, status: "active" },
+    });
+
+    // Mimic the SessionManager shutdown path: a debounced save was queued
+    // earlier, then shutdown calls flush({ immediate: true }) with the final
+    // state, then dispose() tears the timer down.
+    registry.save(oldEntries);
+    registry.flush(newEntries);
+    registry.dispose();
+    vi.advanceTimersByTime(1000);
+
+    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-new");
   });
 
   it("logs persistence failures without throwing", () => {

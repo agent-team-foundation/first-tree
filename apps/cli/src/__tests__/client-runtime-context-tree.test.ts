@@ -116,6 +116,13 @@ vi.mock("../core/version.js", () => ({
   CLI_USER_AGENT: "first-tree-test/0.0.0",
 }));
 
+// Keep real fs behaviour but wrap `watch` so a single test can swap in a fake
+// FSWatcher and drive its runtime 'error' event deterministically.
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return { ...actual, default: actual, watch: vi.fn(actual.watch) };
+});
+
 describe("ClientRuntime context-tree wiring", () => {
   const originalHome = process.env.FIRST_TREE_HOME;
   let home: string;
@@ -437,4 +444,33 @@ describe("ClientRuntime context-tree wiring", () => {
     },
     RUNTIME_TEST_TIMEOUT_MS,
   );
+
+  it("tears down the agents-dir watcher when it emits a runtime error", async () => {
+    const fs = await import("node:fs");
+    const { print } = await import("../core/output.js");
+    type Listener = (...args: unknown[]) => void;
+    const errorListeners: Listener[] = [];
+    const close = vi.fn();
+    const fakeWatcher = {
+      on(event: string, listener: Listener) {
+        if (event === "error") errorListeners.push(listener);
+        return this;
+      },
+      close,
+    };
+    vi.mocked(fs.watch).mockReturnValueOnce(fakeWatcher as unknown as ReturnType<typeof fs.watch>);
+
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    rt.watchAgentsDir(agentsDir);
+
+    expect(errorListeners).toHaveLength(1);
+    errorListeners[0]?.(new Error("inotify exhausted"));
+
+    expect(print.status).toHaveBeenCalledWith("⚠️", expect.stringContaining("inotify exhausted"));
+    expect(close).toHaveBeenCalled();
+    await rt.stop();
+  });
 });
