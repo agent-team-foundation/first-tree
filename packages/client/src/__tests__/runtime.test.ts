@@ -74,6 +74,28 @@ function makeRuntimeConfig(): RuntimeConfig {
   };
 }
 
+function makeRuntimeConfigWithAgentCount(count: number): RuntimeConfig {
+  const agents: RuntimeConfig["agents"] = {};
+  for (let i = 0; i < count; i++) {
+    const name = `agent-${i}`;
+    agents[name] = {
+      agentId: `agent-id-${i}`,
+      type: "claude-code",
+      session: {
+        idle_timeout: 300,
+        max_sessions: 10,
+        working_grace_seconds: 3600,
+        reconcile_interval_seconds: 300,
+      },
+      concurrency: 2,
+    };
+  }
+  return {
+    server: "http://first-tree.test",
+    agents,
+  };
+}
+
 function makeUpdateHooks(): UpdateHooks {
   return {
     updateConfig: {
@@ -239,6 +261,18 @@ describe("AgentRuntime", () => {
     });
     expect(state.slots.map((slot) => `${slot.name}:${slot.agentId}`)).toEqual(["alpha:agent-alpha", "beta:agent-beta"]);
     expect(state.logger.error).toHaveBeenCalledWith({ err: new Error("socket failed") }, "client connection error");
+  });
+
+  it("raises the shared connection listener limit for multi-agent runtimes", async () => {
+    const state = installRuntimeMocks();
+    const { AgentRuntime } = await import("../runtime/runtime.js");
+
+    new AgentRuntime({
+      config: makeRuntimeConfigWithAgentCount(12),
+      getAccessToken: async () => "token",
+    });
+
+    expect(state.connections[0]?.getMaxListeners()).toBe(12);
   });
 
   it("starts, attaches updates, reports partial slot failures, and shuts down on SIGINT", async () => {

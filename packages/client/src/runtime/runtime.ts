@@ -113,6 +113,15 @@ export class AgentRuntime {
         }),
       );
     }
+    this.refreshConnectionListenerLimit();
+  }
+
+  private refreshConnectionListenerLimit(): void {
+    const requiredListenersPerEvent = this.slots.length;
+    const currentLimit = this.clientConnection.getMaxListeners();
+    if (currentLimit !== 0 && currentLimit < requiredListenersPerEvent) {
+      this.clientConnection.setMaxListeners(requiredListenersPerEvent);
+    }
   }
 
   private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
