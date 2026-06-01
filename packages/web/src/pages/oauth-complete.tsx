@@ -16,7 +16,7 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
  */
 export function OAuthCompletePage() {
   const navigate = useNavigate();
-  const { adoptTokens } = useAuth();
+  const { adoptTokens, selectOrganization } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,6 +26,11 @@ export function OAuthCompletePage() {
     const refreshToken = params.get("refresh");
     const next = safeRedirectPath(params.get("next"));
     const joinPath = params.get("joinPath");
+    // The org this callback resolved to (invited org for an invite link).
+    // Selecting it overrides any stale `selectedOrganizationId` left in
+    // localStorage so an invitee lands in the org they just joined, not a
+    // previously-used one.
+    const org = params.get("org");
 
     if (!accessToken || !refreshToken) {
       setError("Sign-in did not complete. Please try again.");
@@ -45,9 +50,12 @@ export function OAuthCompletePage() {
 
     void (async () => {
       await adoptTokens({ accessToken, refreshToken });
+      // Set the active org BEFORE navigating so the workspace/onboarding
+      // gate evaluates against the just-joined org rather than a stale one.
+      if (org) await selectOrganization(org);
       navigate(next, { replace: true });
     })();
-  }, [adoptTokens, navigate]);
+  }, [adoptTokens, selectOrganization, navigate]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background text-body text-muted-foreground">
