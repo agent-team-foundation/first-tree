@@ -147,6 +147,56 @@ describe("conversation-list source tags", () => {
     expect(issueRow?.entityType).toBe("issue");
   });
 
+  it("projects createdByMe from the caller's chat membership role", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createAgent(app.db, {
+      name: `owner-peer-${crypto.randomUUID().slice(0, 8)}`,
+      type: "human",
+      displayName: "Owner Peer",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+    });
+
+    const ownedByMe = uuidv7();
+    const ownedByPeer = uuidv7();
+    await app.db.transaction(async (tx) => {
+      await tx.insert(chats).values([
+        {
+          id: ownedByMe,
+          organizationId: admin.organizationId,
+          type: "direct",
+          topic: "owned by me",
+          metadata: {},
+        },
+        {
+          id: ownedByPeer,
+          organizationId: admin.organizationId,
+          type: "direct",
+          topic: "owned by peer",
+          metadata: {},
+        },
+      ]);
+      await addChatParticipants(tx, ownedByMe, [
+        { agentId: admin.humanAgentUuid, role: "owner" },
+        { agentId: peer.uuid, role: "member" },
+      ]);
+      await addChatParticipants(tx, ownedByPeer, [
+        { agentId: peer.uuid, role: "owner" },
+        { agentId: admin.humanAgentUuid, role: "member" },
+      ]);
+    });
+
+    const rows = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "active",
+    });
+    const byId = new Map(rows.rows.map((r) => [r.chatId, r.createdByMe]));
+    expect(byId.get(ownedByMe)).toBe(true);
+    expect(byId.get(ownedByPeer)).toBe(false);
+  });
+
   it("listMeChatSourceCounts: chatCount + unreadChatCount, manual always present", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

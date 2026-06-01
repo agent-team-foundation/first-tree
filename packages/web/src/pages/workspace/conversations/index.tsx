@@ -38,10 +38,8 @@ const ENGAGEMENT_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: stri
 ];
 
 const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
-  { value: "recency", label: "Recency" },
   { value: "source", label: "Source" },
-  { value: "type", label: "Type" },
-  { value: "none", label: "None" },
+  { value: "recency", label: "Recency" },
 ];
 
 function formatRowTime(iso: string | null): string {

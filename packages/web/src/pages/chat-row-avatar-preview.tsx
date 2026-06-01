@@ -24,6 +24,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     chatId: overrides.chatId ?? "preview",
     type: overrides.type ?? "direct",
     membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
     source: overrides.source ?? "manual",
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? "preview",
