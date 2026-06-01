@@ -52,6 +52,7 @@ vi.mock("../runtime/bootstrap.js", () => ({
   bootstrapWorkspace: vi.fn(),
   buildChatSystemPrompt: vi.fn(() => ""),
   deepEqualIdentity: vi.fn(() => true),
+  generateToolsDoc: vi.fn(() => ""),
   installCoreSkills: vi.fn(),
   installFirstTreeIntegration: vi.fn(() => true),
   isHubWorktreeMarker: vi.fn(() => false),
