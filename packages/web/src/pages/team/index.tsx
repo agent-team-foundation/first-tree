@@ -517,11 +517,14 @@ export function buildTeamData(args: {
 }
 
 export function selectDelegateCandidates(agents: Agent[], managerId: string | null | undefined): Agent[] {
-  // Personal assistants the viewer manages: type=agent + private + active +
-  // managed by the viewer. The managerId filter is the issue 669 candidate fix —
-  // the selector only lists the user's own agents, not the whole org's.
+  // Delegate candidates are the viewer's own team-visible assistants:
+  // type=agent + organization-visible + active + managed by the viewer.
+  // Private agents are excluded — a delegate acts on the human's behalf in
+  // team chats, so it must be mentionable by the team (visibility=organization).
+  // The managerId filter is the issue 669 candidate fix — the selector only
+  // lists the user's own agents, not the whole org's.
   return agents.filter(
-    (a) => a.type === "agent" && a.visibility === "private" && a.status === "active" && a.managerId === managerId,
+    (a) => a.type === "agent" && a.visibility === "organization" && a.status === "active" && a.managerId === managerId,
   );
 }
 
