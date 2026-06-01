@@ -500,11 +500,18 @@ async function completeOauthFlow(
 
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
 
-  const fragment = new URLSearchParams({
+  // Carry the org this callback resolved to (the invited org for an invite
+  // link, otherwise the user's primary/personal org) so the web can make it
+  // the active selection. Without this the client keeps whatever stale org
+  // sits in `localStorage.selectedOrganizationId`, dropping an invitee into
+  // their *previous* org instead of the one they just joined.
+  const fragmentParams: Record<string, string> = {
     access: tokens.accessToken,
     refresh: tokens.refreshToken,
     next,
     joinPath,
-  }).toString();
+  };
+  if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
+  const fragment = new URLSearchParams(fragmentParams).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }

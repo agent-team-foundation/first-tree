@@ -16,7 +16,7 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
-import { listAgentsManagedByUser } from "../services/access-control.js";
+import { listAgentsManagedByUser, listOrgsWithUsableNonHumanAgent } from "../services/access-control.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
@@ -79,6 +79,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       memberships.map((mb) => mb.organizationId),
     );
 
+    // Org-scoped onboarding readiness: which of the caller's orgs already
+    // hold a non-human agent THIS member can use (own or org-visible). The
+    // web onboarding gate keys the create-agent step off this per-org bit
+    // rather than the account-level `onboardingCompletedAt`, so a returning
+    // user who joins a brand-new / all-private org is still walked through
+    // creating an agent there. One query for the whole list — no N+1.
+    const orgsWithUsableAgent = await listOrgsWithUsableNonHumanAgent(
+      app.db,
+      memberships.map((mb) => ({ memberId: mb.memberId, organizationId: mb.organizationId })),
+    );
+
     // Surface invite URL only for users who admin at least one org. The
     // web client picks the relevant org from `selectedOrganizationId`
     // first; this is purely a convenience fallback for the default org.
@@ -103,6 +114,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         role: mb.role,
         agentId: mb.agentId,
         orgHasOtherMembers: (memberCounts.get(mb.organizationId) ?? 1) > 1,
+        hasUsableAgent: orgsWithUsableAgent.has(mb.organizationId),
       })),
       onboarding: {
         step: onboardingStep,

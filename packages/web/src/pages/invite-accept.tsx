@@ -1,4 +1,4 @@
-import type { InvitationPreview, OrgBrief } from "@first-tree/shared";
+import type { InvitationPreview } from "@first-tree/shared";
 import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -28,11 +28,14 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
 export function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated, adoptTokens } = useAuth();
+  const { isAuthenticated, adoptTokens, selectOrganization, teamDisplayName } = useAuth();
   const [preview, setPreview] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [currentTeamName, setCurrentTeamName] = useState<string | null>(null);
+  // Current team name for the "you'll switch from X to Y" warning. Comes
+  // straight from the auth context's selected membership — no extra fetch.
+  // (`null` for unauthenticated visitors, which hides the warning.)
+  const currentTeamName = teamDisplayName;
 
   useEffect(() => {
     if (!token) return;
@@ -49,24 +52,6 @@ export function InviteAcceptPage() {
       }
     })();
   }, [token]);
-
-  // For the switch warning we need the current team's displayName, not just
-  // the orgId from the JWT. Fetched lazily — no-op for unauthenticated visitors.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    void (async () => {
-      try {
-        const orgs = await api.get<OrgBrief[]>("/me/organizations");
-        // The /me JWT carries `organizationId`; resolve via the listing so we
-        // get the human-readable display name.
-        const me = await api.get<{ member: { organizationId: string } }>("/me");
-        const current = orgs.find((o) => o.id === me.member.organizationId);
-        setCurrentTeamName(current?.displayName ?? null);
-      } catch {
-        // best-effort — switch warning just stays hidden
-      }
-    })();
-  }, [isAuthenticated]);
 
   if (!token)
     return (
@@ -97,6 +82,10 @@ export function InviteAcceptPage() {
         tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations/join", { token });
       await adoptTokens(res.tokens);
+      // Make the just-joined org the active selection, overriding any stale
+      // org left in localStorage — otherwise the user lands back in their
+      // previous team instead of the one they accepted the invite for.
+      await selectOrganization(res.organizationId);
       markOnboardingResume("invite");
       navigate("/", { replace: true });
     } catch (err) {

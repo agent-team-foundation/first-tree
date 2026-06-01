@@ -97,7 +97,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt } = useAuth();
+  const { meLoaded, onboardingStep, onboardingDismissedAt, currentOrgHasUsableAgent } = useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -243,7 +243,14 @@ export function WorkspacePage() {
   // flow — including the server-`completed`-but-no-kickoff case. Only
   // terminally completed or dismissed users fall through to the normal
   // workspace; the old inline center-panel onboarding has been retired.
-  if (shouldEnterOnboarding({ meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt })) {
+  if (
+    shouldEnterOnboarding({
+      meLoaded,
+      onboardingStep,
+      onboardingDismissedAt,
+      currentOrgReady: currentOrgHasUsableAgent,
+    })
+  ) {
     return <Navigate to="/onboarding" replace />;
   }
 

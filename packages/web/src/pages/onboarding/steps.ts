@@ -112,51 +112,68 @@ export function stepVisualState(index: number, activeIndex: number): StepVisualS
 export type OnboardingGateFacts = {
   /** `false` until `/me` has resolved at least once. */
   meLoaded: boolean;
+  /**
+   * Account-level server step from `/me`. Only its `connect` / `null` value
+   * is consulted here — it tells us whether the user has connected a runtime
+   * client yet (a once-per-account step). The `create_agent` / `completed`
+   * distinction is org-specific and comes from `currentOrgReady` instead.
+   */
   onboardingStep: ServerOnboardingStep;
+  /**
+   * Whether the *currently selected* org has a non-human agent this member
+   * can use (own or org-visible) — `auth.currentOrgHasUsableAgent`. Replaces
+   * the old account-level `onboardingCompletedAt` short-circuit so a
+   * returning user joining a brand-new / all-private org is still routed
+   * through create-agent for that org.
+   */
+  currentOrgReady: boolean;
   onboardingDismissedAt: string | null;
-  onboardingCompletedAt: string | null;
 };
 
 /**
  * Should the workspace root (`/`) bounce an authenticated user into the
  * standalone onboarding flow?
  *
- * Yes whenever the user has *started but not finished* setup — server step
- * `connect`, `create_agent`, or `completed` (computer + agent exist but the
- * Context Tree kickoff hasn't run) — and they haven't terminally completed
- * or hidden onboarding. The standalone flow resumes at the right step. The
- * `completed` case is now redirected (it previously fell through to an inline
- * workspace onboarding, which has been retired).
+ * Two independent gates, in order:
+ *   1. Account-level — the user hasn't connected a runtime client yet
+ *      (server step `connect` / null). Connecting a computer is a
+ *      once-per-account step, so this is judged user-wide.
+ *   2. Org-level — they're connected, but the *selected* org has no agent
+ *      they can use (`!currentOrgReady`). This is what makes a returning,
+ *      already-onboarded user still get walked through create-agent when
+ *      they join a brand-new or all-private org.
  *
- * The `completed_at` guard is what protects genuinely-finished users: once
- * setup is terminally complete the stamp is set and they're never bounced.
- * (Legacy caveat: a user who predates the `completed_at` column has step
- * `completed` + a null stamp, so they'd be redirected once — acceptable, the
- * now-removed inline onboarding showed them the same kickoff anyway; a one-off
- * `onboarding_completed_at` backfill would remove even that.)
+ * A user who explicitly dismissed onboarding ("finish later") is never
+ * bounced. Note there is deliberately no account-level "completed" escape
+ * hatch anymore — readiness is always evaluated against the current org.
  */
 export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
-  if (facts.onboardingCompletedAt) return false;
   if (facts.onboardingDismissedAt) return false;
-  return (
-    facts.onboardingStep === "connect" ||
-    facts.onboardingStep === "create_agent" ||
-    facts.onboardingStep === "completed"
-  );
+  // A null step means /me hasn't reported one (e.g. a transient failure after
+  // meLoaded flipped) — don't bounce on incomplete data.
+  if (facts.onboardingStep === null) return false;
+  // (1) No runtime client connected yet → start at "connect a computer".
+  if (facts.onboardingStep === "connect") return true;
+  // (2) Connected, but this org has no usable agent → "create an agent" here.
+  if (!facts.currentOrgReady) return true;
+  return false;
 }
 
 /**
  * Should the `/onboarding` route bounce the user back to the workspace?
  *
- * Only once setup is terminally complete — so a finished user can't get
- * stranded on the wizard, while a still-incomplete (or merely dismissed,
- * but deliberately returning via "Resume") user is allowed to stay and
- * work through it.
+ * Once there is nothing left to set up *for the selected org*: the user is
+ * connected AND the org has a usable agent. A user still on `connect`, or in
+ * an org without a usable agent, is allowed to stay and work through the
+ * wizard (including a "finish later"-dismissed user who deliberately
+ * returned via "Resume"). Mirror image of `shouldEnterOnboarding` minus the
+ * dismiss escape hatch, so the two can't fight over the same user.
  */
 export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
-  return facts.onboardingCompletedAt !== null;
+  if (facts.onboardingStep === "connect" || facts.onboardingStep === null) return false;
+  return facts.currentOrgReady;
 }
 
 /**
