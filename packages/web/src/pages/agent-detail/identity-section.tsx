@@ -116,12 +116,10 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     queryKey: ["agents-for-delegate"],
     queryFn: async () => {
       const res = await listAgents({ limit: 100 });
-      // Post-type-merge: pre-merge `personal_assistant` and
-      // `autonomous_agent` collapsed into a single `agent` type. The
-      // "personal" framing is now carried by visibility=private, which is
-      // the default the new-agent dialog already picks for the assistant
-      // creation flow.
-      return res.items.filter((a) => a.type === "agent" && a.visibility === "private" && a.status === "active");
+      // Delegate candidates must be team-visible: a delegate acts on the
+      // human's behalf in team chats, so it has to be mentionable by the team
+      // (visibility=organization). Private agents are excluded.
+      return res.items.filter((a) => a.type === "agent" && a.visibility === "organization" && a.status === "active");
     },
     enabled: open && isHuman,
   });
@@ -205,7 +203,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                 onChange={(e) => setDelegateMention(e.target.value)}
                 className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <option value="">None</option>
+                <option value="">Remove delegate</option>
                 {assistantsQuery.data?.map((a) => (
                   <option key={a.uuid} value={a.uuid}>
                     {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}

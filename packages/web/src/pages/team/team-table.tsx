@@ -640,14 +640,28 @@ function DelegateCell({
         )}
       >
         {({ close }) => (
-          <DelegateSelector
-            current={row.delegate?.uuid ?? null}
-            candidates={candidates}
-            onPick={(uuid) => {
-              onSetDelegate(row.agentId, uuid);
-              close();
+          // The Popover panel is portal-rendered to <body>, but React still
+          // replays synthetic events through the COMPONENT tree — so a click
+          // (or Enter) inside it bubbles up to the row's onClick / onKeyDown
+          // (rowOpenProps) and wrongly opens the profile dialog. Isolate the
+          // panel's pointer/keyboard events from the row here; Escape is left
+          // to propagate so Popover's window-level handler can still close it.
+          // biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops event bubbling, not an interactive control
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") e.stopPropagation();
             }}
-          />
+          >
+            <DelegateSelector
+              current={row.delegate?.uuid ?? null}
+              candidates={candidates}
+              onPick={(uuid) => {
+                onSetDelegate(row.agentId, uuid);
+                close();
+              }}
+            />
+          </div>
         )}
       </Popover>
     );
@@ -688,11 +702,11 @@ function DelegateSelector({
       <DelegateOption
         active={current === null}
         onClick={() => onPick(null)}
-        primary={<span style={{ color: "var(--fg-3)" }}>None</span>}
+        primary={<span style={{ color: "var(--fg-3)" }}>Remove delegate</span>}
       />
       {candidates.length === 0 ? (
         <div className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-1_5) var(--sp-2)" }}>
-          No personal assistants yet.
+          Only team-visible agents can be a delegate.
         </div>
       ) : (
         candidates.map((agent) => (

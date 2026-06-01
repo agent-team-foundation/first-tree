@@ -215,42 +215,40 @@ describe("buildTeamData", () => {
 });
 
 describe("selectDelegateCandidates", () => {
-  it("returns only the given manager's active private assistants", () => {
+  it("returns only the given manager's active team-visible (organization) agents", () => {
+    const mineOrg = agent({
+      uuid: "mine-org",
+      type: "agent",
+      displayName: "Mine",
+      visibility: "organization",
+      managerId: "member-1",
+    });
+    const theirOrg = agent({
+      uuid: "their-org",
+      type: "agent",
+      displayName: "Theirs",
+      visibility: "organization",
+      managerId: "member-2",
+    });
     const minePrivate = agent({
       uuid: "mine-private",
       type: "agent",
-      displayName: "Mine",
+      displayName: "Private",
       visibility: "private",
       managerId: "member-1",
-    });
-    const theirPrivate = agent({
-      uuid: "their-private",
-      type: "agent",
-      displayName: "Theirs",
-      visibility: "private",
-      managerId: "member-2",
     });
     const suspended = agent({
       uuid: "suspended",
       type: "agent",
       displayName: "Suspended",
-      visibility: "private",
-      status: "suspended",
-      managerId: "member-1",
-    });
-    const autonomous = agent({
-      uuid: "auto",
-      type: "agent",
-      displayName: "Cron",
       visibility: "organization",
+      status: "suspended",
       managerId: "member-1",
     });
     const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", managerId: "member-1" });
 
     expect(
-      selectDelegateCandidates([minePrivate, theirPrivate, suspended, autonomous, human], "member-1").map(
-        (a) => a.uuid,
-      ),
-    ).toEqual(["mine-private"]);
+      selectDelegateCandidates([mineOrg, theirOrg, minePrivate, suspended, human], "member-1").map((a) => a.uuid),
+    ).toEqual(["mine-org"]);
   });
 });
