@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { inboxAckFrameSchema, inboxDeliverFrameSchema } from "../schemas/inbox-frames.js";
+import {
+  inboxAckAcceptedFrameSchema,
+  inboxAckFrameSchema,
+  inboxAckRejectedFrameSchema,
+  inboxDeliverFrameSchema,
+} from "../schemas/inbox-frames.js";
 
 const baseClientMessage = {
   id: "msg_1",
@@ -151,6 +156,14 @@ describe("inboxAckFrameSchema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts a confirmed ack ref", () => {
+    const res = inboxAckFrameSchema.safeParse({ type: "inbox:ack", entryId: 7, ref: "ack_123" });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.ref).toBe("ack_123");
+    }
+  });
+
   it("rejects wrong discriminator", () => {
     const res = inboxAckFrameSchema.safeParse({ type: "inbox:deliver", entryId: 7 });
     expect(res.success).toBe(false);
@@ -164,5 +177,29 @@ describe("inboxAckFrameSchema", () => {
   it("rejects non-integer entryId", () => {
     const res = inboxAckFrameSchema.safeParse({ type: "inbox:ack", entryId: 1.5 });
     expect(res.success).toBe(false);
+  });
+});
+
+describe("inboxAckAcceptedFrameSchema", () => {
+  it("accepts an ACK confirmation", () => {
+    const res = inboxAckAcceptedFrameSchema.safeParse({
+      type: "inbox:ack:accepted",
+      entryId: 7,
+      ref: "ack_123",
+      disposition: "accepted_from_pending",
+    });
+    expect(res.success).toBe(true);
+  });
+});
+
+describe("inboxAckRejectedFrameSchema", () => {
+  it("accepts an ACK rejection", () => {
+    const res = inboxAckRejectedFrameSchema.safeParse({
+      type: "inbox:ack:rejected",
+      entryId: 7,
+      ref: "ack_123",
+      reason: "not_found_or_not_bound",
+    });
+    expect(res.success).toBe(true);
   });
 });

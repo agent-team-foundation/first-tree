@@ -13,6 +13,15 @@ import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
  *  conversions (bigserial → number, timestamp → Date) flow through. */
 type ClaimedEntry = typeof inboxEntries.$inferSelect;
 
+export type AckEntryResult =
+  | {
+      ok: true;
+      entry: typeof inboxEntries.$inferSelect;
+      disposition: "acked" | "already_acked" | "accepted_from_pending";
+      transitionedFromDelivered: boolean;
+    }
+  | { ok: false; reason: "not_found_or_not_bound" | "failed_or_dead" };
+
 /** Structurally-typed DB so both `Database` and transaction clients work. */
 type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
 
@@ -413,10 +422,10 @@ async function collectPrecedingContext(
 }
 
 /**
- * Ack a delivered entry from the WS data plane, scoped to the inboxes the
- * connected socket has bound. Returns the acked row on success, `null` if no
- * row matches — a benign outcome the caller should ignore (the entry may
- * have already been acked, timed out, or never belonged to this socket).
+ * Ack an entry from the WS data plane, scoped to the inboxes the connected
+ * socket has bound. The operation is idempotent: duplicate ACKs for `acked`
+ * rows are accepted, and owned `pending` rows may be ACKed to close the
+ * bind-reset race after the client has already completed the turn.
  *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
@@ -425,21 +434,44 @@ export async function ackEntryByIdForBoundAgents(
   db: Database,
   entryId: number,
   inboxIds: string[],
-): Promise<typeof inboxEntries.$inferSelect | null> {
-  if (inboxIds.length === 0) return null;
+): Promise<AckEntryResult> {
+  if (inboxIds.length === 0) return { ok: false, reason: "not_found_or_not_bound" };
   return withSpan("inbox.ack.ws", { [FIRST_TREE_ATTR.INBOX_ENTRY_ID]: String(entryId) }, async () => {
-    const [entry] = await db
-      .update(inboxEntries)
-      .set({ status: "acked", ackedAt: new Date() })
-      .where(
-        and(
-          eq(inboxEntries.id, entryId),
-          inArray(inboxEntries.inboxId, inboxIds),
-          eq(inboxEntries.status, "delivered"),
-        ),
-      )
-      .returning();
-    return entry ?? null;
+    return db.transaction(async (tx) => {
+      const [entry] = await tx
+        .select()
+        .from(inboxEntries)
+        .where(and(eq(inboxEntries.id, entryId), inArray(inboxEntries.inboxId, inboxIds)))
+        .for("update")
+        .limit(1);
+      if (!entry) return { ok: false, reason: "not_found_or_not_bound" };
+      if (entry.status === "acked") {
+        return { ok: true, entry, disposition: "already_acked", transitionedFromDelivered: false };
+      }
+      if (entry.status !== "delivered" && entry.status !== "pending") {
+        return { ok: false, reason: "failed_or_dead" };
+      }
+
+      const previousStatus = entry.status;
+      const [updated] = await tx
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt: new Date() })
+        .where(
+          and(
+            eq(inboxEntries.id, entryId),
+            inArray(inboxEntries.inboxId, inboxIds),
+            eq(inboxEntries.status, previousStatus),
+          ),
+        )
+        .returning();
+      if (!updated) return { ok: false, reason: "not_found_or_not_bound" };
+      return {
+        ok: true,
+        entry: updated,
+        disposition: previousStatus === "delivered" ? "acked" : "accepted_from_pending",
+        transitionedFromDelivered: previousStatus === "delivered",
+      };
+    });
   });
 }
 

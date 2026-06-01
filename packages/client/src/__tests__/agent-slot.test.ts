@@ -419,7 +419,7 @@ describe("AgentSlot", () => {
     onSessionEvent("chat-callback", { type: "error", message: "oops" });
     onSessionRuntimeChange("chat-callback", "error");
 
-    expect(connection.sendInboxAck).toHaveBeenCalledWith(123);
+    expect(connection.sendInboxAck).toHaveBeenCalledWith(123, "agent-1");
     expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-callback", "suspended");
     expect(connection.reportRuntimeState).toHaveBeenCalledWith("agent-1", "blocked");
     expect(connection.reportSessionEvent).toHaveBeenCalledWith("agent-1", "chat-callback", {

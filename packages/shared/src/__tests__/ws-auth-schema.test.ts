@@ -58,15 +58,16 @@ describe("serverWelcomeFrameSchema", () => {
       type: "server:welcome",
       serverCommandVersion: "1.0.0",
       serverTimeMs: 1_713_000_000_000,
-      capabilities: { wsInboxDeliver: true },
+      capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
     });
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.capabilities?.wsInboxDeliver).toBe(true);
+      expect(res.data.capabilities?.wsInboxAckConfirm).toBe(true);
     }
   });
 
-  it("accepts an empty capabilities object and defaults wsInboxDeliver to false", () => {
+  it("accepts an empty capabilities object and defaults WS capabilities to false", () => {
     const res = serverWelcomeFrameSchema.safeParse({
       type: "server:welcome",
       serverCommandVersion: "1.0.0",
@@ -78,6 +79,7 @@ describe("serverWelcomeFrameSchema", () => {
       // The field default + .partial() inflate `{}` → `{wsInboxDeliver:false}`,
       // matching the server-side behaviour: unset == "no opt-in".
       expect(res.data.capabilities?.wsInboxDeliver).toBe(false);
+      expect(res.data.capabilities?.wsInboxAckConfirm).toBe(false);
     }
   });
 
