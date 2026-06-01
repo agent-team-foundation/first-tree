@@ -90,6 +90,40 @@ describe("onboard core", () => {
       ["type", "ok"],
     ]);
     expect(formatCheckReport(missing)).toContain("Run `first-tree login <token>` first");
+
+    loadCredentialsMock.mockReturnValueOnce(null);
+    process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
+    cliFetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
+    const unhealthy = await onboardCheck({ id: "kael", type: "agent" });
+    expect(unhealthy.map((item) => [item.key, item.status, item.value])).toContainEqual([
+      "server_reachable",
+      "error",
+      "HTTP 503",
+    ]);
+    expect(unhealthy.map((item) => [item.key, item.value])).toContainEqual([
+      "client",
+      "(unbound — claimed on first WS connect)",
+    ]);
+
+    loadCredentialsMock.mockReturnValueOnce(null);
+    cliFetchMock.mockRejectedValueOnce(new Error("offline"));
+    const offline = await onboardCheck({ id: "", type: undefined as never });
+    expect(offline.map((item) => [item.key, item.status, item.hint])).toContainEqual([
+      "server_reachable",
+      "error",
+      "Cannot connect to server",
+    ]);
+    expect(offline.map((item) => [item.key, item.status, item.hint])).toContainEqual([
+      "type",
+      "missing_required",
+      "Provide via --type",
+    ]);
+    expect(
+      formatCheckReport([
+        { key: "warning", label: "Warning", status: "warning" },
+        { key: "optional", label: "Optional", status: "missing_optional" },
+      ]),
+    ).toContain("Warning");
   });
 
   it("creates agent and assistant rows and writes local config", async () => {
@@ -177,5 +211,50 @@ describe("onboard core", () => {
       .mockResolvedValueOnce(jsonResponse(409, { error: "name already exists" }));
 
     await expect(onboardCreate({ id: "kael", type: "agent" })).rejects.toThrow("name already exists");
+  });
+
+  it("creates runtime agent configs and tolerates assistant/state cleanup failures", async () => {
+    vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
+      ensureFreshAccessToken: ensureFreshAccessTokenMock,
+    }));
+    const { onboardCreate } = await import("../core/onboard.js");
+
+    process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
+    ensureFreshAccessTokenMock.mockResolvedValue("access-1");
+    cliFetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          memberships: [
+            { organizationId: "org-1", organizationName: "Acme" },
+            { organizationId: "org-2", organizationName: "Other" },
+          ],
+          defaultOrganizationId: "org-2",
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { uuid: "agent-uuid", name: null }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: "assistant failed" }));
+    mkdirSync(join(home, ".onboard-state.json"), { recursive: true });
+
+    await onboardCreate({
+      id: "kael",
+      type: "agent",
+      assistant: "helper",
+      clientId: "client-1",
+    });
+
+    expect(JSON.parse(String(cliFetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      name: "kael",
+      type: "agent",
+      displayName: "kael",
+      delegateMention: "helper",
+      clientId: "client-1",
+    });
+    expect(readFileSync(join(home, "config", "agents", "kael", "agent.yaml"), "utf8")).toContain(
+      'agentId: "agent-uuid"',
+    );
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain('Warning: Failed to create assistant "helper": assistant failed');
+    expect(output).toContain("Agent:     kael");
   });
 });

@@ -1,0 +1,326 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
+
+const doctorCoreMocks = vi.hoisted(() => ({
+  checkAgentConfigs: vi.fn(),
+  checkBackgroundService: vi.fn(),
+  checkClientConfig: vi.fn(),
+  checkNodeVersion: vi.fn(),
+  checkServerReachable: vi.fn(),
+  checkWebSocket: vi.fn(),
+  ensureFreshAccessToken: vi.fn(),
+  reconcileAgentConfigs: vi.fn(),
+  resolveServerUrl: vi.fn(),
+}));
+
+const clientMocks = vi.hoisted(() => ({
+  FirstTreeHubSDK: vi.fn(),
+  ClientOrgMismatchError: class ClientOrgMismatchError extends Error {},
+  createLogger: vi.fn(),
+}));
+
+const configMocks = vi.hoisted(() => ({
+  clientConfigSchema: {},
+  initConfig: vi.fn(),
+  resetConfig: vi.fn(),
+  resetConfigMeta: vi.fn(),
+}));
+
+const cliFetchMock = vi.hoisted(() => vi.fn());
+
+const outputMocks = vi.hoisted(() => ({
+  fail: vi.fn((code: string, message: string, exitCode = 1) => {
+    throw Object.assign(new Error(message), { code, exitCode });
+  }),
+}));
+
+const printMocks = vi.hoisted(() => ({
+  blank: vi.fn(),
+  line: vi.fn(),
+}));
+
+const confirmMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../core/index.js", () => ({
+  CLI_USER_AGENT: "first-tree-test",
+  ...doctorCoreMocks,
+}));
+vi.mock("@first-tree/client", () => clientMocks);
+vi.mock("@first-tree/shared/config", () => configMocks);
+vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
+vi.mock("../cli/output.js", () => outputMocks);
+vi.mock("../core/output.js", () => ({ print: printMocks }));
+vi.mock("@inquirer/prompts", () => ({ confirm: confirmMock }));
+
+let tempDir = "";
+const originalExit = process.exit;
+
+function jsonResponse(body: unknown, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: vi.fn(async () => body),
+    text: vi.fn(async () => (typeof body === "string" ? body : JSON.stringify(body))),
+  } as unknown as Response;
+}
+
+function commandContext(command: Command, json = false) {
+  return {
+    command,
+    options: { debug: false, json, quiet: false },
+  };
+}
+
+function commandWithOptions(options: Record<string, unknown>): Command {
+  const command = new Command("test");
+  for (const [key, value] of Object.entries(options)) {
+    command.setOptionValue(key, value);
+  }
+  return command;
+}
+
+function setRawArgs(command: Command, rawArgs: string[]): void {
+  Object.defineProperty(command, "rawArgs", { configurable: true, value: rawArgs, writable: true });
+}
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "ft-cli-helper-extra-"));
+  vi.clearAllMocks();
+  doctorCoreMocks.checkAgentConfigs.mockReturnValue({ label: "Agents", ok: true, detail: "local" });
+  doctorCoreMocks.checkBackgroundService.mockReturnValue({ label: "Service", ok: true, detail: "running" });
+  doctorCoreMocks.checkClientConfig.mockReturnValue({ label: "Config", ok: true, detail: "ok" });
+  doctorCoreMocks.checkNodeVersion.mockReturnValue({ label: "Node", ok: true, detail: "v24" });
+  doctorCoreMocks.checkServerReachable.mockResolvedValue({ label: "Server", ok: true, detail: "ok" });
+  doctorCoreMocks.checkWebSocket.mockResolvedValue({ label: "WebSocket", ok: true, detail: "ok" });
+  doctorCoreMocks.ensureFreshAccessToken.mockResolvedValue("token");
+  doctorCoreMocks.reconcileAgentConfigs.mockResolvedValue({ label: "Agents", ok: true, detail: "reconciled" });
+  doctorCoreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
+  configMocks.initConfig.mockResolvedValue({ client: { id: "client-1" } });
+  clientMocks.FirstTreeHubSDK.mockImplementation(() => ({ listMyAgents: vi.fn(async () => []) }));
+  clientMocks.createLogger.mockReturnValue({ warn: vi.fn() });
+  confirmMock.mockResolvedValue(true);
+  process.exit = vi.fn(((code?: number) => {
+    throw Object.assign(new Error("process.exit"), { code });
+  }) as never);
+});
+
+afterEach(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+  process.exit = originalExit;
+  process.exitCode = undefined;
+});
+
+describe("command context and command groups", () => {
+  it("resolves debug and quiet precedence from raw argv and invokes wrapped actions", async () => {
+    const { createCommandContext, withCommandContext } = await import("../commands/context.js");
+    const program = new Command();
+    program.name("first-tree").option("--json").option("--debug", undefined, false).option("--quiet", undefined, false);
+    const child = program.command("probe");
+    setRawArgs(program, ["node", "first-tree", "--quiet", "-d", "probe"]);
+    program.setOptionValue("json", true);
+
+    expect(createCommandContext(child).options).toEqual({ json: true, debug: true, quiet: false });
+
+    setRawArgs(program, ["node", "first-tree", "-dq", "probe"]);
+    expect(createCommandContext(child).options).toEqual({ json: true, debug: false, quiet: true });
+
+    setRawArgs(program, ["probe", "--debug", "--", "--quiet"]);
+    expect(createCommandContext(child).options).toEqual({ json: true, debug: true, quiet: false });
+
+    const action = vi.fn();
+    withCommandContext(action).call(child);
+    expect(action).toHaveBeenCalledWith(expect.objectContaining({ command: child }));
+  });
+
+  it("registers command groups with help for bare invocation and unknown-command handling", async () => {
+    const { registerCommandGroup } = await import("../commands/groups.js");
+    const program = new Command();
+    const action = vi.fn();
+    registerCommandGroup(program, "tree", "Tree commands", [
+      { name: "status", alias: "st", summary: "Show", description: "Show status", action },
+    ]);
+
+    const tree = program.commands.find((entry) => entry.name() === "tree");
+    if (!tree) throw new Error("missing tree command");
+    const help = vi.spyOn(tree, "outputHelp").mockImplementation(() => undefined);
+    tree.args = [];
+    await program.parseAsync(["tree"], { from: "user" });
+    expect(help).toHaveBeenCalled();
+
+    const unknown = vi
+      .spyOn(tree as Command & { unknownCommand(): void }, "unknownCommand")
+      .mockImplementation(() => undefined);
+    tree.args = ["typo"];
+    await program.parseAsync(["tree", "typo"], { from: "user" });
+    expect(unknown).toHaveBeenCalled();
+  });
+});
+
+describe("doctor checks and agent resolver", () => {
+  it("runs server-aware daemon checks and falls back to local agent checks", async () => {
+    const { runDaemonChecks } = await import("../commands/_shared/doctor-checks.js");
+
+    await expect(runDaemonChecks()).resolves.toEqual([
+      { label: "Node", ok: true, detail: "v24" },
+      { label: "Config", ok: true, detail: "ok" },
+      { label: "Server", ok: true, detail: "ok" },
+      { label: "Agents", ok: true, detail: "reconciled" },
+      { label: "WebSocket", ok: true, detail: "ok" },
+      { label: "Service", ok: true, detail: "running" },
+    ]);
+    expect(configMocks.resetConfig).toHaveBeenCalled();
+    expect(configMocks.resetConfigMeta).toHaveBeenCalled();
+
+    configMocks.initConfig.mockRejectedValueOnce(new Error("no config"));
+    const fallback = await runDaemonChecks();
+    expect(fallback[3]).toEqual({ label: "Agents", ok: true, detail: "local" });
+  });
+
+  it("resolves managed agents by name or uuid and maps fetch/not-found failures", async () => {
+    const { resolveAgent } = await import("../commands/_shared/resolve-agent.js");
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        { uuid: "agent-1", name: "kael", displayName: "Kael" },
+        { uuid: "agent-2", name: null, displayName: null },
+      ]),
+    );
+    await expect(resolveAgent("https://hub.example", "token", "kael")).resolves.toMatchObject({ uuid: "agent-1" });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse([{ uuid: "agent-2", name: null, displayName: null }]));
+    await expect(resolveAgent("https://hub.example", "token", "agent-2")).resolves.toMatchObject({ uuid: "agent-2" });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("bad", false, 503));
+    await expect(resolveAgent("https://hub.example", "token", "missing")).rejects.toMatchObject({
+      code: "FETCH_ERROR",
+      exitCode: 1,
+    });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse([]));
+    await expect(resolveAgent("https://hub.example", "token", "missing")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      exitCode: 1,
+    });
+  });
+});
+
+describe("client org mismatch handler", () => {
+  it("rotates after confirmation, logs managed rotations, and exits on decline or rotation failure", async () => {
+    const yamlPath = join(tempDir, "client.yaml");
+    writeFileSync(yamlPath, stringifyYaml({ client: { id: "client_11111111" } }));
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+
+    vi.mocked(process.exit).mockImplementationOnce((() => undefined) as never);
+    await handleClientOrgMismatch(new Error("wrong org") as never, {
+      managed: false,
+      configDir: tempDir,
+      rerunCommand: "first-tree login token",
+    });
+    expect(process.exit).toHaveBeenLastCalledWith(0);
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_");
+    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree login token");
+
+    writeFileSync(yamlPath, stringifyYaml({ client: { id: "client_22222222" } }));
+    vi.mocked(process.exit).mockImplementationOnce((() => undefined) as never);
+    await handleClientOrgMismatch(new Error("wrong org") as never, {
+      managed: true,
+      configDir: tempDir,
+      rerunCommand: "ignored",
+    });
+    expect(process.exit).toHaveBeenLastCalledWith(0);
+    expect(clientMocks.createLogger).toHaveBeenCalledWith("client");
+
+    confirmMock.mockResolvedValueOnce(false);
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: false,
+        configDir: join(tempDir, "missing"),
+        rerunCommand: "first-tree login token",
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    confirmMock.mockResolvedValueOnce(true);
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: false,
+        configDir: join(tempDir, "missing"),
+        rerunCommand: "first-tree login token",
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("Failed to rotate");
+  });
+});
+
+describe("tree command surfaces", () => {
+  it("formats and runs agent-context hooks, claude-hook, inject, review, and placeholder commands", async () => {
+    const { CODEX_CONFIG_PATH, CODEX_HOOKS_PATH, formatAgentContextHookMessages, ensureAgentContextHooks } =
+      await import("../commands/tree/agent-context-hooks.js");
+    const { runClaudeHookCommand } = await import("../commands/tree/claude-hook.js");
+    const { runInjectCommand } = await import("../commands/tree/inject.js");
+    const { createPlaceholderAction, createPlaceholderSubcommand } = await import("../commands/placeholder.js");
+    const { buildReviewPrompt, extractReviewJson, runTreeReview } = await import("../commands/tree/review-helper.js");
+
+    expect(
+      formatAgentContextHookMessages({ claudeSettings: "created", codexConfig: "updated", codexHooks: "unchanged" }),
+    ).toEqual([
+      "Created `.claude/settings.json` with the first-tree SessionStart hook.",
+      "Updated `.codex/config.toml` to enable `codex_hooks`.",
+    ]);
+
+    mkdirSync(join(tempDir, ".codex"), { recursive: true });
+    writeFileSync(join(tempDir, CODEX_CONFIG_PATH), "[other]\nkey = true\n[features]\ncodex_hooks = false\n[next]\n");
+    writeFileSync(
+      join(tempDir, CODEX_HOOKS_PATH),
+      JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "custom" }] }] } }),
+    );
+    const result = ensureAgentContextHooks(tempDir);
+    expect(result.codexConfig).toBe("updated");
+    expect(readFileSync(join(tempDir, CODEX_CONFIG_PATH), "utf8")).toContain("codex_hooks = true");
+    expect(readFileSync(join(tempDir, CODEX_HOOKS_PATH), "utf8")).toContain("custom");
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    runClaudeHookCommand(commandContext(commandWithOptions({ root: tempDir }), true));
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({ targetRoot: tempDir });
+
+    writeFileSync(join(tempDir, "NODE.md"), "# Local Context\n");
+    const originalCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      runInjectCommand(commandContext(new Command("inject")));
+      expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({
+        hookSpecificOutput: { hookEventName: "SessionStart" },
+      });
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    const diff = join(tempDir, "diff.patch");
+    const reviewOut = join(tempDir, "review.json");
+    writeFileSync(diff, "diff --git a/NODE.md b/NODE.md\n");
+    expect(buildReviewPrompt(diff, tempDir)).toContain("## Diff");
+    expect(extractReviewJson('```json\n{"verdict":"APPROVE"}\n```')).toEqual({ verdict: "APPROVE" });
+    expect(extractReviewJson("not json")).toBeNull();
+    expect(runTreeReview({ diffPath: diff, outputPath: reviewOut, repoRoot: tempDir, runner: () => "no json" })).toBe(
+      1,
+    );
+    expect(
+      runTreeReview({
+        diffPath: diff,
+        outputPath: reviewOut,
+        repoRoot: tempDir,
+        runner: () => '{"verdict":"COMMENT"}',
+      }),
+    ).toBe(0);
+
+    createPlaceholderAction("coming soon")(commandContext(new Command("placeholder")));
+    expect(createPlaceholderSubcommand({ name: "soon", description: "Soon", message: "later" })).toMatchObject({
+      name: "soon",
+      alias: "",
+      summary: "",
+    });
+  });
+});

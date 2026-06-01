@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatRelative } from "../utils.js";
+import { formatDay, formatRelative } from "../utils.js";
 
 /**
  * `formatRelative` powers the "Last seen N units ago" cell on the
@@ -55,5 +55,16 @@ describe("formatRelative", () => {
 
   it("renders 'now' for the exactly-zero offset", () => {
     expect(formatRelative("2026-05-01T12:00:00Z")).toBe("now");
+  });
+
+  it("formats month and year scale timestamps", () => {
+    expect(formatRelative("2026-03-01T12:00:00Z")).toMatch(/2 months? ago/);
+    expect(formatRelative("2024-05-01T12:00:00Z")).toMatch(/2 years? ago/);
+  });
+
+  it("formats date-only values and keeps null-safe fallback", () => {
+    expect(formatDay(null)).toBe("—");
+    expect(formatDay(undefined)).toBe("—");
+    expect(formatDay("2026-05-01T12:00:00Z")).toMatch(/2026/);
   });
 });
