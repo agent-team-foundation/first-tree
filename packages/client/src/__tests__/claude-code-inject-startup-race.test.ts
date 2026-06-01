@@ -101,7 +101,10 @@ function makeMessage(id: string, content: string): SessionMessage {
   };
 }
 
-function makeContext(markCompleted: (count?: number) => void): SessionContext {
+function makeContext(
+  markCompleted: (count?: number) => void,
+  opts: { formatInboundContent?: SessionContext["formatInboundContent"] } = {},
+): SessionContext {
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   return {
     agent: {
@@ -120,6 +123,7 @@ function makeContext(markCompleted: (count?: number) => void): SessionContext {
     setRuntimeState: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, "chat-claude-startup-race"),
+    ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
     markCompleted,
   };
 }
@@ -179,6 +183,53 @@ describe("claude-code handler startup inject queue", () => {
     expect(state.observedInputs[0]).toContain("first");
     expect(state.observedInputs[1]).toContain("second");
     expect(completedCounts).toEqual([undefined, undefined]);
+
+    await handler.shutdown();
+  });
+
+  it("keeps startup-queued injects ahead of ready-state injects after start returns", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const releaseSecond: { current: (() => void) | null } = { current: null };
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond.current = resolve;
+    });
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (message.id === "m2") await secondGate;
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await Promise.resolve();
+    handler.inject(makeMessage("m2", "second"));
+
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      participants: [],
+    });
+
+    await startPromise;
+    handler.inject(makeMessage("m3", "third"));
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseSecond.current?.();
+
+    await waitFor(() => state.observedInputs.length === 3);
+    await waitFor(() => completedCounts.length === 3);
+
+    expect(state.observedInputs[0]).toContain("first");
+    expect(state.observedInputs[1]).toContain("second");
+    expect(state.observedInputs[2]).toContain("third");
+    expect(completedCounts).toEqual([undefined, undefined, undefined]);
 
     await handler.shutdown();
   });

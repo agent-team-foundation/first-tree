@@ -580,7 +580,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
-  const queuedStartupMessages: SessionMessage[] = [];
+  const queuedInjectedMessages: SessionMessage[] = [];
+  let injectDrainInProgress = false;
   /**
    * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
    * the per-turn prompt block so the LLM knows the absolute paths without
@@ -869,16 +870,26 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
-  function scheduleInjectedMessage(message: SessionMessage, sessionCtx: SessionContext, sessionId: string): void {
-    void pushInjectedMessage(message, sessionCtx, sessionId);
-  }
-
-  function drainStartupMessages(sessionCtx: SessionContext, sessionId: string): void {
-    const drained = queuedStartupMessages.splice(0);
-    if (drained.length === 0) return;
+  function scheduleInjectedMessagesDrain(sessionCtx: SessionContext, sessionId: string): void {
+    if (!inputController || injectDrainInProgress) return;
     void (async () => {
-      for (const message of drained) {
-        await pushInjectedMessage(message, sessionCtx, sessionId);
+      injectDrainInProgress = true;
+      try {
+        while (
+          queuedInjectedMessages.length > 0 &&
+          inputController &&
+          ctx === sessionCtx &&
+          claudeSessionId === sessionId
+        ) {
+          const message = queuedInjectedMessages.shift();
+          if (!message) continue;
+          await pushInjectedMessage(message, sessionCtx, sessionId);
+        }
+      } finally {
+        injectDrainInProgress = false;
+        if (queuedInjectedMessages.length > 0 && inputController && ctx && claudeSessionId) {
+          scheduleInjectedMessagesDrain(ctx, claudeSessionId);
+        }
       }
     })();
   }
@@ -1506,7 +1517,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
       inputController?.push(sdkMsg);
-      drainStartupMessages(sessionCtx, claudeSessionId);
+      scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
       return claudeSessionId;
@@ -1554,7 +1565,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (sdkMsg) {
           inputController?.push(sdkMsg);
         }
-        drainStartupMessages(sessionCtx, sessionId);
+        scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
         return sessionId;
       }
@@ -1594,7 +1605,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
         }
-        drainStartupMessages(sessionCtx, freshSessionId);
+        scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
         return freshSessionId;
       }
@@ -1609,7 +1620,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
       }
-      drainStartupMessages(sessionCtx, sessionId);
+      scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
       sessionCtx.log(`Session resumed (${sessionId})`);
       return sessionId;
@@ -1622,15 +1633,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
       const sessionCtx = ctx;
       const sid = claudeSessionId;
-      if (!inputController) {
-        queuedStartupMessages.push(message);
-        return;
-      }
-      // Step 6: switch (in-flight or restart) BEFORE injecting if the cached
-      // config is newer than the one we launched with. Errors are logged
-      // and we still deliver against the existing query — better than
-      // dropping the user message.
-      scheduleInjectedMessage(message, sessionCtx, sid);
+      queuedInjectedMessages.push(message);
+      scheduleInjectedMessagesDrain(sessionCtx, sid);
     },
 
     async suspend() {
@@ -1657,7 +1661,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // be moot. Resume goes through `handler.resume(message, sessionId)`
       // which re-stashes from its own argument.
       stashedSdkMessage = null;
-      queuedStartupMessages.length = 0;
+      queuedInjectedMessages.length = 0;
+      injectDrainInProgress = false;
     },
 
     async shutdown() {
