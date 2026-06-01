@@ -343,6 +343,7 @@ export async function listMeChats(
       (SELECT count(*) FROM chat_membership
         WHERE chat_id = c.id AND access_mode = 'speaker') AS participant_count,
       cm.access_mode AS access_mode,
+      cm.role AS membership_role,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
@@ -382,6 +383,7 @@ export async function listMeChats(
     last_message_preview: string | null;
     participant_count: number | string;
     access_mode: "speaker" | "watcher";
+    membership_role: string;
     unread_mention_count: number;
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
@@ -604,6 +606,7 @@ export async function listMeChats(
       chatId: r.chat_id,
       type: r.type,
       membershipKind: isSpeaker ? "participant" : "watching",
+      createdByMe: r.membership_role === "owner",
       source: r.source,
       entityType,
       title,

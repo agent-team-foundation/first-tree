@@ -232,8 +232,6 @@ describe("nextParamsForGroup", () => {
 
   it("sets non-default modes", () => {
     expect(nextParamsForGroup(paramsOf(""), "recency").get("group")).toBe("recency");
-    expect(nextParamsForGroup(paramsOf(""), "type").get("group")).toBe("type");
-    expect(nextParamsForGroup(paramsOf(""), "none").get("group")).toBe("none");
   });
 
   it("preserves the chat selection (grouping is purely visual)", () => {

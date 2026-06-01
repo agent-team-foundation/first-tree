@@ -2,6 +2,7 @@ import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
   groupRows,
+  parseGroupMode,
   rowAttentionReason,
   rowIsFailed,
   rowNeedsYou,
@@ -19,6 +20,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     chatId: overrides.id,
     type: overrides.type ?? "direct",
     membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
     source: overrides.source ?? "manual",
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? overrides.id,
@@ -46,18 +48,19 @@ function offsetIso(hours: number): string {
   return new Date(NOW.getTime() + hours * 60 * 60_000).toISOString();
 }
 
-describe("groupRows — none", () => {
-  it("returns a single label-less bucket", () => {
-    const rows = [row({ id: "a", lastMessageAt: offsetIso(-1) })];
-    const buckets = groupRows(rows, "none", NOW);
-    expect(buckets).toHaveLength(1);
-    expect(buckets[0]?.label).toBeNull();
-    expect(buckets[0]?.rows).toHaveLength(1);
+describe("parseGroupMode", () => {
+  it("supports only source and recency", () => {
+    expect(parseGroupMode("source")).toBe("source");
+    expect(parseGroupMode("recency")).toBe("recency");
+    expect(parseGroupMode("type")).toBe("source");
+    expect(parseGroupMode("none")).toBe("source");
+    expect(parseGroupMode(null)).toBe("source");
   });
 
   it("returns an empty single bucket when there are no rows", () => {
-    const buckets = groupRows([], "none", NOW);
+    const buckets = groupRows([], "source", NOW);
     expect(buckets).toHaveLength(1);
+    expect(buckets[0]?.label).toBeNull();
     expect(buckets[0]?.rows).toHaveLength(0);
   });
 });
@@ -127,20 +130,37 @@ describe("groupRows — recency", () => {
 });
 
 describe("groupRows — source", () => {
-  it("buckets rows by ChatSource in canonical order", () => {
+  it("buckets rows by ownership and ChatSource in canonical order", () => {
     const rows = [
       row({ id: "g1", source: "github", entityType: "issue", lastMessageAt: offsetIso(-1) }),
       row({ id: "m", source: "manual", lastMessageAt: offsetIso(-1) }),
+      row({ id: "mine", source: "manual", createdByMe: true, lastMessageAt: offsetIso(-1) }),
       row({ id: "g2", source: "github", entityType: "pull_request", lastMessageAt: offsetIso(-1) }),
     ];
     const buckets = groupRows(rows, "source", NOW);
     // Canonical order is the one declared inside `group-rows.ts`:
-    // manual → github.
-    expect(buckets.map((b) => b.key)).toEqual(["manual", "github"]);
+    // created-by-me → manual → github.
+    expect(buckets.map((b) => b.key)).toEqual(["created-by-me", "manual", "github"]);
+    expect(buckets.map((b) => b.label)).toEqual(["MINE", "MANUAL", "GITHUB"]);
     // Both github rows land in the single `github` bucket regardless
     // of inner entityType — the popover collapse is a per-origin axis,
     // not a per-entity one.
     expect(buckets.find((b) => b.key === "github")?.rows.length).toBe(2);
+  });
+
+  it("keeps owner-role github rows in GITHUB", () => {
+    const rows = [
+      row({
+        id: "mine-github",
+        source: "github",
+        entityType: "issue",
+        createdByMe: true,
+        lastMessageAt: offsetIso(-1),
+      }),
+    ];
+    const buckets = groupRows(rows, "source", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["github"]);
+    expect(buckets[0]?.rows.map((r) => r.chatId)).toEqual(["mine-github"]);
   });
 
   it("omits source buckets with no rows", () => {
@@ -148,39 +168,6 @@ describe("groupRows — source", () => {
     const buckets = groupRows(rows, "source", NOW);
     expect(buckets).toHaveLength(1);
     expect(buckets[0]?.key).toBe("manual");
-  });
-});
-
-describe("groupRows — type", () => {
-  it("buckets direct vs group chats with IM-style labels", () => {
-    const rows = [
-      row({ id: "d1", type: "direct", lastMessageAt: offsetIso(-1) }),
-      row({ id: "g1", type: "group", lastMessageAt: offsetIso(-1) }),
-      row({ id: "d2", type: "direct", lastMessageAt: offsetIso(-1) }),
-    ];
-    const buckets = groupRows(rows, "type", NOW);
-    expect(buckets.map((b) => b.key)).toEqual(["direct", "group"]);
-    expect(buckets[0]?.label).toBe("1:1");
-    expect(buckets[1]?.label).toBe("Team");
-    expect(buckets[0]?.rows.length).toBe(2);
-    expect(buckets[1]?.rows.length).toBe(1);
-  });
-
-  it("omits type buckets with no rows", () => {
-    const rows = [row({ id: "d", type: "direct", lastMessageAt: offsetIso(-1) })];
-    const buckets = groupRows(rows, "type", NOW);
-    expect(buckets).toHaveLength(1);
-    expect(buckets[0]?.key).toBe("direct");
-  });
-
-  it("sinks unknown chat type into an Other bucket so the row stays visible", () => {
-    const rows = [
-      row({ id: "u", type: "future-channel-kind", lastMessageAt: offsetIso(-1) }),
-      row({ id: "d", type: "direct", lastMessageAt: offsetIso(-1) }),
-    ];
-    const buckets = groupRows(rows, "type", NOW);
-    expect(buckets.map((b) => b.key)).toEqual(["direct", "other"]);
-    expect(buckets[1]?.label).toBe("Other");
   });
 });
 

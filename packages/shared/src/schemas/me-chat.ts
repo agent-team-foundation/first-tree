@@ -190,6 +190,14 @@ export const meChatRowSchema = z.object({
   type: z.string(),
   membershipKind: meChatMembershipKindSchema,
   /**
+   * True when the caller's membership row is the chat owner. The web rail
+   * combines this with `source === "manual"` for the MINE bucket, without
+   * exposing the full membership role enum on the public row contract.
+   * Defaulted for web-ahead deploys so older servers keep grouping those rows
+   * under their normal source bucket.
+   */
+  createdByMe: z.boolean().default(false),
+  /**
    * Coarse-grained origin — `manual` / `github`. Mirrors the
    * projection driven by `chatSourceSqlExpression` in
    * `services/me-chat.ts`. Drives the rail's filter popover and
