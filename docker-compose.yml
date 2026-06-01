@@ -4,13 +4,13 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-firsttreehub}
-      POSTGRES_USER: ${POSTGRES_USER:-firsttreehub}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-firsttreehub}
+      POSTGRES_DB: ${POSTGRES_DB:-firsttree}
+      POSTGRES_USER: ${POSTGRES_USER:-firsttree}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-firsttree}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-firsttreehub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-firsttree}"]
       interval: 5s
       timeout: 3s
       retries: 5

@@ -7,7 +7,7 @@
 // web has been built to ../web/dist.
 //
 // Run from packages/server:
-//   DATABASE_URL=postgresql://firsttreehub:firsttreehub@localhost:5432/fth_e2e_askuser \
+//   DATABASE_URL=postgresql://firsttree:firsttree@localhost:5432/fth_e2e_askuser \
 //   PORT=8000 \
 //   npx tsx scripts/start-demo.mjs
 

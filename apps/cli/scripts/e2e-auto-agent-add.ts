@@ -61,7 +61,7 @@ async function signMemberJwt(userId: string, memberId: string, organizationId: s
 
 // Reach into the already-running local Postgres and provision a fresh database
 // for this run. We drop it on teardown so repeat runs stay clean.
-const ADMIN_URL = process.env.E2E_PG_ADMIN_URL ?? "postgresql://firsttreehub:firsttreehub@localhost:5432/postgres";
+const ADMIN_URL = process.env.E2E_PG_ADMIN_URL ?? "postgresql://firsttree:firsttree@localhost:5432/postgres";
 const dbSuffix = crypto.randomUUID().slice(0, 8).replace(/-/g, "");
 const TEST_DB_NAME = `ft_first_tree_e2e_${dbSuffix}`;
 
