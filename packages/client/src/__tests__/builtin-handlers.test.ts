@@ -28,6 +28,27 @@ describe("Built-in Handlers", () => {
     expect(typeof handler.shutdown).toBe("function");
   });
 
+  it("registers claude-code-tui handler", () => {
+    registerBuiltinHandlers();
+
+    const factory = getHandlerFactory("claude-code-tui");
+    expect(factory).toBeDefined();
+    expect(typeof factory).toBe("function");
+  });
+
+  it("claude-code-tui factory returns a valid session-oriented handler", () => {
+    registerBuiltinHandlers();
+
+    const factory = getHandlerFactory("claude-code-tui");
+    const handler = factory({ workspaceRoot: "/tmp/test" });
+    expect(handler).toBeDefined();
+    expect(typeof handler.start).toBe("function");
+    expect(typeof handler.resume).toBe("function");
+    expect(typeof handler.inject).toBe("function");
+    expect(typeof handler.suspend).toBe("function");
+    expect(typeof handler.shutdown).toBe("function");
+  });
+
   it("registers codex handler", () => {
     registerBuiltinHandlers();
 
