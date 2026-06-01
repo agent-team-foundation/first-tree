@@ -590,7 +590,9 @@ export {
 export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,
+  type ChatTokenUsage,
   type ContextTreeUsageEventPayload,
+  chatTokenUsageSchema,
   contextTreeUsageEventPayload,
   type ErrorEventPayload,
   errorEventPayload,

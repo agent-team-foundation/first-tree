@@ -206,6 +206,48 @@ function isUserVisibleItem(item: ThreadItem): boolean {
 }
 
 /**
+ * Codex's `turn.completed.usage` reports the **cumulative** token usage for
+ * the whole thread, not the per-turn delta: on `codex exec resume` the CLI
+ * seeds `total_token_usage` from the last `TokenCount` persisted in the
+ * rollout (`session/mod.rs::last_token_info_from_rollout`) and keeps adding
+ * to it, and the exec JSON layer emits `usage.total` (not `usage.last`). Each
+ * First Tree turn is its own `codex exec resume` child, so the value we see
+ * grows turn-over-turn (T1, T1+T2, T1+T2+T3, …). Emitting that verbatim makes
+ * any consumer that sums `token_usage` events over-count triangularly.
+ *
+ * This converts the cumulative reading into the per-turn delta the
+ * `token_usage` schema expects:
+ *   - With a `baseline` (the previous turn's cumulative in this handler
+ *     instance): subtract field-by-field, clamped at 0 so a compaction reset
+ *     (`fill_to_context_window` lowers the total) under-counts one turn
+ *     rather than emitting a negative.
+ *   - No baseline + a brand-new thread (`start`): the cumulative IS this
+ *     turn, so return it unchanged.
+ *   - No baseline + a resumed thread (cold resume after a daemon restart):
+ *     the cumulative already folds in prior turns we never observed, so there
+ *     is nothing to subtract. Returning `null` skips the emit for exactly one
+ *     turn — far better than reporting the whole thread-to-date as one turn.
+ *
+ * Pure + exported so the delta arithmetic is unit-testable without the full
+ * handler bootstrap chain.
+ */
+export function computePerTurnUsageDelta(
+  cumulative: Usage,
+  baseline: Usage | null,
+  threadIsFresh: boolean,
+): Usage | null {
+  if (!baseline) {
+    return threadIsFresh ? { ...cumulative } : null;
+  }
+  return {
+    input_tokens: Math.max(0, cumulative.input_tokens - baseline.input_tokens),
+    cached_input_tokens: Math.max(0, cumulative.cached_input_tokens - baseline.cached_input_tokens),
+    output_tokens: Math.max(0, cumulative.output_tokens - baseline.output_tokens),
+    reasoning_output_tokens: Math.max(0, cumulative.reasoning_output_tokens - baseline.reasoning_output_tokens),
+  };
+}
+
+/**
  * Abort-aware sleep. Resolves on either the timer firing or the abort
  * signal; on abort, rejects with `AbortError` so the caller can fall back
  * to the abort-aware code path in `runTurn` instead of running another
@@ -310,6 +352,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
   // pick a default when `payload.model` is empty), so this is whatever the
   // operator configured; absence is surfaced as the placeholder below.
   let currentModel = "";
+  // Codex reports CUMULATIVE thread usage on every `turn.completed` (see
+  // `computePerTurnUsageDelta`). Track the previous turn's cumulative so we
+  // can emit the per-turn delta, and whether THIS handler instance opened a
+  // brand-new thread (`start`) — only then is the first reading a true
+  // single-turn value with a zero baseline. A cold `resume` leaves both unset
+  // so the first post-resume turn is skipped rather than over-counted.
+  let prevCumulativeUsage: Usage | null = null;
+  let threadIsFresh = false;
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
@@ -813,23 +863,42 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
 
     const succeeded = !turnFailed && !forwardFailed;
+    // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
+    // the per-turn delta the `token_usage` schema documents before emitting.
+    // `usageBox.value` is null when the turn never reached `turn.completed`
+    // (abort / unrecoverable failure) — no totals to diff, so leave the
+    // baseline untouched and skip both the emit and the log below.
+    const cumulativeUsage = usageBox.value;
+    const perTurnUsage = cumulativeUsage
+      ? computePerTurnUsageDelta(cumulativeUsage, prevCumulativeUsage, threadIsFresh)
+      : null;
+    if (cumulativeUsage) {
+      // Advance the baseline even when `perTurnUsage` is null (the cold-resume
+      // first turn): the NEXT turn must diff against this cumulative, not the
+      // stale pre-resume value. Clearing `threadIsFresh` makes every later
+      // turn take the subtract path.
+      prevCumulativeUsage = cumulativeUsage;
+      threadIsFresh = false;
+    }
+
     // Emit `token_usage` just before `turn_end` so the wire-order matches the
     // claude-code handler (consumers can group all usage events for a turn
-    // between the previous and current `turn_end`). `usage` is null when the
-    // turn never reached `turn.completed` (abort / unrecoverable failure) —
-    // in that case the SDK has no totals to share and we skip the emit
-    // rather than ship zeros.
-    const usageForEvent = usageBox.value;
-    if (usageForEvent) {
+    // between the previous and current `turn_end`).
+    if (perTurnUsage) {
       try {
         sessionCtx.emitEvent({
           kind: "token_usage",
           payload: {
             provider: "codex",
             model: currentModel || "codex-default",
-            inputTokens: usageForEvent.input_tokens,
-            cachedInputTokens: usageForEvent.cached_input_tokens,
-            outputTokens: usageForEvent.output_tokens,
+            // Codex's `input_tokens` is the TOTAL prompt incl. its cached
+            // subset (`codex-rs` derives non_cached = input - cached). The
+            // schema's `inputTokens` is the NON-cached portion, disjoint from
+            // `cachedInputTokens` — subtract to match the claude-code
+            // handler's contract instead of double-counting the cache.
+            inputTokens: Math.max(0, perTurnUsage.input_tokens - perTurnUsage.cached_input_tokens),
+            cachedInputTokens: perTurnUsage.cached_input_tokens,
+            outputTokens: perTurnUsage.output_tokens,
           },
         });
       } catch (err) {
@@ -854,16 +923,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // than a new SessionEvent kind so we stay inside the codex handler
     // (shared schema unchanged). Codex's `high` reasoning + larger context
     // makes per-turn cost 3-5× claude-code at the same input length; without
-    // this line operators cannot account for spend per chat. `usage` is
-    // null when the turn ended without ever emitting `turn.completed` —
-    // i.e. abort / unrecoverable failure — in which case logging tokens
-    // would be misleading.
-    const usage = usageBox.value;
-    if (usage) {
+    // this line operators cannot account for spend per chat. Logs the SAME
+    // per-turn delta as the event (non-cached input split out) so the log and
+    // the wire agree; `null` for an abort / cold-resume first turn we skip.
+    if (perTurnUsage) {
       sessionCtx.log(
         `codex usage chatId=${sessionCtx.chatId} duration_ms=${Date.now() - turnStartedAt} ` +
-          `input_tokens=${usage.input_tokens} cached_input_tokens=${usage.cached_input_tokens} ` +
-          `output_tokens=${usage.output_tokens} reasoning_output_tokens=${usage.reasoning_output_tokens} ` +
+          `input_tokens=${Math.max(0, perTurnUsage.input_tokens - perTurnUsage.cached_input_tokens)} ` +
+          `cached_input_tokens=${perTurnUsage.cached_input_tokens} ` +
+          `output_tokens=${perTurnUsage.output_tokens} reasoning_output_tokens=${perTurnUsage.reasoning_output_tokens} ` +
           `status=${succeeded ? "success" : "error"}`,
       );
     }
@@ -1090,6 +1158,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
+      // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
+      // the per-turn delta can use a zero baseline. (A cold `resume` leaves
+      // these unset, so its first reading — a thread-wide cumulative — is
+      // skipped rather than emitted as one giant turn.)
+      prevCumulativeUsage = null;
+      threadIsFresh = true;
 
       const input = await toCodexInput(message, sessionCtx);
       await runTurn(input, sessionCtx, 1);

@@ -1,4 +1,11 @@
-import type { Chat, ChatDetail, ChatEngagementStatus, ChatGithubEntityListResponse, Message } from "@first-tree/shared";
+import type {
+  Chat,
+  ChatDetail,
+  ChatEngagementStatus,
+  ChatGithubEntityListResponse,
+  ChatTokenUsage,
+  Message,
+} from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {
@@ -25,6 +32,14 @@ export function listChats(params?: { limit?: number; cursor?: string }): Promise
 
 export function getChat(chatId: string): Promise<ChatDetail> {
   return api.get<ChatDetail>(`/chats/${encodeURIComponent(chatId)}`);
+}
+
+/**
+ * Cumulative token usage for this chat — the server's SUM over every persisted
+ * `token_usage` event. Resets when a session is terminated (events cleared).
+ */
+export function getChatTokenUsage(chatId: string): Promise<ChatTokenUsage> {
+  return api.get<ChatTokenUsage>(`/chats/${encodeURIComponent(chatId)}/token-usage`);
 }
 
 /**

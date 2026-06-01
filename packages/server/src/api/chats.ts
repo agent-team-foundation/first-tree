@@ -34,6 +34,7 @@ import { sendMessage } from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { extractSummary } from "../services/session.js";
+import { summarizeChatTokenUsage } from "../services/session-event.js";
 
 /**
  * Class C — resource-scoped chat routes. Mounted at
@@ -139,6 +140,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/agent-status", async (request) => {
     const { chat } = await requireChatAccess(request, app.db);
     return getChatAgentStatuses(app.db, chat.id);
+  });
+
+  /**
+   * Cumulative token usage for this chat — the SUM over every persisted
+   * `token_usage` event (across all participating agents). Drives the marker
+   * the composer renders above the input box. Standard chat-visibility gate;
+   * the figure depends only on the chat. Resets when a session is terminated
+   * (its events are cleared).
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/token-usage", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return summarizeChatTokenUsage(app.db, chat.id);
   });
 
   /**

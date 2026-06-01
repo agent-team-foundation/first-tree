@@ -14,7 +14,7 @@ import {
   updateAgent,
 } from "../../api/agents.js";
 import { deleteMember, listMembers, updateMember, updateMyProfile } from "../../api/members.js";
-import { getOrgUsageByAgent, type UsageWindow } from "../../api/usage.js";
+import { getOrgUsageByAgent } from "../../api/usage.js";
 import { useAuth } from "../../auth/auth-context.js";
 import {
   AgentDeleteConfirmDialog,
@@ -103,13 +103,13 @@ export function TeamPage() {
   const [suspendTarget, setSuspendTarget] = useState<AgentLifecycleTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentLifecycleTarget | null>(null);
   const [query, setQuery] = useState("");
-  const [usageWindow, setUsageWindow] = useState<UsageWindow>("30d");
 
   const membersQuery = useQuery({ queryKey: ["members"], queryFn: listMembers });
 
+  // Window is fixed at 7 days; the column header no longer exposes a picker.
   const usageQuery = useQuery({
-    queryKey: ["usage", "by-agent", usageWindow],
-    queryFn: () => getOrgUsageByAgent(usageWindow),
+    queryKey: ["usage", "by-agent", "7d"],
+    queryFn: () => getOrgUsageByAgent("7d"),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
@@ -322,8 +322,6 @@ export function TeamPage() {
             agentCount={agentCount}
             clientHostMap={clientHostMap}
             usageByAgentId={usageByAgentId}
-            usageWindow={usageWindow}
-            onUsageWindowChange={setUsageWindow}
             usageLoading={usageQuery.isLoading}
             onChat={(uuid) => navigate(`/?c=draft&with=${encodeURIComponent(uuid)}`)}
             onAgentDetails={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
