@@ -20,7 +20,7 @@ export function Hero() {
       <div className="mt-10">
         <Link
           to="/login"
-          className="group inline-flex items-center gap-2 rounded-[var(--radius-input)] bg-primary px-6 py-3 text-body font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="group inline-flex items-center gap-2 rounded-[var(--radius-input)] bg-primary px-6 py-3 text-body font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           Get Started
           <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
