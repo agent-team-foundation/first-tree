@@ -158,7 +158,16 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   const cachedCliVersion = readCachedBundledCliVersion(workspace);
   const cliDrifted = currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
 
-  if (sentinelPresent && !treeDrifted && !cliDrifted) {
+  // A tree-bound agent only pins its CLI version after `installFirstTreeIntegration`
+  // SUCCEEDS (see the integrationOk gate below). So a missing CLI pin on a
+  // tree-bound agent means integration has never succeeded — force the slow
+  // path to retry it rather than freezing behind the sentinel without skills /
+  // briefing. Guard on `currentCliVersion !== null`: when the CLI version is
+  // unknown we can't pin one anyway, so fall back to the sentinel-only decision
+  // (no perpetual re-integration in version-less environments).
+  const integrationNeverPinned = contextTreePath !== null && currentCliVersion !== null && cachedCliVersion === null;
+
+  if (sentinelPresent && !treeDrifted && !cliDrifted && !integrationNeverPinned) {
     ensureStableIdentity(workspace, sessionCtx, contextTreePath);
     return;
   }
