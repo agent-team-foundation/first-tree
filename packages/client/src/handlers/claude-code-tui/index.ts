@@ -1,23 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  type AgentRuntimeConfigPayload,
-  DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
-  deriveRepoLocalPath,
-} from "@first-tree/shared";
+import { type AgentRuntimeConfigPayload, DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD } from "@first-tree/shared";
+import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import {
-  bootstrapWorkspace,
-  buildChatSystemPrompt,
-  installFirstTreeIntegration,
-  type PredeclaredSourceRepo,
-} from "../../runtime/bootstrap.js";
+import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
-import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { prepareSourceRepos } from "../../runtime/source-repos.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
 import { formatQuestionsAsText } from "./ask-user-degrader.js";
@@ -162,74 +154,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     } catch (err) {
       sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
-    }
-  }
-
-  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): void {
-    if (!contextTreePath) return;
-    installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath,
-      workspaceId: agentName ?? sessionCtx.chatId,
-      treeRepoUrl: contextTreeRepoUrl ?? undefined,
-      log: (msg) => sessionCtx.log(msg),
-    });
-  }
-
-  /**
-   * Materialise predeclared source repos at the top level of the agent
-   * home and update `sourceReposForPrompt` so they show up in the per-chat
-   * system-prompt block. Mirrors claude-code.ts's `refreshSourceRepos` —
-   * sessionKey is the agent name (not chatId), so two chats reuse the
-   * same checkout instead of forking branches per-chat.
-   *
-   * Cleanup tracking is omitted: predeclared source repos are agent-scoped
-   * persistent resources that survive shutdown.
-   */
-  async function prepareGitWorktrees(
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    sessionCtx: SessionContext,
-  ): Promise<void> {
-    sourceReposForPrompt = [];
-    if (!gitMirrorManager) return;
-    const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
-    for (const repo of payload.gitRepos) {
-      const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
-      if (!localPath) continue;
-      const targetPath = resolveGitRepoTargetPath(workspaceCwd, localPath);
-      try {
-        await gitMirrorManager.ensureMirror(repo.url);
-        await gitMirrorManager.fetchMirror(repo.url);
-        let branchName: string;
-        if (existsSync(targetPath)) {
-          // Reuse path; nothing more to do — buildChatSystemPrompt still
-          // wants the metadata so the agent knows where the checkout is.
-          branchName = repo.ref ?? "main";
-        } else {
-          const result = await gitMirrorManager.createWorktree({
-            url: repo.url,
-            ref: repo.ref,
-            targetPath,
-            sessionKey: branchAgentKey,
-            agentName: branchAgentKey,
-          });
-          branchName = result.branchName;
-          // Source repos are agent-scoped persistent resources (per
-          // proposals/agent-session-cwd-redesign §⑤) — they survive
-          // shutdown so the next chat finds them ready. Intentionally
-          // NOT tracked in ownedWorktrees.
-        }
-        sourceReposForPrompt.push({
-          absolutePath: targetPath,
-          url: repo.url,
-          ...(repo.ref ? { ref: repo.ref } : {}),
-          branch: branchName,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        sessionCtx.log(`tui git materialisation skipped (${repo.url}): ${msg}`);
-      }
     }
   }
 
@@ -625,18 +549,19 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
         const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
-        // Per-chat material flows through the system-prompt-append channel
-        // built in `buildPromptAppend` — bootstrapWorkspace itself only writes
-        // agent-stable files now (per-agent-home redesign, proposals/2026-05-19).
+        // Per-chat material flows through the system-prompt-append channel built
+        // in `buildPromptAppend`. The stable agent-home bootstrap (CLAUDE.md
+        // briefing, core skills, Context-Tree/CLI drift pins) is the SAME shared
+        // contract the SDK handler uses — see runtime/agent-bootstrap.ts.
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        bootstrapWorkspace({
-          workspacePath: cwd,
-          identity: sessionCtx.agent,
-          contextTreePath,
-          serverUrl: sessionCtx.sdk.serverUrl,
+        ensureAgentBootstrap({ workspace: cwd, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
+        sourceReposForPrompt = await prepareSourceRepos({
+          workspace: cwd,
+          payload,
+          sessionCtx,
+          gitMirrorManager,
+          agentName,
         });
-        ensureFirstTreeBinding(cwd, sessionCtx);
-        await prepareGitWorktrees(payload, cwd, sessionCtx);
         markWorkspaceInitComplete(cwd);
 
         const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
@@ -666,16 +591,17 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        bootstrapWorkspace({
-          workspacePath: cwd,
-          identity: sessionCtx.agent,
-          contextTreePath,
-          serverUrl: sessionCtx.sdk.serverUrl,
+        // Same shared bootstrap as start(): ensureAgentBootstrap handles the
+        // sentinel + Context-Tree/CLI drift internally, so a stale or failed
+        // integration is re-run on resume instead of being skipped.
+        ensureAgentBootstrap({ workspace: cwd, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
+        sourceReposForPrompt = await prepareSourceRepos({
+          workspace: cwd,
+          payload,
+          sessionCtx,
+          gitMirrorManager,
+          agentName,
         });
-        if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
-          ensureFirstTreeBinding(cwd, sessionCtx);
-        }
-        await prepareGitWorktrees(payload, cwd, sessionCtx);
         markWorkspaceInitComplete(cwd);
 
         const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });

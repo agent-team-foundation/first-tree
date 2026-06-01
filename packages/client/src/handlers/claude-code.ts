@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,43 +15,22 @@ import type {
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
 import {
-  deriveRepoLocalPath,
   isImageBatchRefContent,
   isImageRefContent,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
+import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import {
-  bootstrapWorkspace,
-  buildChatSystemPrompt,
-  deepEqualIdentity,
-  installCoreSkills,
-  installFirstTreeIntegration,
-  isHubWorktreeMarker,
-  type PredeclaredSourceRepo,
-  readCachedBundledCliVersion,
-  readCachedContextTreeHead,
-  readContextTreeHead,
-  resolveBundledCliVersion,
-  writeBundledCliVersion,
-  writeContextTreeHead,
-} from "../runtime/bootstrap.js";
+import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { getCliBinding } from "../runtime/cli-binding.js";
 import { classify } from "../runtime/error-taxonomy.js";
-import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
-import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
-import type {
-  AgentHandler,
-  AgentIdentity,
-  HandlerFactory,
-  SessionContext,
-  SessionMessage,
-} from "../runtime/handler.js";
+import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
-import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { prepareSourceRepos as prepareSourceReposShared } from "../runtime/source-repos.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
@@ -1352,82 +1331,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     payload: AgentRuntimeConfigPayload | undefined,
     sessionCtx: SessionContext,
   ): Promise<void> {
-    // Reset the prompt-facing list. If `gitRepos` is empty (or the manager
-    // isn't wired up), the agent simply gets no source-repos section.
-    sourceReposForPrompt = [];
-
-    if (!gitMirrorManager || !payload?.gitRepos?.length) return;
-
-    for (const repo of payload.gitRepos) {
-      const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
-      // Source repos live at the TOP LEVEL of the agent home — no
-      // `worktrees/` prefix. The `worktrees/` subdir is reserved for the
-      // agent's on-demand worktrees.
-      const targetPath = resolveGitRepoTargetPath(workspace, localPath);
-      sessionCtx.log(`Git: preparing source repo ${repo.url} → ${localPath}${repo.ref ? ` @ ${repo.ref}` : ""}`);
-
-      // D14: ensureMirror is idempotent — clone once, fast return thereafter.
-      const mirror = await gitMirrorManager.ensureMirror(repo.url);
-      if (mirror.cloned) {
-        sessionCtx.log(`Git: cloned ${repo.url} in ${mirror.elapsedMs}ms`);
-      }
-
-      // D10: fresh fetch on every new dialog. Failure aborts session creation.
-      await gitMirrorManager.fetchMirror(repo.url);
-
-      const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
-
-      // Serialise per absolute path so two concurrent sessions for the same
-      // agent can't both try to create the same checkout.
-      const { branchName } = await withWorktreePathLock(targetPath, async () => {
-        if (existsSync(targetPath)) {
-          if (isHubWorktreeMarker(targetPath)) {
-            sessionCtx.log(`Git: reusing existing source repo at ${localPath}`);
-            // Reuse path: branchName is deterministic for cleanup. With the
-            // per-agent shared-checkout model, sessionKey is the agentName
-            // (not chatId) so a checkout created by chat A is reused by
-            // chat B without forking branches.
-            return {
-              branchName: deriveSessionBranchName(branchAgentKey, branchAgentKey, repo.url),
-              headCommit: null as string | null,
-            };
-          }
-          // Path occupied by a non-First Tree directory (operator placed it, leftover
-          // from an old layout, etc). Log it explicitly — `createWorktree`
-          // below will likely fail with a generic "path exists" error, and
-          // without this line the operator has no way to know why. PR #506
-          // review S1.
-          sessionCtx.log(
-            `Git: source-repo target ${localPath} occupied by a non-First Tree directory; ` +
-              "createWorktree will likely fail — move or remove the directory and re-run",
-          );
-        }
-        const created = await gitMirrorManager.createWorktree({
-          url: repo.url,
-          ref: repo.ref,
-          targetPath,
-          // sessionKey identifies the branch *owner*. In the per-agent-home
-          // model the owner is the agent, not the chat.
-          sessionKey: branchAgentKey,
-          agentName: branchAgentKey,
-        });
-        return { branchName: created.branchName, headCommit: created.headCommit as string | null };
-      });
-
-      // Per agent-session-cwd-redesign: predeclared source repos are agent-
-      // scoped persistent resources. They survive shutdown so the next chat
-      // finds them ready. We therefore do NOT track them in `ownedWorktrees`
-      // (the legacy shutdown-cleanup list).
-
-      sourceReposForPrompt.push({
-        absolutePath: targetPath,
-        url: repo.url,
-        ...(repo.ref ? { ref: repo.ref } : {}),
-        branch: branchName,
-      });
-
-      sessionCtx.log(`Git: source repo at ${localPath} on ${branchName}`);
-    }
+    // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
+    // TUI handlers share one worktree-lock / Hub-marker implementation rather
+    // than each carrying its own source-repo invariant.
+    sourceReposForPrompt = await prepareSourceReposShared({
+      workspace,
+      payload,
+      sessionCtx,
+      gitMirrorManager,
+      agentName,
+    });
   }
 
   /** Tear down all worktrees this session owns; best-effort. */
@@ -1498,47 +1411,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Hash-check the existing identity.json against the current agent metadata
-   * and rewrite it (plus the rest of the .agent/ stable section) only when
-   * something changed. Cheap to run on every session start — the typical
-   * path is a single readFileSync + JSON.parse + memcmp.
-   *
-   * R5 in the proposal: agent rename / inboxId change / metadata edits must
-   * still propagate even after the sentinel is set, so this runs OUT of the
-   * sentinel gate.
-   */
-  function ensureStableIdentity(workspace: string, sessionCtx: SessionContext): void {
-    const identityPath = join(workspace, ".agent", "identity.json");
-    const desired = {
-      agentId: sessionCtx.agent.agentId,
-      displayName: sessionCtx.agent.displayName,
-      type: sessionCtx.agent.type,
-      delegateMention: sessionCtx.agent.delegateMention,
-      metadata: sessionCtx.agent.metadata,
-      serverUrl: sessionCtx.sdk.serverUrl,
-      contextTreePath,
-    };
-    if (existsSync(identityPath)) {
-      try {
-        const current = JSON.parse(readFileSync(identityPath, "utf-8"));
-        if (deepEqualIdentity(current, desired)) return;
-      } catch {
-        // Corrupt JSON — fall through to rewrite via bootstrapWorkspace.
-      }
-    }
-    // Mismatch (or missing / corrupt) — re-run the full stable bootstrap so
-    // context/, tools.md, the boundary marker, and identity.json all line up
-    // with the current agent metadata. Cheap relative to integrate / git.
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: sessionCtx.agent,
-      contextTreePath,
-      serverUrl: sessionCtx.sdk.serverUrl,
-    });
-    generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
-  }
-
-  /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
    * tree integrate` shell-out). Gated by the stage-2 sentinel + Context-Tree
    * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
@@ -1552,87 +1424,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * directory is per-agent, so the skill identity stays stable across chats.
    */
   function ensureAgentBootstrap(workspace: string, sessionCtx: SessionContext): void {
-    const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
-    const currentTreeHead = readContextTreeHead(contextTreePath);
-    const cachedTreeHead = readCachedContextTreeHead(workspace);
-    // Only treat as drift when we know both values AND they differ — `null`
-    // on either side means "we don't know", in which case we fall back to
-    // the sentinel-only decision (fail open). Warn when the asymmetry shows
-    // up so a transient `git rev-parse` failure doesn't silently disable
-    // drift detection (PR #506 review Q1).
-    if (cachedTreeHead !== null && currentTreeHead === null) {
-      sessionCtx.log(
-        `Context Tree HEAD probe returned null while cached value is ` +
-          `${cachedTreeHead.slice(0, 7)}; drift detection bypassed for this start`,
-      );
-    }
-    const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
-
-    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
-    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
-    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
-    // tree drift: a null on either side means "unknown" and we do not
-    // force re-bootstrap.
-    const currentCliVersion = resolveBundledCliVersion();
-    const cachedCliVersion = readCachedBundledCliVersion(workspace);
-    const cliDrifted =
-      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
-
-    if (sentinelPresent && !treeDrifted && !cliDrifted) {
-      ensureStableIdentity(workspace, sessionCtx);
-      return;
-    }
-
-    if (sentinelPresent && treeDrifted) {
-      sessionCtx.log(
-        `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
-      );
-    }
-    if (sentinelPresent && cliDrifted) {
-      sessionCtx.log(
-        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
-      );
-    }
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: sessionCtx.agent,
-      contextTreePath,
-      serverUrl: sessionCtx.sdk.serverUrl,
-    });
-    generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
-
-    // Core skills (`attention`) ship with every agent, with or without a
-    // Context Tree. The slimmed `tools.md` injected by bootstrap only
-    // carries a pointer at `attention/SKILL.md`, so the on-disk payload
-    // has to exist before the agent's first turn — degrade gracefully
-    // when the CLI is unavailable; the integration install below will
-    // also install attention as part of `tree integrate` for tree-bound
-    // agents, so we have a backup path.
-    installCoreSkills({
-      workspacePath: workspace,
-      log: (msg) => sessionCtx.log(msg),
-    });
-
-    let integrationOk = true;
-    if (contextTreePath) {
-      integrationOk = installFirstTreeIntegration({
-        workspacePath: workspace,
-        contextTreePath,
-        workspaceId: agentName ?? sessionCtx.agent.agentId,
-        treeRepoUrl: contextTreeRepoUrl ?? undefined,
-        log: (msg) => sessionCtx.log(msg),
-      });
-    }
-
-    // Pin the current HEAD so the next start can detect drift.
-    writeContextTreeHead(workspace, currentTreeHead);
-    // Only pin the CLI version when integrate actually succeeded — pinning
-    // on a failed run would silently mask the gap and the next start would
-    // skip the retry that this drift trigger exists to perform.
-    if (integrationOk) {
-      writeBundledCliVersion(workspace, currentCliVersion);
-    }
+    // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
+    // and TUI handlers share one briefing / core-skill / drift-pin contract
+    // rather than each maintaining a partial copy.
+    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
   }
 
   const handler: AgentHandler = {
@@ -1854,77 +1649,3 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   return handler;
 };
-
-/**
- * Generate a CLAUDE.md file from .agent/ bootstrap data.
- *
- * Layer 1 (always): Agent identity (from First Tree)
- * Layer 2 (if Context Tree configured): Operating instructions + domain map
- * Layer 3 (if Context Tree configured): Context Tree location for on-demand reading
- *
- * Per PRD D7 the agent's behavior instructions live in server-managed
- * `agent_configs.payload.prompt.append` and are passed to the Claude SDK via
- * `systemPrompt.append` — not through this file.
- */
-/**
- * Generate the **stable** CLAUDE.md materialised at the agent home root.
- *
- * Per agent-session-cwd-redesign: this file contains only agent-level
- * content (identity, org domain map, Context Tree pointer, SDK tools). Per-
- * chat content — Current Chat Context, participants — is injected per turn
- * via the SDK's `appendSystemPrompt` so two concurrent chats sharing this
- * cwd never see each other's data on disk.
- *
- * Per PRD D7 the agent's behavior instructions live in server-managed
- * `agent_configs.payload.prompt.append` and are passed to the Claude SDK via
- * `systemPrompt.append` — not through this file.
- */
-function generateStableClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
-  const sections: string[] = [];
-  const contextDir = join(workspacePath, ".agent", "context");
-
-  // --- Identity ---
-  // Post-type-merge (migration 0051): pre-merge `personal_assistant` and
-  // `autonomous_agent` collapsed into a single `agent` row. The "personal
-  // assistant" vs. "autonomous bot" framing is now carried by
-  // `agents.visibility` (private → personal assistant, organization →
-  // autonomous bot). Do NOT infer from `delegateMention` — only `human`
-  // rows can hold a delegate, so every `agent` row's `delegateMention`
-  // is null and that signal is useless for this distinction.
-  const name = identity.displayName ?? identity.agentId;
-  if (identity.visibility === "private") {
-    sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
-  } else {
-    sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
-  }
-
-  // --- Context Tree operating instructions (AGENT.md) ---
-  const agentInstructionsPath = join(contextDir, "agent-instructions.md");
-  if (existsSync(agentInstructionsPath)) {
-    const instructions = readFileSync(agentInstructionsPath, "utf-8");
-    sections.push(`## Operating Instructions\n\n${instructions}\n`);
-  }
-
-  // --- Organization domain map (root NODE.md) ---
-  const domainMapPath = join(contextDir, "domain-map.md");
-  if (existsSync(domainMapPath)) {
-    const domainMap = readFileSync(domainMapPath, "utf-8");
-    sections.push(`## Organization Domain Map\n\n${domainMap}\n`);
-  }
-
-  // --- Context Tree location for on-demand reading ---
-  if (contextTreePath) {
-    sections.push(
-      `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\nRead specific domain nodes as needed following the operating instructions above.\n`,
-    );
-  }
-
-  // --- SDK tools reference ---
-  const toolsPath = join(workspacePath, ".agent", "tools.md");
-  if (existsSync(toolsPath)) {
-    const toolsContent = readFileSync(toolsPath, "utf-8");
-    sections.push(toolsContent);
-  }
-
-  writeFileSync(join(workspacePath, "CLAUDE.md"), sections.join("\n"), "utf-8");
-}

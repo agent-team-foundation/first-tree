@@ -29,15 +29,26 @@ describe("deriveSessionName", () => {
     expect(a).not.toBe(b);
   });
 
-  it("strips disallowed tmux characters (. and :)", () => {
+  it("produces a tmux-safe name (hex digest, no . or :) even from dirty ids", () => {
     const name = deriveSessionName(CID, "agent.with.dots", "chat:with:colons");
     expect(name).not.toMatch(/[.:]/);
   });
 
-  it("caps the agent and chat parts at 8 chars", () => {
+  it("does NOT alias uuidv7 agents that share a timestamp prefix", () => {
+    // uuidv7 leading chars are a ms timestamp — agents created in the same
+    // window share the first 8+ chars. A prefix-truncating name would collide
+    // (and startClaude would kill the peer's live session); the hash must not.
+    const a = "019250a1-0000-7000-8000-000000000001";
+    const b = "019250a1-0000-7000-8000-000000000002";
+    expect(a.slice(0, 8)).toBe(b.slice(0, 8)); // guards the premise
+    expect(deriveSessionName(CID, a, "chat-1")).not.toBe(deriveSessionName(CID, b, "chat-1"));
+  });
+
+  it("keeps the name short and within the owner prefix", () => {
     const name = deriveSessionName(CID, "a".repeat(40), "b".repeat(40));
-    // "ftth-" (5) + clientTag (8) + "-" + agent8 + "-" + chat8 = 31
-    expect(name.length).toBe(31);
+    // "ftth-" (5) + clientTag (8) + "-" (1) + 12-hex digest = 26
+    expect(name.length).toBe(26);
+    expect(name.startsWith(ownedSessionPrefix(CID))).toBe(true);
   });
 });
 

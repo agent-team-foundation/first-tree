@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -206,15 +207,22 @@ export function ownedSessionPrefix(clientId: string): string {
 }
 
 /**
- * Derive a deterministic, tmux-safe session name from `(clientId, agentId,
- * chatId)`. tmux disallows `:` and `.` in session names — strip them out. The
- * client tag scopes ownership so the orphan sweep never touches another
- * process's sessions; agent/chat are capped at 8 chars to keep the name short.
+ * Derive a deterministic, tmux-safe, collision-resistant session name from
+ * `(clientId, agentId, chatId)`.
+ *
+ * The agent/chat component is a hash, not a truncated prefix: server agent ids
+ * are uuidv7, whose leading chars are a millisecond timestamp, so two agents
+ * created close together share the first 8 chars. Truncating would alias two
+ * distinct peer agents in the same chat to one session name — and `startClaude`
+ * kills any pre-existing session with that name, so one agent would tear down a
+ * peer's live pane. A 12-hex (48-bit) SHA-256 slice gives uniform entropy
+ * regardless of uuid structure; collisions are negligible. The output is hex
+ * only, so it is inherently tmux-safe (no `:`/`.`). The client-owner prefix is
+ * kept so the orphan sweep's prefix filter still matches.
  */
 export function deriveSessionName(clientId: string, agentId: string, chatId: string): string {
-  const a = sanitise(agentId).slice(0, 8);
-  const c = sanitise(chatId).slice(0, 8);
-  return `${ownedSessionPrefix(clientId)}${a}-${c}`;
+  const digest = createHash("sha256").update(`${agentId} ${chatId}`).digest("hex").slice(0, 12);
+  return `${ownedSessionPrefix(clientId)}${digest}`;
 }
 
 function sanitise(input: string): string {
