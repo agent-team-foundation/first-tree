@@ -212,6 +212,11 @@ export class AgentSlot {
           contextTreePath: contextTreeBinding?.path,
           contextTreeRepoUrl: contextTreeBinding?.repoUrl,
           gitMirrorManager,
+          // Identifies the owning client process. The claude-code-tui handler
+          // uses it to scope tmux session ownership (orphan sweep / names) so
+          // it never touches another live client's sessions. Other handlers
+          // ignore it.
+          clientId: this.clientConnection.clientId,
         },
         agentIdentity: {
           agentId: agent.agentId,
