@@ -1,17 +1,15 @@
 import { type ChatEngagementView, type ChatSource, type MeChatRow, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
-import { SourceIcon } from "../../../components/chat/source-icon.js";
 import { Popover } from "../../../components/ui/popover.js";
-import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
-import { FilterPopover, originLabel } from "./filter-popover.js";
+import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
 import { type GroupMode, groupRows, rowIsFailed, rowNeedsYou, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
@@ -23,24 +21,27 @@ import { RowEngagementMenu } from "./row-engagement-menu.js";
  * tail and the per-bucket collapse overrides (which are session-only
  * preferences, not worth a URL slot).
  *
- * Phase A scope: the origin (`source`) filter has been removed from the
- * rail header pending the Phase B filter popover. The `source` URL
- * param is currently a no-op on the list — every origin is in scope.
- * See `docs/workspace-sidebar-filter-redesign-design.zh-CN.md`.
+ * Redesign (content-first / near-monochrome): the header is a single
+ * row — New chat + the primary `All / Unread / Watching` triad + a `⚙`
+ * popover that holds the lower-frequency Scope / Origin / Group controls.
+ * Rows carry exactly one signal per line: the title row + time, and a
+ * second line that is *either* an attention state *or* the last-message
+ * preview *or* (when there's neither) nothing at all. Colour appears only
+ * on attention rows (left border + state line), the selected row (green),
+ * and the unread dot — never as decoration. Avatars use the desaturated
+ * hue companions so a dense rail stays quiet.
  */
 
 export const DRAFT_CHAT_ID = "draft" as const;
 
-const ENGAGEMENT_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: string }> = [
-  { value: "active", label: "Active" },
-  { value: "archived", label: "Archived" },
-  { value: "all", label: "All" },
-];
-
-const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
-  { value: "source", label: "Source" },
-  { value: "recency", label: "Recency" },
-];
+/**
+ * Primary engagement filter — the single-select triad in the header.
+ * `all` = every active chat; `unread` = chats with unread mentions;
+ * `watching` = chats the user only watches. Maps onto the independent
+ * `?unread=` / `?watching=` URL flags via `onRailFilterChange` (one
+ * atomic URL write — see `nextParamsForRailFilter` in `workspace/index.tsx`).
+ */
+export type RailFilter = "all" | "unread" | "watching";
 
 function formatRowTime(iso: string | null): string {
   if (!iso) return "";
@@ -67,16 +68,6 @@ function formatRowTime(iso: string | null): string {
   return `${get("month")}/${get("day")}`;
 }
 
-function buildSubtitle(row: MeChatRow): string {
-  // Subtitle = the most informative second-line content. Priority:
-  // preview > "Watching" marker for watcher rows. Empty string if
-  // neither — caller renders an em-dash placeholder.
-  if (row.membershipKind === "watching") {
-    return row.lastMessagePreview ? `Watching · ${row.lastMessagePreview}` : "Watching";
-  }
-  return row.lastMessagePreview ?? "";
-}
-
 export function ConversationList({
   selectedChatId,
   onSelectChat,
@@ -84,9 +75,8 @@ export function ConversationList({
   engagement,
   onEngagementChange,
   unread,
-  onUnreadChange,
   watching,
-  onWatchingChange,
+  onRailFilterChange,
   origin,
   onOriginChange,
   participants,
@@ -94,6 +84,7 @@ export function ConversationList({
   onClearFilters,
   group,
   onGroupChange,
+  groupControlPlacement = "header",
   width = 320,
 }: {
   selectedChatId: string | null;
@@ -102,29 +93,28 @@ export function ConversationList({
   engagement: ChatEngagementView;
   onEngagementChange: (view: ChatEngagementView) => void;
   unread: boolean;
-  onUnreadChange: (next: boolean) => void;
   watching: boolean;
-  onWatchingChange: (next: boolean) => void;
+  /** Set the primary triad. Writes `?unread=` / `?watching=` atomically. */
+  onRailFilterChange: (view: RailFilter) => void;
   /** Override the default 20rem aside width. Used by `WorkspacePage`'s
    *  narrow-viewport overlay branch to cap to `min(88vw, 20rem)` so the
    *  inner aside doesn't overflow the wrapper on phones narrower than
    *  ~23rem logical (e.g. compact Android handsets). */
   width?: number | string;
   /**
-   * Multi-select origin filter. Phase B's filter popover (forthcoming
-   * in the next commit) will mount its checkbox group against this
-   * pair; for now they thread through so the URL parser already has a
-   * place to land its state.
+   * Multi-select origin filter, surfaced inside the `⚙` popover.
    */
   origin: ReadonlyArray<ChatSource>;
   onOriginChange: (next: ReadonlyArray<ChatSource>) => void;
   /**
-   * Multi-select participants filter. Same staging story as `origin`.
+   * Multi-select participants filter. The picker UI is a follow-up; the
+   * wire + chip rendering are live so a hand-typed `?with=` narrows the
+   * rail and shows removable chips.
    */
   participants: ReadonlyArray<string>;
   onParticipantsChange: (next: ReadonlyArray<string>) => void;
   /**
-   * Clears every filter dimension (`unread`, `watching`, `origin`,
+   * Clears the chip-row filter dimensions (`unread`, `watching`, `origin`,
    * `with`) in one URL write. Calling the per-flag setters in sequence
    * inside the Clear handler would race against React-router's stale
    * `searchParams` (see `nextParamsForClearFilters` in `workspace/index.tsx`).
@@ -132,6 +122,16 @@ export function ConversationList({
   onClearFilters: () => void;
   group: GroupMode;
   onGroupChange: (next: GroupMode) => void;
+  /**
+   * Where the Group-by control lives:
+   *   "header"  — its own visible dropdown on the filter row (default /
+   *               shipped: more discoverable, doubles as a soft filter via
+   *               grouping). `⚙` then holds only Status + Source.
+   *   "popover" — inside the `⚙` filter popover (cleanest header; kept for
+   *               the design A/B preview).
+   * The two layouts never show Group-by in both places at once.
+   */
+  groupControlPlacement?: "popover" | "header";
 }) {
   const { agentId: selfAgentId } = useAuth();
   // Pages loaded via `Load more` carry a `fetchedAt` timestamp so the busy
@@ -153,14 +153,16 @@ export function ConversationList({
   // changes the group basis (e.g. day rollover) invalidates the keys.
   const [bucketCollapse, setBucketCollapse] = useState<Map<string, boolean>>(() => new Map());
 
-  // Phase B: `filter` carries only the unread axis. The `watching`
-  // dimension travels as an independent boolean — `unread` and
-  // `watching` can compose ("unread chats I'm watching"), which the
-  // pre-Phase-B single-enum couldn't express. `origin` and `with` ride
-  // through as multi-value filters; the wire serialises them as
-  // comma-joined strings (see `me-chats.ts`).
-  const filter: "all" | "unread" = unread ? "unread" : "all";
-  const watchingParam = watching ? true : undefined;
+  // The header triad is single-select. Derive one `railFilter` from the
+  // (canonicalized) `unread` / `watching` props, then build the query
+  // STRICTLY from it — so the applied filter always matches the highlighted
+  // mode. Deriving `watchingParam` off the raw `watching` prop instead would
+  // let a stale `?unread=1&watching=1` URL silently filter by both while the
+  // triad only highlights Unread (parseUnreadWatching already canonicalizes,
+  // but tying the query to railFilter keeps the component self-consistent).
+  const railFilter: RailFilter = unread ? "unread" : watching ? "watching" : "all";
+  const filter: "all" | "unread" = railFilter === "unread" ? "unread" : "all";
+  const watchingParam = railFilter === "watching" ? true : undefined;
   const originParam = origin.length > 0 ? [...origin] : undefined;
   const withParam = participants.length > 0 ? [...participants] : undefined;
 
@@ -199,24 +201,15 @@ export function ConversationList({
     refetchInterval: 30_000,
   });
 
-  const resetExtras = (): void => {
-    if (extraPages.length > 0) setExtraPages([]);
-    setMoreError(null);
-  };
-
   // Mirror in an effect so a URL-only change (browser back/forward, deep
   // link, parent-driven toggle) can't bleed previous-view rows into the
   // new list. Identity-only deps; the body doesn't read them.
   //
-  // Phase B caveat: `origin` and `participants` are arrays — their object
-  // identity changes on every render even when the contents are unchanged,
-  // which would re-fire the effect every paint. We collapse each into a
-  // stable string key (their canonical URL serialisation) so the effect
-  // only fires on actual content changes. Without this dep the new
-  // Phase B dimensions could `Load more` on Manual, then switch to PR
-  // origin, and the stale Manual tail would still render — same bug as
-  // Phase A's filter/engagement dependency was originally added to
-  // prevent (see commentary in chat-projection-dispatcher).
+  // `origin` and `participants` are arrays — their object identity changes
+  // on every render even when the contents are unchanged, which would
+  // re-fire the effect every paint. We collapse each into a stable string
+  // key (their canonical URL serialisation) so the effect only fires on
+  // actual content changes.
   const originKey = origin.join(",");
   const participantsKey = participants.join(",");
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are triggers, not reads
@@ -252,20 +245,10 @@ export function ConversationList({
     return [...baseRows, ...expanded];
   }, [baseRows, extraPages, dataUpdatedAt]);
 
-  // Buckets are recomputed whenever the rows or group mode change.
-  // Day-rollover (a chat that was "Today" at 23:59 should drift into
-  // "Yesterday" after midnight) is handled implicitly by the 15 s
-  // `useQuery` refetch on the parent query — the refetched response
-  // changes `data.rows`' identity, which invalidates this memo. A
-  // user who leaves the rail open past midnight without a refetch
-  // (e.g. an inactive tab the browser throttles) won't see the bucket
-  // shift until the next refetch lands; that's an acceptable degree
-  // of staleness for a presentational concern.
-  // Hoist attention chats (failed + needs-you) into a pinned section at the top
-  // WITHOUT touching cursor pagination or reordering the main list: partition
-  // them out, group the rest as usual, then prepend a synthetic "Needs
-  // attention" bucket (failed pinned above needs-you). A chat appears in
-  // exactly one place (pinned OR its normal group), never both.
+  // Hoist attention chats (failed + needs-you) into a pinned section at the
+  // top WITHOUT touching cursor pagination or reordering the main list:
+  // partition them out, group the rest as usual, then prepend a synthetic
+  // "Needs attention" bucket. A chat appears in exactly one place.
   const buckets = useMemo(() => {
     const { attention, rest } = splitAttentionRows(allRows);
     if (attention.length === 0) return groupRows(allRows, group);
@@ -313,13 +296,12 @@ export function ConversationList({
 
   // Auto-recover from the unread-filter dead-end: when the user reads
   // every unread chat, the visible list collapses to zero and there's
-  // no signal to switch back. Flip the URL for them instead of leaving
-  // an empty rail behind.
+  // no signal to switch back. Flip the triad back to `all` for them.
   useEffect(() => {
-    if (unread && totalUnread === 0 && data && !isLoading) {
-      onUnreadChange(false);
+    if (railFilter === "unread" && totalUnread === 0 && data && !isLoading) {
+      onRailFilterChange("all");
     }
-  }, [unread, totalUnread, data, isLoading, onUnreadChange]);
+  }, [railFilter, totalUnread, data, isLoading, onRailFilterChange]);
 
   const isBucketCollapsed = (key: string, defaultCollapsed: boolean): boolean => {
     const override = bucketCollapse.get(key);
@@ -340,11 +322,13 @@ export function ConversationList({
     });
   };
 
-  // Total active filter dimensions — drives the Filter button badge and
-  // the chip-row visibility. Origin / participants count their list
-  // length so a multi-select "PR + Issue" shows 2.
-  const activeFilterCount = origin.length + participants.length + (unread ? 1 : 0) + (watching ? 1 : 0);
-  const hasActiveFilter = activeFilterCount > 0;
+  // The `⚙` popover badge counts the *secondary* filters it hides from the
+  // header: origin, participants, and a non-default scope. The primary
+  // triad (unread / watching) lives in the header and is not counted here.
+  const popoverFilterCount = origin.length + participants.length + (engagement !== "active" ? 1 : 0);
+  // The chip row mirrors only origin + participants (the removable
+  // multi-selects). Scope is surfaced by the popover badge, not a chip.
+  const hasActiveChips = origin.length > 0 || participants.length > 0;
 
   const resolveAgentName = useAgentNameMap();
 
@@ -355,6 +339,12 @@ export function ConversationList({
     onParticipantsChange(participants.filter((p) => p !== id));
   };
 
+  const TRIAD: ReadonlyArray<{ value: RailFilter; label: string }> = [
+    { value: "all", label: "All" },
+    { value: "unread", label: "Unread" },
+    { value: "watching", label: "Watching" },
+  ];
+
   return (
     <aside
       className="shrink-0 flex flex-col overflow-hidden"
@@ -364,14 +354,17 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header — uniform ghost-button toolbar.
-          New chat / Unread / (Phase B: Filter) sit on row 1 as equal
-          action peers; Scope + Group sit on row 2 as view-mode controls.
-          All toolbar controls share the same ghost-button language (no
-          static borders, mono only for digits) so the rail reads as a
-          navigation strip rather than a chip matrix. */}
+      {/* Header — a single ghost-button row: New chat (primary ink) on the
+          left, the All / Unread / Watching triad pushed right, and the `⚙`
+          popover (Scope / Origin / Group) at the far right. The optional
+          chip row (active origin / participants) sits below. */}
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-        <div className="flex items-center" style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3)" }}>
+        {/* Row 1 — primary action (New chat) + filter entry (⚙). Kept on
+            its own line so it never crowds against the filter triad. */}
+        <div
+          className="flex items-center"
+          style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3) var(--sp-1)" }}
+        >
           <button
             type="button"
             onClick={onNewChat}
@@ -381,11 +374,6 @@ export function ConversationList({
               !isDraftActive && "hover:bg-[var(--bg-active)]",
             )}
             style={{
-              // Slightly larger leading icon than the Unread bell, and
-              // both icon + label rendered in `--primary`. The colour
-              // delta (primary ink vs Unread's fg-3) is the only thing
-              // lifting New chat above the toolbar's other ghost
-              // actions — no border, no fill, no size bump.
               gap: "var(--sp-1)",
               padding: "var(--sp-0_5) var(--sp-1_5)",
               border: 0,
@@ -399,182 +387,97 @@ export function ConversationList({
             <span>New chat</span>
           </button>
 
-          {/* Unread toggle. The two filter entries (Unread + Filter) sit
-              on the right of the toolbar opposite New chat so the row
-              reads as "primary action ↔ filtering controls". */}
-          <button
-            type="button"
-            onClick={() => onUnreadChange(!unread)}
-            aria-pressed={unread}
-            className={cn(
-              "inline-flex items-center text-label cursor-pointer transition-colors",
-              !unread && "hover:bg-[var(--bg-hover)]",
-            )}
-            style={{
-              marginLeft: "auto",
-              gap: "var(--sp-1)",
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              border: 0,
-              borderRadius: 4,
-              background: unread ? "var(--bg-active)" : "transparent",
-              color: unread ? "var(--fg)" : "var(--fg-3)",
-            }}
-            title={unread ? "Show all chats" : "Filter to unread only"}
-          >
-            <Bell size={14} strokeWidth={1.75} />
-            <span>Unread</span>
-            {totalUnread > 0 && (
-              <span className="mono" style={{ color: "var(--state-unread)" }}>
-                {totalUnread}
-              </span>
-            )}
-          </button>
+          <span style={{ marginLeft: "auto" }} />
 
           <FilterPopover
             origin={origin}
             onOriginChange={onOriginChange}
-            watching={watching}
-            onWatchingChange={onWatchingChange}
+            engagement={engagement}
+            onEngagementChange={onEngagementChange}
+            group={group}
+            onGroupChange={onGroupChange}
+            showGroup={groupControlPlacement === "popover"}
             onResetAll={onClearFilters}
-            activeCount={origin.length + participants.length + (watching ? 1 : 0)}
+            activeCount={popoverFilterCount}
           />
         </div>
 
-        <div
-          className="flex flex-col"
-          style={{
-            gap: "var(--sp-2)",
-            padding: "var(--sp-1) var(--sp-3) var(--sp-2_5)",
-          }}
-        >
-          {/* Scope + Group by share one row. Both are "view mode" controls
-            (which pool × how it's arranged), so co-locating them avoids
-            implying that Group by is another filter dimension. Group by
-            right-aligns via `marginLeft: auto`. */}
-          <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <SegmentedControl
-              options={ENGAGEMENT_OPTIONS}
-              value={engagement}
-              onChange={(v) => {
-                if (engagement !== v) {
-                  onEngagementChange(v);
-                  resetExtras();
-                }
-              }}
-            />
-            <div className="inline-flex items-center text-label" style={{ marginLeft: "auto", gap: 4 }}>
-              <span style={{ color: "var(--fg-4)" }}>Group</span>
-              {/* Custom dropdown built on the shared `Popover` primitive.
-                  Phase A used a native `<select>` here; reviewers flagged
-                  the OS-theme chrome (browser-rendered border + arrow) as
-                  visually inconsistent with the rest of the de-chipped
-                  toolbar. The headless replacement matches the ghost-button
-                  language and keeps `<select>`-style listbox semantics via
-                  `role="listbox" / role="option"`. */}
-              <Popover
-                align="end"
-                panelStyle={{ minWidth: 140, padding: "var(--sp-0_5)" }}
-                trigger={({ open, toggle }) => {
-                  const current = GROUP_OPTIONS.find((o) => o.value === group);
-                  return (
-                    <button
-                      type="button"
-                      onClick={toggle}
-                      aria-haspopup="listbox"
-                      aria-expanded={open}
-                      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
-                      style={{
-                        gap: 4,
-                        padding: "var(--sp-0_5) var(--sp-1)",
-                        border: 0,
-                        borderRadius: 4,
-                        background: open ? "var(--bg-active)" : "transparent",
-                        color: "var(--fg-2)",
-                      }}
-                    >
-                      <span>{current?.label ?? "Recency"}</span>
-                      <ChevronDown size={12} strokeWidth={1.75} />
-                    </button>
-                  );
-                }}
-              >
-                {({ close }) => (
-                  <div role="listbox" aria-label="Group by" className="flex flex-col">
-                    {GROUP_OPTIONS.map((opt) => {
-                      const selected = opt.value === group;
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          onClick={() => {
-                            if (!selected) onGroupChange(opt.value);
-                            close();
-                          }}
-                          className="text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] text-left"
-                          style={{
-                            padding: "var(--sp-0_75) var(--sp-1_5)",
-                            border: 0,
-                            borderRadius: 4,
-                            background: selected ? "var(--bg-active)" : "transparent",
-                            color: selected ? "var(--fg)" : "var(--fg-2)",
-                            minWidth: 110,
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </Popover>
-            </div>
+        {/* Row 2 — primary triad (All / Unread / Watching). Single-select; the
+            active view gets the active-bg + full ink, the rest stay tertiary. */}
+        <div className="flex items-center" style={{ padding: "0 var(--sp-3) var(--sp-2_5)" }}>
+          <div className="inline-flex items-center" style={{ gap: 2 }}>
+            {TRIAD.map((opt) => {
+              const active = railFilter === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onRailFilterChange(opt.value)}
+                  aria-pressed={active}
+                  className={cn(
+                    "inline-flex items-center text-label cursor-pointer transition-colors",
+                    !active && "hover:bg-[var(--bg-hover)]",
+                  )}
+                  style={{
+                    gap: "var(--sp-1)",
+                    padding: "var(--sp-0_5) var(--sp-1_5)",
+                    border: 0,
+                    borderRadius: 4,
+                    background: active ? "var(--bg-active)" : "transparent",
+                    color: active ? "var(--fg)" : "var(--fg-3)",
+                  }}
+                >
+                  <span>{opt.label}</span>
+                  {opt.value === "unread" && totalUnread > 0 && (
+                    <span className="mono" style={{ color: "var(--state-unread)" }}>
+                      {totalUnread}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-
-          {/* Filter chip row. Renders one chip per active filter
-              dimension. Each chip's × removes only that dimension; the
-              trailing "Clear" button strips every filter in a single
-              URL write (see `nextParamsForClearFilters`). */}
-          {hasActiveFilter && (
-            <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
-              <span className="text-label" style={{ color: "var(--fg-4)" }}>
-                Filters
-              </span>
-              {unread && (
-                <FilterChip
-                  label={`Unread${totalUnread > 0 ? ` ${totalUnread}` : ""}`}
-                  onClear={() => onUnreadChange(false)}
-                />
-              )}
-              {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
-              {origin.map((src) => (
-                <FilterChip key={`origin-${src}`} label={originLabel(src)} onClear={() => removeOrigin(src)} />
-              ))}
-              {participants.map((agentId) => (
-                <FilterChip
-                  key={`with-${agentId}`}
-                  label={`@${resolveAgentName(agentId)}`}
-                  onClear={() => removeParticipant(agentId)}
-                />
-              ))}
-              <button
-                type="button"
-                onClick={onClearFilters}
-                className="text-label cursor-pointer"
-                style={{
-                  marginLeft: "auto",
-                  background: "transparent",
-                  border: 0,
-                  padding: 0,
-                  color: "var(--primary)",
-                }}
-              >
-                Clear
-              </button>
+          {groupControlPlacement === "header" && (
+            <div style={{ marginLeft: "auto" }}>
+              <GroupDropdown group={group} onGroupChange={onGroupChange} />
             </div>
           )}
         </div>
+
+        {/* Filter chip row — one chip per active origin / participant.
+            Each chip's × removes only that dimension; the trailing "Clear"
+            strips them in a single URL write. */}
+        {hasActiveChips && (
+          <div className="flex items-center flex-wrap" style={{ gap: 4, padding: "0 var(--sp-3) var(--sp-2_5)" }}>
+            <span className="text-label" style={{ color: "var(--fg-4)" }}>
+              Filters
+            </span>
+            {origin.map((src) => (
+              <FilterChip key={`origin-${src}`} label={originLabel(src)} onClear={() => removeOrigin(src)} />
+            ))}
+            {participants.map((agentId) => (
+              <FilterChip
+                key={`with-${agentId}`}
+                label={`@${resolveAgentName(agentId)}`}
+                onClear={() => removeParticipant(agentId)}
+              />
+            ))}
+            <button
+              type="button"
+              onClick={onClearFilters}
+              className="text-label cursor-pointer"
+              style={{
+                marginLeft: "auto",
+                background: "transparent",
+                border: 0,
+                padding: 0,
+                color: "var(--primary)",
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {/* List */}
@@ -622,20 +525,21 @@ export function ConversationList({
               {!collapsed &&
                 bucket.rows.map((row) => {
                   const isSelected = selectedChatId === row.chatId;
-                  const rawSubtitle = buildSubtitle(row);
-                  // 1-message chats: title (auto-generated from first
-                  // message) == subtitle (last-message preview). Suppress
-                  // the duplicate; the em-dash placeholder picks up below.
-                  const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
                   const hasUnread = row.unreadMentionCount > 0;
                   const failed = rowIsFailed(row);
                   const needsYou = rowNeedsYou(row);
+                  const isWatching = row.membershipKind === "watching";
+                  // Density "C": every row is a single line — title + meta only.
+                  // The last-message preview is NOT shown in the rail (the rail
+                  // is for navigating by title; you read the message after
+                  // opening the chat). Attention is carried by the left border +
+                  // a small state dot in the meta cluster — never a second line —
+                  // so row height stays uniform and the list scans fast. failed
+                  // (red) outranks needs-you (amber); both also pin the row into
+                  // the top "Needs attention" bucket for the fuller context.
+                  const attentionColor = failed ? "var(--state-error)" : needsYou ? "var(--state-needs-you)" : null;
                   return (
-                    <div
-                      key={row.chatId}
-                      className="group relative"
-                      style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}
-                    >
+                    <div key={row.chatId} className="group relative">
                       <button
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
@@ -644,17 +548,14 @@ export function ConversationList({
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          padding: "var(--sp-2) var(--sp-3)",
+                          // Single-line rows, but with comfortable vertical
+                          // breathing room (--sp-2_5) so the list doesn't read as
+                          // a dense wall — still well under the old two-line row.
+                          padding: "var(--sp-2_5) var(--sp-3)",
                           gap: "var(--sp-2_5)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
                           borderLeft: `var(--hairline-bold) solid ${
-                            isSelected
-                              ? "var(--brand)"
-                              : failed
-                                ? "var(--state-error)"
-                                : needsYou
-                                  ? "var(--state-needs-you)"
-                                  : "transparent"
+                            isSelected ? "var(--brand)" : (attentionColor ?? "transparent")
                           }`,
                         }}
                       >
@@ -666,61 +567,64 @@ export function ConversationList({
                           unreadCount={row.unreadMentionCount}
                           needsYou={needsYou}
                           failed={failed}
+                          size={28}
+                          muted
+                          badge={false}
                         />
-                        <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
-                          <div className="flex items-center" style={{ gap: 6 }}>
-                            <SourceIcon source={row.source} entityType={row.entityType} emphasize={hasUnread} />
+                        <span
+                          className="truncate text-subtitle"
+                          style={{
+                            color: "var(--fg)",
+                            fontWeight: hasUnread ? 700 : 600,
+                            flex: 1,
+                            minWidth: 0,
+                          }}
+                        >
+                          {row.title}
+                        </span>
+                        {/* Right meta cluster — single line. Hidden on hover so
+                            the row's engagement menu can take the corner. */}
+                        <span
+                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                          style={{ gap: 6 }}
+                        >
+                          {attentionColor && (
                             <span
-                              className="truncate text-subtitle"
+                              role="img"
+                              aria-label={failed ? "agent failed" : "needs your reply"}
                               style={{
-                                // Always render the title at full `--fg`.
-                                // Unread state keeps the stronger 700
-                                // weight to stay visually distinguishable,
-                                // but the read-state title is no longer
-                                // dimmed via `--fg-2` — that was making
-                                // every "already read" row look greyed out.
-                                color: "var(--fg)",
-                                fontWeight: hasUnread ? 700 : 600,
-                                flex: 1,
-                                minWidth: 0,
+                                width: 6,
+                                height: 6,
+                                borderRadius: "50%",
+                                background: attentionColor,
+                                flexShrink: 0,
                               }}
-                            >
-                              {row.title}
+                            />
+                          )}
+                          {hasUnread && (
+                            <span
+                              role="img"
+                              aria-label="unread mentions"
+                              style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: "50%",
+                                background: "var(--state-unread)",
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                          {isWatching && (
+                            <Eye size={12} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-label="watching" />
+                          )}
+                          {row.busyAgentIds.length > 0 ? (
+                            <ActivityDots />
+                          ) : row.lastMessageAt ? (
+                            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                              {formatRowTime(row.lastMessageAt)}
                             </span>
-                            {(() => {
-                              // `busyAgentIds` is the authoritative D-axis
-                              // "is anyone working in this chat" signal — it
-                              // lights the activity dots even when the
-                              // runtime emits no intermediate
-                              // `session_events` (codex tools that only
-                              // report on turn completion), which the legacy
-                              // `liveActivity` freshness proxy alone would
-                              // miss.
-                              const slot =
-                                row.busyAgentIds.length > 0 ? (
-                                  <ActivityDots />
-                                ) : row.lastMessageAt ? (
-                                  <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                                    {formatRowTime(row.lastMessageAt)}
-                                  </span>
-                                ) : null;
-                              return slot ? (
-                                <span className="shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0">
-                                  {slot}
-                                </span>
-                              ) : null;
-                            })()}
-                          </div>
-                          <div
-                            className="truncate text-body"
-                            style={{
-                              color: hasUnread ? "var(--fg-2)" : "var(--fg-3)",
-                              marginTop: 2,
-                            }}
-                          >
-                            {subtitle || "—"}
-                          </div>
-                        </div>
+                          ) : null}
+                        </span>
                       </button>
                       <div
                         className="absolute"
@@ -765,6 +669,75 @@ export function ConversationList({
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Header Group-by dropdown — used only in the "separated" layout
+ * (`groupControlPlacement="header"`), where Group-by is pulled out of the
+ * `⚙` popover into its own visible control on the filter row. Headless
+ * `Popover` + listbox semantics, matching the rail's de-chipped ghost
+ * language. When grouping lives in the popover this control is not rendered.
+ */
+function GroupDropdown({ group, onGroupChange }: { group: GroupMode; onGroupChange: (next: GroupMode) => void }) {
+  const current = GROUP_OPTIONS.find((o) => o.value === group);
+  return (
+    <Popover
+      align="end"
+      panelStyle={{ minWidth: 140, padding: "var(--sp-0_5)" }}
+      trigger={({ open, toggle }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            gap: 4,
+            padding: "var(--sp-0_5) var(--sp-1)",
+            border: 0,
+            borderRadius: 4,
+            background: open ? "var(--bg-active)" : "transparent",
+            color: "var(--fg-2)",
+          }}
+        >
+          <span style={{ color: "var(--fg-4)" }}>Group</span>
+          <span>{current?.label ?? "By time"}</span>
+          <ChevronDown size={12} strokeWidth={1.75} />
+        </button>
+      )}
+    >
+      {({ close }) => (
+        <div role="listbox" aria-label="Group by" className="flex flex-col">
+          {GROUP_OPTIONS.map((opt) => {
+            const selected = opt.value === group;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => {
+                  if (!selected) onGroupChange(opt.value);
+                  close();
+                }}
+                className="text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] text-left"
+                style={{
+                  padding: "var(--sp-0_75) var(--sp-1_5)",
+                  border: 0,
+                  borderRadius: 4,
+                  background: selected ? "var(--bg-active)" : "transparent",
+                  color: selected ? "var(--fg)" : "var(--fg-2)",
+                  minWidth: 110,
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Popover>
   );
 }
 

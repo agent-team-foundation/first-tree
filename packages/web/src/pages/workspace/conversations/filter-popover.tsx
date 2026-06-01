@@ -1,6 +1,7 @@
-import type { ChatSource } from "@first-tree/shared";
+import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { Check, Settings } from "lucide-react";
 import { Popover } from "../../../components/ui/popover.js";
+import type { GroupMode } from "./group-rows.js";
 
 /**
  * Canonical order of origin filters shown in the popover. Phase C
@@ -23,48 +24,90 @@ export function originLabel(source: ChatSource): string {
   return ORIGIN_OPTIONS.find((o) => o.value === source)?.label ?? source;
 }
 
+/**
+ * Scope (lifecycle) options. Demoted from a persistent segmented control
+ * into the filter popover in the conversation-list redesign — `Active` is
+ * the overwhelming default, so the header stays a single row and the rarer
+ * `Archived` / `All` views live one click away.
+ */
+export const SCOPE_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: string }> = [
+  { value: "active", label: "Active" },
+  { value: "archived", label: "Archived" },
+  { value: "all", label: "All" },
+];
+
+/** Short label for a non-default scope — used by the chip row. */
+export function scopeLabel(view: ChatEngagementView): string {
+  return SCOPE_OPTIONS.find((o) => o.value === view)?.label ?? view;
+}
+
+/**
+ * Group-by options. Also demoted from a persistent header dropdown into the
+ * popover — grouping is a view-mode preference, not a daily-touch control.
+ */
+export const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
+  { value: "recency", label: "By time" },
+  { value: "source", label: "By source" },
+];
+
 type FilterPopoverProps = {
   origin: ReadonlyArray<ChatSource>;
   onOriginChange: (next: ReadonlyArray<ChatSource>) => void;
-  watching: boolean;
-  onWatchingChange: (next: boolean) => void;
+  /** Scope (lifecycle) view — Active / Archived / All. */
+  engagement: ChatEngagementView;
+  onEngagementChange: (next: ChatEngagementView) => void;
+  /** Grouping mode — Source / Recency. */
+  group: GroupMode;
+  onGroupChange: (next: GroupMode) => void;
+  /**
+   * Whether the Group-by section renders inside the popover. False when the
+   * rail surfaces Group-by as its own header control instead (the
+   * "separated" layout), so the same control never appears in two places.
+   */
+  showGroup?: boolean;
   /**
    * Clears every rail filter dimension in one URL mutation. The popover
    * delegates "Reset all" to this so the reset doesn't have to call
-   * `onOriginChange([])` + `onWatchingChange(false)` back-to-back —
-   * those calls would each derive from the same render-stale
-   * `searchParams` snapshot and the second `setSearchParams` would
-   * clobber the first (same bug as Phase A's two-setter Clear).
-   * Also covers `with` (participants), which the popover doesn't
-   * surface on its own but which the URL can carry today via
-   * hand-typed parameters.
+   * `onOriginChange([])` back-to-back with the others — those calls would
+   * each derive from the same render-stale `searchParams` snapshot and the
+   * later `setSearchParams` would clobber the earlier (same bug as Phase
+   * A's two-setter Clear). Also covers `with` (participants), which the
+   * popover doesn't surface on its own but which the URL can carry today
+   * via hand-typed parameters.
    */
   onResetAll: () => void;
   /**
-   * Number of active filter dimensions across origin/watching (and,
-   * in Phase B v2, participants). Drives the trigger's badge so the
-   * user knows the popover has narrowed the list without opening it.
+   * Number of active *filter* dimensions the popover hides from the
+   * persistent header (origin + non-default scope + participants). Drives
+   * the trigger's badge so the user knows the popover has narrowed the
+   * list without opening it. Grouping is a view-mode, not a filter, so it
+   * is intentionally excluded from this count.
    */
   activeCount: number;
 };
 
 /**
- * Filter popover — the workspace rail's `⚙ Filter` button + panel.
- * Multi-select origin, watching toggle, and (later) participants
- * picker. Each toggle writes through to the URL immediately, so
- * "Done" is just a dismiss — there's no apply/save step.
+ * Filter popover — the workspace rail's `⚙` button + panel. Holds the
+ * secondary, lower-frequency controls so the header collapses to a single
+ * row (New chat + the All / Unread / Watching triad + this button):
+ * multi-select origin, scope (Active/Archived/All), and group-by. Each
+ * control writes through to the URL immediately, so "Done" is just a
+ * dismiss — there's no apply/save step.
  *
- * Participants picker is intentionally absent in Phase B v1: the
- * `?with=` wire is plumbed end-to-end (URL parser + listMeChats),
- * but the picker UI (agent autocomplete + selected-chip list) is a
- * follow-up. Users who need it today can hand-type `?with=…` in the
- * URL; the rail will narrow accordingly.
+ * The primary engagement triad (All / Unread / Watching) lives in the
+ * header, not here — it's the daily-touch filter. Participants picker is
+ * intentionally absent: the `?with=` wire is plumbed end-to-end (URL parser
+ * + listMeChats) but the picker UI is a follow-up; users who need it today
+ * can hand-type `?with=…` and the rail narrows accordingly.
  */
 export function FilterPopover({
   origin,
   onOriginChange,
-  watching,
-  onWatchingChange,
+  engagement,
+  onEngagementChange,
+  group,
+  onGroupChange,
+  showGroup = true,
   onResetAll,
   activeCount,
 }: FilterPopoverProps) {
@@ -89,22 +132,22 @@ export function FilterPopover({
           aria-pressed={open}
           aria-haspopup="dialog"
           aria-expanded={open}
+          aria-label="Filter"
           className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
           style={{
             gap: "var(--sp-1)",
             padding: "var(--sp-0_5) var(--sp-1_5)",
             border: 0,
             borderRadius: 4,
-            // Open state and "filters are narrowing the list" both
-            // earn the active-bg highlight, so the user always sees
-            // when the popover is live or has unsaved narrowing.
+            // Open state and "filters are narrowing the list" both earn
+            // the active-bg highlight, so the user always sees when the
+            // popover is live or has unsaved narrowing.
             background: open || activeCount > 0 ? "var(--bg-active)" : "transparent",
             color: open || activeCount > 0 ? "var(--fg)" : "var(--fg-3)",
           }}
           title="Filter"
         >
           <Settings size={14} strokeWidth={1.75} />
-          <span>Filter</span>
           {activeCount > 0 && (
             <span className="mono" style={{ color: "var(--primary)" }}>
               {activeCount}
@@ -117,10 +160,29 @@ export function FilterPopover({
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
           <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
             <header
+              className="text-eyebrow"
+              style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
+            >
+              Status
+            </header>
+            {SCOPE_OPTIONS.map((opt) => (
+              <FilterRadio
+                key={opt.value}
+                label={opt.label}
+                selected={engagement === opt.value}
+                onSelect={() => {
+                  if (engagement !== opt.value) onEngagementChange(opt.value);
+                }}
+              />
+            ))}
+          </section>
+
+          <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+            <header
               className="flex items-center justify-between text-eyebrow"
               style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
             >
-              <span>Origin</span>
+              <span>Source</span>
               {origin.length > 0 && (
                 <button
                   type="button"
@@ -132,28 +194,49 @@ export function FilterPopover({
                 </button>
               )}
             </header>
-            {ORIGIN_OPTIONS.map((opt) => {
-              const checked = origin.includes(opt.value);
-              return (
-                <FilterCheckbox
-                  key={opt.value}
-                  label={opt.label}
-                  checked={checked}
-                  onChange={() => toggleOrigin(opt.value)}
-                />
-              );
-            })}
+            {ORIGIN_OPTIONS.map((opt) => (
+              <FilterCheckbox
+                key={opt.value}
+                label={opt.label}
+                checked={origin.includes(opt.value)}
+                onChange={() => toggleOrigin(opt.value)}
+              />
+            ))}
           </section>
 
-          <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-            <header
-              className="text-eyebrow"
-              style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
+          {/* Hairline groups the two filters (Status / Source) above from the
+              arrangement (Group by) below — one semantic separator, same
+              `--hairline` + `--border-faint` recipe as the footer divider
+              (DESIGN.md §5 hairlines / §3 border-faint). No literals, no colour.
+              Omitted entirely in the "separated" layout, where Group-by is a
+              header control instead. */}
+          {showGroup && (
+            <section
+              className="flex flex-col"
+              style={{
+                gap: "var(--sp-0_5)",
+                borderTop: "var(--hairline) solid var(--border-faint)",
+                paddingTop: "var(--sp-2)",
+              }}
             >
-              Status
-            </header>
-            <FilterCheckbox label="Watching only" checked={watching} onChange={() => onWatchingChange(!watching)} />
-          </section>
+              <header
+                className="text-eyebrow"
+                style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
+              >
+                Group by
+              </header>
+              {GROUP_OPTIONS.map((opt) => (
+                <FilterRadio
+                  key={opt.value}
+                  label={opt.label}
+                  selected={group === opt.value}
+                  onSelect={() => {
+                    if (group !== opt.value) onGroupChange(opt.value);
+                  }}
+                />
+              ))}
+            </section>
+          )}
 
           <div
             className="flex items-center"
@@ -232,6 +315,35 @@ function FilterCheckbox({ label, checked, onChange }: { label: string; checked: 
       </span>
       <span>{label}</span>
       <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
+    </label>
+  );
+}
+
+/**
+ * Single-select row for the Scope / Group-by sections. Same de-chipped
+ * language as `FilterCheckbox`, but the selected row is marked by the
+ * active background + a trailing check (radio semantics via the native
+ * `<input type=radio>` kept `sr-only` for keyboard / screen-reader use).
+ */
+function FilterRadio({ label, selected, onSelect }: { label: string; selected: boolean; onSelect: () => void }) {
+  return (
+    <label
+      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+      style={{
+        gap: "var(--sp-1_5)",
+        padding: "var(--sp-0_75) var(--sp-1)",
+        borderRadius: 4,
+        background: selected ? "var(--bg-active)" : "transparent",
+        color: selected ? "var(--fg)" : "var(--fg-2)",
+      }}
+    >
+      <span>{label}</span>
+      {selected && (
+        <span aria-hidden className="inline-flex items-center" style={{ marginLeft: "auto", color: "var(--primary)" }}>
+          <Check size={12} strokeWidth={2.5} />
+        </span>
+      )}
+      <input type="radio" checked={selected} onChange={onSelect} className="sr-only" />
     </label>
   );
 }
