@@ -292,6 +292,12 @@
   --state-error-soft: color-mix(in oklch, var(--state-error) 14%, transparent);
   --state-offline-soft: color-mix(in oklch, var(--state-offline) 14%, transparent);
 
+  /* Border companions for state-tinted callouts — a slightly stronger 28% mix
+     to pair with the 14% -soft fill, so callout boxes stop hand-rolling
+     color-mix at the call site (same rationale as the -soft family above). */
+  --state-blocked-border: color-mix(in oklch, var(--state-blocked) 28%, transparent);
+  --state-error-border: color-mix(in oklch, var(--state-error) 28%, transparent);
+
   /* Feedback / severity vocabulary (success / warning / error). Aliased to the
      shared base hues so there is ONE value per color — distinct *names* from the
      agent-state vocabulary (--state-*), same underlying tones. Replaces the old
@@ -339,6 +345,12 @@
   --fg-2: oklch(0.36 0 0);
   --fg-3: oklch(0.52 0 0);
   --fg-4: oklch(0.68 0 0);
+  /* Muted neutral tone for inline "Saved" / "Active" confirmations (a Check
+     glyph + label sitting in a form row). Deliberately neutral, not green —
+     understated confirmation. Defined once via var() refs so it resolves per
+     palette; replaces the call-site color-mix duplicated in settings-field
+     + settings/onboarding. */
+  --fg-confirm: color-mix(in oklch, var(--primary) 35%, var(--fg));
 
   --border: oklch(0.9 0 0);
   --border-strong: oklch(0.82 0 0);
@@ -427,8 +439,10 @@
   --sp-12: 3rem; /* 48px */
   --sp-16: 4rem; /* 64px */
   --sp-20: 5rem; /* 80px */
+  --sp-35: 8.75rem; /* 140px */
   --sp-45: 11.25rem; /* 180px */
   --sp-60: 15rem; /* 240px */
+  --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
 
   /* Default color-scheme so native form controls, scrollbars, and the
