@@ -276,6 +276,7 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
             <Label htmlFor="mcp-transport">Transport</Label>
             <Select
               id="mcp-transport"
+              aria-label="Transport"
               value={transport}
               onChange={(v) => setTransport(v as "stdio" | "http" | "sse")}
               options={[

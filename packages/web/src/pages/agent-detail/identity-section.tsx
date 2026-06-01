@@ -211,6 +211,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
             <Label htmlFor="id-visibility">Visibility</Label>
             <Select
               id="id-visibility"
+              aria-label="Visibility"
               value={visibility}
               onChange={(v) => setVisibility(v as typeof visibility)}
               disabled={!canChangeVisibility}
@@ -231,6 +232,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
               {canEditDelegate ? (
                 <Select
                   id="id-delegate"
+                  aria-label="Delegate Mention"
                   value={delegateMention}
                   onChange={setDelegateMention}
                   options={delegateOptions}
