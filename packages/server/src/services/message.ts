@@ -459,6 +459,7 @@ async function sendMessageInner(
       mentionedAgentIds: mergedMentions,
       contentPreview: previewText,
       messageCreatedAt: msg.createdAt,
+      bumpForAgentFinalText: isAgentFinalText,
     });
 
     return {

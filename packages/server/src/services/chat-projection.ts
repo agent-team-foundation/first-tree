@@ -17,6 +17,12 @@
  *      speaking participants AND for watcher rows whose managed agent was
  *      mentioned. Sender row is excluded.
  *
+ *   3b. Agent-final-text unread bump: when the message is an agent's final
+ *      turn output (`bumpForAgentFinalText`, mentions-empty by construction),
+ *      bump `unread_mention_count` for human speakers (≠ sender) and for
+ *      watchers whose managed agent is the sender. Restores the "agent
+ *      finished → red dot" UX after PR #633 retired implicit 1:1 dmAuto.
+ *
  *   4. Realtime kick: fire-and-forget `pg_notify('chat_message_events', …)`
  *      so admin WS sockets can translate it into a `chat:message` frame.
  *      Failure is swallowed — durable persistence is the correctness path.
@@ -92,6 +98,19 @@ export type ApplyAfterFanOutInput = {
   contentPreview: string;
   /** When set, used as the `last_message_at` instead of NOW(). */
   messageCreatedAt?: Date;
+  /**
+   * When the send is an agent's final-text turn output (`purpose ===
+   * "agent-final-text"` upstream), bump the unread counter for human
+   * stakeholders of this chat even though the message has no `@`-mentions.
+   * Targets:
+   *   - human speakers (≠ sender) in this chat — the 1:1 human peer case.
+   *   - watcher rows whose managed agent IS the sender — the group-chat
+   *     case where the manager is a watcher, not a speaker.
+   * Restores the "agent finished → red dot for the human" UX that the
+   * previous 1:1 dmAuto + extractMentionsFromContent path provided before
+   * PR #633 retired implicit routing.
+   */
+  bumpForAgentFinalText?: boolean;
 };
 
 /**
@@ -100,7 +119,7 @@ export type ApplyAfterFanOutInput = {
  * is empty (degenerate case skips the mention UPDATEs).
  */
 export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput): Promise<void> {
-  const { chatId, senderId, mentionedAgentIds, contentPreview, messageCreatedAt } = input;
+  const { chatId, senderId, mentionedAgentIds, contentPreview, messageCreatedAt, bumpForAgentFinalText } = input;
   const previewClipped = contentPreview.length > 0 ? contentPreview.slice(0, 200) : null;
   const ts = messageCreatedAt ?? new Date();
 
@@ -129,6 +148,55 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
      WHERE chat_id = ${chatId}
        AND engagement_status = ${ARCHIVED}
   `);
+
+  // 3b. Agent-final-text unread bump (no mention required).
+  //
+  // `purpose === "agent-final-text"` (see services/message.ts purposeProfile)
+  // produces a message with empty `metadata.mentions` by construction: the
+  // explicit-only routing contract introduced in PR #633 made it the one
+  // legal mentions-empty path. As a side-effect the original 1:1 dmAuto
+  // projection — which silently bumped the human peer's unread counter so
+  // the chat list showed a red dot when their agent finished a turn —
+  // was retired with no replacement, and the badge stopped appearing.
+  //
+  // We restore that signal here without re-introducing implicit wake-up:
+  // inbox `notify=false` from `purposeProfile.forceSilentFanOut` still
+  // holds (no agent session is woken), but `chat_user_state.
+  // unread_mention_count` is bumped for the humans who should notice the
+  // agent's final output:
+  //   - speaker branch: human speakers (≠ sender) in this chat — covers
+  //     the 1:1 human-↔-agent case.
+  //   - watcher branch: watchers whose managed agent IS the sender —
+  //     covers group chats where the manager watches but does not speak.
+  // Both branches are keyed off `chat_membership.access_mode`, which is
+  // mutually exclusive per (chat, agent), so the UNION stays disjoint.
+  if (bumpForAgentFinalText) {
+    await tx.execute(sql`
+      INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count)
+      SELECT chat_id, agent_id, 1
+        FROM (
+          SELECT cm.chat_id, cm.agent_id
+            FROM chat_membership cm
+            JOIN agents a ON a.uuid = cm.agent_id
+           WHERE cm.chat_id     = ${chatId}
+             AND cm.access_mode = 'speaker'
+             AND cm.agent_id   <> ${senderId}
+             AND a.type         = 'human'
+          UNION
+          SELECT cm.chat_id, cm.agent_id
+            FROM chat_membership cm
+            JOIN members m ON m.agent_id    = cm.agent_id
+            JOIN agents  a ON a.manager_id  = m.id
+           WHERE cm.chat_id     = ${chatId}
+             AND cm.access_mode = 'watcher'
+             AND a.uuid         = ${senderId}
+             AND a.type        <> 'human'
+             AND m.status       = 'active'
+        ) targets
+      ON CONFLICT (chat_id, agent_id)
+      DO UPDATE SET unread_mention_count = chat_user_state.unread_mention_count + 1
+    `);
+  }
 
   if (mentionedAgentIds.length === 0) return;
 
