@@ -109,6 +109,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (body.managerId !== undefined && scope.role !== "admin") {
       throw new ForbiddenError("Only admins can reassign an agent's manager");
     }
+    // A delegate is a personal choice: only the member themselves may set,
+    // change, or clear their own delegate. `manage` scope otherwise lets an
+    // admin edit any agent in the org, so gate `delegateMention` writes to the
+    // caller acting on their own human agent (humanAgentId === target uuid).
+    if (body.delegateMention !== undefined && scope.humanAgentId !== request.params.uuid) {
+      throw new ForbiddenError("Only the member themselves can set their own delegate");
+    }
     const wantsToBindClient = body.clientId !== undefined;
     const before = wantsToBindClient ? await agentService.getAgent(app.db, request.params.uuid) : null;
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);

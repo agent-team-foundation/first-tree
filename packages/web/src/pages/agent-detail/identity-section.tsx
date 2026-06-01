@@ -112,16 +112,24 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
   // enforces this via assertCanManage; this mirrors that on the UI so the
   // field is disabled when the caller can't persist the change anyway.
   const canChangeVisibility = role === "admin" || agent.managerId === memberId;
+  // A delegate is a personal choice — only the member themselves may set it,
+  // NOT an admin acting on their behalf. The backend enforces this (403);
+  // mirror it here so the control is disabled when the caller can't persist.
+  const canEditDelegate = isHuman && agent.managerId === memberId;
   const assistantsQuery = useQuery({
-    queryKey: ["agents-for-delegate"],
+    queryKey: ["agents-for-delegate", memberId],
     queryFn: async () => {
       const res = await listAgents({ limit: 100 });
-      // Delegate candidates must be team-visible: a delegate acts on the
-      // human's behalf in team chats, so it has to be mentionable by the team
-      // (visibility=organization). Private agents are excluded.
-      return res.items.filter((a) => a.type === "agent" && a.visibility === "organization" && a.status === "active");
+      // Candidates mirror the Team page selector: the member's own team-visible
+      // (organization), active agents. Private agents are excluded because a
+      // delegate acts on the member's behalf in team chats and must be
+      // team-mentionable.
+      return res.items.filter(
+        (a) =>
+          a.type === "agent" && a.visibility === "organization" && a.status === "active" && a.managerId === memberId,
+      );
     },
-    enabled: open && isHuman,
+    enabled: open && canEditDelegate,
   });
 
   async function submit(e: FormEvent) {
@@ -138,8 +146,13 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     try {
       const patch: UpdateAgent = {
         displayName: trimmed,
-        delegateMention: delegateMention || null,
       };
+      // Only send delegateMention when the caller owns this agent. Otherwise an
+      // admin editing someone else's display name would carry the field and trip
+      // the server-side self-only guard (403).
+      if (canEditDelegate) {
+        patch.delegateMention = delegateMention || null;
+      }
       if (visibility !== agent.visibility) {
         patch.visibility = visibility;
       }
@@ -201,7 +214,8 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                 id="id-delegate"
                 value={delegateMention}
                 onChange={(e) => setDelegateMention(e.target.value)}
-                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                disabled={!canEditDelegate}
+                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="">Remove delegate</option>
                 {assistantsQuery.data?.map((a) => (
@@ -210,7 +224,11 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                   </option>
                 ))}
               </select>
-              <p className="text-caption text-muted-foreground">Assistant that acts on behalf of this agent.</p>
+              <p className="text-caption text-muted-foreground">
+                {canEditDelegate
+                  ? "Assistant that acts on behalf of this agent."
+                  : "Only the member themselves can set their own delegate."}
+              </p>
             </div>
           )}
           {error && <p className="text-body text-destructive">{error}</p>}
