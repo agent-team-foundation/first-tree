@@ -64,9 +64,7 @@ export function LoginPage() {
             <div className="mb-2 flex justify-center text-foreground">
               <FirstTreeLogo width={28} height={32} />
             </div>
-            <CardTitle className="text-title">
-              First Tree <span className="font-normal text-muted-foreground">Hub</span>
-            </CardTitle>
+            <CardTitle className="text-title">First Tree</CardTitle>
             <p className="text-label text-muted-foreground" style={{ marginTop: "var(--sp-1)" }}>
               Sign in to set up your team and your first AI agent.
             </p>

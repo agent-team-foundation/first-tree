@@ -9,7 +9,7 @@ export function registerChatHistoryCommand(chat: Command): void {
     .description("View message history in a chat")
     .option("-l, --limit <number>", "Maximum messages to return (1-100)", "20")
     .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (chatId: string, options: { limit: string; cursor?: string; agent?: string }) => {
       try {
         const limit = parseLimit(options.limit, 100);

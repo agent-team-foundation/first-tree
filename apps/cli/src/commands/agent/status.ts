@@ -7,8 +7,8 @@ import { print } from "../../core/output.js";
 export function registerAgentStatusCommand(agent: Command): void {
   agent
     .command("status [name]")
-    .description("Show agent runtime status from Hub server")
-    .option("--server <url>", "Hub server URL")
+    .description("Show agent runtime status from the First Tree server")
+    .option("--server <url>", "First Tree server URL")
     .action(async (name?: string, options?: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options?.server);
@@ -78,7 +78,7 @@ export function registerAgentStatusCommand(agent: Command): void {
           return;
         }
 
-        print.line(`\n  Hub: ${serverUrl}\n\n`);
+        print.line(`\n  Server: ${serverUrl}\n\n`);
         print.line(`  Clients: ${data.clients} connected\n`);
         print.line(`  Agents: ${data.running} running / ${data.total} total\n`);
         print.line(

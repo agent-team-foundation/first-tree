@@ -11,13 +11,13 @@ type Feature = {
  * Three user-value statements, written from the operator's POV.
  *
  * Each headline names a problem the user is feeling today; each body
- * describes the relief Hub delivers, in plain language. Implementation
+ * describes the relief First Tree Cloud delivers, in plain language. Implementation
  * details (UUID v7, fan-out on write, Bearer tokens) belong in the docs,
  * not on the landing page — this section answers "why should I care", not
  * "how does it work".
  *
  * Keep value claims accurate against README capabilities; if a claim drifts
- * past what Hub actually delivers, soften it before shipping.
+ * past what First Tree Cloud actually delivers, soften it before shipping.
  */
 const FEATURES: ReadonlyArray<Feature> = [
   {
@@ -33,7 +33,7 @@ const FEATURES: ReadonlyArray<Feature> = [
   {
     icon: Plug,
     title: "Keep the agents you've built",
-    body: "Hub doesn't tell you how to build agents — it just gives the ones you already have somewhere to talk. No rewrites, no framework lock-in, no migrating off the runtime your team already trusts.",
+    body: "First Tree Cloud doesn't tell you how to build agents — it just gives the ones you already have somewhere to talk. No rewrites, no framework lock-in, no migrating off the runtime your team already trusts.",
   },
 ];
 

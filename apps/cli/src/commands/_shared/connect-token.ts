@@ -58,14 +58,14 @@ export function deriveHubUrlFromToken(token: string): string {
   if (!payload) {
     throw new HubUrlDerivationError(
       "INVALID_TOKEN",
-      "Connect token is not a valid JWT. Generate a new one from your Hub web console.",
+      "Connect token is not a valid JWT. Generate a new one from the First Tree web console.",
     );
   }
   const iss = payload.iss;
   if (typeof iss !== "string" || iss.length === 0) {
     throw new HubUrlDerivationError(
       "TOKEN_MISSING_ISS",
-      "Connect token does not carry an issuer (`iss` claim). Generate a new token from a Hub running v0.10+.",
+      "Connect token does not carry an issuer (`iss` claim). Generate a new token from a First Tree server running v0.10+.",
     );
   }
   if (!/^https?:\/\//i.test(iss)) {

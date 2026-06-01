@@ -18,7 +18,7 @@ export function registerAgentSessionControlCommands(sessionCmd: Command): void {
     sessionCmd
       .command(`${cmd} <agent-name> <chat-id>`)
       .description(desc)
-      .option("--server <url>", "Hub server URL")
+      .option("--server <url>", "First Tree server URL")
       .action(async (agentName: string, chatId: string, options: { server?: string }) => {
         try {
           const serverUrl = resolveServerUrl(options.server);

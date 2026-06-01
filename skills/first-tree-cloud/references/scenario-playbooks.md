@@ -26,14 +26,14 @@ gh auth status
 - Do not jump to `daemon start`, `login <token>`, or `agent create` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree ...` so they do not have to fight PATH.
 
-## 1. "Connect this computer to an existing Hub server"
+## 1. "Connect this computer to an existing First Tree server"
 
-Use this when the Hub is already up and the user wants this machine to run agents against it.
+Use this when First Tree is already up and the user wants this machine to run agents against it.
 
 ### Flow
 
 ```bash
-# Paste a connect token from the Hub web console's "Connect a machine" dialog:
+# Paste a connect token from the First Tree web console's "Connect a machine" dialog:
 first-tree login <connect-token>
 
 # Skip the background service install (useful in containers):
@@ -47,7 +47,7 @@ To verify:
 ```bash
 first-tree daemon status          # local: service state + hub + auth health
 first-tree daemon doctor          # readiness checks (includes background-service state)
-# Server-side: open the Hub web admin → Computers tab to verify this
+# Server-side: open the First Tree web console → Computers tab to verify this
 # machine appears. (The legacy `client list` CLI verb was retired in Phase 1A.)
 ```
 
@@ -56,9 +56,9 @@ If something breaks, `daemon doctor` usually points at the culprit (no credentia
 ### What to remember
 
 - `login <token>` is the **only** supported way to sign in. There is no separate web login flow, username/password, or manual credential setup from the CLI side.
-- It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
-- The hub URL is derived from the token's `iss` claim, so the operator never types a URL.
-- Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
+- It writes `~/.first-tree/config/credentials.json` and a generated `client.id` in `client.yaml`.
+- The server URL is derived from the token's `iss` claim, so the operator never types a URL.
+- Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the First Tree web console (or via `agent create --client-id ...`). A running client auto-picks them up.
 
 ## 2. "Keep this machine online across reboots"
 
@@ -71,7 +71,7 @@ Use this for a production desktop or a server that should run agents permanently
 ```bash
 first-tree login <token>                 # auto-installs the service
 first-tree daemon doctor                   # verify: shows running/inactive/not-installed
-tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
+tail -f ~/.first-tree/logs/client.log      # tail logs (NDJSON)
 ```
 
 To repair a broken unit (binary moved, Node upgraded), re-run `login <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
@@ -88,10 +88,10 @@ systemctl --user disable --now first-treeent.service
 rm -f ~/.config/systemd/user/first-treeent.service
 
 # Both
-rm -rf ~/.first-tree/hub
+rm -rf ~/.first-tree
 ```
 
-To force-disconnect from the server side: use the Hub web admin (Computers → Disconnect). The CLI no longer ships an admin verb for this.
+To force-disconnect from the server side: use the First Tree web console (Computers → Disconnect). The CLI no longer ships an admin verb for this.
 
 ### What to remember
 
@@ -109,7 +109,7 @@ Add a real person to the team through the supported identity flow.
 # 0. Prereq on this machine: CLI installed, logged in.
 first-tree login <token>                                # if credentials.json does not exist
 
-# 1. Create the human agent record on the Hub + bind it to this client:
+# 1. Create the human agent record in First Tree + bind it to this client:
 first-tree agent create alice \
   --server <url> --type human --display-name "Alice" \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
@@ -172,7 +172,7 @@ first-tree agent config dry-run alice -f ./patch.json                  # preview
 - Requests carry an `expectedVersion` — concurrent edits get a conflict, not silent overwrite. On conflict, re-fetch with `agent config show` and retry.
 - `--sensitive` env values are encrypted at rest and always masked in subsequent `get`/`list`.
 - `dry-run` is the safe way to preview a big patch before committing it.
-- Do not confuse this with the local `agent.yaml` (alias → UUID mapping at `~/.first-tree/hub/config/agents/<name>/agent.yaml`), which is local-only state and unrelated to server-side runtime config.
+- Do not confuse this with the local `agent.yaml` (alias → UUID mapping at `~/.first-tree/config/agents/<name>/agent.yaml`), which is local-only state and unrelated to server-side runtime config.
 
 ## 6. "Why can't the client get online?" / "Why does startup fail?"
 
@@ -181,7 +181,7 @@ Diagnose before editing code or YAML.
 ### Flow
 
 ```bash
-first-tree daemon status          # local state: service, hub URL, agents
+first-tree daemon status          # local state: service, server URL, agents
 first-tree daemon doctor          # readiness checks (background-service state included)
 first-tree config show     # effective client YAML
 ```
@@ -190,7 +190,7 @@ first-tree config show     # effective client YAML
 
 - If `daemon doctor` flags "no credentials", the fix is `first-tree login <token>`, not a YAML edit.
 - If `daemon status` / web admin Computers tab shows the client but `daemon status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
-- The Hub server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
+- The First Tree server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
 
 ## 7. "Debug messaging between agents"
 
@@ -199,7 +199,7 @@ Verify delivery, inspect chats, send test messages manually.
 ### Flow
 
 ```bash
-# Prereq: this machine must have credentials.json (connect <token>).
+# Prereq: this machine must have credentials.json (`login <token>`).
 
 first-tree chat send <agentName> "hello"                   # send to an agent in the current chat
 first-tree chat invite <agentName>                # pull a non-member into the current chat first
@@ -243,20 +243,20 @@ first-tree agent workspace clean            # remove stale chat workspaces safel
 
 ## 9. "Roll out clients across many machines"
 
-The Hub server itself is operated by the First Tree team as a SaaS — there
+The First Tree server itself is operated by the First Tree team as a SaaS — there
 is no self-host path. Use this section when scaling out the *client* side.
 
 ### Flow
 
-1. Generate a connect token per machine from the Hub web console.
+1. Generate a connect token per machine from the First Tree web console.
 2. On each machine, run `first-tree login <token>` once — it signs the
    machine in and installs the background service in a single step so the
    runtime survives reboots.
-3. Verify with `first-tree daemon doctor` and the Hub web admin (Computers tab).
+3. Verify with `first-tree daemon doctor` and the First Tree web console (Computers tab).
 
 ### What to remember
 
-- Connect tokens carry the hub URL in their `iss` claim — operators never
+- Connect tokens carry the server URL in their `iss` claim — operators never
   type a URL.
 - Windows is unsupported. `login <token>` falls back to inline mode there;
   use a user-managed supervisor for permanent deployment.

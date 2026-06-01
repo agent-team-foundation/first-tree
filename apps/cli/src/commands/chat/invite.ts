@@ -8,7 +8,7 @@ export function registerChatInviteCommand(chat: Command): void {
     .description(
       "Invite an agent into the caller's current chat (the chat identified by FIRST_TREE_CHAT_ID). Use before `chat send <agentName>` when the recipient is not yet a member.",
     )
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (agentName: string, options: { agent?: string }) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;

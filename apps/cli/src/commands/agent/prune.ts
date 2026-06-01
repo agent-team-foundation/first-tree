@@ -27,7 +27,7 @@ export function registerAgentPruneCommand(agent: Command): void {
     .description("Remove local agent aliases that won't bind on this client (unowned, pinned elsewhere, or unreadable)")
     .option("--yes", "Skip the interactive confirmation prompt")
     .option("--dry-run", "Only list what would be removed; don't touch the filesystem")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (options: { yes?: boolean; dryRun?: boolean; server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);

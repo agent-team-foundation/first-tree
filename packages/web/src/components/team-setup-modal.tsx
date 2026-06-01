@@ -127,7 +127,7 @@ function JoinForm({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      // Strip whole invite URLs (e.g. https://hub/invite/abc) → just the token.
+      // Strip whole invite URLs (e.g. https://first-tree.example/invite/abc) → just the token.
       const raw = token.trim();
       const match = /\/invite\/([^/?#]+)/.exec(raw);
       const justToken = match?.[1] ?? raw;
@@ -154,7 +154,7 @@ function JoinForm({ onDone }: { onDone: () => void }) {
         aria-label="Invite token or full URL"
         value={token}
         onChange={(e) => setToken(e.target.value)}
-        placeholder="abc123… or https://hub/invite/abc123"
+        placeholder="abc123… or https://first-tree.example/invite/abc123"
         autoFocus
       />
       <Button type="submit" className="w-full" disabled={busy || !token.trim()}>

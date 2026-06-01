@@ -6,7 +6,7 @@ export function registerAgentDebugRegisterCommand(debugCmd: Command): void {
   debugCmd
     .command("register")
     .description("Register this agent and return identity info")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: { agent?: string }) => {
       try {
         const sdk = createSdk(options.agent);

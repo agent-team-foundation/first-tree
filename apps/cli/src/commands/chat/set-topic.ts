@@ -59,7 +59,7 @@ export function registerChatSetTopicCommand(chat: Command): void {
     .description(describe())
     .option("--chat <chatId>", "Target chat id (default: FIRST_TREE_CHAT_ID)")
     .option("--clear", "Clear the topic (sets it to null, falls back to auto-derived title)")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (topicArg: string | undefined, options: Options) => {
       await run(topicArg, options);
     });

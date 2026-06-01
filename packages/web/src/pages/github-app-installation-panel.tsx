@@ -242,8 +242,8 @@ function SuspendedBanner() {
     >
       <PauseCircle className="h-4 w-4 shrink-0" style={{ marginTop: "var(--sp-0_5)" }} />
       <span>
-        This installation is suspended upstream. GitHub is not delivering webhooks and Hub can't act as the App on this
-        account. Unsuspend it from the GitHub side to restore service.
+        This installation is suspended upstream. GitHub is not delivering webhooks and First Tree can't act as the App
+        on this account. Unsuspend it from the GitHub side to restore service.
       </span>
     </div>
   );

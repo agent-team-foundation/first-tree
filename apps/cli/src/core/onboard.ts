@@ -209,7 +209,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   // `args.id`. The two usually agree, but the server may normalise or
   // reject on collision and a subsequent rename would be needed on first
   // start. Using `primary.name` here keeps the log message, local dir key,
-  // and the Hub's view aligned from the outset. The `?? args.id` fallback
+  // and the server's view aligned from the outset. The `?? args.id` fallback
   // covers servers that (for some reason) return a null name — the
   // idempotent migration on next start will reconcile.
   const primaryLocalName = primary.name ?? args.id;

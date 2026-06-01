@@ -29,7 +29,7 @@ export function registerAttentionListCommand(parent: Command): void {
     .option("--from-agent <id>", "Filter to attentions raised by this origin agent id (overrides default)")
     .option("--in-chat <id>", "Filter to attentions anchored to this chat id")
     .option("-l, --limit <number>", "Max records to return (1-200)")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .option("--group-by-chat", "Render a human-readable grouping by chat on stderr (still emits JSON on stdout)")
     .action(async (options: ListOptions) => {
       try {

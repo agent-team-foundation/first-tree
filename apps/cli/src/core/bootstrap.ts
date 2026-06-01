@@ -17,7 +17,7 @@ type StoredCredentials = {
 };
 
 /**
- * Resolve Hub server URL from flag, env, or config.
+ * Resolve First Tree server URL from flag, env, or config.
  *
  * Uses resolveConfigReadonly (not the singleton getClientConfig) so CLI entry
  * points don't have to remember to call initConfig() first.

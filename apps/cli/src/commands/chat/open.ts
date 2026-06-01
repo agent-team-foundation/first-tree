@@ -9,7 +9,7 @@ export function registerChatOpenCommand(chat: Command): void {
   chat
     .command("open <agent-name>")
     .description("Open an interactive chat with an agent (as the current member's human agent)")
-    .option("--server <url>", "Hub server URL")
+    .option("--server <url>", "First Tree server URL")
     .action(async (agentName: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);

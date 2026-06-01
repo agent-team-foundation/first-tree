@@ -208,7 +208,7 @@ describe("bootstrapWorkspace", () => {
     expect(existsSync(toolsPath)).toBe(true);
 
     const content = readFileSync(toolsPath, "utf-8");
-    expect(content).toContain("Agent Hub");
+    expect(content).toContain("First Tree Agent Runtime");
     expect(content).toContain("[From: <agent-name>]");
     expect(content).toContain("first-tree chat send");
     // L4 silent-turn protocol: the prompt directive that pairs with the
@@ -334,7 +334,7 @@ describe("bootstrapWorkspace", () => {
     });
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    expect(content).toContain("`AskUserQuestion` is NOT available in this Hub");
+    expect(content).toContain("`AskUserQuestion` is NOT available in First Tree");
     expect(content).toContain("denied on call");
     // Conversion target is the request-type NHA, channel-resolved.
     expect(content).toContain("first-tree attention raise --requires-response");

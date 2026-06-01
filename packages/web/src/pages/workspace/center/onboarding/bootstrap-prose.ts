@@ -10,9 +10,9 @@
  * Two paths:
  *   - existing tree (buildBindBootstrap): the frontend has already best-effort
  *     PUT the URL into the org's `context_tree` settings before sending, so the
- *     message doesn't ask the agent to record it on the Hub again.
+ *     message doesn't ask the agent to record it in First Tree again.
  *   - new tree (buildCreateBootstrap): the URL doesn't exist yet, so the message
- *     asks the agent to record the freshly-created tree URL on the Hub — the one
+ *     asks the agent to record the freshly-created tree URL in First Tree — the one
  *     bit the local skill doesn't own — so future teammates' agents can find it.
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
@@ -68,7 +68,7 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
     "",
     skillLine,
     "",
-    "Once the tree repo is up on GitHub, record its URL on the Hub with the first-tree CLI so future teammates' agents can find it.",
+    "Once the tree repo is up on GitHub, record its URL in First Tree with the first-tree CLI so future teammates' agents can find it.",
     "",
     walkthrough,
     "",

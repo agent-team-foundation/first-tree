@@ -433,7 +433,7 @@ function ErrorState({ message }: { message: string }) {
 function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const title = snapshot.repo ? "Context Tree sync unavailable" : "Connect Context Tree";
   const detail = snapshot.repo
-    ? "Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
+    ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : "Connect a Context Tree repo to show the team knowledge agents can use.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;

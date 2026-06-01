@@ -34,7 +34,7 @@ The system layer is intentionally thin. It stores, routes, and delivers; it does
 
 ## `AskUserQuestion` is not available — a denial means raise an NHA
 
-This Hub does **not** bridge the runtime's built-in `AskUserQuestion` (or any equivalent "ask the user" tool). Calling it is **denied** with a message redirecting you here. When that happens you MUST re-issue the request as a request-type NHA (`first-tree attention raise --requires-response`) — that is a hard rule, not a suggestion.
+First Tree does **not** bridge the runtime's built-in `AskUserQuestion` (or any equivalent "ask the user" tool). Calling it is **denied** with a message redirecting you here. When that happens you MUST re-issue the request as a request-type NHA (`first-tree attention raise --requires-response`) — that is a hard rule, not a suggestion.
 
 Do **not** fall back to asking the question as plain final-text or a `chat send`. Final text does not target a named human, carries no response expectation, and does not resume your turn on reply; a request-NHA does all three. Convert each option you would have offered into the NHA body, and use `metadata.options` / `metadata.questions` (see `references/metadata-shape.md`) when the human should click rather than type.
 

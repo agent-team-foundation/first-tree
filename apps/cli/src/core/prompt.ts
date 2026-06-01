@@ -74,12 +74,12 @@ export async function promptMissingFields(options: {
  * alias — the local config dir is keyed by the server-authoritative
  * `agent.name` slug. This helper only asks the user for the agent UUID
  * (or takes it via `opts.agentId`), then fetches the canonical name
- * from the Hub. A `name` comes back null only if the agent was
+ * from the server. A `name` comes back null only if the agent was
  * tombstoned server-side, in which case the caller must refuse the
  * add (there's nothing sensible to key the local dir on).
  */
 export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
-  // Phase 3 needs a live Hub to resolve the canonical agent name, which
+  // Phase 3 needs a live server to resolve the canonical agent name, which
   // means the caller must have run `connect <token>` first. Detect the
   // two common "not connected yet" states up front with a clear error
   // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
@@ -98,7 +98,7 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
   const agentId =
     opts.agentId ??
     (await input({
-      message: "Agent UUID on the Hub:",
+      message: "Agent UUID on the First Tree server:",
       validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
     }));
 
@@ -113,7 +113,7 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
   const body = (await res.json()) as { name: string | null };
   if (!body.name) {
     throw new Error(
-      `Agent ${agentId} has no hub name (tombstoned or never named). Cannot add a local config without a name.`,
+      `Agent ${agentId} has no server-side name (tombstoned or never named). Cannot add a local config without a name.`,
     );
   }
   return { name: body.name, agentId };

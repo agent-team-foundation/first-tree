@@ -29,7 +29,7 @@ export function LandingNav() {
         >
           <FirstTreeLogo width={18} height={20} />
           <span className="text-title">
-            First Tree <span className="font-normal text-fg-3">Hub</span>
+            First Tree <span className="font-normal text-fg-3">Cloud</span>
           </span>
         </Link>
         <nav aria-label="Primary" className="flex items-center gap-2">

@@ -141,7 +141,7 @@ export class ClientRuntime {
       print.blank();
       print.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
       print.status("", err.message);
-      print.status("", "Recovery: get a new connect token from your Hub's Web admin");
+      print.status("", "Recovery: get a new connect token from the First Tree web console");
       print.status("", "          (Computers → + New Connection), then re-run `first-tree login <token>`.");
       print.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
       this.ensureCredentialsWatcher();
