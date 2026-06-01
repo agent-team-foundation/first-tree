@@ -76,6 +76,11 @@ export class SessionRegistry {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
+    // flush(entries) is authoritative — `entries` is the freshest known
+    // state. Any older debounced snapshot in pendingEntries is now stale,
+    // so drop it; otherwise dispose()'s pending fallback would later
+    // rewrite the stale snapshot on top of what we just persisted.
+    this.pendingEntries = null;
 
     const data: RegistryData = {
       version: REGISTRY_VERSION,

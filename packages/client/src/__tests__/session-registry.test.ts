@@ -165,6 +165,28 @@ describe("SessionRegistry", () => {
     expect(existsSync(filePath)).toBe(false);
   });
 
+  it("dispose does not roll back a fresher flush — save(old) -> flush(new) -> dispose() leaves new on disk", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+    const oldEntries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-old", lastActivity: 1700000000000, status: "active" },
+    });
+    const newEntries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-new", lastActivity: 1700000999999, status: "active" },
+    });
+
+    // Mimic the SessionManager shutdown path: a debounced save was queued
+    // earlier, then shutdown calls flush({ immediate: true }) with the final
+    // state, then dispose() tears the timer down.
+    registry.save(oldEntries);
+    registry.flush(newEntries);
+    registry.dispose();
+    vi.advanceTimersByTime(1000);
+
+    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-new");
+  });
+
   it("logs persistence failures without throwing", () => {
     const parentAsFile = join(testDir, "not-a-directory");
     writeFileSync(parentAsFile, "file blocks mkdir", "utf-8");
