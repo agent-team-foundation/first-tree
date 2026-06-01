@@ -15,7 +15,7 @@
  */
 
 import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
-import { and, eq, ne, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, ne, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -88,4 +88,38 @@ export async function listAgentsManagedByUser(
     .innerJoin(members, eq(agents.managerId, members.id))
     .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.userId, userId), eq(members.status, "active"), ne(agents.status, AGENT_STATUSES.DELETED)));
+}
+
+/**
+ * Org-scoped onboarding readiness. Given the caller's memberships (one
+ * `(memberId, organizationId)` row per org they belong to), return the set
+ * of orgIds in which the member has at least one *usable* non-human agent —
+ * usable = active AND (organization-visible OR managed by that member).
+ *
+ * This is the org-level "is this team set up for me" signal that gates the
+ * onboarding create-agent step. A private agent owned by *another* member
+ * does NOT count (the caller can't use it), so a freshly-joined or
+ * all-private org is correctly reported as not-ready even for a user who
+ * already completed onboarding in some other org. One query for the whole
+ * membership list — no N+1.
+ */
+export async function listOrgsWithUsableNonHumanAgent(
+  db: Database,
+  memberRows: ReadonlyArray<{ memberId: string; organizationId: string }>,
+): Promise<Set<string>> {
+  if (memberRows.length === 0) return new Set<string>();
+  const orgIds = memberRows.map((m) => m.organizationId);
+  const memberIds = memberRows.map((m) => m.memberId);
+  const rows = await db
+    .selectDistinct({ organizationId: agents.organizationId })
+    .from(agents)
+    .where(
+      and(
+        inArray(agents.organizationId, orgIds),
+        ne(agents.type, "human"),
+        eq(agents.status, AGENT_STATUSES.ACTIVE),
+        or(eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION), inArray(agents.managerId, memberIds)),
+      ),
+    );
+  return new Set(rows.map((r) => r.organizationId));
 }

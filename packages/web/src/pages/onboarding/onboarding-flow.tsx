@@ -2,7 +2,14 @@ import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
-import { clampStepIndex, getStepSequence, inferInitialStepIndex, type OnboardingPath, type StepId } from "./steps.js";
+import {
+  clampStepIndex,
+  getStepSequence,
+  inferInitialStepIndex,
+  type OnboardingPath,
+  type ServerOnboardingStep,
+  type StepId,
+} from "./steps.js";
 import { type AgentCreationPhase, type CreateAgentArgs, useAgentCreation } from "./use-agent-creation.js";
 import { type ComputerConnection, useComputerConnection } from "./use-computer-connection.js";
 
@@ -101,19 +108,33 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     teamDisplayName,
     orgHasOtherMembers,
     onboardingStep,
+    currentOrgHasUsableAgent,
     refreshMe,
     dismissOnboarding,
     markOnboardingCompleted,
   } = useAuth();
 
+  // Org-aware step. `onboardingStep` from /me is account-level: its
+  // `create_agent` / `completed` value reflects whether the user has set up
+  // an agent in *any* org. For step selection we care about the *current*
+  // org, so once past the account-level `connect` stage we recompute
+  // create_agent vs completed from this org's readiness — otherwise a
+  // returning user joining an empty org would skip straight to kickoff.
+  const orgStep: ServerOnboardingStep =
+    onboardingStep === "connect" || onboardingStep === null
+      ? onboardingStep
+      : currentOrgHasUsableAgent
+        ? "completed"
+        : "create_agent";
+
   const sequence = getStepSequence(path);
   const [activeIndex, setActiveIndex] = useState<number>(() => {
     const inferred = inferInitialStepIndex(path, {
-      onboardingStep,
+      onboardingStep: orgStep,
       // We can't observe finer team-rename state synchronously; the team
       // step is cheap to revisit, so default returning admins past it only
       // when the server already proves a computer exists.
-      teamSettled: onboardingStep !== "connect",
+      teamSettled: orgStep !== "connect",
     });
     // Resume a persisted position, but never drop *behind* what the server
     // can prove (so a stale marker can't strand a user before their real
@@ -199,7 +220,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       createAgent,
       retryAgent,
       createdAgentUuid,
-      hasAgent: onboardingStep === "completed" || createdAgentUuid !== null,
+      hasAgent: orgStep === "completed" || createdAgentUuid !== null,
       selectedRepoUrls,
       setSelectedRepoUrls,
       treeMode,
@@ -232,7 +253,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       createAgent,
       retryAgent,
       createdAgentUuid,
-      onboardingStep,
+      orgStep,
       selectedRepoUrls,
       treeMode,
       treeUrl,

@@ -57,6 +57,7 @@ const MEMBERSHIPS: MeMembership[] = [
     role: "admin",
     agentId: "human-agent-1",
     orgHasOtherMembers: true,
+    hasUsableAgent: true,
   },
   {
     id: "member-2",
@@ -65,6 +66,7 @@ const MEMBERSHIPS: MeMembership[] = [
     role: "member",
     agentId: "human-agent-2",
     orgHasOtherMembers: false,
+    hasUsableAgent: false,
   },
 ];
 

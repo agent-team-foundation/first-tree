@@ -74,6 +74,16 @@ type AuthContextValue = {
    * `sessionStorage.joinPath` flag could not.
    */
   orgHasOtherMembers: boolean;
+  /**
+   * `true` when the currently selected org holds a non-human agent this
+   * member can use — one they manage themselves OR one set to
+   * `visibility="organization"`. Sourced from `/me`'s per-membership
+   * `hasUsableAgent`. This is the org-scoped readiness the onboarding gate
+   * uses for the create-agent step, replacing the account-level
+   * `onboardingCompletedAt` short-circuit (which wrongly skipped onboarding
+   * for a returning user joining a brand-new / all-private org).
+   */
+  currentOrgHasUsableAgent: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
    * ISO timestamp when the user dismissed onboarding ("finish later").
@@ -347,6 +357,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         agentId: currentMembership?.agentId ?? null,
         teamDisplayName: currentMembership?.organizationName ?? null,
         orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
+        currentOrgHasUsableAgent: currentMembership?.hasUsableAgent ?? false,
         onboardingStep,
         onboardingDismissedAt,
         onboardingCompletedAt,

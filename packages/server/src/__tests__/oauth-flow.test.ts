@@ -49,6 +49,10 @@ describe("GitHub OAuth onboarding flow", () => {
     // in onboarding Step 1.
     expect(orgRow.displayName).toBe("octocat's team");
 
+    // The callback carries the resolved org back so the web selects it
+    // (overriding any stale localStorage org) — here the freshly-minted team.
+    expect(params.get("org")).toBe(orgRow.id);
+
     // The new user is its admin.
     const memberRows = await app.db.select().from(members).where(eq(members.organizationId, orgRow.id));
     expect(memberRows).toHaveLength(1);
@@ -248,6 +252,9 @@ describe("GitHub OAuth invite-only single-org entry gate", () => {
     const params = new URLSearchParams(fragment);
     expect(params.get("joinPath")).toBe("invite");
     expect(params.get("next")).toBe("/");
+    // The invited org is carried back in the fragment so the web makes it the
+    // active selection instead of dropping the invitee into a stale org.
+    expect(params.get("org")).toBe(allowedOrganizationId);
 
     const userId = await findGithubUserId(app, "1201");
     const memberRows = await app.db.select().from(members).where(eq(members.userId, userId));

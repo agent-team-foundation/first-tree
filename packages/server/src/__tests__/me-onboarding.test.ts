@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { encryptValue } from "../services/crypto.js";
@@ -437,5 +439,49 @@ describe("POST /me/onboarding-completed", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe("GET /me — per-membership hasUsableAgent", () => {
+  const getApp = useTestApp();
+
+  type MeMembershipsBody = { memberships: Array<{ organizationId: string; hasUsableAgent: boolean }> };
+
+  it("is false for a fresh org (only the seeded human agent), true once a non-human agent exists", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const before = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    const beforeRow = before
+      .json<MeMembershipsBody>()
+      .memberships.find((m) => m.organizationId === admin.organizationId);
+    expect(beforeRow?.hasUsableAgent).toBe(false);
+
+    // Drop in a non-human agent the admin manages (private — own agents
+    // count regardless of visibility).
+    const uuid = crypto.randomUUID();
+    await app.db.insert(agents).values({
+      uuid,
+      name: `a-${uuid.slice(0, 8)}`,
+      organizationId: admin.organizationId,
+      type: "agent",
+      displayName: "Assistant",
+      inboxId: `inbox_${uuid}`,
+      status: "active",
+      visibility: "private",
+      managerId: admin.memberId,
+    });
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    const afterRow = after.json<MeMembershipsBody>().memberships.find((m) => m.organizationId === admin.organizationId);
+    expect(afterRow?.hasUsableAgent).toBe(true);
   });
 });

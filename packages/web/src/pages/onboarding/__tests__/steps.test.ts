@@ -94,17 +94,25 @@ describe("shouldEnterOnboarding", () => {
   const base = {
     meLoaded: true,
     onboardingStep: "connect" as const,
+    currentOrgReady: false,
     onboardingDismissedAt: null,
-    onboardingCompletedAt: null,
   };
   it("redirects a fresh incomplete user (no computer yet → connect)", () => {
     expect(shouldEnterOnboarding(base)).toBe(true);
   });
-  it("redirects a user with a computer but no agent (create_agent)", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent" })).toBe(true);
+  it("redirects a connected user whose current org has no usable agent (create_agent)", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: false })).toBe(true);
   });
-  it("bounces a server-completed-but-unfinished user so they resume the Context Tree kickoff", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed" })).toBe(true);
+  it("redirects an account-completed user who joined a brand-new / all-private org (org not ready)", () => {
+    // The whole point of the org-level gate: a returning user who set up an
+    // agent in a *prior* org must still create one here.
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: false })).toBe(true);
+  });
+  it("does NOT redirect when connected and the current org already has a usable agent", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: true })).toBe(false);
+    // Even a shared (org-visible) agent created by someone else counts — a
+    // user joining a mature org doesn't need to build their own.
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: true })).toBe(false);
   });
   it("does not redirect before /me loads", () => {
     expect(shouldEnterOnboarding({ ...base, meLoaded: false })).toBe(false);
@@ -114,15 +122,6 @@ describe("shouldEnterOnboarding", () => {
   });
   it("does not redirect a dismissed user (they chose to hide it)", () => {
     expect(shouldEnterOnboarding({ ...base, onboardingDismissedAt: "2026-05-22T00:00:00Z" })).toBe(false);
-  });
-  it("does not redirect a terminally-finished user (completed step + completed_at set)", () => {
-    expect(
-      shouldEnterOnboarding({
-        ...base,
-        onboardingStep: "completed",
-        onboardingCompletedAt: "2026-05-22T00:00:00Z",
-      }),
-    ).toBe(false);
   });
 });
 
@@ -158,19 +157,28 @@ describe("shouldLeaveOnboarding", () => {
   const base = {
     meLoaded: true,
     onboardingStep: "connect" as const,
+    currentOrgReady: false,
     onboardingDismissedAt: null,
-    onboardingCompletedAt: null,
   };
-  it("leaves only once terminally complete", () => {
-    expect(shouldLeaveOnboarding({ ...base, onboardingCompletedAt: "2026-05-22T00:00:00Z" })).toBe(true);
+  it("leaves once connected AND the current org has a usable agent", () => {
+    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: true })).toBe(true);
   });
-  it("stays for an incomplete user", () => {
+  it("stays while the user hasn't connected a computer yet (connect step)", () => {
     expect(shouldLeaveOnboarding(base)).toBe(false);
+    expect(shouldLeaveOnboarding({ ...base, currentOrgReady: true })).toBe(false);
   });
-  it("stays for a merely-dismissed user who deliberately returned via Resume", () => {
-    expect(shouldLeaveOnboarding({ ...base, onboardingDismissedAt: "2026-05-22T00:00:00Z" })).toBe(false);
+  it("stays for a connected user whose current org still has no usable agent", () => {
+    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: false })).toBe(false);
+    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: false })).toBe(false);
+  });
+  it("does not strand a merely-dismissed user who returned via Resume into an unready org", () => {
+    expect(
+      shouldLeaveOnboarding({ ...base, onboardingStep: "create_agent", onboardingDismissedAt: "2026-05-22T00:00:00Z" }),
+    ).toBe(false);
   });
   it("waits for /me before deciding", () => {
-    expect(shouldLeaveOnboarding({ ...base, meLoaded: false, onboardingCompletedAt: "x" })).toBe(false);
+    expect(
+      shouldLeaveOnboarding({ ...base, meLoaded: false, onboardingStep: "completed", currentOrgReady: true }),
+    ).toBe(false);
   });
 });

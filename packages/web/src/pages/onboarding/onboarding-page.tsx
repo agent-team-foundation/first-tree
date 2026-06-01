@@ -18,12 +18,19 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * here; once setup is terminally complete this route bounces back to `/`.
  */
 export function OnboardingPage() {
-  const { meLoaded, role, onboardingStep, onboardingDismissedAt, onboardingCompletedAt } = useAuth();
+  const { meLoaded, role, onboardingStep, onboardingDismissedAt, currentOrgHasUsableAgent } = useAuth();
 
   if (!meLoaded) {
     return <div className="min-h-screen bg-background" />;
   }
-  if (shouldLeaveOnboarding({ meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt })) {
+  if (
+    shouldLeaveOnboarding({
+      meLoaded,
+      onboardingStep,
+      onboardingDismissedAt,
+      currentOrgReady: currentOrgHasUsableAgent,
+    })
+  ) {
     return <Navigate to="/" replace />;
   }
 
