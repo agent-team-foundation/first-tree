@@ -31,6 +31,8 @@ type AgentEntry = {
 
 type AgentStartState = "idle" | "starting" | "running" | "suspended-skipped" | "failed";
 
+const CLIENT_RUNTIME_AGENT_UNBOUND_LISTENER_COUNT = 1;
+
 export function isAgentSuspendedBindError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   return msg.includes("agent_suspended");
@@ -220,6 +222,15 @@ export class ClientRuntime {
     this.agents.push({ name, slot, state: "idle" });
     this.agentNames.add(name);
     this.agentIds.add(config.agentId);
+    this.refreshConnectionListenerLimit();
+  }
+
+  private refreshConnectionListenerLimit(): void {
+    const requiredListenersPerEvent = this.agents.length + CLIENT_RUNTIME_AGENT_UNBOUND_LISTENER_COUNT;
+    const currentLimit = this.connection.getMaxListeners();
+    if (currentLimit !== 0 && currentLimit < requiredListenersPerEvent) {
+      this.connection.setMaxListeners(requiredListenersPerEvent);
+    }
   }
 
   async start(): Promise<void> {

@@ -23,6 +23,7 @@ const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
 const sweepMock = vi.fn(async () => ({ scanned: 0, deleted: 0, failed: 0 }));
+let connectionMaxListeners = 10;
 const connectionMock = {
   clientId: "client-test",
   on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
@@ -34,6 +35,10 @@ const connectionMock = {
   isPaused: vi.fn(() => false),
   getPausedReason: vi.fn<() => ClientPausedReason | null>(() => null),
   clearPaused: vi.fn(),
+  getMaxListeners: vi.fn(() => connectionMaxListeners),
+  setMaxListeners: vi.fn((n: number) => {
+    connectionMaxListeners = n;
+  }),
 };
 vi.mock("@first-tree/client", () => {
   class FakeAgentSlot {
@@ -59,6 +64,8 @@ vi.mock("@first-tree/client", () => {
       isPaused = connectionMock.isPaused;
       getPausedReason = connectionMock.getPausedReason;
       clearPaused = connectionMock.clearPaused;
+      getMaxListeners = connectionMock.getMaxListeners;
+      setMaxListeners = connectionMock.setMaxListeners;
     },
     UpdateManager: { attach: vi.fn(() => ({ dispose: disposeMock })) },
     createGitMirrorManager: vi.fn(() => ({
@@ -128,6 +135,9 @@ describe("ClientRuntime context-tree wiring", () => {
     connectionMock.getPausedReason.mockReset();
     connectionMock.getPausedReason.mockReturnValue(null);
     connectionMock.clearPaused.mockClear();
+    connectionMaxListeners = 10;
+    connectionMock.getMaxListeners.mockClear();
+    connectionMock.setMaxListeners.mockClear();
     disposeMock.mockClear();
     killAllMock.mockClear();
     sweepMock.mockReset();
@@ -164,6 +174,21 @@ describe("ClientRuntime context-tree wiring", () => {
     },
     RUNTIME_TEST_TIMEOUT_MS,
   );
+
+  it("raises the shared connection listener limit as agent slots are added", async () => {
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    for (let i = 0; i < 11; i++) {
+      rt.addAgent(`agent-${i}`, {
+        agentId: `agent-id-${i}`,
+        runtime: "claude-code",
+        session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+        concurrency: 1,
+      } as unknown as Parameters<typeof rt.addAgent>[1]);
+    }
+
+    expect(connectionMock.setMaxListeners).toHaveBeenLastCalledWith(12);
+  });
 
   it(
     "reports suspended local aliases as skipped instead of connection failures",
