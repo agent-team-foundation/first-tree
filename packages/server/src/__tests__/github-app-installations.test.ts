@@ -114,7 +114,7 @@ describe("services/github-app-installations", () => {
       const err = await bindInstallationToOrg(app.db, installation.id, orgB).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).name).toBe("ConflictError");
-      expect((err as Error).message).toMatch(/already bound to a different Hub team/);
+      expect((err as Error).message).toMatch(/already bound to a different First Tree team/);
     });
 
     it("refuses to bind installation Y when org A already has install X bound (H2 / codex P0-3 follow-up)", async () => {

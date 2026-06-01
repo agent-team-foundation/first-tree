@@ -95,7 +95,7 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * Shorter per-call budget for startup-critical GETs (currently
- * `fetchAgentConfig`). A stalled Hub here directly turns into a
+ * `fetchAgentConfig`). A stalled First Tree server here directly turns into a
  * bind-aborted user-visible failure, and the request is a single-row PK
  * lookup server-side — there's no legitimate reason for it to take longer.
  * Combined with `doFetch`'s 3-attempt retry, this caps the worst-case

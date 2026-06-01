@@ -3,7 +3,7 @@ import { defineConfig, field } from "./schema.js";
 import type { InferConfig } from "./types.js";
 
 /**
- * Agent config layout on disk: `~/.first-tree/hub/config/agents/<name>/agent.yaml`.
+ * Agent config layout on disk: `~/.first-tree/config/agents/<name>/agent.yaml`.
  *
  * After the unified-user-token milestone the local config no longer stores an
  * agent bearer; authentication comes from the user's member JWT in
@@ -12,7 +12,7 @@ import type { InferConfig } from "./types.js";
  * handler to instantiate.
  */
 export const agentConfigSchema = defineConfig({
-  /** Agent UUID on the Hub (`agents.uuid`). Sent as `X-Agent-Id` header. */
+  /** Agent UUID on the server (`agents.uuid`). Sent as `X-Agent-Id` header. */
   agentId: field(z.string().min(1)),
   /** Runtime handler type (e.g. "claude-code"). NOT the agent business type. */
   runtime: field(z.string().default("claude-code")),

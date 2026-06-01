@@ -129,7 +129,7 @@ export class AgentRuntime {
   async start(): Promise<void> {
     // Sweep orphan `hub-session-*` branches left over from previous runs
     // before any slot can race a `git worktree add`. The session-branch
-    // config segments would otherwise accumulate forever — Hub sessions
+    // config segments would otherwise accumulate forever — First Tree sessions
     // suspend on idle rather than terminate, so `removeWorktree` (which
     // deletes branches) only fires on explicit terminate/eviction.
     // Failures are advisory: log and continue startup.

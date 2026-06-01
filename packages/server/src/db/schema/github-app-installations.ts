@@ -8,7 +8,7 @@ import { bigint, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } fr
 import { organizations } from "./organizations.js";
 
 /**
- * GitHub App installation records — one row per (GitHub account → Hub team)
+ * GitHub App installation records — one row per (GitHub account → First Tree team)
  * binding. Replaces the per-repo OAuth + webhook-secret model that lived in
  * `organization_settings.github_integration.webhookSecretCipher`.
  *
@@ -17,19 +17,19 @@ import { organizations } from "./organizations.js";
  *   1. User OAuth (user-to-server access + refresh tokens) — persisted on
  *      `auth_identities.metadata` for the signing-in user, not here.
  *   2. Webhook stream — `installation_id` resolves the inbound webhook to
- *      the bound Hub org by joining on this table.
+ *      the bound First Tree org by joining on this table.
  *   3. Installation token (server-to-server) — minted on demand from the
  *      App private key; not persisted (1h TTL, cheap to re-issue).
  *
- * The (GitHub account ↔ Hub team) binding is 1:1 (D2 / §8 Q1). The
+ * The (GitHub account ↔ First Tree team) binding is 1:1 (D2 / §8 Q1). The
  * `hub_organization_id` UNIQUE constraint enforces that; the column is
  * nullable solely to accommodate the install-callback handler inserting
- * the row before the owning Hub team exists (fresh-signup flow). Once a
+ * the row before the owning First Tree team exists (fresh-signup flow). Once a
  * binding exists it never moves — re-installing the App on the same GitHub
  * account UPDATEs this row by `installation_id`.
  *
  * ON DELETE SET NULL on `hub_organization_id` rather than CASCADE because
- * the GitHub-side installation still exists upstream when a Hub team is
+ * the GitHub-side installation still exists upstream when a First Tree team is
  * deleted — keeping the row lets a future re-binding flow recover without
  * a re-install dance.
  */
@@ -61,9 +61,9 @@ export const githubAppInstallations = pgTable(
      */
     accountGithubId: bigint("account_github_id", { mode: "number" }).notNull(),
     /**
-     * Hub org this installation is bound to (1:1, see D2 / §8 Q1).
+     * First Tree org this installation is bound to (1:1, see D2 / §8 Q1).
      * Nullable to allow inserting the row in the install callback before
-     * the owning Hub team is provisioned. Once bound, the value never
+     * the owning First Tree team is provisioned. Once bound, the value never
      * changes — there is no "rebind" flow.
      */
     hubOrganizationId: text("hub_organization_id").references(() => organizations.id, { onDelete: "set null" }),
@@ -84,7 +84,7 @@ export const githubAppInstallations = pgTable(
     /**
      * Set when GitHub fires `installation: suspend`; cleared on
      * `installation: unsuspend`. While non-null, webhook delivery is
-     * paused upstream and installation-token requests are refused — Hub
+     * paused upstream and installation-token requests are refused — First Tree
      * code should treat the binding as inactive.
      */
     suspendedAt: timestamp("suspended_at", { withTimezone: true }),

@@ -6,7 +6,7 @@
 - `developer.yaml` — handles code-related PRs and issues
 - `code-reviewer.yaml` — focuses on PR review
 
-These are the bodies the GitHub Scan daemon (and any future Hub daemon) reads
+These are the bodies the GitHub Scan daemon (and any future First Tree Cloud daemon) reads
 when spawning a per-task agent. They are not skill payloads; they are agent
 _instances_.
 

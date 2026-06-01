@@ -21,11 +21,11 @@ export const SUMMARY_MAX_LENGTH = 50;
  *  - `@<name>` mention tokens are stripped before truncation: in the
  *    chat-first model they're routing/audience metadata, not part of
  *    the user's intent. Leaving them in produces noisy titles like
- *    "@hub-agent-01 帮我重构这个文件" or "你好 @hub-agent-02 看看".
+ *    "@agent-01 帮我重构这个文件" or "你好 @agent-02 看看".
  *  - Whitespace runs (including those left behind by mention removal)
  *    collapse to single spaces.
  *  - If the cleaned text is empty (e.g., a message that's only
- *    `@hub-agent-01`), returns null so the caller falls through to
+ *    `@agent-01`), returns null so the caller falls through to
  *    the participant-join fallback.
  *  - Slicing is code-point-aware (`Array.from + join`) so emoji /
  *    surrogate pairs aren't split into garbled half-characters. */

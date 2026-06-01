@@ -56,7 +56,7 @@ export const DIM = "\x1b[2m";
 export const SKIP_KEYS = new Set(["level", "time", "msg", "module", "pid", "hostname", "v"]);
 
 /**
- * Pino `redact.paths` entries applied to every root logger in Hub. Keeps the
+ * Pino `redact.paths` entries applied to every root logger in First Tree. Keeps the
  * list short on purpose — pino's redact walks each path on every log call, so
  * we target obvious sensitive field names plus a narrow set of nested forms
  * (`*.foo` matches a single nesting level in pino v9).

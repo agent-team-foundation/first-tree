@@ -110,7 +110,7 @@ const pathDocumentContextSchema = z.object({
  *
  * - `kind: "snapshot"` — inline preview content. Each snapshot carries the
  *   markdown body verbatim at the moment the message was sent. Used by
- *   cloud Hub server + local agent runtime topology where the server
+ *   First Tree Cloud server + local agent runtime topology where the server
  *   cannot read the runtime's workspace filesystem.
  * - `kind: "path"` — PR #356 path-based fallback, only meaningful when
  *   server and runtime share a filesystem (local dev / single-host).

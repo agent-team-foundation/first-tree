@@ -108,7 +108,7 @@ export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
 }
 
 /**
- * Re-bind an agent to a new client and/or a new runtime provider. The Hub
+ * Re-bind an agent to a new client and/or a new runtime provider. The server
  * runs owner / org / capability checks atomically; pass `force: true` to
  * bypass the capability match (e.g. when the destination client is offline
  * and `clients.metadata.capabilities` is stale).

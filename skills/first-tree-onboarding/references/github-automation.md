@@ -22,7 +22,7 @@ rule layer the skill teaches should be functionally similar to what
 | `validate.yml`        | Run `first-tree tree verify` on every PR                                                   | yes                   | onboarding skill |
 | `auto-merge.yml`      | Classify a PR by `owners:` / `members/` rules and auto-approve / auto-merge the safe cases | no, opt-in            | onboarding skill |
 | `review-enforcer.yml` | Dismiss non-owner approvals on cross-owner PRs                                             | no, opt-in            | onboarding skill |
-| AI PR review          | Summaries, comments, model calls, Hub dispatch                                             | no                    | `first-tree cloud` |
+| AI PR review          | Summaries, comments, model calls, First Tree Cloud dispatch                                | no                    | `first-tree cloud` |
 
 That is the practical meaning of "set up the tree repo like `first-tree-context`
 does today" for the current product surface.
@@ -172,7 +172,7 @@ When a user says "set up the tree repo with the proper GitHub rules," the agent
 should be able to explain all of this from the skill alone:
 
 - Tier 0 is safe and installed by default.
-- Tier 1 is separate and belongs to Hub, not to the onboarding skill.
+- Tier 1 is separate and belongs to First Tree Cloud, not to the onboarding skill.
 - Tier 2 is rule-based and can mirror the current `first-tree-context` gate,
   but it depends on:
   - workflow files on the default branch

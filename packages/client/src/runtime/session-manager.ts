@@ -411,7 +411,7 @@ export class SessionManager {
     // version. This is the *only* trigger for active-session re-config —
     // matches PRD §7.2. Failures are logged but do not block delivery on
     // M1: handler integration in Step 6 will decide whether to use the
-    // stale config or hold the message until Hub recovers.
+    // stale config or hold the message until the server recovers.
     if (this.config.agentConfigCache) {
       try {
         await this.config.agentConfigCache.refreshIfNewer(

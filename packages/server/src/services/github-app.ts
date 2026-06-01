@@ -8,9 +8,9 @@ import { GITHUB_API_BASE } from "./github-api-base.js";
  *
  *   App-private-key (server-to-server):
  *   - `createAppJwt`           — short-lived (≤10min) JWT identifying
- *                                 Hub-as-this-App to GitHub.
+ *                                 First-Tree-as-this-App to GitHub.
  *   - `mintInstallationToken`  — exchange the App JWT for a per-installation
- *                                 token (~1h TTL). Used when Hub acts as the
+ *                                 token (~1h TTL). Used when First Tree acts as the
  *                                 App on a tenant's repos (Phase 4 identity
  *                                 convergence — not yet wired into request
  *                                 paths).
@@ -81,7 +81,7 @@ export type GithubAppCredentials = {
 };
 
 /**
- * Mint an App JWT. RS256-signed; identifies Hub-as-this-App to GitHub for
+ * Mint an App JWT. RS256-signed; identifies First-Tree-as-this-App to GitHub for
  * the next ~9 minutes. Use this directly for `/app/...` endpoints and as
  * the input to `mintInstallationToken` for `/installation/...` endpoints.
  *
@@ -168,7 +168,7 @@ export async function fetchInstallation(
  * use this: `installation_id` arrives over insecure channels (browser
  * address bar, API body) and isn't a secret, so we MUST prove the caller
  * owns / admins the GitHub account the install lives under before
- * binding it to a Hub org.
+ * binding it to a First Tree org.
  *
  * Rules — strict, per GitHub's account model:
  *

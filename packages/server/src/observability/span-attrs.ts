@@ -2,7 +2,7 @@
  * Helpers that turn domain objects (messages, inbox entries, chats, agents,
  * adapters) into a consistent set of span attribute records.
  *
- * Cross-async trace continuity in Hub relies on *attribute matching* in the
+ * Cross-async trace continuity in First Tree relies on *attribute matching* in the
  * trace backend rather than on parent-span linking (see
  * `proposals/hub-observability.20260420.md` for rationale). These helpers
  * guarantee that enqueue / deliver / push / adapter-outbound all stamp the

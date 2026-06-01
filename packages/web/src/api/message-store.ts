@@ -1,7 +1,7 @@
 /**
  * Per-browser cache of chat messages keyed by `[chatId, messageId]`.
  *
- * Hub's chat history is the **outcome stream** — only finalised messages are
+ * First Tree's chat history is the **outcome stream** — only finalised messages are
  * persisted; transient `session_events` / `session_outputs` are not cached
  * here (they are session-lifecycle scoped on the server per
  * `agent-hub/client-runtime.md`, and come from a separate query in the UI).

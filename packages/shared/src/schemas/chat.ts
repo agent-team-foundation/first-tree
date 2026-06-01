@@ -34,7 +34,7 @@ export const patchChatEngagementSchema = z.object({
 export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
 
 /**
- * Hub keeps a single group-chat model (see first-tree-context PR #281),
+ * First Tree keeps a single group-chat model (see first-tree-context PR #281),
  * so every newly created chat MUST be a `group`. `chatTypeSchema` survives
  * for the read path (legacy `direct` rows still exist on disk and must
  * deserialise), but the write path is locked down to `"group"` — a caller

@@ -18,7 +18,7 @@ function assertProductionRequiresPublicUrl(config: Config): void {
   // to whatever the inbound proxy injected via Host headers (forgery
   // risk). Fail closed.
   if (process.env.NODE_ENV === "production" && !config.server.publicUrl) {
-    throw new Error("FIRST_TREE_PUBLIC_URL is required in production — set the public-facing hub URL.");
+    throw new Error("FIRST_TREE_PUBLIC_URL is required in production — set the public-facing First Tree URL.");
   }
 }
 

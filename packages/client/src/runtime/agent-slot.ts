@@ -182,7 +182,7 @@ export class AgentSlot {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.error({ err }, "failed to fetch agent config — bind aborted");
-        throw new Error(`Hub unreachable while loading agent config: ${msg}`);
+        throw new Error(`First Tree server unreachable while loading agent config: ${msg}`);
       }
 
       this.inboxId = agent.inboxId;

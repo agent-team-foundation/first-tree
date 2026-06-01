@@ -114,7 +114,7 @@ retained as a read-only debug endpoint.
 ## Using the SDK
 
 ```ts
-import { FirstTreeHubSDK as FirstTreeSDK } from "first-tree";
+import { FirstTreeSDK } from "first-tree";
 
 const sdk = new FirstTreeSDK({
   serverUrl: process.env.FIRST_TREE_SERVER_URL ?? "http://localhost:8000",

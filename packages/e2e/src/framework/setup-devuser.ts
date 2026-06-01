@@ -11,7 +11,7 @@ export type DevUserSession = {
   pid: number;
   /** Per-session home so devuser doesn't collide with the fixture home. */
   home: string;
-  /** Hub-side identifiers, fetched from PG after WS register completes. */
+  /** Server-side identifiers, fetched from PG after WS register completes. */
   userId: string;
   username: string;
   clientId: string;

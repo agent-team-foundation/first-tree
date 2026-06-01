@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { type HubClient, listClients } from "../api/activity.js";
 
 /**
- * Shared hook that builds a clientId → HubClient lookup map.
+ * Shared hook that builds a clientId → client lookup map.
  * Used by Workspace (Agent Roster, Context Panel) and Agents page
  * to display client hostname, OS, SDK version, etc.
  */

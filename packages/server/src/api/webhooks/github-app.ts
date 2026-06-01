@@ -129,7 +129,7 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
       // UPSERT only writes metadata fields; `hub_organization_id` is owned
       // by the OAuth-callback bind path. A webhook arriving before the
       // callback leaves the row unbound (intentional — webhooks don't
-      // know which Hub user installed the App).
+      // know which First Tree user installed the App).
       await upsertInstallationFromMetadata(app.db, { installation: metadata });
       return action;
     }
@@ -178,7 +178,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     // without the App wired up). Stub the route as 501 so the URL is
     // discoverable but doesn't pretend to work.
     app.post("/github-app", async (_request, reply) =>
-      reply.status(501).send({ error: "GitHub App webhook is not configured for this Hub deployment." }),
+      reply.status(501).send({ error: "GitHub App webhook is not configured for this First Tree deployment." }),
     );
     return;
   }
@@ -233,7 +233,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not seen" });
       }
       if (!installation.hubOrganizationId) {
-        log.warn({ installationId, eventType }, "installation not bound to any hub org, skipping");
+        log.warn({ installationId, eventType }, "installation not bound to any First Tree org, skipping");
         return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not bound" });
       }
       if (installation.suspendedAt !== null) {

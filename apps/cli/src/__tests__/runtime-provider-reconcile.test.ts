@@ -10,9 +10,9 @@ import {
 } from "../core/runtime-provider-reconcile.js";
 
 /**
- * Two CLI helpers, both fetch-driven against the hub:
+ * Two CLI helpers, both fetch-driven against the server:
  *   - `reconcileLocalRuntimeProviders` rewrites local `agent.yaml::runtime`
- *     when it disagrees with `agents.runtime_provider` (hub authoritative).
+ *     when it disagrees with `agents.runtime_provider` (server authoritative).
  *   - `uploadClientCapabilities` PATCHes the per-machine probe results to
  *     `clients.metadata.capabilities`.
  *
@@ -50,7 +50,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     return path;
   }
 
-  it("rewrites agent.yaml when hub says a different runtime_provider", async () => {
+  it("rewrites agent.yaml when the server says a different runtime_provider", async () => {
     const yamlPath = seedAgentDir("alpha", { agentId: "agent-1", runtime: "claude-code", workspaceLabel: "alpha-ws" });
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify([{ agentId: "agent-1", clientId: "cli-1", runtimeProvider: "codex" }]), {
@@ -71,7 +71,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     expect(after.workspaceLabel).toBe("alpha-ws");
   });
 
-  it("leaves agent.yaml untouched when runtime already matches hub", async () => {
+  it("leaves agent.yaml untouched when runtime already matches the server", async () => {
     const yamlPath = seedAgentDir("beta", { agentId: "agent-2", runtime: "codex" });
     const before = readFileSync(yamlPath, "utf-8");
     fetchMock.mockResolvedValue(
@@ -89,7 +89,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     expect(readFileSync(yamlPath, "utf-8")).toBe(before);
   });
 
-  it("ignores local agents that aren't pinned to this user (hub returns no entry)", async () => {
+  it("ignores local agents that aren't pinned to this user (server returns no entry)", async () => {
     const yamlPath = seedAgentDir("gamma", { agentId: "stale-agent", runtime: "claude-code" });
     const before = readFileSync(yamlPath, "utf-8");
     fetchMock.mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
@@ -103,7 +103,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     expect(readFileSync(yamlPath, "utf-8")).toBe(before);
   });
 
-  it("throws when hub returns a non-OK status (caller wraps best-effort)", async () => {
+  it("throws when the server returns a non-OK status (caller wraps best-effort)", async () => {
     fetchMock.mockResolvedValue(new Response("server down", { status: 500 }));
     await expect(
       reconcileLocalRuntimeProviders({

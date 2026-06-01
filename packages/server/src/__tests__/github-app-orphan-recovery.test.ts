@@ -360,7 +360,7 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
     expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBeNull();
   });
 
-  it("409s when the installation is already bound to a different Hub team", async () => {
+  it("409s when the installation is already bound to a different First Tree team", async () => {
     const app = getApp();
     const { accessToken, organizationId } = await seedAdminWithGithubToken();
     const installationId = 9_303;

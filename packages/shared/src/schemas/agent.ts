@@ -82,7 +82,7 @@ export const AGENT_NAME_MAX_LENGTH = 64;
 
 /**
  * Names users cannot claim in the portal. Prefix `__` is separately
- * reserved for Hub-internal pseudo-agents (enforced in the server service
+ * reserved for First Tree-internal pseudo-agents (enforced in the server service
  * layer) — this list covers short, obvious squatters that would confuse
  * routing, docs, or CLI help.
  */

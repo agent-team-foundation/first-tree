@@ -44,7 +44,7 @@ export function registerOrgBindTreeCommand(org: Command): void {
           const text = await res.text().catch(() => "");
           fail(
             "PUT_FAILED",
-            `hub returned ${res.status} on PUT /orgs/${orgId}/settings/context_tree: ${text.slice(0, 256)}`,
+            `server returned ${res.status} on PUT /orgs/${orgId}/settings/context_tree: ${text.slice(0, 256)}`,
             1,
           );
         }
@@ -64,7 +64,7 @@ async function resolveDefaultOrgId(serverUrl: string, accessToken: string): Prom
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
-    fail("ME_FAILED", `hub returned ${res.status} on /me`, 1);
+    fail("ME_FAILED", `server returned ${res.status} on /me`, 1);
   }
   const me = (await res.json()) as {
     memberships?: Array<{ organizationId: string }>;

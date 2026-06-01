@@ -274,7 +274,7 @@ function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
  *     (speaker → "participant" / watcher → "watching"); the user
  *     state row supplies the unread counter (COALESCE → 0 when
  *     row is missing).
- *   - Filter `parent_chat_id IS NULL` defensively. Hub has no sub-chat
+ *   - Filter `parent_chat_id IS NULL` defensively. First Tree has no sub-chat
  *     product layer (see first-tree-context PR #281); the column is
  *     decision-inert scaffolding, so any historical non-null row stays
  *     hidden from the conversation list.
@@ -712,7 +712,7 @@ export async function createMeChat(
     );
   }
 
-  // Hub keeps a single group-chat model (see first-tree-context PR #281).
+  // First Tree keeps a single group-chat model (see first-tree-context PR #281).
   // New chats are always `group`, regardless of participant count — the
   // historical `direct` write path is gone. Reads still derive 1:1 / agent-
   // only behaviour from membership shape (see Task 1.F), so existing

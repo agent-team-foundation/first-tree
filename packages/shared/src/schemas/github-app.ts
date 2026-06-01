@@ -3,8 +3,8 @@ import { z } from "zod";
 /**
  * GitHub App installation — schemas shared between server and web.
  *
- * Background: Hub is migrating from a per-repo OAuth + webhook model to a
- * GitHub App installation model. Each Hub team binds 1:1 to a single GitHub
+ * Background: First Tree is migrating from a per-repo OAuth + webhook model to a
+ * GitHub App installation model. Each First Tree team binds 1:1 to a single GitHub
  * account (User or Organization). The binding row lives in
  * `github_app_installations`; this file owns the public-facing Zod shapes
  * (account type, permissions, output DTO) so server and web agree on the
@@ -43,7 +43,7 @@ export type GithubPermissionLevel = z.infer<typeof githubPermissionLevelSchema>;
  * `installation.permissions` blob from GitHub. Key is the permission name
  * (`contents`, `pull_requests`, `issues`, `members`, …) — we keep this as a
  * free-form `z.record` because GitHub adds new permission keys over time
- * and we don't want a Hub-side `app_id` upgrade just to surface a new key
+ * and we don't want a First Tree-side `app_id` upgrade just to surface a new key
  * in the integrations panel.
  */
 export const githubAppInstallationPermissionsSchema = z.record(z.string(), githubPermissionLevelSchema);
@@ -88,7 +88,7 @@ export const githubAppUserTokenMetadataSchema = z.object({
 export type GithubAppUserTokenMetadata = z.infer<typeof githubAppUserTokenMetadataSchema>;
 
 /**
- * GET-side projection returned by the Hub admin API for the Integrations
+ * GET-side projection returned by the First Tree admin API for the Integrations
  * panel. Secrets are never echoed — only the metadata needed to render
  * "you're connected as @octocat (Organization), 7 repos selected".
  *

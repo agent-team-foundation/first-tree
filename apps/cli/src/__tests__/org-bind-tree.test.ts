@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Coverage for `first-tree org bind-tree` (Phase B handoff #7). The
  * command is wired to Step 3 onboarding agents that just created a fresh
- * context-tree repo and need the Hub to record the binding under
+ * context-tree repo and need the server to record the binding under
  * `orgs/:orgId/settings/context_tree`. We assert:
  *
  *   1. URL validation rejects malformed input with `INVALID_URL` and exits 2.

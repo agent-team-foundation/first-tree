@@ -10,7 +10,7 @@ import Fastify, { type FastifyInstance } from "fastify";
  *      with the e2e run's webhook secret so the server's HMAC verification
  *      accepts them as if GitHub itself had delivered.
  *
- *   2. **Outbound from Hub**: serves a minimal `/api/*` surface. The server
+ *   2. **Outbound from First Tree**: serves a minimal `/api/*` surface. The server
  *      reaches it via `FIRST_TREE_GITHUB_API_BASE_URL` (F3 — landed in
  *      M1). M2 only wires the webhook direction, so the proxy currently
  *      returns 404 by default — endpoints get stubbed lazily as the test
@@ -45,7 +45,7 @@ export type GitHubMock = {
 };
 
 export type GitHubMockOptions = {
-  /** Hub server base URL — the mock POSTs webhooks to `${serverBaseUrl}/api/v1/webhooks/github-app`. */
+  /** First Tree server base URL — the mock POSTs webhooks to `${serverBaseUrl}/api/v1/webhooks/github-app`. */
   serverBaseUrl: string;
   /** HMAC secret the server validates against. Must equal the server's `FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET`. */
   webhookSecret: string;
@@ -58,7 +58,7 @@ const WEBHOOK_PATH = "/api/v1/webhooks/github-app";
 export async function startGithubMock(opts: GitHubMockOptions): Promise<GitHubMock> {
   const app = Fastify({ logger: false });
 
-  // Default proxy behaviour: any /api/* call from the Hub server lands here.
+  // Default proxy behaviour: any /api/* call from the First Tree server lands here.
   // Returning 404 is informative — tests that need a real stub register a
   // route on `mock.fastify` BEFORE the relevant action triggers the call.
   app.get("/api/*", async (request, reply) => {

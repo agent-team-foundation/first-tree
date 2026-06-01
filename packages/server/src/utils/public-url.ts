@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 /**
- * Resolve the hub's public-facing base URL.
+ * Resolve First Tree's public-facing base URL.
  *
  * Precedence:
  *   1. `app.config.server.publicUrl` — explicit configuration. Required in

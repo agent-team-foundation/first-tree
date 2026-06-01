@@ -5,7 +5,7 @@ import type { FirstTreeHubSDK } from "../sdk.js";
 /**
  * In-memory cache of per-agent runtime configs (Step 4).
  *
- * The Hub is the single source of truth (PRD §D11). The cache exists only
+ * The server is the single source of truth (PRD §D11). The cache exists only
  * to skip a fetch when the message-borne `configVersion` matches what we
  * already hold. Whenever the incoming version is newer, we fetch and replace.
  *
@@ -18,7 +18,7 @@ export interface AgentConfigCache {
   /** Snapshot of the currently cached config, if any. */
   get(agentId: string): AgentRuntimeConfig | undefined;
   /**
-   * Refresh from Hub if `incomingVersion > local`; no-op otherwise.
+   * Refresh from the server if `incomingVersion > local`; no-op otherwise.
    * Returns the in-cache value after the operation.
    */
   refreshIfNewer(agentId: string, incomingVersion: number): Promise<AgentRuntimeConfig>;

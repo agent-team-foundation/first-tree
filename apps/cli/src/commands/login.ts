@@ -87,7 +87,7 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 
 /**
  * `first-tree login <token>` — single entry point. The connect token's
- * `iss` claim carries the hub URL so prod / staging / local environments are
+ * `iss` claim carries the server URL so prod / staging / local environments are
  * tagged at issuance and the operator can never accidentally cross-target.
  *
  * Two modes:

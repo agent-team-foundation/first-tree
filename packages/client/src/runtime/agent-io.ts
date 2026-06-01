@@ -10,7 +10,7 @@ import type { AgentIdentity, SessionMessage } from "./handler.js";
 import { findImagePath } from "./image-store.js";
 
 /**
- * Cross-handler plumbing for Agent Hub ↔ agent-runtime interaction.
+ * Cross-handler plumbing for First Tree ↔ agent-runtime interaction.
  *
  * Every handler that shells out to the `first-tree` CLI or otherwise acts
  * on behalf of the agent needs the same envelope variables (server URL, agent
@@ -24,7 +24,7 @@ import { findImagePath } from "./image-store.js";
 
 /**
  * Build the env for CLI sub-processes that need to call `first-tree ...`.
- * Layers the Agent-Hub envelope variables on top of the parent env. Handlers
+ * Layers the First Tree envelope variables on top of the parent env. Handlers
  * that start sub-processes should call this so every one of them sees the
  * same envelope — enabling replyTo inference, access-token propagation, and
  * agent-id binding without per-handler duplication.

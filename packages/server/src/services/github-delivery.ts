@@ -74,7 +74,7 @@ export async function deliverNormalizedEvent(
       // helper only touches a chat whose own `direct` anchor entity matches
       // this event (never a linked fixes_link entity), preserves the original
       // prefix, and no-ops when the payload carries no title — keeping the
-      // refresh scoped to chats Hub originally minted from this entity.
+      // refresh scoped to chats First Tree originally minted from this entity.
       if (!resolved.created) {
         const entity: GithubEntity = {
           type: event.entity.type,

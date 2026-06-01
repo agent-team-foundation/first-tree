@@ -1,5 +1,5 @@
 /**
- * Standard span attribute names used across Hub tracing.
+ * Standard span attribute names used across First Tree tracing.
  *
  * Centralized to avoid typos (`inbox.entry.id` vs `inbox_entry_id`) and to
  * make trace-backend queries consistent — operators can search by these keys

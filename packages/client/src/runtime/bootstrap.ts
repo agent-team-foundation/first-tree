@@ -93,7 +93,7 @@ function toSshGitUrl(httpsRepo: string): string | null {
  * The old implementation chained callers (`prev.then(fn)`), so N agents
  * sharing one Context Tree (the common case) cost N×git-pull at startup
  * — observed as ~7s per extra agent. With dedup, those N calls collapse
- * to a single shared sync. Each Hub `agent:bind` still resyncs the tree
+ * to a single shared sync. Each server `agent:bind` still resyncs the tree
  * once per process restart (the first caller's pull), which is the
  * contract `syncAgentContextTree` advertises.
  *
@@ -528,7 +528,7 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
   // 2. Copy organizational context from Context Tree (if available).
-  // Per PRD D7, the agent's behavior instructions live in the Hub-managed
+  // Per PRD D7, the agent's behavior instructions live in the server-managed
   // `agent_configs.payload.prompt.append` and are injected via the Claude
   // Code SDK's `systemPrompt.append`, not via a workspace file.
   if (contextTreePath) {
@@ -798,7 +798,7 @@ export type PredeclaredSourceRepo = {
 };
 
 /**
- * A Hub-managed worktree has a `.git` FILE (not directory) pointing back at
+ * A First Tree-managed worktree has a `.git` FILE (not directory) pointing back at
  * the bare mirror — `git worktree add` produces this shape. Used by the
  * source-repo reuse decision in both handlers to distinguish "checkout we
  * created earlier" from "operator dropped an unrelated directory in the

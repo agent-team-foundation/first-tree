@@ -354,7 +354,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
   it("E8: resume of a stale pre-upgrade sessionId falls back to fresh start (R2 fallback)", async () => {
     // Defensive fallback path: when sessionId can't be located at EITHER
     // cwd (legacy chatId dir or agent home), the handler mints a fresh
-    // id and starts cold — Hub-side chat history is preserved.
+    // id and starts cold — First Tree-side chat history is preserved.
     // SessionManager then persists the returned id, so subsequent inbox
     // messages resume against the new id cleanly (no permanent error loop).
     capturedSdkOptions.length = 0;

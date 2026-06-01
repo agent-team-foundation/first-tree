@@ -29,7 +29,7 @@ type StatePayload = {
   /** Pre-validated relative path the SPA navigates to after consuming the fragment. */
   next: string;
   /**
-   * Hub org the resulting GitHub App installation should bind to. Set when
+   * First Tree org the resulting GitHub App installation should bind to. Set when
    * the flow was kicked off from an org's Settings → GitHub panel (codex
    * P1-3) — without it the callback would bind to the user's *primary*
    * org, which is wrong when an admin of org B installs the App. Absent on

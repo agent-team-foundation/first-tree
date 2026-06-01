@@ -69,7 +69,7 @@ export type GitMirrorManagerOptions = {
   cloneTimeoutMs?: number;
   log?: pino.Logger;
   /**
-   * Paths under which Hub owns the directory tree end-to-end (typically
+   * Paths under which First Tree owns the directory tree end-to-end (typically
    * `<dataDir>/workspaces`). When a worktree target sits inside one of these
    * roots and a stale non-managed leftover is found at session start, the
    * manager auto-recovers — kill any process still holding the path, `rm -rf`
@@ -111,7 +111,7 @@ export interface GitMirrorManager {
    * before any slot starts. No `withUrlLock` is taken; the caller's timing
    * is the guarantee.
    *
-   * Cross-process caveat: a peer hub client (rare — happens during in-place
+   * Cross-process caveat: a peer First Tree client (rare — happens during in-place
    * upgrades or when an old install still runs in parallel) creating a
    * worktree in its own `add` sequence has a microsecond window where the
    * branch ref exists but its worktree admin record doesn't yet. If our
@@ -241,7 +241,7 @@ function looksLikeCommitSha(ref: string): boolean {
  * Identifies the cross-process `<gitdir>/config.lock` contention that
  * `git worktree add -b` surfaces as exit code 255 with stderr containing
  * `error: could not lock config file …`. Triggered when a peer git process
- * (e.g. a second hub client running an old install in parallel) is mid-way
+ * (e.g. a second First Tree client running an old install in parallel) is mid-way
  * through writing the same shared bare mirror's `config`. Safe to retry —
  * see the createWorktree retry loop for the recovery argument.
  */
@@ -262,7 +262,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   // (`hubManagedRoots: ["/"]`, `[os.homedir()]`, etc.) would weaponise the
   // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
   // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
-  // (so we never grant "the whole hub data dir is fair game").
+  // (so we never grant "the whole First Tree data dir is fair game").
   //
   // Aggregate every bad root into one error so an operator who misconfigured
   // multiple entries sees the whole picture on their first startup attempt
@@ -270,7 +270,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   const badRoots = hubManagedRoots.filter((root) => !isUnderManagedRoot(root, [resolvedDataDir]));
   if (badRoots.length > 0) {
     throw new GitMirrorError(
-      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
+      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the First Tree data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
     );
   }
 
@@ -697,8 +697,8 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         const absTarget = resolve(targetPath);
         const branchName = deriveSessionBranchName(sessionKey, agentName, url);
 
-        // D13: target path must be free OR a Hub-managed worktree we can reuse.
-        // Self-heal exception: when the path sits inside a hub-managed root the
+        // D13: target path must be free OR a First Tree-managed worktree we can reuse.
+        // Self-heal exception: when the path sits inside a First Tree-managed root the
         // leftover is almost always an orphaned dev-server cache (vite/.vite,
         // node_modules/.cache, etc) re-written by a daemonised child that
         // outlived the previous session — see worktree-cleanup.ts header for
@@ -714,7 +714,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
                 occupantKind,
                 hubManagedRoots,
               },
-              "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+              "worktree target occupied inside First Tree-managed root — auto-recovering (kill holders + rm -rf)",
             );
             await killProcessesHoldingPath(absTarget, log);
             try {
@@ -749,7 +749,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         // Crash-recovery matrix + cross-process race recovery, wrapped in a
         // retry loop. `withUrlLock` already serialises everything in *this*
         // process, but the shared bare mirror has no inter-process lock —
-        // a second hub client (rare, but happens during in-place upgrades or
+        // a second First Tree client (rare, but happens during in-place upgrades or
         // when an old install hasn't been uninstalled) can still race on
         // `<gitdir>/config.lock` while writing upstream tracking, which makes
         // `worktree add -b` exit 255 with `could not lock config file`.
@@ -789,7 +789,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
               // Already wired up — treat as successful reuse.
             } else if (pathExists && !hasBranch) {
               throw new GitMirrorError(
-                `Worktree directory "${absTarget}" exists as a Hub worktree but the expected session branch "${branchName}" is missing in the mirror — manual cleanup required`,
+                `Worktree directory "${absTarget}" exists as a First Tree worktree but the expected session branch "${branchName}" is missing in the mirror — manual cleanup required`,
               );
             } else if (!pathExists && hasBranch) {
               await git(["worktree", "add", absTarget, branchName], mirror, cloneTimeoutMs);
@@ -1097,7 +1097,7 @@ export function isLikelyAuthFailure(message: string): boolean {
  * `ECONNREFUSED` IS a transient signal — when Surge / Clash bounces the
  * listener, the next attempt sees the same listener back up within
  * seconds. This is why we diverge from the SDK's `doFetch` policy (which
- * does NOT retry `ECONNREFUSED` because there the peer is the remote hub).
+ * does NOT retry `ECONNREFUSED` because there the peer is the remote server).
  *
  * Exported for unit testing.
  */

@@ -37,8 +37,8 @@ export function evaluateDelegateTarget(
  *                       for echo suppression: the agent's own actions don't
  *                       fan back into their own chat.
  *   - `our-app-bot`   — actor is `<app-slug>[bot]`. The event is a downstream
- *                       effect of Hub's own outbound write. `kind: "existing"`
- *                       targets are kept (so PRs the agent opens via Hub's
+ *                       effect of First Tree's own outbound write. `kind: "existing"`
+ *                       targets are kept (so PRs the agent opens via First Tree's
  *                       installation token still surface their comments / CI
  *                       back to the agent's chat via the subscription path);
  *                       `kind: "new"` mention rows are dropped — minting a
@@ -110,7 +110,7 @@ export type AudienceTarget = {
  *   - actor = `our-app-bot`: `kind: "existing"` rows are kept so follow-up
  *     events on entities the agent opened still reach the chat through the
  *     subscription path; `kind: "new"` rows are dropped to avoid forking a
- *     fresh chat just to echo Hub's own outbound write. See `ActorIdentity`.
+ *     fresh chat just to echo First Tree's own outbound write. See `ActorIdentity`.
  */
 export async function resolveAudience(
   db: Database,
@@ -234,7 +234,7 @@ export async function resolveAudience(
 
   const actor = await identifyActor(db, organizationId, event.actor, appSlug);
   if (actor.kind === "our-app-bot") {
-    // The App bot is on the wire because Hub itself wrote to GitHub — the
+    // The App bot is on the wire because First Tree itself wrote to GitHub — the
     // user already saw their own action client-side. We still need to fan
     // out to *existing* subscriptions so PR comments / CI changes reach
     // the chat the agent worked in; mention-driven `kind: "new"` rows are
