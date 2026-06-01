@@ -5,8 +5,7 @@ import {
   nextParamsForGroup,
   nextParamsForOrigin,
   nextParamsForParticipants,
-  nextParamsForUnread,
-  nextParamsForWatching,
+  nextParamsForRailFilter,
   parseOriginList,
   parseParticipantList,
   parseUnreadWatching,
@@ -49,48 +48,37 @@ describe("nextParamsForEngagement", () => {
   });
 });
 
-describe("nextParamsForUnread", () => {
-  it("sets unread=1 when enabling", () => {
-    const result = nextParamsForUnread(paramsOf(""), true);
-    expect(result.get("unread")).toBe("1");
-  });
-
-  it("removes unread when disabling", () => {
-    const result = nextParamsForUnread(paramsOf("unread=1"), false);
+describe("nextParamsForRailFilter", () => {
+  it("`all` clears both unread and watching", () => {
+    const result = nextParamsForRailFilter(paramsOf("unread=1&watching=1"), "all");
     expect(result.has("unread")).toBe(false);
-  });
-
-  it("leaves watching alone (Phase B — the two dimensions are independent)", () => {
-    // Phase A enforced mutual exclusivity because the server `filter`
-    // enum could only carry one of {unread, watching} at a time. Phase
-    // B lifted `watching` to an independent boolean, so toggling
-    // `unread` no longer disturbs `watching`.
-    const result = nextParamsForUnread(paramsOf("watching=1"), true);
-    expect(result.get("unread")).toBe("1");
-    expect(result.get("watching")).toBe("1");
-  });
-
-  it("preserves the chat selection (unlike scope toggles)", () => {
-    const result = nextParamsForUnread(paramsOf("c=abc"), true);
-    expect(result.get("c")).toBe("abc");
-  });
-});
-
-describe("nextParamsForWatching", () => {
-  it("sets watching=1 when enabling", () => {
-    const result = nextParamsForWatching(paramsOf(""), true);
-    expect(result.get("watching")).toBe("1");
-  });
-
-  it("removes watching when disabling", () => {
-    const result = nextParamsForWatching(paramsOf("watching=1"), false);
     expect(result.has("watching")).toBe(false);
   });
 
-  it("leaves unread alone (Phase B — independent dimensions)", () => {
-    const result = nextParamsForWatching(paramsOf("unread=1"), true);
-    expect(result.get("watching")).toBe("1");
+  it("`unread` sets only unread (and clears watching) — single-select", () => {
+    const result = nextParamsForRailFilter(paramsOf("watching=1"), "unread");
     expect(result.get("unread")).toBe("1");
+    expect(result.has("watching")).toBe(false);
+  });
+
+  it("`watching` sets only watching (and clears unread) — single-select", () => {
+    const result = nextParamsForRailFilter(paramsOf("unread=1"), "watching");
+    expect(result.get("watching")).toBe("1");
+    expect(result.has("unread")).toBe(false);
+  });
+
+  it("writes both flags in one mutation (mutual exclusivity, no stale-snapshot race)", () => {
+    // The whole point of folding the two independent flags into one
+    // transition: switching unread → watching must end with exactly one
+    // flag set, never both, in a single URLSearchParams write.
+    const result = nextParamsForRailFilter(paramsOf("unread=1"), "watching");
+    expect(result.get("watching")).toBe("1");
+    expect(result.has("unread")).toBe(false);
+  });
+
+  it("preserves the chat selection (switching the triad doesn't drop `?c=`)", () => {
+    const result = nextParamsForRailFilter(paramsOf("c=abc&unread=1"), "watching");
+    expect(result.get("c")).toBe("abc");
   });
 });
 
@@ -100,11 +88,12 @@ describe("parseUnreadWatching", () => {
     expect(parseUnreadWatching(paramsOf("watching=1"))).toEqual({ unread: false, watching: true });
   });
 
-  it("reads both flags as true when both are set (Phase B)", () => {
-    // Phase B server accepts both dimensions independently, so the URL
-    // can legitimately encode "unread chats I'm watching". The parser
-    // is straight-through — no more Phase A canonicalisation.
-    expect(parseUnreadWatching(paramsOf("unread=1&watching=1"))).toEqual({ unread: true, watching: true });
+  it("canonicalizes a stale `unread=1&watching=1` combo to single-select (unread wins)", () => {
+    // The header triad is single-select, so a URL carrying both flags
+    // (a pre-redesign link or hand-typed) resolves to one mode — unread
+    // wins — so the applied query matches the highlighted triad instead
+    // of silently filtering by both.
+    expect(parseUnreadWatching(paramsOf("unread=1&watching=1"))).toEqual({ unread: true, watching: false });
   });
 
   it("defaults both off when neither key is present", () => {
@@ -203,17 +192,23 @@ describe("nextParamsForClearFilters", () => {
     // `with` atomically because two sequential `setSearchParams` calls
     // would each derive from the same render-stale params and the
     // second would clobber the first.
-    const result = nextParamsForClearFilters(paramsOf("unread=1&watching=1&origin=manual,github&with=agent-a,agent-b"));
+    const result = nextParamsForClearFilters(
+      paramsOf("unread=1&watching=1&origin=manual,github&with=agent-a,agent-b&engagement=archived"),
+    );
     expect(result.has("unread")).toBe(false);
     expect(result.has("watching")).toBe(false);
+    expect(result.has("engagement")).toBe(false);
     expect(result.has("origin")).toBe(false);
     expect(result.has("with")).toBe(false);
   });
 
-  it("preserves non-filter params (scope, chat selection, group)", () => {
+  it("resets Status (engagement) to default but preserves chat selection + grouping", () => {
+    // Status lives in the ⚙ popover and counts toward its active-filter
+    // badge, so "Reset all" must clear it too; `?group=` (view-mode) and
+    // `?c=` (selection) survive.
     const result = nextParamsForClearFilters(paramsOf("unread=1&c=abc&engagement=archived&group=source"));
+    expect(result.has("engagement")).toBe(false);
     expect(result.get("c")).toBe("abc");
-    expect(result.get("engagement")).toBe("archived");
     expect(result.get("group")).toBe("source");
   });
 

@@ -8,7 +8,7 @@ import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { CenterPanel } from "./center/index.js";
 import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
-import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
+import { ConversationList, DRAFT_CHAT_ID, type RailFilter } from "./conversations/index.js";
 
 /**
  * Workspace shell — chat-first. The left rail is `ConversationList`; the
@@ -44,15 +44,19 @@ function isChatSource(value: string): value is ChatSource {
 }
 
 /**
- * Parse the mutually-independent `?unread=` / `?watching=` flags. Phase B
- * removes the Phase A mutex (the server's `filter` enum no longer carries
- * "watching", so the two dimensions compose freely on the wire).
+ * Parse the `?unread=` / `?watching=` flags into the single-select triad
+ * state (All / Unread / Watching). The header triad is single-select, so a
+ * URL that still carries BOTH flags — a link saved before this redesign, or
+ * one hand-typed — is canonicalized to one mode: **unread wins**. Without
+ * this, `listMeChats` would silently filter by unread *and* watching while
+ * the triad only highlights Unread, leaving a hidden active filter the user
+ * can't see or clear. `nextParamsForRailFilter` only ever writes one flag,
+ * so a freshly-driven URL never carries both.
  */
 export function parseUnreadWatching(params: URLSearchParams): { unread: boolean; watching: boolean } {
-  return {
-    unread: params.get("unread") === "1",
-    watching: params.get("watching") === "1",
-  };
+  const unread = params.get("unread") === "1";
+  const watching = params.get("watching") === "1";
+  return { unread, watching: unread ? false : watching };
 }
 
 /**
@@ -196,16 +200,12 @@ export function WorkspacePage() {
     [searchParams, setSearchParams],
   );
 
-  const setUnread = useCallback(
-    (next: boolean) => {
-      setSearchParams(nextParamsForUnread(searchParams, next), { replace: true });
-    },
-    [searchParams, setSearchParams],
-  );
-
-  const setWatching = useCallback(
-    (next: boolean) => {
-      setSearchParams(nextParamsForWatching(searchParams, next), { replace: true });
+  // Primary triad — sets the `?unread=` / `?watching=` flags
+  // mutually-exclusively in one atomic write (the two are independent URL
+  // keys, so two back-to-back setters would race on the stale snapshot).
+  const setRailFilter = useCallback(
+    (view: RailFilter) => {
+      setSearchParams(nextParamsForRailFilter(searchParams, view), { replace: true });
     },
     [searchParams, setSearchParams],
   );
@@ -276,9 +276,8 @@ export function WorkspacePage() {
       engagement={engagement}
       onEngagementChange={setEngagement}
       unread={unread}
-      onUnreadChange={setUnread}
       watching={watching}
-      onWatchingChange={setWatching}
+      onRailFilterChange={setRailFilter}
       origin={origin}
       onOriginChange={setOrigin}
       participants={participants}
@@ -378,30 +377,23 @@ export function nextParamsForEngagement(current: URLSearchParams, view: ChatEnga
 }
 
 /**
- * Pure URL transition for the `unread` toggle. Exported for unit tests.
- * Phase B: `unread` and `watching` are now independent boolean dimensions
- * (the server filter enum no longer overloads both onto one slot), so
- * toggling one no longer clears the other.
+ * Pure URL transition for the header's primary triad (All / Unread /
+ * Watching). Exported for unit tests. The triad is single-select, so it
+ * sets the two independent `?unread=` / `?watching=` flags
+ * mutually-exclusively in one mutation: `all` clears both, `unread` sets
+ * only unread, `watching` sets only watching. Doing it in a single
+ * `URLSearchParams` write avoids the stale-snapshot race that two
+ * back-to-back per-flag writes would hit.
  *
- * Selection is preserved here — toggling unread doesn't shift the user
- * out of the chat they're reading (unlike scope which does hide
- * the selection).
+ * Selection (`?c=`) is preserved — switching the triad doesn't shift the
+ * user out of the chat they're reading.
  */
-export function nextParamsForUnread(current: URLSearchParams, on: boolean): URLSearchParams {
+export function nextParamsForRailFilter(current: URLSearchParams, view: RailFilter): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (on) next.set("unread", "1");
-  else next.delete("unread");
-  return next;
-}
-
-/**
- * Pure URL transition for the `watching` toggle. Exported for unit tests.
- * Independent of `unread` (Phase B — the two compose freely).
- */
-export function nextParamsForWatching(current: URLSearchParams, on: boolean): URLSearchParams {
-  const next = new URLSearchParams(current);
-  if (on) next.set("watching", "1");
-  else next.delete("watching");
+  next.delete("unread");
+  next.delete("watching");
+  if (view === "unread") next.set("unread", "1");
+  else if (view === "watching") next.set("watching", "1");
   return next;
 }
 
@@ -461,13 +453,17 @@ export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): U
  * shot. Used by the rail's "Clear" affordance. Exported for unit tests.
  *
  * Done in a single mutation because the rail filters live on independent
- * URL keys (`?unread=`, `?watching=`, `?origin=`, `?with=`); running the
- * per-key setters back-to-back would re-derive each call from the same
- * stale `searchParams` snapshot, so only the last write would win.
+ * URL keys (`?unread=`, `?watching=`, `?origin=`, `?with=`, `?engagement=`);
+ * running the per-key setters back-to-back would re-derive each call from
+ * the same stale `searchParams` snapshot, so only the last write would win.
  *
- * Scope (`?engagement=`), grouping (`?group=`), and the selected chat
- * (`?c=`) are deliberately preserved — they're not "filters" in the
- * Clear sense; the user expects them to survive a Clear.
+ * Scope (`?engagement=`) IS cleared (reset to the default `active`): it now
+ * lives inside the `⚙` popover and counts toward the popover's active-filter
+ * badge, so the popover's "Reset all" must actually reset it — otherwise the
+ * list stays Status-limited with the badge still lit after a Reset.
+ *
+ * Grouping (`?group=`, a view-mode, not a filter) and the selected chat
+ * (`?c=`) are deliberately preserved — the user expects them to survive.
  */
 export function nextParamsForClearFilters(current: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(current);
@@ -475,5 +471,6 @@ export function nextParamsForClearFilters(current: URLSearchParams): URLSearchPa
   next.delete("watching");
   next.delete("origin");
   next.delete("with");
+  next.delete("engagement");
   return next;
 }

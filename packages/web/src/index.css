@@ -322,6 +322,26 @@
   --avatar-hue-6: oklch(0.72 0.15 90); /* amber */
   --avatar-hue-7: oklch(0.55 0.17 270); /* indigo */
 
+  /* Muted (low-chroma) companions of the avatar hues. Same lightness +
+     hue angle as their vivid sibling — only the chroma is dropped to a
+     uniform ~0.06 — so identity stays recognisable (you can still tell
+     the green agent from the blue one) while the disc reads as a quiet
+     tinted neutral rather than a saturated swatch. The conversation
+     list uses these (`muted` path in `pickAvatarHue` /
+     `resolveAvatarHue`) so a dense rail of avatars no longer reads as a
+     rainbow; vivid hues stay in the chat header / roster / right rail
+     where only a few appear at once. Lightness is unchanged, so the
+     near-white `--fg-on-vivid` initials keep the same AA contrast as on
+     the vivid set. */
+  --avatar-hue-0-muted: oklch(0.66 0.06 150);
+  --avatar-hue-1-muted: oklch(0.62 0.06 250);
+  --avatar-hue-2-muted: oklch(0.6 0.06 295);
+  --avatar-hue-3-muted: oklch(0.65 0.06 0);
+  --avatar-hue-4-muted: oklch(0.68 0.06 50);
+  --avatar-hue-5-muted: oklch(0.65 0.06 200);
+  --avatar-hue-6-muted: oklch(0.72 0.06 90);
+  --avatar-hue-7-muted: oklch(0.55 0.06 270);
+
   --radius: 0.5rem;
 
   /* Light theme (default when .dark class is absent).
