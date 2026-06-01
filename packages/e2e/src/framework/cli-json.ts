@@ -1,4 +1,4 @@
-import { type CliExecResult, execCli, type ExecCliOptions } from "./cli-driver/exec.js";
+import { type CliExecResult, type ExecCliOptions, execCli } from "./cli-driver/exec.js";
 
 export type CliJsonResult<T> = {
   /** Parsed stdout JSON. */
