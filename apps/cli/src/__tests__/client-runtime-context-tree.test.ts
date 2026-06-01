@@ -461,7 +461,7 @@ describe("ClientRuntime context-tree wiring", () => {
     vi.mocked(fs.watch).mockReturnValueOnce(fakeWatcher as unknown as ReturnType<typeof fs.watch>);
 
     const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
     const agentsDir = join(home, "config", "agents");
     mkdirSync(agentsDir, { recursive: true });
     rt.watchAgentsDir(agentsDir);
