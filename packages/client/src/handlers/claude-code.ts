@@ -580,6 +580,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
+  const queuedStartupMessages: SessionMessage[] = [];
   /**
    * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
    * the per-turn prompt block so the LLM knows the absolute paths without
@@ -840,6 +841,46 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   function ackTurnClose(sessionCtx: SessionContext): void {
     sessionCtx.markCompleted();
     stashedSdkMessage = null;
+  }
+
+  async function pushInjectedMessage(
+    message: SessionMessage,
+    sessionCtx: SessionContext,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await maybeSwitchConfig(sessionCtx);
+    } catch (err) {
+      sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    try {
+      const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
+      stashedSdkMessage = sdkMsg;
+      inputController?.push(sdkMsg);
+    } catch (err) {
+      sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
+      // `toSDKUserMessage` failed before the SDK ever saw the
+      // message, so no `result` event will ever fire to pair this
+      // entry with a `markCompleted()`. Ack here — re-handling on
+      // redelivery would re-hit the same conversion error
+      // (permanent failure semantics, design §4).
+      sessionCtx.markCompleted(1);
+    }
+  }
+
+  function scheduleInjectedMessage(message: SessionMessage, sessionCtx: SessionContext, sessionId: string): void {
+    void pushInjectedMessage(message, sessionCtx, sessionId);
+  }
+
+  function drainStartupMessages(sessionCtx: SessionContext, sessionId: string): void {
+    const drained = queuedStartupMessages.splice(0);
+    if (drained.length === 0) return;
+    void (async () => {
+      for (const message of drained) {
+        await pushInjectedMessage(message, sessionCtx, sessionId);
+      }
+    })();
   }
 
   /**
@@ -1465,6 +1506,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
       inputController?.push(sdkMsg);
+      drainStartupMessages(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
       return claudeSessionId;
@@ -1512,6 +1554,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (sdkMsg) {
           inputController?.push(sdkMsg);
         }
+        drainStartupMessages(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
         return sessionId;
       }
@@ -1551,6 +1594,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
         }
+        drainStartupMessages(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
         return freshSessionId;
       }
@@ -1565,41 +1609,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
       }
+      drainStartupMessages(sessionCtx, sessionId);
 
       sessionCtx.log(`Session resumed (${sessionId})`);
       return sessionId;
     },
 
     inject(message) {
-      if (!inputController || !claudeSessionId || !ctx) {
+      if (!claudeSessionId || !ctx) {
         ctx?.log("inject() called but no active session — dropping message");
         return;
       }
       const sessionCtx = ctx;
       const sid = claudeSessionId;
+      if (!inputController) {
+        queuedStartupMessages.push(message);
+        return;
+      }
       // Step 6: switch (in-flight or restart) BEFORE injecting if the cached
       // config is newer than the one we launched with. Errors are logged
       // and we still deliver against the existing query — better than
       // dropping the user message.
-      void maybeSwitchConfig(sessionCtx)
-        .catch((err) => {
-          sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
-        })
-        .finally(async () => {
-          try {
-            const sdkMsg = await toSDKUserMessage(message, sessionCtx, sid);
-            stashedSdkMessage = sdkMsg;
-            inputController?.push(sdkMsg);
-          } catch (err) {
-            sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
-            // `toSDKUserMessage` failed before the SDK ever saw the
-            // message, so no `result` event will ever fire to pair this
-            // entry with a `markCompleted()`. Ack here — re-handling on
-            // redelivery would re-hit the same conversion error
-            // (permanent failure semantics, design §4).
-            sessionCtx.markCompleted(1);
-          }
-        });
+      scheduleInjectedMessage(message, sessionCtx, sid);
     },
 
     async suspend() {
@@ -1626,6 +1657,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // be moot. Resume goes through `handler.resume(message, sessionId)`
       // which re-stashes from its own argument.
       stashedSdkMessage = null;
+      queuedStartupMessages.length = 0;
     },
 
     async shutdown() {

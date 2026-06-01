@@ -364,6 +364,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
   let drainScheduled = false;
+  let drainInProgress = false;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
   /**
@@ -936,17 +937,29 @@ export const createCodexHandler: HandlerFactory = (config) => {
       );
     }
 
-    // Drain queued messages — schedules at most one follow-up at a time so
-    // a runaway inject loop can't recurse into stack overflow.
-    if (queuedMessages.length > 0 && !drainScheduled) {
-      drainScheduled = true;
-      setImmediate(() => {
-        drainScheduled = false;
-        const drained = queuedMessages.splice(0);
-        if (drained.length === 0 || !ctx || !thread) return;
-        void mergeAndRun(drained, ctx);
+    scheduleQueuedMessagesDrain();
+  }
+
+  function scheduleQueuedMessagesDrain(): void {
+    if (drainScheduled || drainInProgress) return;
+    if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) return;
+
+    drainScheduled = true;
+    setImmediate(() => {
+      drainScheduled = false;
+      if (drainInProgress || queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) {
+        scheduleQueuedMessagesDrain();
+        return;
+      }
+
+      const drained = queuedMessages.splice(0);
+      const sessionCtx = ctx;
+      drainInProgress = true;
+      void mergeAndRun(drained, sessionCtx).finally(() => {
+        drainInProgress = false;
+        scheduleQueuedMessagesDrain();
       });
-    }
+    });
   }
 
   async function mergeAndRun(drained: SessionMessage[], sessionCtx: SessionContext): Promise<void> {
@@ -1226,28 +1239,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
     inject(message) {
       // Fire-and-forget — Codex turns are run-to-completion, so the message
-      // is buffered and drained on the next available turn. If the thread
-      // isn't running anything right now, schedule a turn immediately.
-      if (currentTurnPromise) {
-        queuedMessages.push(message);
-        return;
-      }
-      const sessionCtx = ctx;
-      if (!sessionCtx || !thread) return;
-      void (async () => {
-        try {
-          const input = await toCodexInput(message, sessionCtx);
-          // Single inject, single entry — runTurn will ack exactly one.
-          await runTurn(input, sessionCtx, 1);
-        } catch (err) {
-          sessionCtx.log(`codex inject failed: ${err instanceof Error ? err.message : String(err)}`);
-          // `toCodexInput` / `runTurn` threw before any markCompleted —
-          // the entry is still in flight. Ack so the row doesn't loop
-          // server-side as `delivered`; redelivery would re-hit the same
-          // failure. Mirrors design §4 "permanent → ack".
-          sessionCtx.markCompleted(1);
-        }
-      })();
+      // is buffered and drained on the next available turn. Queue every
+      // inject instead of only mid-turn injects so the async gap before
+      // `runTurn()` sets `currentTurnPromise` cannot start parallel turns
+      // and desynchronise the in-flight entry FIFO.
+      if (!ctx) return;
+      queuedMessages.push(message);
+      scheduleQueuedMessagesDrain();
     },
 
     async suspend() {
