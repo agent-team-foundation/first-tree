@@ -651,6 +651,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
       activeSessions: agentPresence.activeSessions,
+      lastSeenAt: agentPresence.lastSeenAt,
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
@@ -705,6 +706,7 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
       activeSessions: agentPresence.activeSessions,
+      lastSeenAt: agentPresence.lastSeenAt,
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
@@ -801,6 +803,7 @@ export async function listAgentsForMember(
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
       activeSessions: agentPresence.activeSessions,
+      lastSeenAt: agentPresence.lastSeenAt,
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))

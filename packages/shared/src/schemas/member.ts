@@ -15,6 +15,12 @@ export const memberSchema = z.object({
   agentId: z.string(),
   role: memberRoleSchema,
   createdAt: z.string(),
+  /**
+   * ISO timestamp the member was last active, *derived* from the most recent
+   * message sent by their human agent (no dedicated column — read-time
+   * `MAX(messages.created_at)`). Null when they've never sent a message.
+   */
+  lastActiveAt: z.string().nullable(),
 });
 export type Member = z.infer<typeof memberSchema>;
 
@@ -32,6 +38,19 @@ export const updateMemberSchema = z.object({
   displayName: z.string().min(1).max(200).optional(),
 });
 export type UpdateMember = z.infer<typeof updateMemberSchema>;
+
+/**
+ * Self-service profile edit (`PATCH /me/profile`). `role` is intentionally
+ * absent: a member can rename themselves but cannot self-promote. The admin
+ * route `PATCH /orgs/:orgId/members/:id` remains the only way to change roles.
+ */
+export const updateMyProfileSchema = z.object({
+  // `.trim()` runs before `.min(1)`, so a whitespace-only name collapses to ""
+  // and is rejected — a direct API caller can't write a blank display name
+  // (the web dialog already trims, this closes the server-side hole).
+  displayName: z.string().trim().min(1).max(200),
+});
+export type UpdateMyProfile = z.infer<typeof updateMyProfileSchema>;
 
 /** Response when creating a member — includes the one-time plaintext password. */
 export const memberCreatedSchema = memberSchema.extend({

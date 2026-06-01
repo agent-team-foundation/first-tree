@@ -1,4 +1,4 @@
-import type { UpdateMember } from "@first-tree/shared";
+import type { UpdateMember, UpdateMyProfile } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type MemberListItem = {
@@ -10,6 +10,8 @@ type MemberListItem = {
   createdAt: string;
   username: string;
   displayName: string;
+  /** Derived from the member's most recent message (口径 B); null = never active. */
+  lastActiveAt: string | null;
 };
 
 export function listMembers(): Promise<MemberListItem[]> {
@@ -22,4 +24,13 @@ export function updateMember(id: string, data: UpdateMember): Promise<MemberList
 
 export function deleteMember(id: string): Promise<void> {
   return api.delete<void>(withOrg(`/members/${encodeURIComponent(id)}`));
+}
+
+/**
+ * Self-service profile edit (`PATCH /me/profile`) — user-scoped, NOT org-scoped
+ * (no `withOrg`). The caller can rename themselves; the server has no `role`
+ * field on this route, so it can never change the caller's own role.
+ */
+export function updateMyProfile(data: UpdateMyProfile): Promise<{ id: string; displayName: string }> {
+  return api.patch<{ id: string; displayName: string }>("/me/profile", data);
 }

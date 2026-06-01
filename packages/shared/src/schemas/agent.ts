@@ -242,6 +242,13 @@ export const agentSchema = z.object({
   avatarImageUrl: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
   /**
+   * ISO timestamp of the agent's last presence heartbeat
+   * (`agent_presence.last_seen_at`). Drives the "active X ago" hover on the
+   * Team page status cell. Absent on single-agent reads that don't join
+   * presence; null when the agent has never connected.
+   */
+  lastSeenAt: z.string().nullable().optional(),
+  /**
    * Runtime-A business state from `agent_presence.runtime_state` (the M1+
    * authority for "is this agent running"; NULL when not bound). Carried on
    * single-agent reads + mutations so management surfaces can derive

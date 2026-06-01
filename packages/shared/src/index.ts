@@ -444,7 +444,9 @@ export {
   memberRoleSchema,
   memberSchema,
   type UpdateMember,
+  type UpdateMyProfile,
   updateMemberSchema,
+  updateMyProfileSchema,
 } from "./schemas/member.js";
 export {
   type ClientMessage,
