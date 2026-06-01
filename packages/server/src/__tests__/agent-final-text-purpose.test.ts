@@ -247,6 +247,73 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
   });
 
+  it("counts +1 per message even when final-text also names the human peer explicitly (no double-bump)", async () => {
+    // Regression guard for the codex review point on PR #728:
+    // `agent-final-text` + explicit `metadata.mentions: [human]` previously
+    // hit both the final-text speaker branch AND the mention speaker
+    // branch in two separate UPSERTs, incrementing the human's counter
+    // twice for a single message. The UNION'd UPSERT collapses the
+    // duplicate target row so the counter advances by exactly +1.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `ftd-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "done",
+      metadata: { mentions: [admin.humanAgentUuid] },
+      purpose: "agent-final-text",
+    });
+
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 10,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row?.unreadMentionCount).toBe(1);
+  });
+
+  it("does NOT bump on a human-sender send that smuggles `purpose: agent-final-text` (sender-type gate)", async () => {
+    // Regression guard for the codex review point on PR #728:
+    // `purpose` lives on the shared sendMessage schema, so nothing at
+    // the route layer forbids a human sender from setting
+    // `agent-final-text`. The unread-bump branch is gated on
+    // `senderRow.type !== "human"` so a human's send never lands
+    // unread-bumps on co-speakers from this code path; mention-driven
+    // unread (the explicit path) is unaffected and still works.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `fth-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Human sends with the agent-final-text marker but NO mentions. The
+    // bump should not fire because the sender is human.
+    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "api",
+      format: "text",
+      content: "human-flavoured 'final text'",
+      purpose: "agent-final-text",
+    });
+
+    // Peer is an agent — query chat_user_state directly. The lazy-
+    // materialised row should be absent (or 0) since neither branch
+    // fired.
+    const { sql } = await import("drizzle-orm");
+    const rows = (await app.db.execute(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${peer.agent.uuid}`,
+    )) as unknown as Array<{ unread_mention_count: number }>;
+    expect(rows[0]?.unread_mention_count ?? 0).toBe(0);
+  });
+
   it("does NOT bump non-human speaker peers' unread state on final text (avoid polluting agent unread state)", async () => {
     // Two agents under one admin; admin watches both. The sender's final
     // text should bump the watcher (admin) but NOT the other agent peer.
