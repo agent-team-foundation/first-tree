@@ -306,26 +306,35 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // while the fallback input is shown.
   const manualSeqRef = useRef(0);
   useEffect(() => {
+    // Bump the sequence BEFORE any early return so an in-flight probe from a
+    // prior run can never write back after the input changed or cleared
+    // (otherwise a stale `{ available: true }` could re-mark a now-empty /
+    // invalid value as `ok`).
+    const seq = ++manualSeqRef.current;
     if (!open || handleState.status !== "manual") {
       setManualAvailability({ status: "idle" });
       return;
     }
-    if (!manualHandle) {
+    // Probe the exact value that gets submitted (`effectiveHandle` is the slug),
+    // not the raw input — `normalizeNameInput` keeps a trailing `-`/`_` for
+    // mid-typing, so checking the raw value would verify a different string
+    // than the one we POST.
+    const candidate = slugify(manualHandle);
+    if (!candidate) {
       setManualAvailability({ status: "idle" });
       return;
     }
-    if (!AGENT_NAME_REGEX.test(manualHandle)) {
+    if (!AGENT_NAME_REGEX.test(candidate)) {
       setManualAvailability({ status: "bad", reason: "invalid" });
       return;
     }
-    if (isReservedAgentName(manualHandle)) {
+    if (isReservedAgentName(candidate)) {
       setManualAvailability({ status: "bad", reason: "reserved" });
       return;
     }
-    const seq = ++manualSeqRef.current;
     setManualAvailability({ status: "checking" });
     const timer = window.setTimeout(() => {
-      checkAgentNameAvailability(manualHandle)
+      checkAgentNameAvailability(candidate)
         .then((res) => {
           if (seq !== manualSeqRef.current) return;
           setManualAvailability(res.available ? { status: "ok" } : { status: "bad", reason: res.reason });
@@ -487,17 +496,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const manualSlug = slugify(manualHandle);
   const effectiveHandle = handleState.status === "manual" ? manualSlug : resolvedHandle;
 
-  // Whether the handle is settled enough to submit. In manual mode we accept
-  // an explicitly-available handle, or (on a probe network failure) any
-  // syntactically-valid one and let the server arbitrate.
+  // Whether the handle is settled enough to submit. In manual mode the gate is
+  // tied to the CURRENT submitted slug (not just a possibly-stale `ok` flag):
+  // the slug must be non-empty, valid and non-reserved, AND availability must be
+  // `ok` (explicitly available) or `idle` (probe network-failed → optimistic,
+  // server arbitrates on POST).
+  const manualSlugSubmittable =
+    manualSlug.length > 0 && AGENT_NAME_REGEX.test(manualSlug) && !isReservedAgentName(manualSlug);
   const handleReady =
     handleState.status === "ok"
       ? true
       : handleState.status === "manual"
-        ? manualAvailability.status === "ok" ||
-          (manualAvailability.status === "idle" &&
-            AGENT_NAME_REGEX.test(manualSlug) &&
-            !isReservedAgentName(manualSlug))
+        ? manualSlugSubmittable && (manualAvailability.status === "ok" || manualAvailability.status === "idle")
         : false;
 
   const createMut = useMutation({

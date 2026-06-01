@@ -41,6 +41,10 @@
    thin line icons, search + underline tabs, rounded-square avatars,
    comfortable aligned spacing, a right Session sidebar. Do **not** borrow a
    saturated blue primary.
+5. **Card chrome = interactivity.** A filled or bordered card signals that
+   something is selectable or actionable. Read-only / informational states
+   (status readouts, confirmations) render as plain labeled content, **not**
+   wrapped in a filled/bordered card.
 
 **Semantic color map — the only places color appears:**
 
@@ -260,7 +264,7 @@ const buttonVariants = cva("…base classes…", {
 
 **Inventory** (representative):
 - **Actions / inputs:** Button, Input, Label, SegmentedControl, FilterPill,
-  Command (cmdk), RowActionsMenu
+  OptionCard, Command (cmdk), RowActionsMenu
 - **Containers / layout:** Card, Panel, Section, Tile, SettingsField, PageHeader,
   SectionHeader, FlatSectionHeader, TabBar
 - **Data:** Table, DenseTable, Breadcrumb, Markdown
@@ -268,6 +272,14 @@ const buttonVariants = cva("…base classes…", {
   PresenceChip, AgentStatusChip
 - **Overlay / feedback:** Dialog, Popover, Toast
 - **Theming:** ThemeToggle
+
+**Selection state** (`OptionCard` and any radio/option cards): selected and
+unselected share the **same faint `--border` hairline** — selection is signalled
+by a **filled neutral dot (`--fg`) plus a very light `--fg` tint (~5%)**, never a
+heavier or colored border and never a saturated dot. Both cues are
+hue-independent (filled vs hollow dot, presence of tint), so it reads without
+relying on color. The real `<input>` is `sr-only`; focus follows the §13
+bordered-control rule (deepen the card's own border on `:focus-within`).
 
 ---
 
