@@ -52,6 +52,12 @@ export type ExecCliOptions = CliEnvOptions & {
   args: string[];
   /** Hard wall-clock timeout in ms. Default 30s. */
   timeoutMs?: number;
+  /**
+   * Working directory the spawned CLI runs from. Defaults to `REPO_ROOT`.
+   * Commands that resolve files via `process.cwd()` (e.g. `tree inspect`,
+   * `tree init` against a local source repo fixture) need this.
+   */
+  cwd?: string;
 };
 
 /**
@@ -66,7 +72,7 @@ export async function execCli(opts: ExecCliOptions): Promise<CliExecResult> {
   const child = spawn(process.execPath, [CLI_ENTRY, ...opts.args], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
-    cwd: REPO_ROOT,
+    cwd: opts.cwd ?? REPO_ROOT,
   });
   let stdout = "";
   let stderr = "";
