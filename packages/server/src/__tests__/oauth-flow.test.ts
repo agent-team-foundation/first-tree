@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { invitationRedemptions } from "../db/schema/invitations.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
-import { useTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
  * End-to-end tests for the public GitHub-OAuth onboarding surface.
@@ -199,6 +201,122 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(body.memberships[0]?.role).toBe("admin");
     expect(body.defaultOrganizationId).toBe(body.memberships[0]?.organizationId);
     expect(body.onboarding.step).toBe("connect");
+  });
+});
+
+describe("GitHub OAuth invite-only single-org entry gate", () => {
+  const allowedOrganizationId = "org-entry-gate-allowed";
+  const blockedOrganizationId = "org-entry-gate-blocked";
+  const getApp = useTestApp({ allowedOrganizationId });
+
+  async function ensureOrg(app: ReturnType<typeof getApp>, id: string, name: string): Promise<void> {
+    const [existing] = await app.db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.id, id));
+    if (existing) return;
+    await app.db.insert(organizations).values({ id, name, displayName: name });
+  }
+
+  async function rotateInviteForOrg(app: ReturnType<typeof getApp>, organizationId: string) {
+    const admin = await createTestAdmin(app, { username: `gate-admin-${randomUUID().slice(0, 8)}` });
+    const { rotateInvitation } = await import("../services/invitation.js");
+    return rotateInvitation(app.db, organizationId, admin.userId);
+  }
+
+  async function findGithubUserId(app: ReturnType<typeof getApp>, githubId: string): Promise<string> {
+    const [identity] = await app.db
+      .select({ userId: authIdentities.userId })
+      .from(authIdentities)
+      .where(eq(authIdentities.identifier, githubId));
+    if (!identity) throw new Error(`expected github identity ${githubId}`);
+    return identity.userId;
+  }
+
+  it("allows invite redemption for the configured organization", async () => {
+    const app = getApp();
+    await ensureOrg(app, allowedOrganizationId, "allowed-entry-gate");
+    const invite = await rotateInviteForOrg(app, allowedOrganizationId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=1201&login=allowedinvite&next=/invite/${invite.token}`,
+    });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = res.headers.location?.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("joinPath")).toBe("invite");
+    expect(params.get("next")).toBe("/");
+
+    const userId = await findGithubUserId(app, "1201");
+    const memberRows = await app.db.select().from(members).where(eq(members.userId, userId));
+    expect(memberRows).toHaveLength(1);
+    expect(memberRows[0]?.organizationId).toBe(allowedOrganizationId);
+
+    const redemptions = await app.db
+      .select()
+      .from(invitationRedemptions)
+      .where(eq(invitationRedemptions.invitationId, invite.id));
+    expect(redemptions).toHaveLength(1);
+  });
+
+  it("rejects invite redemption for other organizations before membership or redemption side effects", async () => {
+    const app = getApp();
+    await ensureOrg(app, allowedOrganizationId, "allowed-entry-gate");
+    await ensureOrg(app, blockedOrganizationId, "blocked-entry-gate");
+    const invite = await rotateInviteForOrg(app, blockedOrganizationId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=1202&login=blockedinvite&next=/invite/${invite.token}`,
+    });
+
+    expect(res.statusCode).toBe(403);
+    const userId = await findGithubUserId(app, "1202");
+    const memberRows = await app.db.select().from(members).where(eq(members.userId, userId));
+    expect(memberRows).toHaveLength(0);
+    const redemptions = await app.db
+      .select()
+      .from(invitationRedemptions)
+      .where(eq(invitationRedemptions.invitationId, invite.id));
+    expect(redemptions).toHaveLength(0);
+  });
+
+  it("rejects new users without invite and does not create a personal team", async () => {
+    const app = getApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=1203&login=blockedsolo",
+    });
+
+    expect(res.statusCode).toBe(403);
+    const userId = await findGithubUserId(app, "1203");
+    const memberRows = await app.db.select().from(members).where(eq(members.userId, userId));
+    expect(memberRows).toHaveLength(0);
+    const orgRows = await app.db.select().from(organizations).where(eq(organizations.name, "blockedsolo"));
+    expect(orgRows).toHaveLength(0);
+  });
+
+  it("allows existing members to return without an invite", async () => {
+    const app = getApp();
+    await ensureOrg(app, allowedOrganizationId, "allowed-entry-gate");
+    const invite = await rotateInviteForOrg(app, allowedOrganizationId);
+    await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=1204&login=returninggate&next=/invite/${invite.token}`,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=1204&login=returninggate",
+    });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = res.headers.location?.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("joinPath")).toBe("returning");
   });
 });
 

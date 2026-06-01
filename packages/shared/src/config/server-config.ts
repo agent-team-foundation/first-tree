@@ -6,6 +6,12 @@ import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
 
+const optionalTrimmedStringSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().min(1).optional());
+
 export const serverConfigSchema = defineConfig({
   /**
    * Which release channel this server speaks to. Single switch that drives
@@ -91,6 +97,15 @@ export const serverConfigSchema = defineConfig({
     refreshTokenExpiry: field(z.string().default("30d"), { env: "FIRST_TREE_AUTH_REFRESH_TOKEN_EXPIRY" }),
     connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_AUTH_CONNECT_TOKEN_EXPIRY" }),
   },
+  access: optional({
+    /**
+     * Invite-only entry gate for hosted environments that should accept new
+     * users only through one organization. Empty / whitespace disables it.
+     */
+    allowedOrganizationId: field(optionalTrimmedStringSchema, {
+      env: "FIRST_TREE_ALLOWED_ORGANIZATION_ID",
+    }),
+  }),
   // Context Tree (repo / branch / localPath) and GitHub integration
   // (webhook secret / allowed org) used to live here as global config.
   // They are now per-org settings in the `organization_settings` table —
