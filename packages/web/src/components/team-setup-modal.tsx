@@ -54,7 +54,7 @@ function slugify(input: string): string {
 }
 
 function CreateForm({ onDone }: { onDone: () => void }) {
-  const { adoptTokens } = useAuth();
+  const { selectOrganization } = useAuth();
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -76,9 +76,11 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     try {
       const res = await api.post<{
         organization: { id: string; name: string; displayName: string; role: string };
-        tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations", { name: slugify(trimmed), displayName: trimmed });
-      await adoptTokens(res.tokens);
+      // The caller is already authenticated and the user JWT is org-agnostic,
+      // so no token adoption is needed (the endpoint returns none). Select the
+      // freshly created org so the user lands in it.
+      await selectOrganization(res.organization.id);
       onDone();
       navigate("/", { replace: true });
     } catch (err) {
@@ -109,7 +111,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 }
 
 function JoinForm({ onDone }: { onDone: () => void }) {
-  const { adoptTokens } = useAuth();
+  const { selectOrganization } = useAuth();
   const navigate = useNavigate();
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -132,9 +134,14 @@ function JoinForm({ onDone }: { onDone: () => void }) {
       const match = /\/invite\/([^/?#]+)/.exec(raw);
       const justToken = match?.[1] ?? raw;
       const res = await api.post<{
-        tokens: { accessToken: string; refreshToken: string };
+        organizationId: string;
+        memberId: string;
+        role: string;
       }>("/me/organizations/join", { token: justToken });
-      await adoptTokens(res.tokens);
+      // No token adoption: the endpoint returns none and the user JWT is
+      // org-agnostic. Select the joined org so the user lands in it instead of
+      // a stale one (and so we never write `undefined` into the token store).
+      await selectOrganization(res.organizationId);
       onDone();
       navigate("/", { replace: true });
     } catch (err) {

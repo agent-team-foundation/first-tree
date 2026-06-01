@@ -28,7 +28,7 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
 export function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated, adoptTokens, selectOrganization, teamDisplayName } = useAuth();
+  const { isAuthenticated, selectOrganization, teamDisplayName } = useAuth();
   const [preview, setPreview] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,16 +75,19 @@ export function InviteAcceptPage() {
   const handleJoin = async () => {
     setBusy(true);
     try {
+      // This path only runs for an already-authenticated user (the
+      // unauthenticated case goes through GitHub OAuth). `/me/organizations/join`
+      // returns no tokens and the user JWT is org-agnostic (org is chosen
+      // client-side and re-checked per request), so do NOT adopt tokens here —
+      // adopting the absent `res.tokens` would write `undefined` into the token
+      // store and log the user out. Just switch to the joined org;
+      // `selectOrganization` refreshes `/me` so the onboarding gate evaluates
+      // against the new org and the user lands in it, not a stale one.
       const res = await api.post<{
         organizationId: string;
         memberId: string;
         role: string;
-        tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations/join", { token });
-      await adoptTokens(res.tokens);
-      // Make the just-joined org the active selection, overriding any stale
-      // org left in localStorage — otherwise the user lands back in their
-      // previous team instead of the one they accepted the invite for.
       await selectOrganization(res.organizationId);
       markOnboardingResume("invite");
       navigate("/", { replace: true });
