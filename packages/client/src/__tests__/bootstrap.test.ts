@@ -9,6 +9,7 @@ import {
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
   deepEqualIdentity,
+  generateToolsDoc,
   type InstallFirstTreeIntegrationExec,
   installCoreSkills,
   installFirstTreeIntegration,
@@ -254,6 +255,21 @@ describe("bootstrapWorkspace", () => {
     // requires改造 4 to overwrite.
     expect(content).not.toContain("Your final text response is automatically delivered");
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+  });
+
+  it("tools.md is generated from the shared tools doc helper", () => {
+    const workspace = join(tmpBase, "ws-tools-helper");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toBe(generateToolsDoc());
   });
 
   it("tools.md uses the channel-resolved binary name when the CLI binding points at staging", () => {

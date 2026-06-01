@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt,
   deepEqualIdentity,
   FIRST_TREE_WORKSPACE_MARKER,
+  generateToolsDoc,
   installCoreSkills,
   installFirstTreeIntegration,
   isHubWorktreeMarker,
@@ -316,6 +317,42 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   return opts;
 }
 
+export function buildCodexAgentBriefing(
+  payload: AgentRuntimeConfigPayload,
+  chatContext: ChatContext | undefined,
+  workspaceCwd: string,
+  sourceRepos: PredeclaredSourceRepo[],
+): string {
+  const lines: string[] = [];
+  lines.push("# Agent Briefing");
+  lines.push("");
+  if (payload.prompt.append.trim()) {
+    lines.push(payload.prompt.append.trim());
+    lines.push("");
+  }
+  // Per agent-session-cwd-redesign: the Claude Code handler injects the
+  // working-directory convention + worktree list + chat context via the
+  // SDK's `systemPrompt.append`. Codex has no equivalent option, so we
+  // serialise the same block into AGENTS.md instead. The codex CLI reads
+  // AGENTS.md once at thread startup, so concurrent sessions for the same
+  // agent only race during the short window between bootstrap and CLI
+  // launch — accepted under proposal §⓪.3.
+  const perChatBlock = buildChatSystemPrompt({
+    agentHome: workspaceCwd,
+    chatContext,
+    sourceRepos,
+  }).trim();
+  if (perChatBlock.length > 0) {
+    lines.push(perChatBlock);
+    lines.push("");
+  }
+  lines.push(generateToolsDoc().trim());
+  lines.push("");
+  lines.push("Refer to `.agent/identity.json` for your agent identity, and `.agent/context/`");
+  lines.push("for organisational context (when configured).");
+  return lines.join("\n").concat("\n");
+}
+
 /**
  * Codex Handler — session-oriented handler using `@openai/codex-sdk`.
  *
@@ -423,33 +460,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     chatContext: ChatContext | undefined,
     workspaceCwd: string,
   ): string {
-    const lines: string[] = [];
-    lines.push("# Agent Briefing");
-    lines.push("");
-    if (payload.prompt.append.trim()) {
-      lines.push(payload.prompt.append.trim());
-      lines.push("");
-    }
-    // Per agent-session-cwd-redesign: the Claude Code handler injects the
-    // working-directory convention + worktree list + chat context via the
-    // SDK's `systemPrompt.append`. Codex has no equivalent option, so we
-    // serialise the same block into AGENTS.md instead. The codex CLI reads
-    // AGENTS.md once at thread startup, so concurrent sessions for the same
-    // agent only race during the short window between bootstrap and CLI
-    // launch — accepted under proposal §⓪.3.
-    const perChatBlock = buildChatSystemPrompt({
-      agentHome: workspaceCwd,
-      chatContext,
-      sourceRepos: sourceReposForPrompt,
-    }).trim();
-    if (perChatBlock.length > 0) {
-      lines.push(perChatBlock);
-      lines.push("");
-    }
-    lines.push("Refer to `.agent/identity.json` for your agent identity, `.agent/tools.md` for the");
-    lines.push("first-tree SDK reference, and `.agent/context/` for organisational context");
-    lines.push("(when configured).");
-    return lines.join("\n").concat("\n");
+    return buildCodexAgentBriefing(payload, chatContext, workspaceCwd, sourceReposForPrompt);
   }
 
   /**
