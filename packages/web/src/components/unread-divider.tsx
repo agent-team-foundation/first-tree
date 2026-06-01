@@ -5,7 +5,7 @@
  * persisted `latestKnownMessageId` — its position does not move as
  * new messages stream in during the session.
  *
- * The divider has no count by design (Lark-style): the count lives
+ * The divider has no count by design: the count lives
  * on the floating pill and tracks the live scroll position. Keeping
  * a number off the divider lets it remain a stable anchor even
  * after the user has scrolled past every new message.

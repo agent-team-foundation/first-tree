@@ -2546,8 +2546,8 @@ export function ChatView({
               )}
               {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
-              mirroring the rail's position. The "..." glyph matches the
-              Teams/Lark convention referenced in the design discussion. */}
+              mirroring the rail's position. The "..." glyph follows the
+              collaboration-product convention referenced in the design discussion. */}
               <button
                 type="button"
                 onClick={toggleSidebar}
