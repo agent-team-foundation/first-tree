@@ -21,7 +21,7 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
  *
  *   1. Happy path. Agent's `gh pr create` wrote an `agent_created` mapping.
  *      The subsequent `pull_request.opened` webhook arrives with sender =
- *      `<app-slug>[bot]` (because the agent used Hub's installation token).
+ *      `<app-slug>[bot]` (because the agent used First Tree's installation token).
  *      Expectation: existing chat receives the card; the App-bot echo
  *      suppression branch keeps subscribed targets.
  *
@@ -129,7 +129,7 @@ describe("Agent-created → real webhook end-to-end", () => {
     expect(beforeMapping[0]?.chatId).toBe(chatId);
 
     // Stage 2: real `pull_request.opened` webhook fires. Sender = our App
-    // bot (because the agent used Hub's installation token to open the PR).
+    // bot (because the agent used First Tree's installation token to open the PR).
     const beforeChatCount = (await app.db.select().from(chats)).length;
     const res = await postWebhook(app, "pull_request", {
       action: "opened",

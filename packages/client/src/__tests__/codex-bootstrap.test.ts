@@ -38,7 +38,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
         metadata: {},
       },
       contextTreePath: null,
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
     });
 
     expect(existsSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER))).toBe(true);
@@ -57,7 +57,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
         metadata: {},
       },
       contextTreePath: null,
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       briefing: { format: "agents-md", content: "# Hello\n\nFollow your team's playbook.\n" },
     });
 
@@ -81,7 +81,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
         metadata: {},
       },
       contextTreePath: null,
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
     });
 
     expect(existsSync(join(workspacePath, "AGENTS.md"))).toBe(false);

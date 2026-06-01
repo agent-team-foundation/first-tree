@@ -1034,7 +1034,7 @@ describe("web DOM interaction coverage", () => {
     const originalPost = api.post;
     const invite = {
       id: "invite-1",
-      inviteUrl: "https://hub.example/invite/token-1",
+      inviteUrl: "https://first-tree.example/invite/token-1",
       token: "token-1",
       organizationId: "org-1",
       role: "member",
@@ -1043,27 +1043,31 @@ describe("web DOM interaction coverage", () => {
       revokedAt: null,
     };
     api.get = async <T,>(): Promise<T> => invite as T;
-    api.post = async <T,>(): Promise<T> => ({ ...invite, inviteUrl: "https://hub.example/invite/token-2" }) as T;
+    api.post = async <T,>(): Promise<T> => ({ ...invite, inviteUrl: "https://first-tree.example/invite/token-2" }) as T;
 
     const panel = await renderDom(<InviteLinkPanel />);
     await waitForText("Created", panel.container);
-    expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe("https://hub.example/invite/token-1");
+    expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe(
+      "https://first-tree.example/invite/token-1",
+    );
     await click(
       [...panel.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Copy")) ?? null,
     );
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("https://hub.example/invite/token-1");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("https://first-tree.example/invite/token-1");
     await click(
       [...panel.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Rotate")) ?? null,
     );
     for (
       let index = 0;
       index < 20 &&
-      panel.container.querySelector<HTMLInputElement>("input")?.value !== "https://hub.example/invite/token-2";
+      panel.container.querySelector<HTMLInputElement>("input")?.value !== "https://first-tree.example/invite/token-2";
       index += 1
     ) {
       await flush();
     }
-    expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe("https://hub.example/invite/token-2");
+    expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe(
+      "https://first-tree.example/invite/token-2",
+    );
     await unmountRoot(panel.root);
 
     api.get = vi.fn(async () => {

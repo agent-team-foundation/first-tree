@@ -129,11 +129,11 @@ describe("AgentConfigCache (Step 4)", () => {
 
   it("rejected fetch is propagated and not cached as inflight forever", async () => {
     const sdk = {
-      fetchAgentConfig: vi.fn().mockRejectedValueOnce(new Error("Hub down")).mockResolvedValueOnce(makeConfig(1)),
+      fetchAgentConfig: vi.fn().mockRejectedValueOnce(new Error("server down")).mockResolvedValueOnce(makeConfig(1)),
       isHubReachable: vi.fn(),
     } as unknown as FirstTreeHubSDK;
     const cache = createAgentConfigCache({ sdk });
-    await expect(cache.refresh("agent-1")).rejects.toThrow(/Hub down/);
+    await expect(cache.refresh("agent-1")).rejects.toThrow(/server down/);
     // Second call should retry, not return the failed inflight.
     const ok = await cache.refresh("agent-1");
     expect(ok.version).toBe(1);
@@ -141,7 +141,7 @@ describe("AgentConfigCache (Step 4)", () => {
   });
 
   it("logs rejected fetches when a logger is provided", async () => {
-    const err = new Error("Hub down");
+    const err = new Error("server down");
     const sdk = {
       fetchAgentConfig: vi.fn().mockRejectedValue(err),
       isHubReachable: vi.fn(),
@@ -149,7 +149,7 @@ describe("AgentConfigCache (Step 4)", () => {
     const log = { warn: vi.fn() } as unknown as AgentConfigCacheLogger;
     const cache = createAgentConfigCache({ sdk, log });
 
-    await expect(cache.refresh("agent-1")).rejects.toThrow("Hub down");
+    await expect(cache.refresh("agent-1")).rejects.toThrow("server down");
 
     expect(log.warn).toHaveBeenCalledWith({ agentId: "agent-1", err }, "agent config fetch failed");
   });

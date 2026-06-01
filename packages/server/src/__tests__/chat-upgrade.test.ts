@@ -142,7 +142,7 @@ describe("chat upgrade — direct to group", () => {
   });
 
   it("upgrades when a third participant joins via ensureParticipant (web-UI auto-join path)", async () => {
-    // The hub web console's "send a message in this chat" handler funnels
+    // The First Tree web console's "send a message in this chat" handler funnels
     // through ensureParticipant to auto-add the sender. This path bypassed
     // the upgrade logic initially, leaving b1+tester in `full` mode when a
     // human entered an existing direct chat — the exact shape that kept

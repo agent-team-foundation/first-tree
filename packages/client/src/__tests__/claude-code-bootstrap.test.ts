@@ -234,9 +234,9 @@ describe("CLAUDE.md generation", () => {
       metadata: {},
     };
 
-    const md = generateClaudeMd(workspace, identity, "/home/user/.first-tree/hub/data/context-tree");
+    const md = generateClaudeMd(workspace, identity, "/home/user/.first-tree/data/context-tree");
     expect(md).toContain("Context Tree Location");
-    expect(md).toContain("/home/user/.first-tree/hub/data/context-tree");
+    expect(md).toContain("/home/user/.first-tree/data/context-tree");
     expect(md).toContain("Read specific domain nodes as needed");
   });
 

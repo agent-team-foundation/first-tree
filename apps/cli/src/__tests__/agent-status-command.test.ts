@@ -57,7 +57,7 @@ describe("agent status command", () => {
     printLineMock.mockReset();
     failMock.mockClear();
 
-    bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
+    bootstrapMocks.resolveServerUrl.mockReturnValue("https://first-tree.example");
     bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
   });
 
@@ -105,7 +105,7 @@ describe("agent status command", () => {
 
     expect(bootstrapMocks.resolveServerUrl).toHaveBeenCalledWith("https://override.example");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/orgs/org-a/activity",
+      "https://first-tree.example/api/v1/orgs/org-a/activity",
       expect.objectContaining({ headers: { Authorization: "Bearer access-token" } }),
     );
     expect(output()).toContain("Clients: 3 connected");

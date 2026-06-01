@@ -13,7 +13,7 @@ import { FirstTreeHubSDK, SdkError } from "../sdk.js";
  * swapping the retry layer out behind one of the public methods.
  */
 
-const SERVER_URL = "https://hub.example";
+const SERVER_URL = "https://first-tree.example";
 const CHAT_ID = "chat-1";
 
 function makeOkResponse(): Response {

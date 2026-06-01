@@ -61,14 +61,18 @@ describe("onboard core", () => {
     }));
     const { formatCheckReport, onboardCheck } = await import("../core/onboard.js");
 
-    loadCredentialsMock.mockReturnValueOnce({ accessToken: "a", refreshToken: "r", serverUrl: "http://hub.test" });
-    process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
+    loadCredentialsMock.mockReturnValueOnce({
+      accessToken: "a",
+      refreshToken: "r",
+      serverUrl: "http://first-tree.test",
+    });
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     cliFetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
 
     const ok = await onboardCheck({ id: "kael", type: "agent", clientId: "client-1" });
     expect(ok.map((item) => [item.key, item.status, item.value])).toEqual([
-      ["connect", "ok", "http://hub.test"],
-      ["server", "ok", "http://hub.test"],
+      ["connect", "ok", "http://first-tree.test"],
+      ["server", "ok", "http://first-tree.test"],
       ["server_reachable", "ok", "healthy"],
       ["id", "ok", "kael"],
       ["type", "ok", "agent"],
@@ -95,7 +99,7 @@ describe("onboard core", () => {
     }));
     const { onboardCreate, saveOnboardState } = await import("../core/onboard.js");
 
-    process.env.FIRST_TREE_SERVER_URL = "http://hub.test/";
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test/";
     ensureFreshAccessTokenMock.mockResolvedValue("access-1");
     cliFetchMock
       .mockResolvedValueOnce(
@@ -119,9 +123,9 @@ describe("onboard core", () => {
     });
 
     expect(cliFetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://hub.test/api/v1/me",
-      "http://hub.test/api/v1/orgs/org-1/agents",
-      "http://hub.test/api/v1/orgs/org-1/agents",
+      "http://first-tree.test/api/v1/me",
+      "http://first-tree.test/api/v1/orgs/org-1/agents",
+      "http://first-tree.test/api/v1/orgs/org-1/agents",
     ]);
     expect(JSON.parse(String(cliFetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
       name: "gandy",
@@ -139,7 +143,7 @@ describe("onboard core", () => {
     expect(readFileSync(join(home, "config", "agents", "gandy-assistant", "agent.yaml"), "utf8")).toContain(
       'agentId: "assistant-uuid"',
     );
-    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://hub.test");
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://first-tree.test");
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Onboard complete");
   });
 
@@ -150,7 +154,7 @@ describe("onboard core", () => {
     }));
     const { onboardCreate } = await import("../core/onboard.js");
 
-    process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     ensureFreshAccessTokenMock.mockResolvedValue("access-1");
     cliFetchMock.mockResolvedValueOnce(
       jsonResponse(200, {

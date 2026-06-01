@@ -119,7 +119,7 @@ describe("fetchChatContext", () => {
   });
 
   it("collapses any non-human participant type to 'agent' in the output", async () => {
-    // Hub seeds non-human participants as type='agent' (post-merge of
+    // The server seeds non-human participants as type='agent' (post-merge of
     // pre-existing `personal_assistant` / `autonomous_agent` types); the
     // LLM-facing chat-context contract still narrows any non-human to
     // 'agent' so the chat prompt only ever has the human/agent split.
@@ -208,11 +208,13 @@ describe("fetchChatContext", () => {
 
   it("propagates errors so the handler can degrade", async () => {
     const sdk = {
-      getChatDetail: vi.fn().mockRejectedValue(new Error("hub 500")),
+      getChatDetail: vi.fn().mockRejectedValue(new Error("server 500")),
       listChatParticipants: vi.fn().mockResolvedValue([]),
     };
 
-    await expect(fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null })).rejects.toThrow(/hub 500/);
+    await expect(fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null })).rejects.toThrow(
+      /server 500/,
+    );
   });
 });
 

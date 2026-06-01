@@ -10,12 +10,12 @@ import { FAKE_CLAUDE_CODE_EXECUTABLE } from "../framework/agent-mock.js";
  * env or HTTP_PROXY). See `src/mocks/fake-claude-code.mjs` for the
  * protocol decisions.
  *
- * Why this layer (SDK direct), not full hub round-trip: the hub client
+ * Why this layer (SDK direct), not full server round-trip: the client
  * runtime needs an agent.yaml on disk + an AgentSlot wired to a real
  * workspace bootstrap (`packages/client/src/runtime/bootstrap.ts`). That
  * surface is M3 — proposal §九 explicitly framed agent runtime e2e as a
  * spike before commitment. This test closes the SDK-level loop so M3 can
- * focus on hub-side glue instead of binary protocol debugging.
+ * focus on server-side glue instead of binary protocol debugging.
  *
  * No globalSetup dependencies — the SDK + fake binary are self-contained.
  */

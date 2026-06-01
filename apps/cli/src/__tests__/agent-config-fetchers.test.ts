@@ -67,7 +67,7 @@ describe("agent config fetch helpers", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
     await expect(
-      adminFetch<{ ok: boolean }>("https://hub.example/api/v1/agents/agent-1/config", {
+      adminFetch<{ ok: boolean }>("https://first-tree.example/api/v1/agents/agent-1/config", {
         method: "PATCH",
         adminToken: "admin-token",
         headers: { "X-Test": "1" },
@@ -76,7 +76,7 @@ describe("agent config fetch helpers", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/agents/agent-1/config",
+      "https://first-tree.example/api/v1/agents/agent-1/config",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ expectedVersion: 1, payload: {} }),
@@ -93,17 +93,17 @@ describe("agent config fetch helpers", () => {
     const { getCurrent, patchConfig } = await import("../commands/agent/config/_shared/fetchers.js");
     fetchMock.mockResolvedValueOnce(jsonResponse("unauthorized", false, 401));
 
-    await expect(getCurrent("https://hub.example", "admin-token", "agent-1")).rejects.toMatchObject({
+    await expect(getCurrent("https://first-tree.example", "admin-token", "agent-1")).rejects.toMatchObject({
       code: "HTTP_401",
       exitCode: 3,
     });
 
     fetchMock.mockResolvedValueOnce(jsonResponse(config({ version: 8 })));
     await expect(
-      patchConfig("https://hub.example", "admin-token", "agent-1", 7, { model: "opus" }),
+      patchConfig("https://first-tree.example", "admin-token", "agent-1", 7, { model: "opus" }),
     ).resolves.toMatchObject({ version: 8 });
     expect(fetchMock).toHaveBeenLastCalledWith(
-      "https://hub.example/api/v1/agents/agent-1/config",
+      "https://first-tree.example/api/v1/agents/agent-1/config",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ expectedVersion: 7, payload: { model: "opus" } }),

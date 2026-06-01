@@ -46,7 +46,7 @@ type MockRuntimeState = {
 
 function makeRuntimeConfig(): RuntimeConfig {
   return {
-    server: "http://hub.test",
+    server: "http://first-tree.test",
     agents: {
       alpha: {
         agentId: "agent-alpha",
@@ -232,7 +232,7 @@ describe("AgentRuntime", () => {
     state.connections[0]?.emit("error", new Error("socket failed"));
 
     expect(state.connections[0]?.config).toMatchObject({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       clientId: "client-test",
       sdkVersion: "1.2.3",
       userAgent: "first-tree-test",

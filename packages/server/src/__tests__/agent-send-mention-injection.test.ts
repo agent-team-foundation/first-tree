@@ -7,7 +7,7 @@ import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Mention enforcement + content normalisation are core hub routing
+ * Mention enforcement + content normalisation are core server routing
  * logic. The agent runtime, web UI, and adapter bridges all depend on
  * the invariants this file pins. Each behavioural axis is covered at
  * the service layer (so failures localise to the rule, not the HTTP

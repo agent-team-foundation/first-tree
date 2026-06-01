@@ -42,7 +42,7 @@ describe("org bind-tree CLI", () => {
   let originalStdoutWrite: typeof process.stdout.write;
 
   beforeEach(() => {
-    testHome = join(tmpdir(), `ft-hub-bind-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testHome = join(tmpdir(), `ft-first-tree-bind-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(join(testHome, "config"), { recursive: true });
     writeFileSync(
       join(testHome, "config", "credentials.json"),
@@ -51,10 +51,10 @@ describe("org bind-tree CLI", () => {
         // it without firing /auth/refresh.
         accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 }),
         refreshToken: "refresh-xyz",
-        serverUrl: "http://hub.test",
+        serverUrl: "http://first-tree.test",
       }),
     );
-    writeFileSync(join(testHome, "config", "client.yaml"), "server:\n  url: http://hub.test\n");
+    writeFileSync(join(testHome, "config", "client.yaml"), "server:\n  url: http://first-tree.test\n");
 
     originalHome = process.env.FIRST_TREE_HOME;
     originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
@@ -185,7 +185,7 @@ describe("org bind-tree CLI", () => {
     // Single fetch — no /me round-trip when --org is provided.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toBe("http://hub.test/api/v1/orgs/org-explicit/settings/context_tree");
+    expect(String(url)).toBe("http://first-tree.test/api/v1/orgs/org-explicit/settings/context_tree");
     expect((init as RequestInit).method).toBe("PUT");
     expect(JSON.parse(String((init as RequestInit).body))).toEqual({ repo: "https://github.com/acme/tree" });
 
@@ -212,7 +212,7 @@ describe("org bind-tree CLI", () => {
     ]);
 
     const [url] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toBe("http://hub.test/api/v1/orgs/org%20with%20space/settings/context_tree");
+    expect(String(url)).toBe("http://first-tree.test/api/v1/orgs/org%20with%20space/settings/context_tree");
   });
 
   it("without --org, single-membership user auto-picks the org", async () => {
@@ -235,7 +235,7 @@ describe("org bind-tree CLI", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const putUrl = String(fetchMock.mock.calls[1]?.[0] ?? "");
-    expect(putUrl).toBe("http://hub.test/api/v1/orgs/only-one/settings/context_tree");
+    expect(putUrl).toBe("http://first-tree.test/api/v1/orgs/only-one/settings/context_tree");
   });
 
   it("without --org and multiple orgs without a default, fails AMBIGUOUS_ORG and does not PUT", async () => {
@@ -291,7 +291,7 @@ describe("org bind-tree CLI", () => {
     await program.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
 
     const putUrl = String(fetchMock.mock.calls[1]?.[0] ?? "");
-    expect(putUrl).toBe("http://hub.test/api/v1/orgs/org-default/settings/context_tree");
+    expect(putUrl).toBe("http://first-tree.test/api/v1/orgs/org-default/settings/context_tree");
   });
 
   it("surfaces server errors as PUT_FAILED with the response body", async () => {

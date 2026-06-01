@@ -12,13 +12,13 @@ function fakeJwt(payload: Record<string, unknown>): string {
 
 describe("deriveHubUrlFromToken", () => {
   it("returns the iss claim verbatim when present", () => {
-    const token = fakeJwt({ iss: "https://hub.example.com", type: "connect" });
-    expect(deriveHubUrlFromToken(token)).toBe("https://hub.example.com");
+    const token = fakeJwt({ iss: "https://first-tree.example.com", type: "connect" });
+    expect(deriveHubUrlFromToken(token)).toBe("https://first-tree.example.com");
   });
 
   it("strips trailing slashes", () => {
-    const token = fakeJwt({ iss: "https://hub.example.com//" });
-    expect(deriveHubUrlFromToken(token)).toBe("https://hub.example.com");
+    const token = fakeJwt({ iss: "https://first-tree.example.com//" });
+    expect(deriveHubUrlFromToken(token)).toBe("https://first-tree.example.com");
   });
 
   it("supports http for local dev", () => {
@@ -43,7 +43,7 @@ describe("deriveHubUrlFromToken", () => {
   });
 
   it("hard-fails when iss is not http(s)", () => {
-    const token = fakeJwt({ iss: "ftp://hub.example.com" });
+    const token = fakeJwt({ iss: "ftp://first-tree.example.com" });
     try {
       deriveHubUrlFromToken(token);
       throw new Error("expected throw");
@@ -65,7 +65,7 @@ describe("deriveHubUrlFromToken", () => {
 
 describe("decodeJwtPayload", () => {
   it("decodes a payload-only token", () => {
-    const token = fakeJwt({ memberId: "abc123", iss: "https://hub.example.com" });
+    const token = fakeJwt({ memberId: "abc123", iss: "https://first-tree.example.com" });
     expect(decodeJwtPayload(token)).toMatchObject({ memberId: "abc123" });
   });
 

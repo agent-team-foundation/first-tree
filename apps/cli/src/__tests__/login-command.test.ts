@@ -105,17 +105,17 @@ afterEach(() => {
 
 describe("login command", () => {
   it("exchanges a connect token, writes credentials/config, and honors --no-start", async () => {
-    await runLogin(["login", jwt({ iss: "http://hub.test/", memberId: "member-new" }), "--no-start"]);
+    await runLogin(["login", jwt({ iss: "http://first-tree.test/", memberId: "member-new" }), "--no-start"]);
 
     expect(cliFetchMock).toHaveBeenCalledWith(
-      "http://hub.test/api/v1/auth/connect-token",
+      "http://first-tree.test/api/v1/auth/connect-token",
       expect.objectContaining({ method: "POST" }),
     );
     expect(JSON.parse(readFileSync(credentialsPath(), "utf8"))).toMatchObject({
       refreshToken: "r1",
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
     });
-    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://hub.test");
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://first-tree.test");
     expect(installClientServiceMock).not.toHaveBeenCalled();
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--no-start");
   });
@@ -124,7 +124,7 @@ describe("login command", () => {
     writeCredentials("member-old");
     selectMock.mockResolvedValueOnce("cancel");
 
-    await runLogin(["login", jwt({ iss: "http://hub.test", memberId: "member-new" })]);
+    await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" })]);
 
     expect(selectMock).toHaveBeenCalled();
     expect(cliFetchMock).not.toHaveBeenCalled();
@@ -137,11 +137,11 @@ describe("login command", () => {
     isServiceSupportedMock.mockReturnValueOnce(true);
     installClientServiceMock.mockReturnValueOnce({ platform: "launchd", logDir: join(home, "logs") });
 
-    await runLogin(["login", jwt({ iss: "http://hub.test", memberId: "member-new" }), "--override"]);
+    await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--override"]);
 
-    expect(postClaimMock).toHaveBeenCalledWith("http://hub.test", expect.any(String));
+    expect(postClaimMock).toHaveBeenCalledWith("http://first-tree.test", expect.any(String));
     expect(cleanupStaleAliasesAfterClaimMock).toHaveBeenCalledWith(
-      expect.objectContaining({ serverUrl: "http://hub.test", nonInteractive: true }),
+      expect.objectContaining({ serverUrl: "http://first-tree.test", nonInteractive: true }),
     );
     expect(installClientServiceMock).toHaveBeenCalled();
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Ownership transferred");
@@ -156,7 +156,7 @@ describe("login command", () => {
     exitMock.mockClear();
     cliFetchMock.mockResolvedValueOnce(response(403, { error: "expired token" }));
     await expect(
-      runLogin(["login", jwt({ iss: "http://hub.test", memberId: "member-new" }), "--no-start"]),
+      runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--no-start"]),
     ).rejects.toThrow("process.exit");
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("expired token");
   });

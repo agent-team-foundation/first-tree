@@ -145,7 +145,7 @@ describe("ClientRuntime context-tree wiring", () => {
     "starts eager slots without a shared Context Tree binding",
     async () => {
       const { ClientRuntime } = await import("../core/client-runtime.js");
-      const rt = new ClientRuntime("https://hub.test", "client-test");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
       rt.addAgent("alpha", {
         agentId: "agent-alpha",
         runtime: "claude-code",
@@ -170,7 +170,7 @@ describe("ClientRuntime context-tree wiring", () => {
     async () => {
       const { print } = await import("../core/output.js");
       const { ClientRuntime } = await import("../core/client-runtime.js");
-      const rt = new ClientRuntime("https://hub.test", "client-test");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
       rt.addAgent("active", {
         agentId: "agent-active",
         runtime: "claude-code",
@@ -225,7 +225,7 @@ describe("ClientRuntime context-tree wiring", () => {
       ConstructorParameters<typeof import("../core/client-runtime.js").ClientRuntime>[2]
     >["update"];
     const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test", { currentVersion: "0.0.1", update });
+    const rt = new ClientRuntime("https://first-tree.test", "client-test", { currentVersion: "0.0.1", update });
     rt.addAgent("alpha", {
       agentId: "agent-alpha",
       runtime: "claude-code",
@@ -267,7 +267,7 @@ describe("ClientRuntime context-tree wiring", () => {
 
   it("auto-adds server-pinned agents and skips duplicates", async () => {
     const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
     const agentsDir = join(home, "config", "agents");
     mkdirSync(agentsDir, { recursive: true });
     rt.watchAgentsDir(agentsDir);
@@ -306,7 +306,7 @@ describe("ClientRuntime context-tree wiring", () => {
   it("reports pinned agents when no agent directory is set and ignores duplicate watched agents", async () => {
     const { print } = await import("../core/output.js");
     const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
 
     const pinned = connectionListeners.get("agent:pinned");
     if (!pinned) throw new Error("agent:pinned listener missing");
@@ -344,7 +344,7 @@ describe("ClientRuntime context-tree wiring", () => {
     const { ClientRuntime } = await import("../core/client-runtime.js");
     mkdirSync(join(home, "config"), { recursive: true });
     writeFileSync(join(home, "config", "credentials.json"), JSON.stringify({ refreshToken: "old" }));
-    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
     connectionMock.isPaused.mockReturnValue(true);
 
     const paused = connectionListeners.get("auth:paused");
@@ -378,7 +378,7 @@ describe("ClientRuntime context-tree wiring", () => {
     async () => {
       const { print } = await import("../core/output.js");
       const { ClientRuntime } = await import("../core/client-runtime.js");
-      const rt = new ClientRuntime("https://hub.test", "client-test");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
 
       // A valid enum provider this client build ships no handler for yet
       // (e.g. claude-code-tui before the TUI handler lands). Added FIRST so the

@@ -22,7 +22,7 @@ describe("resolveServerUrl without prior initConfig", () => {
   let originalServerUrl: string | undefined;
 
   beforeEach(() => {
-    testHome = join(tmpdir(), `ft-hub-resolve-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testHome = join(tmpdir(), `ft-first-tree-resolve-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(join(testHome, "config"), { recursive: true });
 
     originalHome = process.env.FIRST_TREE_HOME;

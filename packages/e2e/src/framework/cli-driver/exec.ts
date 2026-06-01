@@ -7,7 +7,7 @@ const CLI_ENTRY = resolve(REPO_ROOT, "apps/cli/dist/cli/index.mjs");
 export type CliEnvOptions = {
   /** Per-CLI FIRST_TREE_HOME, where credentials.json / client.yaml live. */
   home: string;
-  /** Per-CLI Hub URL — wins over any ambient `FIRST_TREE_SERVER_URL`. */
+  /** Per-CLI server URL — wins over any ambient `FIRST_TREE_SERVER_URL`. */
   serverBaseUrl: string;
   /** Optional extra env overrides (claude/codex executable paths, etc.). */
   extraEnv?: NodeJS.ProcessEnv;
@@ -17,7 +17,7 @@ export type CliEnvOptions = {
  * Build the env the framework spawns the dist CLI with.
  *
  * Why the sanitization step matters: when the e2e harness itself runs inside
- * an agent runtime (e.g. yzw-assistant on prod hub), the parent process
+ * an agent runtime (e.g. yzw-assistant on prod), the parent process
  * exports `FIRST_TREE_SERVER_URL` and friends. The CLI config resolver
  * gives env > file priority, so without this step a per-run `client.yaml`
  * gets silently overridden by the parent's prod URL, and the WS handshake

@@ -3,9 +3,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 /**
  * `github-mock` — a self-contained fastify server that stands in for both
- * sides of the Hub ↔ GitHub interaction during an e2e run:
+ * sides of the First Tree ↔ GitHub interaction during an e2e run:
  *
- *   1. **Inbound to Hub**: drives the server's `/api/v1/webhooks/github-app`
+ *   1. **Inbound to First Tree**: drives the server's `/api/v1/webhooks/github-app`
  *      handler via `POST /__emit/:event` — payloads are signed in-process
  *      with the e2e run's webhook secret so the server's HMAC verification
  *      accepts them as if GitHub itself had delivered.

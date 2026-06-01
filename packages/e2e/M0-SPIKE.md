@@ -129,8 +129,8 @@ no need to exercise the other two:
 
 ### What is NOT yet covered (deferred to M3)
 
-The M2 test exercises the agent-mock at the **SDK layer**, not the **hub
-client runtime layer**. A full hub round-trip — chat-send → server inbox →
+The M2 test exercises the agent-mock at the **SDK layer**, not the **client
+runtime layer**. A full server round-trip — chat-send → server inbox →
 client WS push → AgentSlot dispatch → claude-code handler → fake binary →
 assistant response back into chat — needs:
 
@@ -152,7 +152,7 @@ assistant response back into chat — needs:
 
 Recording this gap explicitly so M3 picks it up rather than discovering it
 the hard way. The agent-mock binary itself is production-ready for the
-moment hub runtime is plumbed in.
+moment the runtime is plumbed in.
 
 ### Why ANTHROPIC_BASE_URL / HTTP_PROXY didn't need to be tried
 

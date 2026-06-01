@@ -29,7 +29,7 @@ function setTty(value: boolean): void {
   Object.defineProperty(process.stdin, "isTTY", { configurable: true, value });
 }
 
-function writeCredentials(serverUrl = "http://hub.test"): void {
+function writeCredentials(serverUrl = "http://first-tree.test"): void {
   mkdirSync(join(home, "config"), { recursive: true });
   const credentialsPath = join(home, "config", "credentials.json");
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
@@ -128,18 +128,18 @@ describe("prompt core", () => {
       },
     };
     setTty(true);
-    inputMock.mockResolvedValueOnce("http://hub.test").mockResolvedValueOnce("custom-runtime");
+    inputMock.mockResolvedValueOnce("http://first-tree.test").mockResolvedValueOnce("custom-runtime");
     passwordMock.mockResolvedValueOnce("secret-value");
     selectMock.mockResolvedValueOnce("__input__").mockResolvedValueOnce("__auto__");
 
     await expect(promptMissingFields({ schema, role: "client", configDir: join(home, "config") })).resolves.toEqual({
-      server: { url: "http://hub.test" },
+      server: { url: "http://first-tree.test" },
       secret: "secret-value",
       runtime: "custom-runtime",
     });
 
     const yaml = readFileSync(join(home, "config", "client.yaml"), "utf8");
-    expect(yaml).toContain("url: http://hub.test");
+    expect(yaml).toContain("url: http://first-tree.test");
     expect(yaml).toContain("secret: secret-value");
     expect(yaml).toContain("runtime: custom-runtime");
     expect(yaml).not.toContain("skip:");
@@ -155,11 +155,11 @@ describe("prompt core", () => {
     await expect(promptAddAgent({ agentId: "agent-1" })).rejects.toThrow("first-tree login <token>");
 
     writeCredentials();
-    process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     ensureFreshAccessTokenMock.mockResolvedValue("access-1");
     cliFetchMock.mockResolvedValueOnce(response(200, { name: "kael" }));
     await expect(promptAddAgent({ agentId: "agent-1" })).resolves.toEqual({ name: "kael", agentId: "agent-1" });
-    expect(cliFetchMock.mock.calls[0]?.[0]).toBe("http://hub.test/api/v1/agents/agent-1");
+    expect(cliFetchMock.mock.calls[0]?.[0]).toBe("http://first-tree.test/api/v1/agents/agent-1");
 
     cliFetchMock.mockResolvedValueOnce(response(404, { error: "missing" }));
     await expect(promptAddAgent({ agentId: "missing" })).rejects.toThrow("HTTP 404");
@@ -175,7 +175,7 @@ describe("prompt core", () => {
     }));
     const { promptAddAgent } = await import("../core/prompt.js");
 
-    writeCredentials("http://hub.test/");
+    writeCredentials("http://first-tree.test/");
     process.env.FIRST_TREE_SERVER_URL = "http://override.test";
     inputMock.mockResolvedValueOnce("agent-from-prompt");
     ensureFreshAccessTokenMock.mockResolvedValue("access-1");

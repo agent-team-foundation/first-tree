@@ -181,7 +181,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -230,7 +230,7 @@ describe("Context Tree sync bootstrap paths", () => {
     const { syncContextTree } = await import("../runtime/bootstrap.js");
 
     const binding = await syncContextTree(
-      "https://hub.example",
+      "https://first-tree.example",
       async () => "token",
       (msg) => state.logs.push(msg),
       "ua-test",
@@ -252,7 +252,7 @@ describe("Context Tree sync bootstrap paths", () => {
     const { syncContextTree } = await import("../runtime/bootstrap.js");
 
     const binding = await syncContextTree(
-      "https://hub.example",
+      "https://first-tree.example",
       async () => "token",
       (msg) => state.logs.push(msg),
     );
@@ -270,7 +270,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -289,7 +289,7 @@ describe("Context Tree sync bootstrap paths", () => {
     const { syncContextTree } = await import("../runtime/bootstrap.js");
 
     const binding = await syncContextTree(
-      "https://hub.example",
+      "https://first-tree.example",
       async () => "token",
       (msg) => state.logs.push(msg),
     );
@@ -309,7 +309,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -326,7 +326,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -344,7 +344,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -362,7 +362,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -380,7 +380,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -403,7 +403,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -421,7 +421,7 @@ describe("Context Tree sync bootstrap paths", () => {
 
     await expect(
       syncContextTree(
-        "https://hub.example",
+        "https://first-tree.example",
         async () => "token",
         (msg) => state.logs.push(msg),
       ),
@@ -433,7 +433,7 @@ describe("Context Tree sync bootstrap paths", () => {
     expect(state.logs).toContain("Using existing Context Tree clone despite sync failure");
   });
 
-  it("detects hub worktree markers and handles stat failures", async () => {
+  it("detects First Tree worktree markers and handles stat failures", async () => {
     const state = installContextSyncMocks({ gitExists: false });
     const { isHubWorktreeMarker } = await import("../runtime/bootstrap.js");
 

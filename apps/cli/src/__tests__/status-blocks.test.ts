@@ -76,7 +76,7 @@ describe("status block renderers", () => {
     expect(output()).toContain("journalctl --user -u first-tree-dev -f");
   });
 
-  it("renders hub configuration states", async () => {
+  it("renders server configuration states", async () => {
     const { renderHubBlock } = await import("../commands/_shared/status-blocks.js");
 
     renderHubBlock();
@@ -85,10 +85,10 @@ describe("status block renderers", () => {
     stderrSpy.mockClear();
     writeFileSync(
       join(home, "config", "client.yaml"),
-      "server:\n  url: https://hub.example\nclient:\n  id: client-1\n",
+      "server:\n  url: https://first-tree.example\nclient:\n  id: client-1\n",
     );
     renderHubBlock();
-    expect(output()).toContain("https://hub.example");
+    expect(output()).toContain("https://first-tree.example");
     expect(output()).toContain("client-1");
 
     stderrSpy.mockClear();

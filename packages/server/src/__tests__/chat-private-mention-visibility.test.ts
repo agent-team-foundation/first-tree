@@ -320,7 +320,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
 
     // M spins up a chat with privateA — 2 speakers is a legal v2 chat
-    // (group is the only `chats.type` Hub writes now; 1:1 behaviour is
+    // (group is the only `chats.type` First Tree writes now; 1:1 behaviour is
     // derived from `participants.length === 2`, see chat.ts).
     const chat = await agentCreateChat(app.db, m.humanAgentUuid, {
       type: "group",

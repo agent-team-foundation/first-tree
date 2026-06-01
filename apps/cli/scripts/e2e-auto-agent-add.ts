@@ -9,7 +9,7 @@
  * End-to-end verification for the auto agent-add fix.
  *
  *   1. Create a fresh database in the already-running local Postgres so state
- *      never bleeds into the operator's production hub schema.
+ *      never bleeds into the operator's production schema.
  *   2. Migrate the schema, start the real Fastify app on a random port.
  *   3. Seed an admin user + owned client (bypassing the CLI onboarding wizard).
  *   4. Start a real `ClientRuntime` pointing at that server (isolated home
@@ -37,7 +37,7 @@ import postgres from "postgres";
 
 // ── Step 1: Temp home — must be exported BEFORE anything reads it. ───────────
 
-const TEST_HOME = join(tmpdir(), `ft-hub-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`);
+const TEST_HOME = join(tmpdir(), `ft-first-tree-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`);
 mkdirSync(join(TEST_HOME, "config"), { recursive: true });
 process.env.FIRST_TREE_HOME = TEST_HOME;
 
@@ -63,7 +63,7 @@ async function signMemberJwt(userId: string, memberId: string, organizationId: s
 // for this run. We drop it on teardown so repeat runs stay clean.
 const ADMIN_URL = process.env.E2E_PG_ADMIN_URL ?? "postgresql://firsttreehub:firsttreehub@localhost:5432/postgres";
 const dbSuffix = crypto.randomUUID().slice(0, 8).replace(/-/g, "");
-const TEST_DB_NAME = `ft_hub_e2e_${dbSuffix}`;
+const TEST_DB_NAME = `ft_first_tree_e2e_${dbSuffix}`;
 
 async function provisionFreshDb(): Promise<string> {
   const admin = postgres(ADMIN_URL, { max: 1 });

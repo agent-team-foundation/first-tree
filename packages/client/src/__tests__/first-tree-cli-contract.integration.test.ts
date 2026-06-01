@@ -66,7 +66,7 @@ function tracingExec(captured: string[]): InstallFirstTreeIntegrationExec {
  * Contract test against the real `first-tree` CLI.
  *
  * Why this file exists: the mock-exec unit tests can't catch protocol drift
- * between Hub's argv construction and the first-tree CLI's accepted flags.
+ * between the runtime's argv construction and the first-tree CLI's accepted flags.
  * That gap is exactly how `--source-path` (a flag the CLI doesn't accept)
  * shipped to production and silently broke every session bootstrap.
  *
@@ -95,7 +95,7 @@ const HAS_FIRST_TREE_CLI = (() => {
  * the worktree, the CLI would climb out and land on the worktree root, then
  * write its binding files there. That's not just a wrong fixture; it would
  * actively trash the developer's repo. Real production paths
- * (`~/.first-tree/hub/data/workspaces/...`) sit outside any git repo, so
+ * (`~/.first-tree/data/workspaces/...`) sit outside any git repo, so
  * this also matches the production layout.
  */
 let tmpBase: string;
@@ -114,7 +114,7 @@ function installFirstTreePathShim(binDir: string): void {
 /**
  * Initialise a fake context-tree git repo. first-tree CLI insists on a real
  * git checkout for `tree integrate --mode workspace-root` because the
- * managed binding block records the tree's origin URL — matching how Hub's
+ * managed binding block records the tree's origin URL — matching how the runtime's
  * `syncContextTree` produces the path it hands over (a fresh `git clone`).
  */
 function makeFakeTreeRepo(dir: string, remoteUrl?: string): void {
@@ -226,7 +226,7 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
       workspacePath: workspace,
       identity,
       contextTreePath: treePath,
-      serverUrl: "https://hub.example.com",
+      serverUrl: "https://first-tree.example.com",
     });
 
     // bootstrap should have produced the .agent layout the agent reads first.

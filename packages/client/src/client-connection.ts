@@ -67,7 +67,7 @@ export type ClientConnectionConfig = {
   userAgent?: string;
   /**
    * Optional accessor for the most recent self-update outcome — the
-   * command layer reads `~/.first-tree/hub/state/update-state.json` and
+   * command layer reads `~/.first-tree/state/update-state.json` and
    * returns the parsed record. The connection forwards it on every
    * `client:register` so the server can persist into
    * `clients.metadata.lastUpdateAttempt`, giving the admin dashboard
