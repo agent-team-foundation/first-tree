@@ -343,6 +343,7 @@ async function completeOauthFlow(
   targetOrganizationId: string | null,
 ) {
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
+  const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
   // Track which signup path the user took. Surfaced to the SPA via the
   // post-OAuth fragment so the onboarding modal can pick context-aware copy.
@@ -362,6 +363,9 @@ async function completeOauthFlow(
     const inv = await findActiveByToken(app.db, token);
     if (!inv) {
       return reply.status(404).send({ error: "Invitation not found or no longer valid" });
+    }
+    if (allowedOrganizationId && inv.organizationId !== allowedOrganizationId) {
+      return reply.status(403).send({ error: "Invitation is not allowed on this server" });
     }
     await ensureMembership(app.db, {
       userId,
@@ -403,6 +407,9 @@ async function completeOauthFlow(
       resolvedOrganizationId = primary.organizationId;
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
+      if (allowedOrganizationId) {
+        return reply.status(403).send({ error: "This server requires an invitation link to join" });
+      }
       const personal = await createPersonalTeam(app.db, {
         userId,
         loginSeed: profile.login,

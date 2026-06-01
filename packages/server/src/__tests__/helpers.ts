@@ -58,6 +58,7 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  allowedOrganizationId?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
    * `/github-app-installation/install-url` 503 test — the slug is the
@@ -107,6 +108,9 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       refreshTokenExpiry: "30d",
       connectTokenExpiry: "10m",
     },
+    ...(opts.allowedOrganizationId !== undefined
+      ? { access: { allowedOrganizationId: opts.allowedOrganizationId.trim() || undefined } }
+      : {}),
     oauth: {
       // Stub GitHub App creds. Tests that exercise the App flow inject
       // fetchers / mocks at the service-call layer and never actually
