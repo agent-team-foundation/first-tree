@@ -1,35 +1,46 @@
 import type { UsageAgentSummary, UsageTurnRow } from "@first-tree/shared";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { type ReactElement, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { type CSSProperties, type ReactElement, type ReactNode, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { getAgentUsageSummary, getAgentUsageTurns, type UsageWindow, windowToDays } from "../../api/usage.js";
+import { getAgentUsageSummary, getAgentUsageTurns } from "../../api/usage.js";
 import { Section } from "../../components/ui/section.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
 const ACTIVITY_GRID_DAYS = 90;
+const RECENT_TURNS_LIMIT = 10;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Calendar columns are Sunday-first (row index 0 = Sunday, matching JS
+// Date.getUTCDay()). GitHub's contribution graph convention labels rows
+// 1/3/5 — Mon, Wed, Fri — and leaves Sun/Tue/Thu/Sat blank.
+const WEEKDAY_RAIL: readonly string[] = ["", "Mon", "", "Wed", "", "Fri", ""];
 
 /**
  * Agent profile Usage tab — the deep view onto one agent's token usage.
- * Three blocks:
- *   1. KPI strip      — window totals (driven by 7d/30d selector)
- *   2. Activity grid  — fixed 90d daily density (always-on, ignores selector)
- *   3. Recent turns   — paginated per-turn detail with deep-link back to chat
+ * Two blocks, both always-on (no window selector):
+ *   1. Activity (last 90 days) — GitHub-style contribution calendar with
+ *      hover tooltips, paired with a 2×2 stats panel.
+ *   2. Recent turns (30d)     — last 10 turns with model chips + per-row
+ *      volume bar; deep-links each row to its source chat.
  *
- * Summary query is lifted here so the KPI block + activity grid share one
- * `/usage/summary` round-trip (review nit R4). Backend always
- * returns the trailing-90d `daily` series regardless of `from`, so the same
- * response feeds both surfaces.
+ * Summary + turns run in parallel. The summary endpoint always returns a
+ * trailing-90d `daily` series regardless of the `from` window, so the 30d
+ * call here is just a stable, server-cached key.
  */
 export function UsageTab(): ReactElement {
   const ctx = useAgentDetailContext();
-  const [window, setWindow] = useState<UsageWindow>("30d");
 
-  // Shared summary query — `totals` honours `window`, `daily` is always
-  // trailing-90d. Both KPI and Activity grid read from the same data.
   const summaryQuery = useQuery({
-    queryKey: ["usage-summary", ctx.agent.uuid, window],
-    queryFn: () => getAgentUsageSummary(ctx.agent.uuid, window),
+    queryKey: ["usage-summary", ctx.agent.uuid, "30d"],
+    queryFn: () => getAgentUsageSummary(ctx.agent.uuid, "30d"),
+    enabled: !ctx.isHuman,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const turnsQuery = useQuery({
+    queryKey: ["usage-turns", ctx.agent.uuid, "30d", "first10"],
+    queryFn: () => getAgentUsageTurns(ctx.agent.uuid, { window: "30d", limit: RECENT_TURNS_LIMIT }),
     enabled: !ctx.isHuman,
     refetchInterval: 60_000,
     staleTime: 30_000,
@@ -37,7 +48,7 @@ export function UsageTab(): ReactElement {
 
   if (ctx.isHuman) {
     return (
-      <Section title="Token Usage">
+      <Section title="Usage">
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Token usage is only tracked for agent-type accounts. This profile represents a human member and does not run
           model turns.
@@ -48,236 +59,259 @@ export function UsageTab(): ReactElement {
 
   return (
     <>
-      <SummaryBlock
-        window={window}
-        onWindowChange={setWindow}
-        data={summaryQuery.data}
-        isLoading={summaryQuery.isLoading}
-        isError={summaryQuery.isError}
+      <ActivityBlock data={summaryQuery.data} isLoading={summaryQuery.isLoading} isError={summaryQuery.isError} />
+      <RecentTurnsBlock
+        rows={turnsQuery.data?.rows ?? []}
+        isLoading={turnsQuery.isLoading}
+        isError={turnsQuery.isError}
       />
-      <ActivityGridBlock data={summaryQuery.data} isLoading={summaryQuery.isLoading} isError={summaryQuery.isError} />
-      <RecentTurnsBlock agentId={ctx.agent.uuid} window={window} />
     </>
   );
 }
 
-function SummaryBlock({
-  window,
-  onWindowChange,
+/* ============================================================================
+   Activity
+   ========================================================================== */
+
+type DayBucket = { date: string; weekday: number; month: number; day: number; year: number; tokens: number };
+
+function ActivityBlock({
   data,
   isLoading,
   isError,
 }: {
-  window: UsageWindow;
-  onWindowChange: (next: UsageWindow) => void;
   data: UsageAgentSummary | undefined;
   isLoading: boolean;
   isError: boolean;
 }): ReactElement {
-  const totals = data?.totals;
-  const totalTokens = totals ? totals.inputTokens + totals.cachedInputTokens + totals.outputTokens : null;
   return (
-    <Section title="Token Usage" action={<WindowPicker window={window} onChange={onWindowChange} />}>
-      {isError ? (
-        <ErrorRow message="Failed to load usage summary." />
-      ) : (
+    <Section
+      title={
         <>
-          {/* `auto-fit` + an 8rem floor keeps all four KPIs on one row on
-              desktop but folds to 2×2 on a phone, where four columns would
-              crush the large mono values into cells too narrow to read. No
-              breakpoint / JS needed — the track count follows the width. */}
-          <div
-            className="grid"
-            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(8rem, 1fr))", gap: "var(--sp-4)" }}
-          >
-            <Kpi label={`Tokens (${window})`} value={formatCompactCount(totalTokens)} loading={isLoading} />
-            <Kpi label="Turns" value={formatCompactCount(totals?.turns ?? null)} loading={isLoading} />
-            <Kpi label="Chats" value={formatCompactCount(totals?.chats ?? null)} loading={isLoading} />
-            <Kpi label="Last active" value={formatRelative(totals?.lastUsageAt ?? null)} loading={isLoading} />
-          </div>
-          {totals && totalTokens !== null && totalTokens > 0 && (
-            <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-3)" }}>
-              Input {formatCompactCount(totals.inputTokens)} · Cached {formatCompactCount(totals.cachedInputTokens)} ·
-              Output {formatCompactCount(totals.outputTokens)}
-            </p>
-          )}
+          Activity{" "}
+          <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+            · last 90 days
+          </span>
         </>
+      }
+      description="One cell per day · darker means more input tokens consumed."
+      action={<DensityLegend />}
+    >
+      {isError ? (
+        <ErrorRow message="Failed to load activity." />
+      ) : isLoading ? (
+        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-4) 0" }}>
+          Loading…
+        </p>
+      ) : (
+        <ActivityBody summary={data} />
       )}
     </Section>
   );
 }
 
-function Kpi({ label, value, loading }: { label: string; value: string; loading: boolean }): ReactElement {
+function DensityLegend(): ReactElement {
   return (
-    <div>
-      <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-        {label}
-      </div>
-      <div className="text-h3 mono" style={{ color: "var(--fg-2)", marginTop: "var(--sp-1)" }}>
-        {loading ? "…" : value}
-      </div>
-    </div>
-  );
-}
-
-function WindowPicker({
-  window,
-  onChange,
-}: {
-  window: UsageWindow;
-  onChange: (next: UsageWindow) => void;
-}): ReactElement {
-  const base = "px-2 py-0_5 text-caption font-semibold";
-  const baseStyle = { background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-3)" };
-  const activeStyle = { ...baseStyle, color: "var(--fg-2)", background: "var(--bg-hover)" };
-  return (
-    <span
-      className="inline-flex items-center"
-      style={{ gap: "var(--hairline)", border: "var(--hairline) solid var(--border)", padding: "var(--hairline)" }}
-    >
-      <button
-        type="button"
-        className={base}
-        onClick={() => onChange("7d")}
-        style={window === "7d" ? activeStyle : baseStyle}
-      >
-        7d
-      </button>
-      <button
-        type="button"
-        className={base}
-        onClick={() => onChange("30d")}
-        style={window === "30d" ? activeStyle : baseStyle}
-      >
-        30d
-      </button>
+    <span className="usage-cal-legend text-caption">
+      Less
+      <span className="usage-cal-legend-cell" style={{ background: "var(--lvl0)" }} />
+      <span className="usage-cal-legend-cell" style={{ background: "var(--lvl1)" }} />
+      <span className="usage-cal-legend-cell" style={{ background: "var(--lvl2)" }} />
+      <span className="usage-cal-legend-cell" style={{ background: "var(--lvl3)" }} />
+      <span className="usage-cal-legend-cell" style={{ background: "var(--lvl4)" }} />
+      More
     </span>
   );
 }
 
-function ActivityGridBlock({
-  data,
-  isLoading,
-  isError,
-}: {
-  data: UsageAgentSummary | undefined;
-  isLoading: boolean;
-  isError: boolean;
-}): ReactElement {
-  return (
-    <Section title="Activity (last 90 days)">
-      {isError ? <ErrorRow message="Failed to load activity." /> : <ActivityGrid summary={data} loading={isLoading} />}
-    </Section>
-  );
-}
-
-/**
- * 90-day daily-density grid. Buckets daily input-token totals into 5 levels;
- * cells with no events render as the lowest level (effectively empty). The
- * server returns only days with activity, so we backfill the missing days
- * on the client to keep the grid's geometry stable regardless of activity.
- */
-function ActivityGrid({
-  summary,
-  loading,
-}: {
-  summary: UsageAgentSummary | undefined;
-  loading: boolean;
-}): ReactElement {
-  if (loading) {
-    return (
-      <p className="text-caption" style={{ color: "var(--fg-4)" }}>
-        Loading…
-      </p>
-    );
-  }
-  const byDate = new Map<string, number>();
-  for (const d of summary?.daily ?? []) byDate.set(d.date, d.inputTokens);
-  const today = new Date();
-  const days: { date: string; tokens: number }[] = [];
-  for (let i = ACTIVITY_GRID_DAYS - 1; i >= 0; i--) {
-    const dt = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
-    const iso = dt.toISOString().slice(0, 10);
-    days.push({ date: iso, tokens: byDate.get(iso) ?? 0 });
-  }
+function ActivityBody({ summary }: { summary: UsageAgentSummary | undefined }): ReactElement {
+  const days = useMemo(() => buildDays(summary?.daily), [summary?.daily]);
+  const columns = useMemo(() => buildColumns(days), [days]);
   const max = Math.max(1, ...days.map((d) => d.tokens));
-  function bucket(t: number): 0 | 1 | 2 | 3 | 4 {
-    if (t <= 0) return 0;
-    const r = Math.log10(1 + t) / Math.log10(1 + max);
-    if (r < 0.25) return 1;
-    if (r < 0.5) return 2;
-    if (r < 0.75) return 3;
-    return 4;
-  }
-  const colors: Record<0 | 1 | 2 | 3 | 4, string> = {
-    0: "var(--bg-sunken)",
-    1: "var(--brand-bg)",
-    2: "color-mix(in oklch, var(--brand) 35%, var(--bg-sunken))",
-    3: "color-mix(in oklch, var(--brand) 65%, var(--bg-sunken))",
-    4: "var(--brand)",
-  };
+  const stats = useMemo(() => computeStats(days), [days]);
+  const [hover, setHover] = useState<{ d: DayBucket; x: number; y: number } | null>(null);
+
   return (
-    <div>
-      <div
-        className="grid"
-        style={{ gridTemplateColumns: `repeat(${ACTIVITY_GRID_DAYS}, minmax(0, 1fr))`, gap: "var(--hairline)" }}
-      >
-        {days.map((d) => {
-          const b = bucket(d.tokens);
-          return (
-            <span
-              key={d.date}
-              title={`${d.date} · ${formatCompactCount(d.tokens)} input tokens`}
-              style={{
-                background: colors[b],
-                height: "var(--sp-3)",
-                borderRadius: "var(--hairline)",
-                display: "block",
-              }}
-            />
-          );
-        })}
+    <div className="usage-activity-row">
+      <div className="usage-cal-shell">
+        <div className="usage-cal-inner">
+          {/* Weekday rail — Mon / Wed / Fri labels, the rest are empty spacers
+              that keep the row geometry aligned with the cell grid. */}
+          <div className="usage-cal-weekday-rail">
+            {WEEKDAY_RAIL.map((label, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed 7-row rail, slot identity IS the index.
+              <span key={i} className="usage-cal-weekday-cell text-caption">
+                {label}
+              </span>
+            ))}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <MonthsRow columns={columns} />
+            <div className="usage-cal-grid">
+              {columns.map((col, ci) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: column position is the column's identity in this fixed-geometry grid.
+                <div key={ci} className="usage-cal-col">
+                  {col.map((d, ri) => (
+                    <Cell
+                      // biome-ignore lint/suspicious/noArrayIndexKey: weekday row position is the cell's identity in its column.
+                      key={ri}
+                      day={d}
+                      max={max}
+                      onEnter={(e) => {
+                        if (!d) return;
+                        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setHover({ d, x: r.left + r.width / 2, y: r.top });
+                      }}
+                      onLeave={() => setHover(null)}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
+      <ActivityStatsPanel stats={stats} />
+      {hover && <CellTooltip day={hover.d} anchorX={hover.x} anchorY={hover.y} />}
     </div>
   );
 }
 
-function RecentTurnsBlock({ agentId, window }: { agentId: string; window: UsageWindow }): ReactElement {
-  const turnsQuery = useInfiniteQuery({
-    queryKey: ["usage-turns", agentId, window],
-    queryFn: ({ pageParam }) => getAgentUsageTurns(agentId, { window, cursor: pageParam ?? null, limit: 50 }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.nextCursor,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
-  const rows = turnsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
+function MonthsRow({ columns }: { columns: (DayBucket | null)[][] }): ReactElement {
+  let lastMonth = -1;
   return (
-    <Section
-      title={`Recent turns (${window})`}
-      action={
-        turnsQuery.hasNextPage ? (
-          <button
-            type="button"
-            onClick={() => void turnsQuery.fetchNextPage()}
-            className="text-caption font-semibold"
-            style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--primary)" }}
-            disabled={turnsQuery.isFetchingNextPage}
-          >
-            {turnsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
-          </button>
-        ) : null
-      }
-    >
-      {turnsQuery.isError ? (
+    <div className="usage-cal-months">
+      {columns.map((col, i) => {
+        const first = col.find((d): d is DayBucket => d != null);
+        const showLabel = first != null && first.month !== lastMonth;
+        if (showLabel && first) lastMonth = first.month;
+        return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: column position is the slot's identity in this fixed-geometry header.
+          <span key={i} className="usage-cal-month-slot text-caption">
+            {showLabel && first ? MONTHS[first.month] : ""}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function Cell({
+  day,
+  max,
+  onEnter,
+  onLeave,
+}: {
+  day: DayBucket | null;
+  max: number;
+  onEnter: (e: React.MouseEvent) => void;
+  onLeave: () => void;
+}): ReactElement {
+  if (!day) {
+    return <span aria-hidden="true" className="usage-cal-cell usage-cal-cell-empty" />;
+  }
+  const b = bucket(day.tokens, max);
+  const colors = ["var(--lvl0)", "var(--lvl1)", "var(--lvl2)", "var(--lvl3)", "var(--lvl4)"];
+  return (
+    <span
+      role="img"
+      aria-label={`${WEEKDAYS[day.weekday]} ${MONTHS[day.month]} ${day.day}: ${
+        day.tokens > 0 ? `${formatCompactCount(day.tokens)} input tokens` : "no activity"
+      }`}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      className="usage-cal-cell"
+      style={{ background: colors[b] }}
+    />
+  );
+}
+
+function CellTooltip({ day, anchorX, anchorY }: { day: DayBucket; anchorX: number; anchorY: number }): ReactElement {
+  const label = `${WEEKDAYS[day.weekday]} · ${MONTHS[day.month]} ${day.day}, ${day.year}`;
+  const value = day.tokens > 0 ? `${formatCompactCount(day.tokens)} input tokens` : "No activity";
+  return (
+    <div role="tooltip" className="usage-cal-tooltip" style={{ left: anchorX, top: anchorY }}>
+      <div className="text-eyebrow mono" style={{ color: "var(--fg-3)" }}>
+        {label}
+      </div>
+      <div className="usage-cal-tooltip-value text-body mono font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function ActivityStatsPanel({
+  stats,
+}: {
+  stats: { activeDays: number; avgPerDay: number; peak: DayBucket | null; streak: number };
+}): ReactElement {
+  const peakLabel =
+    stats.peak && stats.peak.tokens > 0
+      ? `${MONTHS[stats.peak.month]} ${stats.peak.day} · ${formatCompactCount(stats.peak.tokens)}`
+      : "—";
+  return (
+    <div className="usage-stats-panel">
+      <StatTile
+        label="Active days"
+        value={
+          <>
+            {stats.activeDays}
+            <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+              {` / ${ACTIVITY_GRID_DAYS}`}
+            </span>
+          </>
+        }
+      />
+      <StatTile label="Avg input / day" value={formatCompactCount(stats.avgPerDay)} mono />
+      <StatTile label="Peak day" value={peakLabel} mono />
+      <StatTile
+        label="Current streak"
+        value={
+          <>
+            {stats.streak}
+            <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+              {" "}
+              {stats.streak === 1 ? "day" : "days"}
+            </span>
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+function StatTile({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }): ReactElement {
+  return (
+    <div className="usage-stats-tile">
+      <div className="usage-stats-tile-label text-caption">{label}</div>
+      <div className={`usage-stats-tile-value text-subtitle${mono ? " mono" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   Recent turns
+   ========================================================================== */
+
+function RecentTurnsBlock({
+  rows,
+  isLoading,
+  isError,
+}: {
+  rows: UsageTurnRow[];
+  isLoading: boolean;
+  isError: boolean;
+}): ReactElement {
+  return (
+    <Section title="Recent turns" count="30d">
+      {isError ? (
         <ErrorRow message="Failed to load recent turns." />
-      ) : turnsQuery.isLoading ? (
-        <p className="text-caption" style={{ color: "var(--fg-4)" }}>
+      ) : isLoading ? (
+        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
           Loading…
         </p>
       ) : rows.length === 0 ? (
-        <p className="text-caption" style={{ color: "var(--fg-4)" }}>
-          No turns in the last {windowToDays(window)} days.
+        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
+          No turns in the last 30 days.
         </p>
       ) : (
         <TurnsTable rows={rows} />
@@ -288,60 +322,175 @@ function RecentTurnsBlock({ agentId, window }: { agentId: string; window: UsageW
 
 function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
   const navigate = useNavigate();
+  const totalFor = (r: UsageTurnRow) => r.inputTokens + r.cachedInputTokens + r.outputTokens;
+  const max = Math.max(1, ...rows.map(totalFor));
   return (
-    <table className="w-full text-caption" style={{ borderCollapse: "collapse" }}>
-      <thead>
-        <tr className="font-semibold" style={{ color: "var(--fg-4)" }}>
-          <th style={{ textAlign: "left", padding: "var(--sp-2)" }}>When</th>
-          <th style={{ textAlign: "left", padding: "var(--sp-2)" }}>Chat</th>
-          <th style={{ textAlign: "right", padding: "var(--sp-2)" }}>Input</th>
-          <th style={{ textAlign: "right", padding: "var(--sp-2)" }}>Cached</th>
-          <th style={{ textAlign: "right", padding: "var(--sp-2)" }}>Output</th>
-          <th style={{ textAlign: "left", padding: "var(--sp-2)" }}>Model</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={`${r.chatId}:${r.seq}`} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
-            <td style={{ padding: "var(--sp-2)", color: "var(--fg-3)" }}>{formatRelative(r.createdAt)}</td>
-            <td style={{ padding: "var(--sp-2)" }}>
-              {r.chatTitle ? (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/?chat=${encodeURIComponent(r.chatId)}`)}
-                  className="font-medium"
-                  style={{
-                    background: "transparent",
-                    border: 0,
-                    cursor: "pointer",
-                    color: "var(--primary)",
-                    padding: 0,
-                  }}
-                >
-                  {r.chatTitle}
-                </button>
-              ) : (
-                <span style={{ color: "var(--fg-4)" }}>private chat</span>
-              )}
-            </td>
-            <td className="mono" style={{ padding: "var(--sp-2)", textAlign: "right" }}>
-              {formatCompactCount(r.inputTokens)}
-            </td>
-            <td className="mono" style={{ padding: "var(--sp-2)", textAlign: "right", color: "var(--fg-3)" }}>
-              {formatCompactCount(r.cachedInputTokens)}
-            </td>
-            <td className="mono" style={{ padding: "var(--sp-2)", textAlign: "right" }}>
-              {formatCompactCount(r.outputTokens)}
-            </td>
-            <td className="mono" style={{ padding: "var(--sp-2)", color: "var(--fg-3)" }}>
-              {r.provider}/{r.model}
-            </td>
+    <div className="usage-turn-scroll">
+      <table className="usage-turn-table w-full" style={{ borderCollapse: "collapse", marginTop: "var(--sp-1)" }}>
+        <thead>
+          <tr className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
+            <th style={thStyle("left")}>When</th>
+            <th style={thStyle("left")}>Chat</th>
+            <th style={thStyle("left")}>Model</th>
+            <th style={thStyle("right")}>Input</th>
+            <th style={thStyle("right")}>Cached</th>
+            <th style={thStyle("right")}>Output</th>
+            <th style={{ ...thStyle("left"), width: "var(--sp-20)" }}>Total</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const total = totalFor(r);
+            return (
+              <tr key={`${r.chatId}:${r.seq}`} className="usage-turn-row">
+                <td className="text-body" style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}>
+                  {formatRelative(r.createdAt)}
+                </td>
+                <td>
+                  {r.chatTitle ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/?chat=${encodeURIComponent(r.chatId)}`)}
+                      className="text-body font-medium"
+                      style={{
+                        background: "transparent",
+                        border: 0,
+                        padding: 0,
+                        cursor: "pointer",
+                        color: "var(--fg)",
+                        textAlign: "left",
+                      }}
+                    >
+                      {r.chatTitle}
+                    </button>
+                  ) : (
+                    <span className="text-body" style={{ color: "var(--fg-4)" }}>
+                      private chat
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <ModelChip provider={r.provider} model={r.model} />
+                </td>
+                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-2)" }}>
+                  {formatCompactCount(r.inputTokens)}
+                </td>
+                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-3)" }}>
+                  {formatCompactCount(r.cachedInputTokens)}
+                </td>
+                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-2)" }}>
+                  {formatCompactCount(r.outputTokens)}
+                </td>
+                <td>
+                  <div
+                    role="img"
+                    className="usage-turn-volbar"
+                    aria-label={`${formatCompactCount(total)} tokens this turn`}
+                  >
+                    <span style={{ width: `${(total / max) * 100}%` }} />
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
+
+function thStyle(align: "left" | "right"): CSSProperties {
+  return { textAlign: align };
+}
+
+function ModelChip({ provider, model }: { provider: string; model: string }): ReactElement {
+  return (
+    <span className="usage-model-chip mono text-caption">
+      {provider}/{model}
+    </span>
+  );
+}
+
+/* ============================================================================
+   Helpers
+   ========================================================================== */
+
+function buildDays(daily: UsageAgentSummary["daily"] | undefined): DayBucket[] {
+  // `daily[].date` is YYYY-MM-DD in UTC (schema). Iterate, label, and join in
+  // UTC consistently — local-tz Date methods would shift weekday/date by ±1
+  // half the day in non-UTC zones and silently miss the join key.
+  const byDate = new Map<string, number>();
+  for (const d of daily ?? []) byDate.set(d.date, d.inputTokens);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const days: DayBucket[] = [];
+  for (let i = ACTIVITY_GRID_DAYS - 1; i >= 0; i--) {
+    const dt = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+    const iso = dt.toISOString().slice(0, 10);
+    days.push({
+      date: iso,
+      weekday: dt.getUTCDay(),
+      month: dt.getUTCMonth(),
+      day: dt.getUTCDate(),
+      year: dt.getUTCFullYear(),
+      tokens: byDate.get(iso) ?? 0,
+    });
+  }
+  return days;
+}
+
+function buildColumns(days: DayBucket[]): (DayBucket | null)[][] {
+  const first = days[0];
+  if (!first) return [];
+  const cols: (DayBucket | null)[][] = [];
+  // Pad the first column so its first cell sits in the correct weekday row.
+  let col: (DayBucket | null)[] = new Array(first.weekday).fill(null);
+  for (const d of days) {
+    col[d.weekday] = d;
+    if (d.weekday === 6) {
+      cols.push(col);
+      col = new Array(7).fill(null);
+    }
+  }
+  if (col.some((x) => x != null)) {
+    while (col.length < 7) col.push(null);
+    cols.push(col);
+  }
+  return cols;
+}
+
+function bucket(tokens: number, max: number): 0 | 1 | 2 | 3 | 4 {
+  if (tokens <= 0) return 0;
+  const r = Math.log10(1 + tokens) / Math.log10(1 + max);
+  if (r < 0.25) return 1;
+  if (r < 0.5) return 2;
+  if (r < 0.75) return 3;
+  return 4;
+}
+
+function computeStats(days: DayBucket[]): {
+  activeDays: number;
+  avgPerDay: number;
+  peak: DayBucket | null;
+  streak: number;
+} {
+  const activeDays = days.filter((d) => d.tokens > 0).length;
+  const total = days.reduce((acc, d) => acc + d.tokens, 0);
+  const avgPerDay = days.length > 0 ? Math.round(total / days.length) : 0;
+  const seed = days[0];
+  const peak = seed ? days.reduce((a, d) => (d.tokens > a.tokens ? d : a), seed) : null;
+  let streak = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    const d = days[i];
+    if (d && d.tokens > 0) streak++;
+    else break;
+  }
+  return { activeDays, avgPerDay, peak, streak };
+}
+
+/* ============================================================================
+   Misc
+   ========================================================================== */
 
 /**
  * Inline error placeholder for failed usage queries. Made distinct from
@@ -350,7 +499,7 @@ function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
  */
 function ErrorRow({ message }: { message: string }): ReactElement {
   return (
-    <p className="text-caption" style={{ color: "var(--state-error)" }}>
+    <p className="text-caption" style={{ color: "var(--state-error)", padding: "var(--sp-3) 0" }}>
       {message}
     </p>
   );

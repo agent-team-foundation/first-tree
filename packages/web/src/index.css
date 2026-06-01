@@ -439,6 +439,17 @@
      macOS overlay scrollbars so layout doesn't jump between platforms. */
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
+
+  /* Activity density ramp for the agent profile contribution calendar.
+     Explicit green steps — using color-mix with oklch on --brand swings hue
+     toward tan/orange in the mid buckets and reads off-brand at the cell-grid
+     scale. These lvl tokens stay green across the whole range and flip in
+     `.dark` below. */
+  --lvl0: var(--bg-sunken);
+  --lvl1: oklch(0.9 0.06 150);
+  --lvl2: oklch(0.83 0.11 150);
+  --lvl3: oklch(0.77 0.15 150);
+  --lvl4: var(--brand);
 }
 
 /* ============================================================================
@@ -541,6 +552,14 @@
   /* Flip native form controls / scrollbars to dark to match the canvas
      (previously only .landing-marketing set this). */
   color-scheme: dark;
+
+  /* Activity density ramp — dark-mode steps. Light-mode tokens (and the
+     rationale for not using color-mix) live on `:root` above. */
+  --lvl0: var(--bg-sunken);
+  --lvl1: oklch(0.32 0.06 150);
+  --lvl2: oklch(0.44 0.1 150);
+  --lvl3: oklch(0.58 0.14 150);
+  --lvl4: var(--brand);
 }
 
 @layer base {
@@ -1572,4 +1591,199 @@ tr[data-interactive]:hover {
 .mention-composer-textarea::selection {
   background: var(--brand-ring);
   color: transparent;
+}
+
+/* ============================================================================
+   Agent profile · Usage tab — Activity calendar + Recent turns
+   ============================================================================
+   Layout-level pixel sizes (cell 15px, column gap 4px, rail offset 20px) sit
+   here so the component's TSX can stay free of raw `Npx` literals (enforced
+   by check-design-tokens.sh). The cell size is a deliberate visual choice for
+   a 90-day GitHub-style grid — it does not map cleanly to the --sp-* ramp. */
+
+.usage-activity-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-7);
+  padding-top: var(--sp-4);
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .usage-activity-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-5);
+  }
+}
+
+.usage-cal-shell {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.usage-cal-inner {
+  display: flex;
+}
+
+.usage-cal-weekday-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-top: var(--sp-5);
+  margin-right: var(--sp-2);
+}
+
+.usage-cal-weekday-cell {
+  height: 15px;
+  display: flex;
+  align-items: center;
+  color: var(--fg-4);
+}
+
+.usage-cal-months {
+  display: flex;
+  gap: var(--sp-1);
+  height: 14px;
+  color: var(--fg-4);
+}
+
+.usage-cal-month-slot {
+  width: 15px;
+  flex: 0 0 15px;
+}
+
+.usage-cal-grid {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.usage-cal-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.usage-cal-cell {
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  display: block;
+}
+
+.usage-cal-cell-empty {
+  background: transparent;
+  pointer-events: none;
+}
+
+.usage-cal-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1_25);
+  color: var(--fg-4);
+}
+
+.usage-cal-legend-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.usage-cal-tooltip {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - var(--sp-2)));
+  pointer-events: none;
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-md);
+  padding: var(--sp-2) var(--sp-2_5);
+  white-space: nowrap;
+  z-index: 50;
+}
+
+.usage-cal-tooltip-value {
+  color: var(--fg);
+  margin-top: var(--sp-0_75);
+}
+
+/* 2×2 stat panel paired with the calendar. Hairline-separated tiles on a
+   --border-faint substrate, matching the KPI-strip pattern used elsewhere. */
+.usage-stats-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--hairline);
+  background: var(--border-faint);
+  border: var(--hairline) solid var(--border-faint);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+.usage-stats-tile {
+  background: var(--bg-raised);
+  padding: var(--sp-3) var(--sp-3_5);
+}
+
+.usage-stats-tile-label {
+  color: var(--fg-4);
+  text-transform: uppercase;
+}
+
+.usage-stats-tile-value {
+  color: var(--fg);
+  margin-top: var(--sp-1_25);
+}
+
+/* Recent turns table — horizontal scroll wrapper so the right-hand columns
+   (Output / Total) stay reachable at narrow viewports instead of being silently
+   clipped by the main scroll container's `overflow: hidden`. The min-width
+   forces the table to keep its natural column widths and overflow the wrapper
+   (giving a horizontal scrollbar) once the viewport is too narrow to fit. */
+.usage-turn-scroll {
+  overflow-x: auto;
+}
+
+.usage-turn-scroll > .usage-turn-table {
+  min-width: 36rem; /* ≈576px — fits all 7 columns at their content-natural widths */
+}
+
+/* Recent turns table — model chip + per-row volume bar. */
+.usage-turn-volbar {
+  height: 4px;
+  width: 64px;
+  background: var(--bg-sunken);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: var(--sp-1_25);
+}
+
+.usage-turn-volbar > span {
+  display: block;
+  height: 100%;
+  background: var(--fg-4);
+}
+
+.usage-model-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--sp-1_75);
+  border-radius: var(--radius-chip);
+  background: var(--bg-sunken);
+  color: var(--fg-2);
+  border: var(--hairline) solid var(--border);
+}
+
+.usage-turn-row td {
+  padding: var(--sp-2_5);
+  vertical-align: middle;
+}
+
+.usage-turn-row + .usage-turn-row td {
+  border-top: var(--hairline) solid var(--border-faint);
+}
+
+.usage-turn-table th {
+  padding: var(--sp-2) var(--sp-2_5);
+  text-transform: uppercase;
 }
