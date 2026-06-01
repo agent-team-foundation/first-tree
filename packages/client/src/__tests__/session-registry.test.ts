@@ -138,7 +138,7 @@ describe("SessionRegistry", () => {
     registry.dispose();
   });
 
-  it("dispose cancels a pending debounced save", () => {
+  it("dispose flushes a pending debounced save", () => {
     vi.useFakeTimers();
     const registry = new SessionRegistry(filePath);
     const entries = makeEntries({
@@ -146,6 +146,19 @@ describe("SessionRegistry", () => {
     });
 
     registry.save(entries);
+    registry.dispose();
+    // flush() already cancelled the timer — nothing more should fire.
+    vi.advanceTimersByTime(1000);
+
+    expect(existsSync(filePath)).toBe(true);
+    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-x");
+  });
+
+  it("dispose without a pending save writes nothing", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+
     registry.dispose();
     vi.advanceTimersByTime(1000);
 

@@ -588,8 +588,9 @@ export class SessionManager {
       }
     }
 
-    // Persist final state
-    this.persistRegistry();
+    // Persist final state — flush synchronously so the last batch reaches
+    // disk before dispose() tears the timer down.
+    this.persistRegistry({ immediate: true });
     this.registry?.dispose();
 
     this.sessions.clear();
@@ -1588,7 +1589,7 @@ export class SessionManager {
     }
   }
 
-  private persistRegistry(): void {
+  private persistRegistry(opts: { immediate?: boolean } = {}): void {
     if (!this.registry) return;
 
     const entries = new Map<string, { claudeSessionId: string; lastActivity: number; status: string }>();
@@ -1607,6 +1608,10 @@ export class SessionManager {
         status: "evicted",
       });
     }
-    this.registry.save(entries);
+    // On shutdown we MUST write synchronously: the alternative is
+    // `save()` (debounced 1s) followed by `dispose()`, which races the
+    // process exit and silently drops the last mapping batch.
+    if (opts.immediate) this.registry.flush(entries);
+    else this.registry.save(entries);
   }
 }

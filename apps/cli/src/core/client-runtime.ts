@@ -288,6 +288,13 @@ export class ClientRuntime {
         this.scanForNewAgents(agentsDir);
       }, 500);
     });
+    // A recursive FSWatcher can emit 'error' at runtime (watched dir removed,
+    // or inotify exhaustion on Linux). An unhandled 'error' throws and would
+    // take down the daemon — tear the watcher down so it degrades gracefully.
+    this.watcher.on("error", (err: Error) => {
+      print.status("⚠️", `agents dir watcher error: ${err.message}`);
+      this.unwatchAgentsDir();
+    });
   }
 
   unwatchAgentsDir(): void {
@@ -346,6 +353,13 @@ export class ClientRuntime {
             }
           }
         }, 250);
+      });
+      // Synchronous setup is wrapped in try/catch above, but the FSWatcher can
+      // still emit 'error' later; without a listener that would crash the
+      // daemon. Tear it down so paused-mode recovery degrades gracefully.
+      this.credentialsWatcher.on("error", (err: Error) => {
+        print.status("⚠️", `credentials watcher error: ${err.message}`);
+        this.stopCredentialsWatcher();
       });
     } catch (err) {
       print.status("⚠️", `credentials watcher failed: ${err instanceof Error ? err.message : String(err)}`);
