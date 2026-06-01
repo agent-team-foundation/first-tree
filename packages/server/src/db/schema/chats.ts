@@ -15,7 +15,7 @@ export const chats = pgTable(
     topic: text("topic"),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
     /**
-     * Decision-inert column. Hub keeps a single group-chat model — there is no
+     * Decision-inert column. First Tree keeps a single group-chat model — there is no
      * sub-chat / nested-chat product layer (see first-tree-context PR #281).
      * The column is retained as schema scaffolding only; the business layer
      * never writes a non-null value and `listMeChats` defensively filters

@@ -333,7 +333,7 @@ describe("formatInboundContent", () => {
 });
 
 describe("buildAgentEnv", () => {
-  it("layers the four Hub envelope vars on top of parent env (parent wins on unrelated keys)", () => {
+  it("layers the four First Tree envelope vars on top of parent env (parent wins on unrelated keys)", () => {
     const parent = { PATH: "/usr/bin", FOO: "bar" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
       sdk: { serverUrl: "http://hub" },

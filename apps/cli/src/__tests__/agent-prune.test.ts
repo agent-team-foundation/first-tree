@@ -13,7 +13,7 @@ import { findStaleAliases, type PinnedAgent } from "../core/agent-prune.js";
  *      junk-dir case that broke the previous loadAgents-based impl)
  *
  * The SDK call is injected as `listPinnedAgents`, so these tests don't
- * need to spin up a Hub or stub fetch.
+ * need to spin up a server or stub fetch.
  */
 
 const THIS_CLIENT = "client_self";

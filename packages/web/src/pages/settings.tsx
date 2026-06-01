@@ -28,7 +28,7 @@ import { cn } from "../lib/utils.js";
  * route targets — only the chrome shape changes.
  *
  * Sub-routes:
- *   Computers     — user-scoped: machines connected to Hub (most-frequent
+ *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
  *   Team          — org-scoped Identity / Context Tree / Source repos
  *   GitHub        — admin-only platform integration

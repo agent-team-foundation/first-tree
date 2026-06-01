@@ -27,7 +27,7 @@ afterEach(() => {
  * Mirror of generateClaudeMd from claude-code.ts.
  * Must stay in sync with the real implementation.
  *
- * Layer 1 (always): Agent identity + profile (from Hub)
+ * Layer 1 (always): Agent identity + profile (from First Tree)
  * Layer 2 (if Context Tree configured): Operating instructions + domain map
  * Layer 3 (if Context Tree configured): Context Tree location for on-demand reading
  */

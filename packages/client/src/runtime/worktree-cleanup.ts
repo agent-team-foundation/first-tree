@@ -4,10 +4,10 @@ import { relative, sep } from "node:path";
 import type { pino } from "../observability/logger.js";
 
 /**
- * Pre-cleanup helpers for worktree paths the Hub owns.
+ * Pre-cleanup helpers for worktree paths First Tree owns.
  *
  * Why this module exists: agent sessions often spawn dev servers (vite, esbuild,
- * test watchers) inside the worktree as background children. When Hub tears the
+ * test watchers) inside the worktree as background children. When First Tree tears the
  * worktree down those children outlive the agent process — daemonised, attached
  * to a different process group, or simply not tracked by the SDK. The orphan
  * keeps the cwd open, keeps writing cache files (`.vite/deps/...`,
@@ -19,7 +19,7 @@ import type { pino } from "../observability/logger.js";
  *   - `removeWorktree` calls `killProcessesHoldingPath` BEFORE `git worktree
  *     remove --force` so the rmdir actually sticks.
  *   - `createWorktree` calls `killProcessesHoldingPath` then `rmSync` when a
- *     non-managed leftover sits in a path under a hub-managed root — see the
+ *     non-managed leftover sits in a path under a First Tree-managed root — see the
  *     `hubManagedRoots` option on `GitMirrorManager`.
  *
  * Platform support: `lsof` is the universal way to enumerate file holders
@@ -27,7 +27,7 @@ import type { pino } from "../observability/logger.js";
  * launchd / systemd strip `/usr/sbin` from `Environment=PATH`). Windows ships
  * no equivalent; `resolveLsofBinary` returns `null` there and the helpers
  * become no-ops — the self-heal path then relies on `existsSync(absTarget)`
- * after the post-cleanup attempt to surface failure. Windows isn't in Hub's
+ * after the post-cleanup attempt to surface failure. Windows isn't in First Tree's
  * supported daemon matrix today; revisit if/when that changes.
  */
 
@@ -73,7 +73,7 @@ export function isUnderManagedRoot(target: string, roots: readonly string[]): bo
     if (rel.startsWith("..")) continue;
     // `path.relative` returns OS-native separators; reject if it bottoms out
     // to an absolute path on the foreign side (relative across volumes on
-    // Windows). Hub data dirs never cross volumes on POSIX so this is just
+    // Windows). First Tree data dirs never cross volumes on POSIX so this is just
     // belt-and-braces.
     if (rel.startsWith(sep)) continue;
     return true;

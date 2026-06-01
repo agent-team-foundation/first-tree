@@ -17,7 +17,7 @@ own file; helpers shared across namespaces live in `commands/_shared/`.
 - **Top-level shortcuts** (single-verb files):
   - `apps/cli/src/commands/login.ts` — `login <token> [--no-start] [--override]`. Decodes the token's `iss` claim to derive the server URL, persists `credentials.json`, writes `server.url` into `client.yaml`, installs the background daemon (unless `--no-start`). `--override` folds in the old `client claim` behavior (POST `/clients/:id/claim` + stale alias cleanup).
   - `apps/cli/src/commands/logout.ts` — `logout [--purge]`. Symmetric to `login`: stops the daemon + deletes `credentials.json`; `--purge` also wipes `client.yaml`.
-  - `apps/cli/src/commands/status.ts` — top-level cross-subsystem overview (CLI version + service + hub + auth + agents).
+  - `apps/cli/src/commands/status.ts` — top-level cross-subsystem overview (CLI version + service + server + auth + agents).
   - `apps/cli/src/commands/doctor.ts` — top-level cross-subsystem readiness check. Phase 1A ships the daemon-side checks; Phase 3 wires in tree / git / claude-code binary checks via the same shared helper.
   - `apps/cli/src/commands/upgrade.ts` — `upgrade [--check] [--no-restart]`. Self-upgrade via the npm registry + refresh unit + restart daemon. Refuses to run from a source checkout.
 - **Namespaces** (subdirectories with their own `index.ts` registrar):
@@ -33,7 +33,7 @@ own file; helpers shared across namespaces live in `commands/_shared/`.
   - `local-agent.ts` — `resolveLocalAgent`, `createSdk`, `handleSdkError`, `readClientId`. Used by agent and chat namespaces to resolve the sender agent from the local config.
   - `resolve-agent.ts` — `resolveAgent` (cross-org `/me/managed-agents` lookup), used by every command that addresses a First Tree agent by name.
   - `account-transfer.ts` — `postClaim` + `cleanupStaleAliasesAfterClaim`. Used by `login --override` to transfer machine ownership and prune the previous owner's local aliases.
-  - `status-blocks.ts` — pure render blocks for `status` and `daemon status` (CLI version, service, hub, auth, agents).
+  - `status-blocks.ts` — pure render blocks for `status` and `daemon status` (CLI version, service, server, auth, agents).
 
 ## Reusable Core Logic
 

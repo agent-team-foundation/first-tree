@@ -178,7 +178,7 @@ export async function buildApp(config: Config) {
   });
 
   // Loud security reminder: trustProxy=true makes Fastify trust ANY upstream's
-  // x-forwarded-for header. Safe iff the Hub container only receives traffic
+  // x-forwarded-for header. Safe iff the First Tree container only receives traffic
   // through a vetted proxy (Cloudflare → CapRover). If the container is ever
   // exposed to the public internet directly, attackers can spoof XFF and
   // bypass every IP-keyed rate limit / audit log. Surface this on every boot
@@ -317,7 +317,7 @@ export async function buildApp(config: Config) {
       binName: channelIdentity.binName,
       pollIntervalMinutes: config.update.pollIntervalMinutes,
     },
-    "Hub server advertising command version (poller bootstrap)",
+    "First Tree server advertising command version (poller bootstrap)",
   );
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY

@@ -88,7 +88,7 @@ export async function sweepChatArchive(
  *    `archived`/`deleted` so we never even SELECT them again on the next
  *    tick (the `ON CONFLICT … WHERE` guard handles the race window).
  *  - `parent_chat_id IS NULL` matches `listMeChats`'s defensive filter
- *    — Hub has no sub-chat product, but historical rows may carry a
+ *    — First Tree has no sub-chat product, but historical rows may carry a
  *    non-null value and should stay invisible (and untouched).
  */
 async function sweepMapped(db: Database, idleSeconds: number, batchSize: number): Promise<number> {

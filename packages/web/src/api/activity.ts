@@ -120,7 +120,7 @@ export type ConnectTokenResponse = {
   npmSpec: string | null;
   /**
    * Bin name to invoke after install — `first-tree` / `first-tree-staging`
-   * / `first-tree-dev` depending on this Hub's channel. Use instead of
+   * / `first-tree-dev` depending on this server's channel. Use instead of
    * hardcoded `"first-tree"` strings in command-line UX.
    */
   binName: string;

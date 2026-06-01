@@ -17,14 +17,14 @@ import {
 } from "../schemas/agent-runtime-config.js";
 
 /**
- * Lock the Hub-side default model. This default backs two separate paths:
+ * Lock the server-side default model. This default backs two separate paths:
  *   - `server.services.agent.createAgent` seeds fresh rows from this constant.
  *   - `agentRuntimeConfigPayloadSchema.parse({})` fills the same field when a
  *     payload arrives without `model` (e.g. partial PATCH + merge).
  *
  * Dropping back to `""` would regress agents to SDK's CLI fallback — which
  * in turn depends on the operator's local `~/.claude/settings.json`. For
- * fresh agents that haven't been touched by an admin, Hub should have a
+ * fresh agents that haven't been touched by an admin, the server should have a
  * deterministic answer, so this test pins it.
  */
 describe("agent runtime config — default model", () => {
@@ -38,7 +38,7 @@ describe("agent runtime config — default model", () => {
   });
 
   it("schema preserves explicit empty string (operator opt-out)", () => {
-    // Empty string means "defer to SDK / local settings.json" — the hub
+    // Empty string means "defer to SDK / local settings.json" — the server
     // must not silently replace it with the default.
     const parsed = agentRuntimeConfigPayloadSchema.parse({ model: "" });
     expect(parsed.model).toBe("");
@@ -48,7 +48,7 @@ describe("agent runtime config — default model", () => {
 /**
  * Codex defaults sit on a different invariant than claude-code: the Codex
  * CLI's ChatGPT-account auth rejects `gpt-5-codex` (the SDK's compile-time
- * default), so Hub leaves `model` empty and lets the CLI pick a slug that
+ * default), so the server leaves `model` empty and lets the CLI pick a slug that
  * matches the user's auth mode. Pin it here so a well-meaning "set a sane
  * default" change doesn't quietly break ChatGPT-auth users.
  */

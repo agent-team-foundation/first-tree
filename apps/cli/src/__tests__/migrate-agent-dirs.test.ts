@@ -7,7 +7,7 @@ import { migrateLocalAgentDirs, type NameResolver } from "../core/migrate-agent-
 /**
  * Pins the Phase-3 local-dir rename. The helper is a pure filesystem shuffler
  * driven by an injected name resolver; we stub the resolver in-memory so the
- * tests don't need a live Hub.
+ * tests don't need a live server.
  *
  * What we specifically want to guard against:
  *   1. Renaming is idempotent (already-aligned dirs are untouched).

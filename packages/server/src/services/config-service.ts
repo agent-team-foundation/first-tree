@@ -54,7 +54,7 @@ export type ConfigServiceOptions = {
 /**
  * Configuration service for per-agent runtime config.
  *
- * Concurrency model (M1 single-instance Hub):
+ * Concurrency model (M1 single-instance server):
  *   - Optimistic lock via `version` column.
  *   - Per-agent debounce: writes within `debounceMs` of the previous write
  *     are coalesced into a single UPDATE that bumps version once.

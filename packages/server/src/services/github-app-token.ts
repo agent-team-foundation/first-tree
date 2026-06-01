@@ -64,7 +64,7 @@ export async function mintContextTreeInstallationToken(
     const detail =
       error instanceof GithubAppApiError
         ? `GitHub returned ${error.status} when minting an installation token.`
-        : "Hub could not mint a GitHub App installation token.";
+        : "First Tree could not mint a GitHub App installation token.";
     return { ok: false, reason: "mint-failed", detail };
   }
 }
@@ -99,7 +99,7 @@ export function decorateSnapshotWithMintGuidance(
       ? "Install the First Tree GitHub App from Team Settings and grant it access to this repo."
       : mintResult.reason === "suspended"
         ? "The GitHub App installation is suspended — unsuspend it from your GitHub account settings."
-        : `Hub could not mint a GitHub App installation token.${mintResult.detail ? ` ${mintResult.detail}` : ""}`;
+        : `First Tree could not mint a GitHub App installation token.${mintResult.detail ? ` ${mintResult.detail}` : ""}`;
 
   return {
     ...snapshot,

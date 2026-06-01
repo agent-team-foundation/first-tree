@@ -1,4 +1,4 @@
-// Boot the Hub server in foreground against the e2e DB, with the
+// Boot the First Tree server in foreground against the e2e DB, with the
 // pre-built web/dist served as static files. Used for hand-driven
 // verification of the AskUserQuestion UI after `seed-askuser-demo.mjs`.
 //
@@ -65,7 +65,7 @@ await app.listen({ port: PORT, host: HOST });
 const url = `http://${HOST}:${PORT}`;
 console.log("");
 console.log(`════════════════════════════════════════════════════════════════════`);
-console.log(`  Hub server running:    ${url}`);
+console.log(`  First Tree server:     ${url}`);
 console.log(`  Web (SPA fallback):    ${url}/`);
 console.log(`  API:                   ${url}/api/v1/healthz`);
 console.log(`  Login:                 ${url}/login`);

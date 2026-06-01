@@ -18,7 +18,7 @@ type AuthoritativePinnedAgent = {
  * authoritative `runtime_provider` for every non-deleted agent the calling
  * user owns and rewrites any local `agent.yaml` whose `runtime` field
  * disagrees. Suspended agents stay in this ownership list so their local
- * footprint is preserved while disabled. Best-effort: a transient hub failure
+ * footprint is preserved while disabled. Best-effort: a transient server failure
  * logs and falls back to the local YAML value (the in-band repair path catches
  * any remaining drift on first bind).
  */
@@ -32,7 +32,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
     headers: { Authorization: `Bearer ${opts.accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`hub returned ${res.status} on /clients/me/agents`);
+    throw new Error(`server returned ${res.status} on /clients/me/agents`);
   }
   const items = (await res.json()) as AuthoritativePinnedAgent[];
   const byAgentId = new Map(items.map((it) => [it.agentId, it]));
@@ -61,7 +61,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
       writeFileSync(yamlPath, stringifyYaml(next), { mode: 0o600 });
       opts.log?.(
         "info",
-        `agent ${parsed.agentId}: yaml runtime "${parsed.runtime ?? "(unset)"}" → "${auth.runtimeProvider}" (hub authoritative)`,
+        `agent ${parsed.agentId}: yaml runtime "${parsed.runtime ?? "(unset)"}" → "${auth.runtimeProvider}" (server authoritative)`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -90,12 +90,12 @@ export async function uploadClientCapabilities(opts: {
     body: JSON.stringify({ capabilities: opts.capabilities }),
   });
   if (!res.ok) {
-    throw new Error(`hub returned ${res.status} on PATCH /clients/${opts.clientId}/capabilities`);
+    throw new Error(`server returned ${res.status} on PATCH /clients/${opts.clientId}/capabilities`);
   }
 }
 
 /**
- * Replace the agent's slash-command skill list on the hub. Called once per
+ * Replace the agent's slash-command skill list on the server. Called once per
  * managed agent during daemon startup (and on subsequent restarts) after
  * the local SKILL.md scan. Snapshot semantics: server overwrites the row
  * with the payload in full, so callers should always upload the complete
@@ -117,6 +117,6 @@ export async function uploadAgentSkills(opts: {
     body: JSON.stringify({ skills: opts.skills }),
   });
   if (!res.ok) {
-    throw new Error(`hub returned ${res.status} on PATCH /agents/${opts.agentId}/skills`);
+    throw new Error(`server returned ${res.status} on PATCH /agents/${opts.agentId}/skills`);
   }
 }

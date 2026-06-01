@@ -45,7 +45,7 @@ export function CompactMetaLine({
   if (timeSegment) segments.push(timeSegment);
   // "first-tree " prefix makes the version segment self-describing —
   // without it the bare "0.5.3-staging.49.1" reads as an opaque
-  // identifier with no hint that it's the hub CLI version.
+  // identifier with no hint that it's the First Tree CLI version.
   if (client.sdkVersion) segments.push(`first-tree ${client.sdkVersion}`);
   if (client.os) segments.push(client.os);
   if (segments.length === 0) return null;

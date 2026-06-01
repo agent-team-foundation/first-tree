@@ -47,9 +47,9 @@ export const serverConfigSchema = defineConfig({
     port: field(z.number().default(8000), { env: "FIRST_TREE_PORT" }),
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
-     * Public-facing URL of this Hub server. Required in production — used to:
+     * Public-facing URL of this First Tree server. Required in production — used to:
      *   1. Stamp the `iss` claim on connect tokens so `first-tree login`
-     *      can derive the hub URL with no extra arg.
+     *      can derive the server URL with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
      * Dev environments may omit it — we fall back to the request's host header
@@ -175,7 +175,7 @@ export const serverConfigSchema = defineConfig({
   }),
   /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
-   * in production where Hub sits behind Cloudflare / a reverse proxy — otherwise
+   * in production where First Tree sits behind Cloudflare / a reverse proxy — otherwise
    * `req.ip` resolves to the proxy and every IP-keyed rate-limit key collapses
    * to the same value. Default false; safe for local development.
    */
@@ -242,7 +242,7 @@ export const serverConfigSchema = defineConfig({
   kael: optional({
     endpoint: field(z.string(), { env: "KAEL_ENDPOINT" }),
     apiKey: field(z.string(), { env: "KAEL_API_KEY", secret: true }),
-    /** Public URL of this Hub server, reachable from Kael for API callbacks */
+    /** Public URL of this First Tree server, reachable from Kael for API callbacks */
     hubPublicUrl: field(z.string(), { env: "FIRST_TREE_PUBLIC_URL" }),
   }),
   feedback: optional({
@@ -250,7 +250,7 @@ export const serverConfigSchema = defineConfig({
      * GitHub repo where feedback issues are filed (owner/name).
      * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
      * the feedback token can be scoped narrowly (issues:write on a single repo)
-     * without widening the hub's Context Tree access.
+     * without widening First Tree's Context Tree access.
      */
     repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
     githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
@@ -261,7 +261,7 @@ export const serverConfigSchema = defineConfig({
     }),
     /**
      * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-     * when the hub sits behind a proxy you control (CDN, ingress). Otherwise
+     * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
      * clients can spoof the header and bypass per-ip limits.
      */
     trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
@@ -304,7 +304,7 @@ export const serverConfigSchema = defineConfig({
       sampleRate: field(z.number().min(0).max(1).default(1)),
       /**
        * Whether to attach `client.ip` to HTTP root spans. **Off by default**
-       * because Hub is open-source and IP addresses are personal data under
+       * because First Tree is open-source and IP addresses are personal data under
        * GDPR — defaulting to capture would force every self-hosted operator
        * to think about deletion / retention. Operators who need IP-level
        * audit (rate-limit forensics, login brute-force investigation, etc.)

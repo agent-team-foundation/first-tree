@@ -262,7 +262,7 @@ export async function migrateLocalAgentDirs(opts: {
       }
     }
 
-    print.status("", `agent "${dirName}" renamed to "${serverName}" to match hub`);
+    print.status("", `agent "${dirName}" renamed to "${serverName}" to match server`);
     result.renamed += 1;
   }
 

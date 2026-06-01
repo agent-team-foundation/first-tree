@@ -385,7 +385,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       for (const e of payload.env) env[e.key] = e.value;
     }
     const merged = sessionCtx.buildAgentEnv(env);
-    // The Hub envelope returns `Record<string, string | undefined>`; trim out
+    // The First Tree envelope returns `Record<string, string | undefined>`; trim out
     // undefined values so the SDK doesn't see them.
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(merged)) {
@@ -500,7 +500,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         await gitMirrorManager.fetchMirror(repo.url);
 
         // Mirror claude-code's reuse contract (PR #506 review B2): only
-        // reuse when the target IS a Hub-managed worktree, and surface a
+        // reuse when the target IS a First Tree-managed worktree, and surface a
         // deterministic branchName so the prompt block stays consistent
         // across sessions. Without the `isHubWorktreeMarker` check, an
         // operator-placed directory would be silently reused; without the
@@ -516,7 +516,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             // operator can find this in the codex log when `createWorktree`
             // throws on the next line (S1 in PR #506 review).
             sessionCtx.log(
-              `Git: source-repo target ${localPath} occupied by a non-Hub directory; ` +
+              `Git: source-repo target ${localPath} occupied by a non-First Tree directory; ` +
                 "createWorktree will likely fail",
             );
           }

@@ -10,14 +10,14 @@ import {
 
 /**
  * Top-level `first-tree status` — one-screen overview across every
- * subsystem (CLI version, daemon, hub binding, auth health, agents). For a
+ * subsystem (CLI version, daemon, server binding, auth health, agents). For a
  * daemon-only view (faster, fewer lines), use `daemon status`. Future tree /
  * chat status blocks plug in once Phase 3 wires those subsystems through.
  */
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("Show CLI, daemon, hub, auth, and agent status (one-screen overview)")
+    .description("Show CLI, daemon, server, auth, and agent status (one-screen overview)")
     .action(() => {
       print.line("\n");
       renderCliVersionBlock();

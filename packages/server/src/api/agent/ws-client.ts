@@ -44,7 +44,7 @@ import * as sessionEventService from "../../services/session-event.js";
 
 /**
  * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
- * unset. Mirrors the schema default so a hub running without an explicit
+ * unset. Mirrors the schema default so a server running without an explicit
  * `inbox` block still gets reasonable backpressure.
  */
 const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;

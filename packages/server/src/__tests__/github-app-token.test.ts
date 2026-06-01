@@ -83,7 +83,7 @@ describe("services/github-app-token", () => {
     const githubBinding: ContextTreeBinding = { repo: "agent-team-foundation/first-tree-context", branch: "main" };
 
     it("returns the snapshot unchanged when the mint succeeded", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, { ok: true, token: "ghs_t" });
       expect(decorated).toBe(snapshot);
     });
@@ -98,7 +98,7 @@ describe("services/github-app-token", () => {
     });
 
     it("leaves no-app-config snapshots untouched (public-repo path)", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, {
         ok: false,
         reason: "no-app-config",
@@ -123,7 +123,7 @@ describe("services/github-app-token", () => {
     });
 
     it("does not append App guidance for a non-GitHub remote", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const decorated = decorateSnapshotWithMintGuidance(
         snapshot,
         { repo: "https://gitlab.com/example/tree", branch: "main" },
@@ -133,7 +133,7 @@ describe("services/github-app-token", () => {
     });
 
     it("appends install-guidance for no-installation", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, {
         ok: false,
         reason: "no-installation",
@@ -142,13 +142,13 @@ describe("services/github-app-token", () => {
     });
 
     it("appends unsuspend-guidance for suspended", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, { ok: false, reason: "suspended" });
       expect(decorated.contextStatus.detail).toContain("suspended");
     });
 
     it("appends mint-failed detail when GitHub rejected the mint", () => {
-      const snapshot = unavailableSnapshot("Hub could not sync the configured Context Tree repo.");
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
       const failure: ContextTreeInstallationTokenResult = {
         ok: false,
         reason: "mint-failed",

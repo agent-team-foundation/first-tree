@@ -277,7 +277,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     }
 
     // The installation row is NOT created (the upsert is gated behind
-    // admin proof passing) and the user's Hub team has no install bound.
+    // admin proof passing) and the user's First Tree team has no install bound.
     const row = await findInstallationByGithubId(app.db, installationId);
     expect(row).toBeNull();
   });

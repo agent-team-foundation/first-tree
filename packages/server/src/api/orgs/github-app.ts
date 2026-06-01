@@ -54,7 +54,7 @@ export function resolvePostInstallNext(requested: string | undefined): string {
 /**
  * Class B — `/api/v1/orgs/:orgId/github-app-installation`.
  *
- * Read-only admin view of the GitHub App installation bound to this Hub
+ * Read-only admin view of the GitHub App installation bound to this First Tree
  * team. Powers the Settings → Integrations panel. 404 when no install is
  * bound (the panel renders the "Install on GitHub" prompt in that case).
  *
@@ -194,7 +194,7 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // requires the operator to POST to this endpoint directly.
   //
   // Authorization mirrors the OAuth callback's `installation_id` check:
-  // being an admin of the target Hub org isn't sufficient — installation
+  // being an admin of the target First Tree org isn't sufficient — installation
   // IDs aren't secrets, so we also confirm the caller can actually
   // **administer** the install on GitHub. Per-install rules:
   //   - User-type: caller's GitHub ID must equal the install account's

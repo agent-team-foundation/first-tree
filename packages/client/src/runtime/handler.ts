@@ -97,7 +97,7 @@ export type SessionContext = HandlerContext & {
 
   /**
    * Build env for CLI sub-processes that shell out to the `first-tree`
-   * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
+   * CLI. Layers First Tree envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
    */
   buildAgentEnv: (parentEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;

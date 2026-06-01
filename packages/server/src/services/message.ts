@@ -471,8 +471,8 @@ async function sendMessageInner(
 
   // Predictive session-state activation: after the main transaction commits,
   // best-effort upsert an `active` agent_chat_sessions row for every notify=true
-  // recipient so the Hub UI list refreshes immediately on send (see M-plan
-  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to Hub UI,
+  // recipient so the First Tree UI list refreshes immediately on send (see M-plan
+  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to First Tree UI,
   // touchPresenceLastSeen=false avoids polluting the client's heartbeat).
   // Failure is logged but never thrown: the message is durable, and the
   // client's later `session:state: active` frame self-heals the row.

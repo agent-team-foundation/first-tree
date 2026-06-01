@@ -18,7 +18,7 @@ export const githubCallbackQuerySchema = z.object({
    * GitHub App installation ID. Present when the user landed in callback
    * via the install flow ("first install of the App by this user / org").
    * Returning users who already had the App installed get `code` + `state`
-   * without `installation_id` — Hub must tolerate both shapes.
+   * without `installation_id` — First Tree must tolerate both shapes.
    *
    * Numeric per GitHub but transported as a query-string field, so accept
    * a digit-only string and coerce in the route handler.

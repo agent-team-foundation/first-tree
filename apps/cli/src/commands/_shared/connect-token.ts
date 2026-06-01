@@ -44,7 +44,7 @@ export class HubUrlDerivationError extends Error {
 }
 
 /**
- * Derive the hub URL from a connect token's `iss` claim. Throws
+ * Derive the server URL from a connect token's `iss` claim. Throws
  * `HubUrlDerivationError` when the claim is missing or malformed — we
  * *never* fall back to a default URL because that would let a stale connect
  * token from one environment silently re-target another (prod → staging

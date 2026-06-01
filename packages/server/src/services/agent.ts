@@ -35,7 +35,7 @@ import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
 /**
- * Names beginning with `__` are reserved for Hub-internal pseudo agents.
+ * Names beginning with `__` are reserved for First Tree-internal pseudo agents.
  * User-facing creation must not be able to squat on them, otherwise
  * internal traffic could be routed through a real account.
  */
@@ -371,7 +371,7 @@ export async function createAgent(
   const runtimeProvider: RuntimeProvider = data.runtimeProvider ?? DEFAULT_RUNTIME_PROVIDER;
   if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
     throw new BadRequestError(
-      `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are Hub-internal`,
+      `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are First Tree-internal`,
     );
   }
   if (name && isReservedAgentName(name)) {

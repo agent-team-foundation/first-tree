@@ -342,7 +342,7 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(existsSync(join(targetB, "README.md"))).toBe(true);
   });
 
-  it("createWorktree rejects a non-Hub occupant (D13)", async () => {
+  it("createWorktree rejects a non-First Tree occupant (D13)", async () => {
     const m = makeManager();
     await m.ensureMirror(fixtureUrl);
     const occupied = join(workRoot, "occupied");
@@ -403,7 +403,7 @@ describe("GitMirrorManager — lifecycle", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("createWorktree auto-recovers when a leftover sits in a hub-managed root", async () => {
+  it("createWorktree auto-recovers when a leftover sits in a First Tree-managed root", async () => {
     // Reproduces the production incident: previous session left a directory
     // tree at the worktree target (typical cause: orphaned vite/.vite dep
     // cache rewritten by a daemonised dev server after the worktree was
@@ -437,7 +437,7 @@ describe("GitMirrorManager — lifecycle", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("createWorktree logs hub-managed leftover auto-recovery", async () => {
+  it("createWorktree logs First Tree-managed leftover auto-recovery", async () => {
     const { spies, log } = makeLogSpies();
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-log-"));
     const managedRoot = join(dataDir, "workspaces");
@@ -453,13 +453,13 @@ describe("GitMirrorManager — lifecycle", () => {
 
     expect(spies.warn).toHaveBeenCalledWith(
       expect.objectContaining({ targetPath: target, occupantKind: "directory", hubManagedRoots: [managedRoot] }),
-      "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+      "worktree target occupied inside First Tree-managed root — auto-recovering (kill holders + rm -rf)",
     );
 
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("createWorktree fails loudly when hub-managed leftover cleanup cannot remove the target", async () => {
+  it("createWorktree fails loudly when First Tree-managed leftover cleanup cannot remove the target", async () => {
     if (process.getuid?.() === 0) return;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-rm-fail-"));
     const managedRoot = join(dataDir, "workspaces");

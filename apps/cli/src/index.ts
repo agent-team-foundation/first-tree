@@ -2,8 +2,8 @@
 
 // SDK — re-export for convenience
 export type { AccessTokenProvider, RegisterResult, SdkConfig } from "@first-tree/client";
-export { FirstTreeHubSDK, SdkError } from "@first-tree/client";
-// Connect-token helpers — derive the hub URL from a connect token's `iss`.
+export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "@first-tree/client";
+// Connect-token helpers — derive the server URL from a connect token's `iss`.
 // `decodeJwtPayload` is intentionally NOT re-exported: it's an internal
 // helper used by the CLI account-switch prompt, and its only legitimate
 // public use case (URL derivation) already has a dedicated export.

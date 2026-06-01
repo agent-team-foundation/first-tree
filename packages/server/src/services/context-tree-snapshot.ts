@@ -251,7 +251,7 @@ async function resolveContextTreeRoot(
     } catch (error) {
       return {
         root: null,
-        reason: `Hub could not sync the configured Context Tree repo. Check repo access and branch "${resolvedBranch}". ${errorMessage(error)}`,
+        reason: `First Tree could not sync the configured Context Tree repo. Check repo access and branch "${resolvedBranch}". ${errorMessage(error)}`,
         staleReason: null,
       };
     }
@@ -398,7 +398,7 @@ async function syncRemoteContextTree(
   } catch (error) {
     if (existsSync(join(root, ".git"))) {
       return {
-        staleReason: `Showing the last synced Context Tree snapshot because Hub could not refresh the configured repo. ${errorMessage(error)}`,
+        staleReason: `Showing the last synced Context Tree snapshot because First Tree could not refresh the configured repo. ${errorMessage(error)}`,
       };
     }
     throw error;

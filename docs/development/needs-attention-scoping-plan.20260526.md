@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Scope the Agent Hub Web me-chat "Needs attention" bucket to chats that are actually relevant to the caller — narrow the existing wire fields to "agents I manage", add one boolean to cover the speaker-in-chat-with-question fallback, and extend the frontend predicate to also include unread @-mentions.
+**Goal:** Scope the First Tree web me-chat "Needs attention" bucket to chats that are actually relevant to the caller — narrow the existing wire fields to "agents I manage", add one boolean to cover the speaker-in-chat-with-question fallback, and extend the frontend predicate to also include unread @-mentions.
 
 **Architecture:**
 - **Backend** (`me-chat.ts`): one extra indexed lookup for the caller's managed-agent set; narrow the existing `failedAgentIds` / `pendingQuestionAgentIds` projection by that set; emit a new `chatHasOpenQuestion: boolean`.

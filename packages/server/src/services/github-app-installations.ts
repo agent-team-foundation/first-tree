@@ -36,7 +36,7 @@ function isUniqueViolation(err: unknown): boolean {
  * is the dedup mechanism.
  *
  * `bindInstallationToOrg` is the second-half of the OAuth-callback flow —
- * it links a freshly-inserted-or-rebound installation to the user's Hub
+ * it links a freshly-inserted-or-rebound installation to the user's First Tree
  * team. Idempotent: subsequent sign-ins by the same user re-bind to the
  * same org via the UNIQUE(hub_organization_id) constraint (a different
  * user signing in with the same installation_id MUST NOT rebind to their
@@ -46,9 +46,9 @@ function isUniqueViolation(err: unknown): boolean {
 export type UpsertInstallationInput = {
   installation: AppInstallation;
   /**
-   * Optional Hub org id to bind. Used when the install-callback path
+   * Optional First Tree org id to bind. Used when the install-callback path
    * already knows the user's primary org at insert time. Webhook path
-   * omits this — webhooks don't know which Hub user installed the App;
+   * omits this — webhooks don't know which First Tree user installed the App;
    * the binding is established by the callback path's
    * `bindInstallationToOrg` instead.
    */
@@ -110,12 +110,12 @@ export async function upsertInstallationFromMetadata(
 }
 
 /**
- * Bind an installation to a Hub team. Idempotent: re-binding to the same
+ * Bind an installation to a First Tree team. Idempotent: re-binding to the same
  * org is a no-op at the row level.
  *
  * Race-safe (codex P0-3): the previous SELECT-then-UPDATE implementation
  * had a TOCTOU window — two concurrent callbacks for the same unbound
- * installation but different Hub orgs could both see `hubOrganizationId
+ * installation but different First Tree orgs could both see `hubOrganizationId
  * IS NULL`, both pass the in-memory validation, and then the second
  * UPDATE would silently rebind. This implementation:
  *
@@ -137,7 +137,7 @@ export async function upsertInstallationFromMetadata(
  * Throws:
  *   - NotFoundError if no installation row exists with installationId.
  *   - ConflictError if (a) the installation is already bound to a
- *     different Hub team (D2 1:1), or (b) the target Hub team is
+ *     different First Tree team (D2 1:1), or (b) the target First Tree team is
  *     already bound to a different installation.
  *
  * Returns `true` on any successful UPDATE — fresh bind and idempotent
@@ -178,9 +178,9 @@ export async function bindInstallationToOrg(
       // UNIQUE(hub_organization_id) rejected the write because ANOTHER
       // row is already bound to the target org. This is the H2 codex
       // scenario: user installs App #Y on a fresh account, tries to
-      // bind it to a Hub org that already has install #X bound.
+      // bind it to a First Tree org that already has install #X bound.
       throw new ConflictError(
-        "Hub team is already bound to a different GitHub installation. Uninstall the existing one from GitHub first, or transfer the binding from Settings.",
+        "First Tree team is already bound to a different GitHub installation. Uninstall the existing one from GitHub first, or transfer the binding from Settings.",
       );
     }
     throw err;
@@ -189,7 +189,7 @@ export async function bindInstallationToOrg(
   if (updatedCount === 0) {
     // The UPDATE matched zero rows — either no row exists with that
     // installation_id, or the row exists but is bound to a DIFFERENT
-    // Hub org (WHERE clause filtered it out). One SELECT to give the
+    // First Tree org (WHERE clause filtered it out). One SELECT to give the
     // caller a precise error.
     const [row] = await db
       .select({ hubOrganizationId: githubAppInstallations.hubOrganizationId })
@@ -202,7 +202,7 @@ export async function bindInstallationToOrg(
     // row.hubOrganizationId is guaranteed non-null AND not equal to
     // hubOrganizationId (otherwise the WHERE would have matched).
     throw new ConflictError(
-      `Installation ${installationId} is already bound to a different Hub team — refusing to rebind (D2 1:1).`,
+      `Installation ${installationId} is already bound to a different First Tree team — refusing to rebind (D2 1:1).`,
     );
   }
 
@@ -284,7 +284,7 @@ export async function markInstallationUnsuspended(
  * was reverted after a post-Phase-C codex challenge flagged a worse bug:
  * a real install + immediate uninstall (within 60 s) became permanent —
  * the handler returned a 200 no-op so GitHub never redelivered, and the
- * Hub-side row lived forever even though the App was gone upstream.
+ * First Tree-side row lived forever even though the App was gone upstream.
  *
  * The original race the grace was meant to solve doesn't actually exist:
  * GitHub mints a fresh `installation.id` per install, so a delayed
@@ -297,7 +297,7 @@ export async function markInstallationUnsuspended(
  * path needs a `last_lifecycle_event_at` column or tombstone to be
  * order-safe.
  *
- * Note: deleting the org on the Hub side is the inverse case — handled
+ * Note: deleting the org on the First Tree side is the inverse case — handled
  * by the `ON DELETE SET NULL` FK on `hub_organization_id`, which keeps
  * the installation row alive so a future rebind can recover.
  */
@@ -308,7 +308,7 @@ export async function deleteInstallationByGithubId(db: Database, installationId:
 /**
  * Lookup an installation by GitHub-side id. Used by the webhook router
  * to resolve `installation.id` → `hub_organization_id` so downstream
- * event handlers (issues, PRs) know which Hub team the event belongs to.
+ * event handlers (issues, PRs) know which First Tree team the event belongs to.
  */
 export async function findInstallationByGithubId(
   db: Database,
@@ -323,7 +323,7 @@ export async function findInstallationByGithubId(
 }
 
 /**
- * Lookup the installation bound to a Hub team. Used by Settings →
+ * Lookup the installation bound to a First Tree team. Used by Settings →
  * Integrations to render the connected-account panel. Returns null when
  * no install is bound.
  *
@@ -340,7 +340,7 @@ export async function findInstallationByOrg(db: Database, hubOrganizationId: str
 }
 
 /**
- * List the installations for a GitHub account that aren't bound to any Hub
+ * List the installations for a GitHub account that aren't bound to any First Tree
  * team yet. Newest-first.
  *
  * The orphan-recovery path (codex P1-5 + H1): if the OAuth callback's
@@ -371,7 +371,7 @@ export async function findUnboundInstallationsByAccount(
 
 /**
  * Belt-and-braces helper for tests / debugging: how many installations
- * currently bound to this Hub team. Should always be 0 or 1 — anything
+ * currently bound to this First Tree team. Should always be 0 or 1 — anything
  * higher means the UNIQUE index was somehow violated and the rest of the
  * system is in undefined territory.
  */

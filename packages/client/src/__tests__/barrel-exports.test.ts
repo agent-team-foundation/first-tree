@@ -5,6 +5,7 @@ describe("public barrel exports", () => {
     const api = await import("../index.js");
 
     expect(api.FirstTreeHubSDK).toBeDefined();
+    expect(api.FirstTreeSDK).toBe(api.FirstTreeHubSDK);
     expect(api.ClientConnection).toBeDefined();
     expect(api.AgentSlot).toBeDefined();
     expect(api.AgentRuntime).toBeDefined();

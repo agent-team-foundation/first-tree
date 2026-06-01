@@ -4,14 +4,14 @@ import type { runtimeProviderSchema } from "./runtime-provider.js";
 /**
  * Agent runtime configuration.
  *
- * Defines the 5 user-tunable field groups that the Hub centrally manages
+ * Defines the 5 user-tunable field groups that First Tree centrally manages
  * and pushes down to the client runtime: prompt append, model, MCP servers,
  * env vars, and Git repos. Tagged by `kind` (a runtime provider) so future
  * provider-specific fields can land on a dedicated variant.
  *
  * NOTE: do not co-locate with `packages/shared/src/config/` — that namespace
  * is reserved for the local YAML config (`agent.yaml` / server / client) and
- * is unrelated to the Hub-managed runtime config defined here.
+ * is unrelated to the server-managed runtime config defined here.
  */
 
 const PROMPT_APPEND_MAX_LENGTH = 32_000;

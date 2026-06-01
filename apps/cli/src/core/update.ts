@@ -204,7 +204,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
   }
   // Channel-mismatch guard: if the spec is a concrete version (not a
   // dist-tag like "latest"), refuse to install when its inferred channel
-  // does not match this binary's channel. The common trigger is a hub
+  // does not match this binary's channel. The common trigger is a server
   // server with the wrong `FIRST_TREE_CHANNEL` env — without this guard,
   // a prod CLI would auto-install a `…-staging.X.Y` build and brick its
   // service unit. Fail-closed on "unknown" predicates (`-beta.N`,
@@ -215,7 +215,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
     if (targetChannel !== channelConfig.channel) {
       const reason =
         `Refusing to install ${spec}: target channel "${targetChannel}" does not match my channel ` +
-        `"${channelConfig.channel}". This usually means the hub server is misconfigured ` +
+        `"${channelConfig.channel}". This usually means the First Tree server is misconfigured ` +
         `(check FIRST_TREE_CHANNEL on the server).`;
       print.line(`  [update] ${reason}\n`);
       return { ok: false, mode: "global", reason };

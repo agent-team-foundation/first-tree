@@ -28,7 +28,7 @@ BIN_DIR="${HOME}/.local/bin"
 # Auto-migrate the legacy dev home from the pre-multi-env layout
 # (scripts/dev-cli.sh used ~/.first-tree/hub-dev). One-shot mv — never
 # copies, so the data structure is preserved bit-for-bit. Limited to
-# the dev-side hub-dev path so it cannot touch peer staging / prod
+# the legacy dev-only path so it cannot touch peer staging / prod
 # state (the cli-side auto unit cleanup was removed for that exact
 # reason — see service-install.ts docblocks).
 LEGACY_DEV_HOME="${HOME}/.first-tree/hub-dev"
@@ -66,5 +66,5 @@ echo "  $BIN_DIR/ftd            → $DIST"
 echo
 echo "Next:"
 echo "  1. Make sure $BIN_DIR is on \$PATH"
-echo "  2. Start your local hub server on http://127.0.0.1:8000"
+echo "  2. Start your local First Tree server on http://127.0.0.1:8000"
 echo "  3. first-tree-dev login <token>      # token from http://127.0.0.1:8000/clients"

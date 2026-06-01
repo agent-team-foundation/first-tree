@@ -2,7 +2,7 @@ import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 /**
- * Per-agent runtime configuration (Hub-managed; not the local YAML config).
+ * Per-agent runtime configuration (server-managed; not the local YAML config).
  *
  * One row per agent. `version` increments on every successful UPDATE
  * (optimistic locking via WHERE version = :expected). Sensitive env values

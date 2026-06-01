@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  *     which carries the agent's identity + Hub SDK reference.
  *   - `"user"` — inherits the operator's local ~/.claude/settings.json so
  *     their thinking mode, effortLevel, plugins, skills, hooks, statusLine,
- *     and MCP servers carry over. Hub-managed fields (model, systemPrompt,
+ *     and MCP servers carry over. Server-managed fields (model, systemPrompt,
  *     env, permissionMode) still win because they ride as explicit options.
  *
  * Dropping either entry silently breaks one of those two contracts with no

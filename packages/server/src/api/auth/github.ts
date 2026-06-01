@@ -77,7 +77,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const { next } = githubStartQuerySchema.parse(request.query);
     const safeNext = safeRedirectPath(next ?? null);
     if (!appCfg) {
-      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
+      return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
 
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext);
@@ -102,7 +102,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/callback", async (request, reply) => {
     if (!appCfg) {
-      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
+      return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
     const parsed = githubCallbackQuerySchema.parse(request.query);
     const { code, state, installation_id: installationIdRaw } = parsed;
@@ -161,7 +161,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // SECURITY: `installation_id` rides the browser address bar — not a
     // secret, not signed. Any signed-in user could append
     // `?installation_id=<other-team's-id>` and bind that installation to
-    // their own Hub team if we don't authorize first (the App JWT can
+    // their own First Tree team if we don't authorize first (the App JWT can
     // read every installation, so `fetchInstallation` would succeed).
     //
     // Require GitHub-side **admin** on the install's account: User-type
@@ -329,11 +329,11 @@ async function completeOauthFlow(
    * GitHub-side installation id when the user just installed the App;
    * null on the legacy OAuth path, returning App users without a fresh
    * install, and `dev-callback`. Used after team resolution to bind the
-   * installation row to the user's Hub team.
+   * installation row to the user's First Tree team.
    */
   installationId: number | null,
   /**
-   * Hub org the install should bind to, carried in the signed state when
+   * First Tree org the install should bind to, carried in the signed state when
    * the flow was kicked off from an org's Settings panel (codex P1-3).
    * The user MUST be an active admin of it (re-checked here against the
    * live `members` row — the state JWT outlives a membership revoke).
@@ -437,7 +437,7 @@ async function completeOauthFlow(
     }
   }
 
-  // Bind the installation to whichever Hub team the user just resolved
+  // Bind the installation to whichever First Tree team the user just resolved
   // into. Late-bound (after team resolution) so a personal-team-creating
   // signup ends up bound to the team it just minted, and an invitee binds
   // to the inviting org.

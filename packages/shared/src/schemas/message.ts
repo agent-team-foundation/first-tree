@@ -7,7 +7,7 @@ import { z } from "zod";
  * every write path must declare its caller-stack origin so observability /
  * loop / egress diagnostics can join on it.
  *
- *   - "web"     — Hub web UI (POST /chats/:id/messages from a browser
+ *   - "web"     — First Tree web UI (POST /chats/:id/messages from a browser
  *                 session).
  *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
  *                 / etc.).
@@ -68,7 +68,7 @@ export const sendMessageSchema = z.object({
   inReplyTo: z.string().optional(),
   /**
    * Required output (NOT NULL in `messages.source`). The Zod `.default("api")`
-   * lets HTTP request bodies omit the field — Hub's pre-v2 HTTP clients still
+   * lets HTTP request bodies omit the field — pre-v2 HTTP clients still
    * send messages without `source`, and a deploy that suddenly 422'd those
    * requests would be a needless coupling break. The default fills in for
    * those callers; in-process TS callers go through `z.infer<>` (= the
@@ -129,7 +129,7 @@ export const precedingMessageSchema = z.object({
 export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
 
 /**
- * Wire format for messages routed FROM the Hub TO a client runtime.
+ * Wire format for messages routed FROM the server TO a client runtime.
  *
  * Adds `configVersion` so the client can compare against its locally cached
  * agent runtime config and refresh before delivering the message to the SDK.

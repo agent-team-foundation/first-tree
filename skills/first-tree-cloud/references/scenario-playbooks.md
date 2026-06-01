@@ -45,7 +45,7 @@ After `connect` succeeds, the machine is signed in and (by default on macOS/Linu
 To verify:
 
 ```bash
-first-tree daemon status          # local: service state + hub + auth health
+first-tree daemon status          # local: service state + server + auth health
 first-tree daemon doctor          # readiness checks (includes background-service state)
 # Server-side: open the First Tree web console → Computers tab to verify this
 # machine appears. (The legacy `client list` CLI verb was retired in Phase 1A.)
