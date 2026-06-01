@@ -15,7 +15,7 @@ export function parseGroupMode(raw: string | null): GroupMode {
 
 export type GroupBucket = {
   key: string;
-  /** `null` = no header rendered (used by `none`). */
+  /** `null` = no header rendered (used only by the empty-list fallback). */
   label: string | null;
   rows: ReadonlyArray<MeChatRow>;
   defaultCollapsed: boolean;
@@ -113,9 +113,13 @@ function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArra
 // ---------------------------------------------------------------------------
 
 const SOURCE_BUCKETS: ReadonlyArray<{ key: string; label: string; match: (row: MeChatRow) => boolean }> = [
-  { key: "created-by-me", label: "MINE", match: (row) => row.createdByMe === true },
+  {
+    key: "created-by-me",
+    label: "MINE",
+    match: (row) => row.createdByMe === true && (row.source ?? "manual") === "manual",
+  },
   { key: "manual", label: "MANUAL", match: (row) => row.createdByMe !== true && (row.source ?? "manual") === "manual" },
-  { key: "github", label: "GITHUB", match: (row) => row.createdByMe !== true && row.source === "github" },
+  { key: "github", label: "GITHUB", match: (row) => row.source === "github" },
 ];
 
 function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket> {

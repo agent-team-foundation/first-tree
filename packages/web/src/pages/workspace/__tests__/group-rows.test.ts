@@ -148,7 +148,7 @@ describe("groupRows — source", () => {
     expect(buckets.find((b) => b.key === "github")?.rows.length).toBe(2);
   });
 
-  it("created-by-me takes precedence over the underlying source", () => {
+  it("keeps owner-role github rows in GITHUB", () => {
     const rows = [
       row({
         id: "mine-github",
@@ -159,7 +159,7 @@ describe("groupRows — source", () => {
       }),
     ];
     const buckets = groupRows(rows, "source", NOW);
-    expect(buckets.map((b) => b.key)).toEqual(["created-by-me"]);
+    expect(buckets.map((b) => b.key)).toEqual(["github"]);
     expect(buckets[0]?.rows.map((r) => r.chatId)).toEqual(["mine-github"]);
   });
 
