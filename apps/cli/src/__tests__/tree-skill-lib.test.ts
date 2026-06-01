@@ -6,6 +6,7 @@ import {
   readlinkSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -198,17 +199,17 @@ describe("tree skill library", () => {
     expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
     expect(upsertWhitepaperFile(root)).toBe("unchanged");
 
-    rmSync(join(root, "WHITEPAPER.md"));
+    unlinkSync(join(root, "WHITEPAPER.md"));
     symlinkSync("old-target", join(root, "WHITEPAPER.md"));
     expect(upsertWhitepaperFile(root)).toBe("updated");
     expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
 
-    rmSync(join(root, "WHITEPAPER.md"));
+    unlinkSync(join(root, "WHITEPAPER.md"));
     writeFileSync(join(root, "WHITEPAPER.md"), "custom\n");
     expect(upsertWhitepaperFile(root)).toBe("skipped");
     expect(readFileSync(join(root, "WHITEPAPER.md"), "utf8")).toBe("custom\n");
 
-    rmSync(join(root, "WHITEPAPER.md"));
+    unlinkSync(join(root, "WHITEPAPER.md"));
     mkdirSync(join(root, "WHITEPAPER.md"));
     expect(upsertWhitepaperFile(root)).toBe("skipped");
     expect(existsSync(join(root, "WHITEPAPER.md"))).toBe(true);
