@@ -84,6 +84,14 @@ const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
+// Indent applied to a section's BODY (column header + groups + member rows),
+// relative to its section header. This is the disclosure "step": a section
+// caret sits at the left edge (x0); everything below — subgroup carets, the
+// Name column header, and every member row — shifts one step right (x1) and
+// shares that single left edge. So the hierarchy reads from the carets only
+// (section at x0, subgroup at x1), while member Name never indents per group:
+// Agent members (under Public/Private) and Human members line up on one column.
+const SECTION_BODY_INDENT = "var(--sp-6)";
 
 /**
  * Per-section collapse state, persisted to localStorage so a member's
@@ -174,10 +182,31 @@ export function TeamTable(props: TeamTableProps) {
 
 function AgentSection(props: TeamTableProps & { compact: boolean }) {
   const { publicAgents, privateAgents, agentFilter, onAgentFilter, agentCount, compact } = props;
+  const [collapsed, toggle] = useCollapsed("team.collapse.agents");
   return (
     <section>
-      <div className="flex items-center justify-between" style={{ padding: "var(--sp-5) var(--sp-1) var(--sp-3)" }}>
-        <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+      {/* Section header is now collapsible, matching Human teammates: a caret at
+          the left edge (x0) + a clickable title that toggles the whole section.
+          The All/Mine filter keeps its place at the right of this row — it is a
+          sibling of the toggle button (not nested in it) and the toggle button
+          flex-grows to fill the rest of the row, so most of the row collapses
+          while the filter stays put and still works. */}
+      <div className="flex items-center justify-between" style={{ paddingRight: "var(--sp-1)" }}>
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          className="flex flex-1 items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            gap: "var(--sp-2)",
+            padding: "var(--sp-5) var(--sp-1) var(--sp-3)",
+            border: 0,
+            background: "transparent",
+            cursor: "pointer",
+            borderRadius: "var(--radius-input)",
+          }}
+        >
+          <CollapseCaret collapsed={collapsed} />
           <Bot className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
           <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
             Agent teammates
@@ -185,7 +214,7 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
           <span className="text-label" style={{ color: "var(--fg-4)" }}>
             {agentCount}
           </span>
-        </div>
+        </button>
         <SegmentedControl
           value={agentFilter}
           onChange={onAgentFilter}
@@ -196,24 +225,28 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
         />
       </div>
 
-      {compact ? null : <AgentColumnHeader />}
+      {collapsed ? null : (
+        <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
+          {compact ? null : <AgentColumnHeader />}
 
-      <AgentGroup
-        icon={Bot}
-        title="Public"
-        rows={publicAgents}
-        dimOwner={false}
-        collapseKey="team.collapse.agents.public"
-        {...props}
-      />
-      <AgentGroup
-        icon={Lock}
-        title="Private"
-        rows={privateAgents}
-        dimOwner={props.dimPrivateOwner}
-        collapseKey="team.collapse.agents.private"
-        {...props}
-      />
+          <AgentGroup
+            icon={Bot}
+            title="Public"
+            rows={publicAgents}
+            dimOwner={false}
+            collapseKey="team.collapse.agents.public"
+            {...props}
+          />
+          <AgentGroup
+            icon={Lock}
+            title="Private"
+            rows={privateAgents}
+            dimOwner={props.dimPrivateOwner}
+            collapseKey="team.collapse.agents.private"
+            {...props}
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -481,7 +514,9 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
       </button>
 
       {collapsed ? null : (
-        <>
+        // Same body indent (x1) as the Agent section so Human member Name lines
+        // up with Agent member Name on one column.
+        <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
           {compact ? null : <HumanColumnHeader />}
           {humans.length === 0 ? (
             <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
@@ -490,7 +525,7 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
           ) : (
             humans.map((row) => <HumanRowView key={row.id} row={row} {...props} />)
           )}
-        </>
+        </div>
       )}
     </section>
   );
