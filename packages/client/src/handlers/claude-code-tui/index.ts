@@ -445,8 +445,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       finalText = state.finalTexts.join("\n\n").trim();
     }
 
+    // Decide delivery + ack/state from how the turn ended. The `forward` /
+    // `ack` flags are independent of forwardResult's own success, so compute
+    // them first and use `forward` to gate delivery: on a timeout or a
+    // suspend-abort the inbox entry stays un-acked and the message re-runs on
+    // reconnect/resume, so forwarding partial output here would double-post
+    // (and risk inconsistent output) once the replay produces the real answer.
     let forwardFailed = false;
-    if (finalText.trim()) {
+    const willForward = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed: false });
+    if (willForward.forward && finalText.trim()) {
       try {
         await sessionCtx.forwardResult(finalText);
       } catch (err) {
@@ -461,13 +468,13 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       }
     }
 
-    // Resolve status / ack / runtime-state from how the turn ended. The
-    // runtime never auto-acks on turn_end (see SessionContext in handler.ts):
-    // when `ack` is false the triggering inbox entries stay in-flight and the
-    // server redelivers them (re-running the turn) on reconnect / restart.
-    // A clean close acks even on a forward-only failure (mirrors the SDK
-    // handler's ackTurnClose, avoiding redelivery storms); an abort (suspend)
-    // or a timeout withholds the ack so the message gets a real retry.
+    // Re-resolve with the real forwardFailed folded in (it only affects
+    // `status`). The runtime never auto-acks on turn_end (see SessionContext in
+    // handler.ts): when `ack` is false the triggering inbox entries stay
+    // in-flight and the server redelivers them on reconnect / restart. A clean
+    // close acks even on a forward-only failure (mirrors the SDK handler's
+    // ackTurnClose, avoiding redelivery storms); an abort or a timeout
+    // withholds the ack so the message gets a real retry.
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
     if (disposition.ack) {

@@ -27,6 +27,13 @@ export type TurnDisposition = {
    * for at-least-once redelivery.
    */
   ack: boolean;
+  /**
+   * Whether to deliver the assistant text to chat (`forwardResult`). Tracks
+   * `ack`: we only post output for a turn we are consuming. A turn that will
+   * re-run (abort/timeout) must NOT forward partial output, or the chat
+   * double-posts once the replay produces the real answer.
+   */
+  forward: boolean;
   /** Runtime state to settle into after the turn. */
   runtimeState: "idle" | "error";
 };
@@ -53,9 +60,14 @@ export type TurnDisposition = {
  */
 export function resolveTurnDisposition(outcome: TurnOutcome): TurnDisposition {
   const { aborted, timedOut, turnFailed, forwardFailed } = outcome;
+  // Consume the turn (ack + deliver its output) only when it is NOT going to
+  // re-run. abort (suspend) and timeout both leave the entries un-acked for a
+  // replay, so neither acks nor forwards — otherwise the replay double-posts.
+  const consume = !aborted && !timedOut;
   return {
     status: turnFailed || forwardFailed || timedOut ? "error" : "success",
-    ack: !aborted && !timedOut,
+    ack: consume,
+    forward: consume,
     // A broken (turnFailed) or interrupted (timedOut) session is advertised as
     // error; a forward-only failure leaves the session healthy, so it stays idle.
     runtimeState: turnFailed || timedOut ? "error" : "idle",
