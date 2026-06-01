@@ -2,7 +2,7 @@ import { AGENT_SELECTOR_HEADER, type Attention } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FirstTreeHubSDK, SdkError } from "../sdk.js";
 
-const SERVER_URL = "https://hub.example/";
+const SERVER_URL = "https://first-tree.example/";
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -91,7 +91,7 @@ describe("FirstTreeHubSDK public surface", () => {
   it("normalizes serverUrl and exposes the scoped agent id", () => {
     const sdk = makeSdk();
 
-    expect(sdk.serverUrl).toBe("https://hub.example");
+    expect(sdk.serverUrl).toBe("https://first-tree.example");
     expect(sdk.agentId).toBe("agent-1");
   });
 
@@ -125,7 +125,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await makeSdk().sendMessage("chat-1", { source: "api", format: "text", content: "hi" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/agent/chats/chat-1/messages",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/messages",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ source: "api", format: "text", content: "hi" }),
@@ -167,15 +167,15 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.getAgentContextTreeConfig()).resolves.toEqual({ repo: null, branch: null });
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "https://hub.example/api/v1/context-tree/info",
-      "https://hub.example/api/v1/agent/config",
-      "https://hub.example/api/v1/me/pinned-agents",
-      "https://hub.example/api/v1/agent/chats?limit=20&cursor=abc",
-      "https://hub.example/api/v1/agent/chats/chat-1",
-      "https://hub.example/api/v1/agent/chats/chat-1/messages?limit=10&cursor=m0",
-      "https://hub.example/api/v1/agent/chats/chat-1/participants",
-      "https://hub.example/api/v1/agent/chats/chat-1/participants",
-      "https://hub.example/api/v1/agent/context-tree/info",
+      "https://first-tree.example/api/v1/context-tree/info",
+      "https://first-tree.example/api/v1/agent/config",
+      "https://first-tree.example/api/v1/me/pinned-agents",
+      "https://first-tree.example/api/v1/agent/chats?limit=20&cursor=abc",
+      "https://first-tree.example/api/v1/agent/chats/chat-1",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/messages?limit=10&cursor=m0",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/participants",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/participants",
+      "https://first-tree.example/api/v1/agent/context-tree/info",
     ]);
   });
 
@@ -209,7 +209,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.isHubReachable(25)).resolves.toBe(false);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/health",
+      "https://first-tree.example/api/v1/health",
       expect.objectContaining({
         headers: { "User-Agent": "first-tree-test" },
       }),
@@ -252,12 +252,12 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.attention.show("att/1")).resolves.toMatchObject({ id: "att-1" });
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "https://hub.example/api/v1/agent/attention",
-      "https://hub.example/api/v1/agent/attention/att%2F1/cancel",
-      "https://hub.example/api/v1/agent/attention/att-2/cancel",
-      "https://hub.example/api/v1/agent/attention",
-      "https://hub.example/api/v1/agent/attention?target=human-1&chat=chat-1&agent=agent-1&state=open&limit=5",
-      "https://hub.example/api/v1/agent/attention/att%2F1",
+      "https://first-tree.example/api/v1/agent/attention",
+      "https://first-tree.example/api/v1/agent/attention/att%2F1/cancel",
+      "https://first-tree.example/api/v1/agent/attention/att-2/cancel",
+      "https://first-tree.example/api/v1/agent/attention",
+      "https://first-tree.example/api/v1/agent/attention?target=human-1&chat=chat-1&agent=agent-1&state=open&limit=5",
+      "https://first-tree.example/api/v1/agent/attention/att%2F1",
     ]);
   });
 
@@ -314,7 +314,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await method.call(sdk, "/api/v1/test", { signal: controller.signal });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/test",
+      "https://first-tree.example/api/v1/test",
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       }),
@@ -341,7 +341,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await sdk.listChats();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://hub.example/api/v1/agent/chats",
+      "https://first-tree.example/api/v1/agent/chats",
       expect.objectContaining({
         headers: { Authorization: "Bearer access-token" },
       }),

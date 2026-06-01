@@ -403,13 +403,15 @@ describe("services/github-app", () => {
     it("builds an authorize URL with client_id / redirect_uri / state / allow_signup", () => {
       const url = buildAppAuthorizeUrl({
         clientId: "Iv23liABCDEF",
-        redirectUri: "https://hub.example.com/api/v1/auth/github/callback",
+        redirectUri: "https://first-tree.example.com/api/v1/auth/github/callback",
         state: "signed.state.jwt",
       });
       const parsed = new URL(url);
       expect(parsed.origin + parsed.pathname).toBe("https://github.com/login/oauth/authorize");
       expect(parsed.searchParams.get("client_id")).toBe("Iv23liABCDEF");
-      expect(parsed.searchParams.get("redirect_uri")).toBe("https://hub.example.com/api/v1/auth/github/callback");
+      expect(parsed.searchParams.get("redirect_uri")).toBe(
+        "https://first-tree.example.com/api/v1/auth/github/callback",
+      );
       expect(parsed.searchParams.get("state")).toBe("signed.state.jwt");
       expect(parsed.searchParams.get("allow_signup")).toBe("true");
       // Permissions are declared on the App's GitHub-side settings page,
@@ -459,7 +461,7 @@ describe("services/github-app", () => {
           clientId: "cid",
           clientSecret: "csec",
           code: "code-from-callback",
-          redirectUri: "https://hub.example.com/cb",
+          redirectUri: "https://first-tree.example.com/cb",
           installationId: 9999,
         },
         { fetcher: fakeFetch, now: () => fixedNow },
@@ -472,7 +474,7 @@ describe("services/github-app", () => {
         client_id: "cid",
         client_secret: "csec",
         code: "code-from-callback",
-        redirect_uri: "https://hub.example.com/cb",
+        redirect_uri: "https://first-tree.example.com/cb",
       });
       expect(result.profile).toEqual({
         githubId: "583231",

@@ -95,7 +95,7 @@ function buildCache() {
 
 describe("claude-code handler — turn_end serialization (race guard)", () => {
   it("blocks the next turn's events until the current turn_end has been emitted", async () => {
-    // sendMessage holds for 50ms to simulate a slow Hub round-trip.
+    // sendMessage holds for 50ms to simulate a slow server round-trip.
     const sendMessage = vi.fn().mockImplementation(async () => {
       await sendMessageStalled;
     });

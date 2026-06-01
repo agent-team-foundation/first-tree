@@ -52,6 +52,7 @@ vi.mock("../cli/output.js", () => ({
 }));
 
 const originalHome = process.env.FIRST_TREE_HOME;
+const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 const originalServiceMode = process.env.FIRST_TREE_SERVICE_MODE;
 const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 vi.spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined) => {
@@ -70,10 +71,11 @@ beforeEach(() => {
   mkdirSync(join(home, "config", "agents", "kael"), { recursive: true });
   writeFileSync(
     join(home, "config", "client.yaml"),
-    "server:\n  url: https://hub.example\nclient:\n  id: client_1234abcd\n",
+    "server:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
   );
   writeFileSync(join(home, "config", "agents", "kael", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
   process.env.FIRST_TREE_HOME = home;
+  delete process.env.FIRST_TREE_SERVER_URL;
   delete process.env.FIRST_TREE_SERVICE_MODE;
 
   for (const mock of Object.values(clientMocks)) mock.mockReset();
@@ -115,6 +117,8 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
   else process.env.FIRST_TREE_HOME = originalHome;
+  if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
+  else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
   if (originalServiceMode === undefined) delete process.env.FIRST_TREE_SERVICE_MODE;
   else process.env.FIRST_TREE_SERVICE_MODE = originalServiceMode;
 });
@@ -218,7 +222,7 @@ describe("daemon start command", () => {
     expect(clientMocks.probeCapabilities).toHaveBeenCalled();
     expect(coreMocks.reconcileLocalRuntimeProviders).toHaveBeenCalled();
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
-      "https://hub.example",
+      "https://first-tree.example",
       "client_1234abcd",
       expect.objectContaining({ currentVersion: "0.0.0-test" }),
     );
@@ -241,7 +245,7 @@ describe("daemon start command", () => {
     expect(coreMocks.promptMissingFields).toHaveBeenCalledWith(expect.objectContaining({ noInteractive: true }));
     expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
-      "https://hub.example",
+      "https://first-tree.example",
       "client_1234abcd",
       expect.objectContaining({
         update: expect.objectContaining({ prompt: coreMocks.declineUpdate }),

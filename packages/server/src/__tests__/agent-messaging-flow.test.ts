@@ -3,7 +3,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * End-to-end agent messaging flow against the canonical
- * `POST /api/v1/agent/chats/:chatId/messages` path. Hub keeps a single
+ * `POST /api/v1/agent/chats/:chatId/messages` path. First Tree keeps a single
  * group-chat model (see first-tree-context PR #281) and the by-name
  * `sendToAgent` primitive has been retired — these tests exercise the
  * `create chat → send → list → history` flow without relying on it.

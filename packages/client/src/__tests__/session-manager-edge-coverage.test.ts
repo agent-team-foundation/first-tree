@@ -63,7 +63,7 @@ const sessionConfig = {
 
 function mockSdk(): FirstTreeHubSDK {
   return {
-    serverUrl: "https://hub.example.test",
+    serverUrl: "https://first-tree.example.test",
     register: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
@@ -232,7 +232,7 @@ describe("SessionManager edge coverage", () => {
 
     const failingCache = makeCache({
       refreshIfNewer: async () => {
-        throw new Error("hub unavailable");
+        throw new Error("server unavailable");
       },
     });
     const failHandler = handler();

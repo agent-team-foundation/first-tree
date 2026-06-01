@@ -74,7 +74,7 @@ describe("config formatting helpers", () => {
   it("prints nested config values and masks secrets by default", () => {
     printFlat(
       {
-        server: { url: "https://hub.example", token: "secret-token" },
+        server: { url: "https://first-tree.example", token: "secret-token" },
         agent: { runtime: { model: "codex", apiKey: "sk-test" } },
         retry: 3,
         tags: ["prod", "dev"],
@@ -86,7 +86,7 @@ describe("config formatting helpers", () => {
 
     const output = outputMocks.line.mock.calls.map((call) => call[0]).join("");
     expect(output).toContain("server.url");
-    expect(output).toContain("https://hub.example");
+    expect(output).toContain("https://first-tree.example");
     expect(output).toContain("server.token");
     expect(output).toContain("***");
     expect(output).toContain("agent.runtime.model");

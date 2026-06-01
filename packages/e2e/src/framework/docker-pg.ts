@@ -40,7 +40,7 @@ export type DockerPgOptions = {
  * sweep for the standalone containers this function now creates.
  */
 export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
-  const containerName = `hub_e2e_${opts.identity.shortId}_pg`;
+  const containerName = `first_tree_e2e_${opts.identity.shortId}_pg`;
   const env: NodeJS.ProcessEnv = { ...process.env };
 
   // Remove any leftover container with this name (e.g. previous crashed run).
@@ -54,15 +54,15 @@ export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
     "-p",
     `${opts.port}:5432`,
     "-e",
-    "POSTGRES_DB=firsttreehub_e2e",
+    "POSTGRES_DB=firsttree_e2e",
     "-e",
-    "POSTGRES_USER=firsttreehub_e2e",
+    "POSTGRES_USER=firsttree_e2e",
     "-e",
-    "POSTGRES_PASSWORD=firsttreehub_e2e",
+    "POSTGRES_PASSWORD=firsttree_e2e",
     "--tmpfs",
     "/var/lib/postgresql/data:rw",
     "--health-cmd",
-    "pg_isready -U firsttreehub_e2e -d firsttreehub_e2e",
+    "pg_isready -U firsttree_e2e -d firsttree_e2e",
     "--health-interval",
     "1s",
     "--health-timeout",
@@ -100,7 +100,7 @@ export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
     );
   }
 
-  const databaseUrl = `postgres://firsttreehub_e2e:firsttreehub_e2e@127.0.0.1:${opts.port}/firsttreehub_e2e`;
+  const databaseUrl = `postgres://firsttree_e2e:firsttree_e2e@127.0.0.1:${opts.port}/firsttree_e2e`;
 
   const stop = async (): Promise<void> => {
     const down = spawnSync("docker", ["rm", "-f", containerName], { env, encoding: "utf8", timeout: 30_000 });
@@ -117,9 +117,9 @@ export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
  *
  *   1. Compose projects matching `hub_e2e_*` / `hub-e2e-*` — legacy runs
  *      that pre-date the switch to `docker run`.
- *   2. Standalone containers matching `hub_e2e_*_pg` — the shape this
- *      module creates today; only matter if a previous run crashed before
- *      its `stop()` ran.
+ *   2. Standalone containers matching `first_tree_e2e_*_pg` — the shape this
+ *      module creates today, plus legacy `hub_e2e_*_pg` containers; only
+ *      matter if a previous run crashed before its `stop()` ran.
  *
  * Both sweeps swallow errors; doctor surfaces missing CLI tools separately.
  */
@@ -144,12 +144,16 @@ export function bestEffortCleanupStaleContainers(composeBin: string): void {
 
   // Sweep 2: standalone containers created by current `startDockerPg`.
   // Single combined regex because `docker ps` ORs multiple --filter values
-  // of the same key — passing `name=^hub_e2e_` AND `name=_pg$` separately
+  // of the same key — passing `name=^first_tree_e2e_` AND `name=_pg$` separately
   // would also reap any unrelated container ending in `_pg`.
   try {
-    const out = execFileSync("docker", ["ps", "-a", "--filter", "name=^hub_e2e_.*_pg$", "--format", "{{.Names}}"], {
-      encoding: "utf8",
-    });
+    const out = execFileSync(
+      "docker",
+      ["ps", "-a", "--filter", "name=^(first_tree_e2e|hub_e2e)_.*_pg$", "--format", "{{.Names}}"],
+      {
+        encoding: "utf8",
+      },
+    );
     for (const name of out
       .split("\n")
       .map((s) => s.trim())

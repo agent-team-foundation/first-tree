@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
  * When a Claude `result` arrives but the auto-bridge `sdk.sendMessage` rejects
- * (Hub outage / chat permission etc.), the assistant text would otherwise be
+ * (server outage / chat permission etc.), the assistant text would otherwise be
  * lost — the session_output table was retired in NC2. The handler now mirrors
  * the loss as a `runtime` SessionEvent containing a truncated snapshot so it
  * stays visible via the events API.
@@ -69,7 +69,7 @@ function buildCache() {
 
 describe("claude-code handler — sendMessage failure surfaces lost result", () => {
   it("emits a runtime error event with a snapshot of the dropped text", async () => {
-    const sendMessage = vi.fn().mockRejectedValue(new Error("hub unreachable"));
+    const sendMessage = vi.fn().mockRejectedValue(new Error("server unreachable"));
     const emitted: SessionEvent[] = [];
 
     const cache = buildCache();
@@ -113,7 +113,7 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
     const err = errors[0];
     if (!err || err.kind !== "error") throw new Error("expected error event");
     expect(err.payload.source).toBe("runtime");
-    expect(err.payload.message).toContain("Result forward failed: hub unreachable");
+    expect(err.payload.message).toContain("Result forward failed: server unreachable");
     // snapshot is truncated to keep total message ≤ 2000 chars
     expect(err.payload.message.length).toBeLessThanOrEqual(2000);
     expect(err.payload.message).toContain("final answer");

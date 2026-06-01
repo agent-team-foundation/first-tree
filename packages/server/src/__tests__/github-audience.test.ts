@@ -425,8 +425,8 @@ describe("resolveAudience", () => {
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
-  it("keeps subscribed targets when actor is our-app-bot (route Hub's own writes back to existing chats)", async () => {
-    // Background: when an agent creates a PR via Hub's GitHub App token, the
+  it("keeps subscribed targets when actor is our-app-bot (route First Tree's own writes back to existing chats)", async () => {
+    // Background: when an agent creates a PR via First Tree's GitHub App token, the
     // resulting `pull_request.opened` webhook arrives with `sender = <app>[bot]`.
     // Pre-agent-binding behaviour silenced the whole audience here, which
     // meant PR comments / CI changes on bot-authored entities never reached

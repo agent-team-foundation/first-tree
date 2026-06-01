@@ -25,7 +25,7 @@ if [[ ! -d packages/e2e ]]; then
   exit 1
 fi
 
-STASH_DIR="$(mktemp -d -t hub-e2e-stash-XXXXXX)"
+STASH_DIR="$(mktemp -d -t first-tree-e2e-stash-XXXXXX)"
 
 restore() {
   # Idempotent — trap may invoke this after a manual call once the stash dir

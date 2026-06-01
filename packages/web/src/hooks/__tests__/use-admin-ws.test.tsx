@@ -118,7 +118,7 @@ beforeEach(() => {
   Object.defineProperty(window, "WebSocket", { configurable: true, value: FakeWebSocket });
   Object.defineProperty(window, "location", {
     configurable: true,
-    value: { protocol: "https:", host: "hub.test" },
+    value: { protocol: "https:", host: "first-tree.test" },
   });
   const storage = createStorage();
   storage.setItem("first-tree:selectedOrganizationId", "org-1");
@@ -143,7 +143,7 @@ describe("useAdminWs", () => {
     const socket = FakeWebSocket.instances[0];
     if (!socket) throw new Error("socket missing");
 
-    expect(socket.url).toBe("wss://hub.test/api/v1/orgs/org-1/ws/?token=access-1");
+    expect(socket.url).toBe("wss://first-tree.test/api/v1/orgs/org-1/ws/?token=access-1");
     queryClient.setQueryData(
       ["chat-agent-status", "chat-1"],
       [makeStatus({ agentId: "agent-1", main: "ready", working: false })],

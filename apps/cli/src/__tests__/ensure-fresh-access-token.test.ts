@@ -15,7 +15,7 @@ describe("ensureFreshAccessToken — safety margin", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    testHome = join(tmpdir(), `ft-hub-fresh-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testHome = join(tmpdir(), `ft-first-tree-fresh-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(join(testHome, "config"), { recursive: true });
 
     originalHome = process.env.FIRST_TREE_HOME;
@@ -36,7 +36,7 @@ describe("ensureFreshAccessToken — safety margin", () => {
   async function writeCredentials(accessToken: string): Promise<void> {
     writeFileSync(
       join(testHome, "config", "credentials.json"),
-      JSON.stringify({ accessToken, refreshToken: "refresh-xyz", serverUrl: "http://hub.test" }),
+      JSON.stringify({ accessToken, refreshToken: "refresh-xyz", serverUrl: "http://first-tree.test" }),
     );
   }
 
@@ -63,7 +63,7 @@ describe("ensureFreshAccessToken — safety margin", () => {
 
     expect(result).toBe(refreshed);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://hub.test/api/v1/auth/refresh",
+      "http://first-tree.test/api/v1/auth/refresh",
       expect.objectContaining({ method: "POST" }),
     );
   });

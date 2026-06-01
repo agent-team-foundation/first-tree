@@ -303,7 +303,7 @@ describe("bootstrapWorkspace", () => {
     // Member-default routing description (the recipient must be in this chat).
     expect(content).toMatch(/recipient MUST be a participant/);
     // The retired escape hatches must NOT be taught — agents that try them
-    // would hit `unknown option` and loop. (Hub keeps a single group-chat
+    // would hit `unknown option` and loop. (First Tree keeps a single group-chat
     // model; non-members must be added first.)
     expect(content).not.toMatch(/--direct/);
     expect(content).not.toMatch(/auto-mentions the recipient/);

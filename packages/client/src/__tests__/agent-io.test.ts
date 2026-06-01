@@ -212,7 +212,7 @@ describe("formatInboundContent", () => {
 
   it("returns [] from the cache on fetch failure and logs (graceful degrade)", async () => {
     const logs: string[] = [];
-    const sdk = mkSdk(() => Promise.reject(new Error("hub down")));
+    const sdk = mkSdk(() => Promise.reject(new Error("server down")));
     const cache = createParticipantCache(sdk, "chat-1", (m) => logs.push(m));
     const msg: SessionMessage = {
       id: "m1",
@@ -229,11 +229,11 @@ describe("formatInboundContent", () => {
 
   it("logs non-Error participant fetch failures", async () => {
     const logs: string[] = [];
-    const sdk = mkSdk(() => Promise.reject("hub string failure"));
+    const sdk = mkSdk(() => Promise.reject("server string failure"));
     const cache = createParticipantCache(sdk, "chat-1", (m) => logs.push(m));
 
     expect(await cache.get()).toEqual([]);
-    expect(logs).toContain("listChatParticipants failed: hub string failure");
+    expect(logs).toContain("listChatParticipants failed: server string failure");
   });
 
   it("resets inflight after a successful direct cache fetch", async () => {
@@ -336,7 +336,7 @@ describe("buildAgentEnv", () => {
   it("layers the four First Tree envelope vars on top of parent env (parent wins on unrelated keys)", () => {
     const parent = { PATH: "/usr/bin", FOO: "bar" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
-      sdk: { serverUrl: "http://hub" },
+      sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
@@ -350,7 +350,7 @@ describe("buildAgentEnv", () => {
     });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.FOO).toBe("bar");
-    expect(env.FIRST_TREE_SERVER_URL).toBe("http://hub");
+    expect(env.FIRST_TREE_SERVER_URL).toBe("http://first-tree");
     expect(env.FIRST_TREE_AGENT_ID).toBe("agent-a");
     expect(env.FIRST_TREE_INBOX_ID).toBe("inbox-a");
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
@@ -359,7 +359,7 @@ describe("buildAgentEnv", () => {
   it("overrides any pre-existing FIRST_TREE_* value in the parent env", () => {
     const parent = { FIRST_TREE_CHAT_ID: "wrong-chat" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
-      sdk: { serverUrl: "http://hub" },
+      sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
@@ -379,7 +379,7 @@ describe("buildAgentEnv", () => {
     // `FIRST_TREE_DOC_BASE` is kept emitting so a stale pre-fix `chat send`
     // binary inherited from this process still snapshots like it used to.
     const env = buildAgentEnv({} as NodeJS.ProcessEnv, {
-      sdk: { serverUrl: "http://hub" },
+      sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
@@ -410,7 +410,7 @@ describe("buildAgentEnv", () => {
     // suppressed so chat-send doesn't try to derive a promotion prefix from
     // garbage and accidentally widen the fence in a different way.
     const env = buildAgentEnv({} as NodeJS.ProcessEnv, {
-      sdk: { serverUrl: "http://hub" },
+      sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
@@ -429,7 +429,7 @@ describe("buildAgentEnv", () => {
 
   it("omits doc-preview env vars when no docContext is provided (self-only / non-agent shells)", () => {
     const env = buildAgentEnv({} as NodeJS.ProcessEnv, {
-      sdk: { serverUrl: "http://hub" },
+      sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",

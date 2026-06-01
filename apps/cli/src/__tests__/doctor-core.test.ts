@@ -60,33 +60,37 @@ describe("doctor core checks", () => {
 
     writeFileSync(
       join(home, "config", "client.yaml"),
-      "server:\n  url: http://hub.test\nclient:\n  id: client_1234abcd\n",
+      "server:\n  url: http://first-tree.test\nclient:\n  id: client_1234abcd\n",
     );
     delete process.env.FIRST_TREE_SERVER_URL;
     expect(checkClientConfig().detail).toContain("client.yaml");
 
     cliFetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
-    await expect(checkServerReachable()).resolves.toEqual({ label: "Server URL", ok: true, detail: "http://hub.test" });
+    await expect(checkServerReachable()).resolves.toEqual({
+      label: "Server URL",
+      ok: true,
+      detail: "http://first-tree.test",
+    });
 
     cliFetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
     await expect(checkServerReachable()).resolves.toEqual({
       label: "Server URL",
       ok: false,
-      detail: "unhealthy (HTTP 503) at http://hub.test",
+      detail: "unhealthy (HTTP 503) at http://first-tree.test",
     });
 
     cliFetchMock.mockRejectedValueOnce(new Error("network"));
     await expect(checkWebSocket()).resolves.toEqual({
       label: "WebSocket",
       ok: false,
-      detail: "server unreachable at http://hub.test",
+      detail: "server unreachable at http://first-tree.test",
     });
 
     cliFetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
     await expect(checkWebSocket()).resolves.toEqual({
       label: "WebSocket",
       ok: true,
-      detail: "ws://hub.test (server reachable)",
+      detail: "ws://first-tree.test (server reachable)",
     });
 
     expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: false, detail: "no agents configured" });
@@ -136,7 +140,7 @@ describe("doctor core checks", () => {
     const failed = await reconcileAgentConfigs({
       clientId: "client-1",
       listPinnedAgents: async () => {
-        throw new Error("hub unavailable".repeat(10));
+        throw new Error("server unavailable".repeat(10));
       },
     });
     expect(failed.ok).toBe(false);

@@ -6,7 +6,7 @@ import { buildCodexThreadOptions } from "../handlers/codex.js";
  * Codex CLI's two auth modes accept different model slugs:
  *   - ChatGPT-account auth rejects the `gpt-5-codex` family.
  *   - API-key auth accepts the wider set.
- * Hub therefore stores `model: ""` by default and lets the CLI pick. The
+ * The server therefore stores `model: ""` by default and lets the CLI pick. The
  * handler must respect that — emitting `model` only when the operator
  * actively chose one, otherwise omitting it from `ThreadOptions`. A
  * regression here would silently break ChatGPT-auth users at first turn

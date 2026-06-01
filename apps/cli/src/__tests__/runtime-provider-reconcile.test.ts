@@ -27,7 +27,7 @@ describe("reconcileLocalRuntimeProviders", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    agentsDir = mkdtempSync(join(tmpdir(), "ft-hub-reconcile-"));
+    agentsDir = mkdtempSync(join(tmpdir(), "ft-first-tree-reconcile-"));
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -59,7 +59,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     );
 
     await reconcileLocalRuntimeProviders({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       agentsDir,
     });
@@ -81,7 +81,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     );
 
     await reconcileLocalRuntimeProviders({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       agentsDir,
     });
@@ -95,7 +95,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
 
     await reconcileLocalRuntimeProviders({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       agentsDir,
     });
@@ -107,7 +107,7 @@ describe("reconcileLocalRuntimeProviders", () => {
     fetchMock.mockResolvedValue(new Response("server down", { status: 500 }));
     await expect(
       reconcileLocalRuntimeProviders({
-        serverUrl: "http://hub.test",
+        serverUrl: "http://first-tree.test",
         accessToken: "tok",
         agentsDir,
       }),
@@ -128,7 +128,7 @@ describe("reconcileLocalRuntimeProviders", () => {
 
     const logs: Array<[string, string]> = [];
     await reconcileLocalRuntimeProviders({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       agentsDir,
       log: (level, msg) => logs.push([level, msg]),
@@ -157,7 +157,7 @@ describe("uploadClientCapabilities", () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 
     await uploadClientCapabilities({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok-xyz",
       clientId: "cli-1",
       capabilities: {
@@ -176,7 +176,7 @@ describe("uploadClientCapabilities", () => {
     const call = fetchMock.mock.calls[0];
     if (!call) throw new Error("fetch was not called");
     const [url, init] = call as [string, RequestInit];
-    expect(url).toBe("http://hub.test/api/v1/clients/cli-1/capabilities");
+    expect(url).toBe("http://first-tree.test/api/v1/clients/cli-1/capabilities");
     expect(init.method).toBe("PATCH");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-xyz");
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
@@ -187,7 +187,7 @@ describe("uploadClientCapabilities", () => {
   it("URL-encodes the clientId so paths with `/` or unicode survive", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await uploadClientCapabilities({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       clientId: "weird/client id",
       capabilities: {},
@@ -195,14 +195,14 @@ describe("uploadClientCapabilities", () => {
     const call = fetchMock.mock.calls[0];
     if (!call) throw new Error("fetch was not called");
     const url = call[0] as string;
-    expect(url).toBe("http://hub.test/api/v1/clients/weird%2Fclient%20id/capabilities");
+    expect(url).toBe("http://first-tree.test/api/v1/clients/weird%2Fclient%20id/capabilities");
   });
 
   it("throws on non-OK status so the caller can log + continue", async () => {
     fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
     await expect(
       uploadClientCapabilities({
-        serverUrl: "http://hub.test",
+        serverUrl: "http://first-tree.test",
         accessToken: "tok",
         clientId: "cli-1",
         capabilities: {},
@@ -227,7 +227,7 @@ describe("uploadAgentSkills", () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 
     await uploadAgentSkills({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok-xyz",
       agentId: "agent-1",
       skills: [{ name: "review", description: "Pre-landing PR review", source: "user" }],
@@ -237,7 +237,7 @@ describe("uploadAgentSkills", () => {
     const call = fetchMock.mock.calls[0];
     if (!call) throw new Error("fetch was not called");
     const [url, init] = call as [string, RequestInit];
-    expect(url).toBe("http://hub.test/api/v1/agents/agent-1/skills");
+    expect(url).toBe("http://first-tree.test/api/v1/agents/agent-1/skills");
     expect(init.method).toBe("PATCH");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-xyz");
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
@@ -248,7 +248,7 @@ describe("uploadAgentSkills", () => {
   it("URL-encodes the agentId so weird ids survive", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await uploadAgentSkills({
-      serverUrl: "http://hub.test",
+      serverUrl: "http://first-tree.test",
       accessToken: "tok",
       agentId: "agent/with slash",
       skills: [],
@@ -256,14 +256,14 @@ describe("uploadAgentSkills", () => {
     const call = fetchMock.mock.calls[0];
     if (!call) throw new Error("fetch was not called");
     const url = call[0] as string;
-    expect(url).toBe("http://hub.test/api/v1/agents/agent%2Fwith%20slash/skills");
+    expect(url).toBe("http://first-tree.test/api/v1/agents/agent%2Fwith%20slash/skills");
   });
 
   it("throws on non-OK status so the caller can log + continue", async () => {
     fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
     await expect(
       uploadAgentSkills({
-        serverUrl: "http://hub.test",
+        serverUrl: "http://first-tree.test",
         accessToken: "tok",
         agentId: "agent-1",
         skills: [],

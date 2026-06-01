@@ -244,7 +244,7 @@ async function makeSlot(options?: {
   const config: AgentSlotConfig = {
     name: "agent-one",
     agentId: "agent-1",
-    serverUrl: "https://hub.example",
+    serverUrl: "https://first-tree.example",
     type: "claude-code",
     runtimeType: options?.runtimeType,
     runtimeVersion: "1.2.3",
@@ -312,13 +312,15 @@ describe("AgentSlot", () => {
   });
 
   it("wraps runtime config fetch failures with a bind-aborted error", async () => {
-    const { slot, connection, state } = await makeSlot({ configError: new Error("hub offline") });
+    const { slot, connection, state } = await makeSlot({ configError: new Error("server offline") });
 
-    await expect(slot.start()).rejects.toThrow("First Tree server unreachable while loading agent config: hub offline");
+    await expect(slot.start()).rejects.toThrow(
+      "First Tree server unreachable while loading agent config: server offline",
+    );
 
     expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
     expect(state.logger.error).toHaveBeenCalledWith(
-      { err: new Error("hub offline") },
+      { err: new Error("server offline") },
       "failed to fetch agent config — bind aborted",
     );
   });
@@ -345,14 +347,14 @@ describe("AgentSlot", () => {
   });
 
   it("stringifies non-Error runtime config fetch failures", async () => {
-    const { slot, state } = await makeSlot({ configError: "hub string offline" });
+    const { slot, state } = await makeSlot({ configError: "server string offline" });
 
     await expect(slot.start()).rejects.toThrow(
-      "First Tree server unreachable while loading agent config: hub string offline",
+      "First Tree server unreachable while loading agent config: server string offline",
     );
 
     expect(state.logger.error).toHaveBeenCalledWith(
-      { err: "hub string offline" },
+      { err: "server string offline" },
       "failed to fetch agent config — bind aborted",
     );
   });

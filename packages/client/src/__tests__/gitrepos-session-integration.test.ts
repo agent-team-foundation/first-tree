@@ -33,7 +33,7 @@ import { mockCtxPlumbing } from "./test-helpers.js";
  * This test locks down the contract that PRD §5.1.5 Git worktree lifecycle is
  * actually wired into the session-oriented handler. The previous iteration of
  * this PRD shipped `GitMirrorManager` as a standalone utility but never
- * consumed it from the handler — operators could set `gitRepos` in the Hub
+ * consumed it from the handler — operators could set `gitRepos` on the server
  * and the workspace stayed empty. This test prevents that regression by
  * going through the real `createClaudeCodeHandler.start()` path with a stub
  * AgentConfigCache and an on-disk fixture repo.
