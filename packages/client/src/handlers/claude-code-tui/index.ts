@@ -27,6 +27,7 @@ import {
 } from "./tmux-session.js";
 import { type RawTranscriptEntry, TranscriptTailer, transcriptPathFor } from "./transcript-tail.js";
 import { ASKUSER_MENU_FOOTER, ASKUSER_TOOL_NAME, WORKING_MARKER } from "./tui-markers.js";
+import { resolveTurnDisposition } from "./turn-disposition.js";
 
 const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const TURN_POLL_MS = 250;
@@ -338,6 +339,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
     const state: TurnState = { finalTexts: [], askUserTexts: [], seenToolUseIds: new Set() };
     let turnFailed = false;
+    let timedOut = false;
     let everSawWorking = false;
     let askUserEscapeArmed = false;
     let brokeOnIdle = false;
@@ -404,13 +406,26 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
       // Loop hit the TURN_TIMEOUT ceiling (not a clean idle break, not an
       // explicit abort): claude may still be working. Interrupt it so its
-      // output doesn't bleed into the next turn's pane/transcript.
+      // output doesn't bleed into the next turn's pane/transcript, and flag the
+      // turn as timed out — it is NOT a success. A timed-out turn reports
+      // `turn_end: error`, stays un-acked (so the inbox entries are redelivered
+      // for a real retry instead of being silently consumed), and settles the
+      // runtime into `error` (see resolveTurnDisposition).
       if (!brokeOnIdle && !turnAborted) {
+        timedOut = true;
+        sessionCtx.log(`tui turn exceeded ${TURN_TIMEOUT_MS}ms without completing; interrupting claude`);
         try {
           await sendKey(tmuxSessionName, "Escape");
         } catch {
           /* best-effort */
         }
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: {
+            source: "runtime",
+            message: `Turn timed out after ${Math.round(TURN_TIMEOUT_MS / 1000)}s; claude was interrupted before finishing`,
+          },
+        });
       }
     } catch (err) {
       turnFailed = true;
@@ -446,23 +461,19 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       }
     }
 
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: !turnFailed && !forwardFailed ? "success" : "error" },
-    });
-    // The runtime never auto-acks on turn_end (see SessionContext in
-    // handler.ts) — without this the triggering inbox entries stay in-flight
-    // and the server redelivers them (re-running the turn) on reconnect /
-    // restart. Ack on a clean close even when forwardResult failed (mirroring
-    // the SDK handler's ackTurnClose) to avoid redelivery storms; but NOT when
-    // the turn was aborted by suspend(), so the message is re-run on resume.
-    if (!turnAborted) {
+    // Resolve status / ack / runtime-state from how the turn ended. The
+    // runtime never auto-acks on turn_end (see SessionContext in handler.ts):
+    // when `ack` is false the triggering inbox entries stay in-flight and the
+    // server redelivers them (re-running the turn) on reconnect / restart.
+    // A clean close acks even on a forward-only failure (mirrors the SDK
+    // handler's ackTurnClose, avoiding redelivery storms); an abort (suspend)
+    // or a timeout withholds the ack so the message gets a real retry.
+    const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
+    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
+    if (disposition.ack) {
       sessionCtx.markCompleted(ackCount);
     }
-    // A failed turn loop (e.g. the tmux session died) leaves a broken session —
-    // surface it as `error` rather than advertising `idle`. A forward-only
-    // failure keeps the session healthy, so it stays idle.
-    sessionCtx.setRuntimeState(turnFailed ? "error" : "idle");
+    sessionCtx.setRuntimeState(disposition.runtimeState);
     resetProcessor();
   }
 
