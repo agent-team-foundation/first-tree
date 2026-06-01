@@ -27,6 +27,7 @@ import {
   killSession,
   listOwnedSessions,
   newSession,
+  ownedSessionPrefix,
   pasteText,
   sendKey,
   sessionExists,
@@ -44,17 +45,21 @@ const SHORT_PROMPT_INLINE_THRESHOLD = 200;
 type Worktree = { url: string; path: string; branchName: string };
 
 /**
- * Module-level lazy sweep: on first handler instantiation in this process,
- * kill all `ftth-*` tmux sessions left over from prior runs. We can be
- * aggressive because Hub Client is the only thing that creates them — anything
- * the registry doesn't know about is orphaned.
+ * Module-level lazy sweep: on first handler instantiation in this process, kill
+ * tmux sessions left over from a prior crashed run of THIS client.
+ *
+ * Scoped by the client-owner prefix (`ftth-<clientTag>-`), never the bare
+ * `ftth-` prefix: multiple client processes (prod / staging / dev) and parallel
+ * QA slots share one tmux server, so a blanket sweep would kill sessions a
+ * concurrent live process is actively driving. The client tag is stable across
+ * restarts of the same client, so we still reclaim our own orphans.
  */
 let orphanSweepDone = false;
-async function orphanSweep(): Promise<void> {
+async function orphanSweep(clientId: string): Promise<void> {
   if (orphanSweepDone) return;
   orphanSweepDone = true;
   try {
-    const owned = await listOwnedSessions();
+    const owned = await listOwnedSessions(ownedSessionPrefix(clientId));
     for (const name of owned) {
       try {
         await killSession(name);
@@ -86,6 +91,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
+  // Identifies this client process; scopes tmux session ownership so the orphan
+  // sweep and session names never collide with another live client / QA slot
+  // on the shared tmux server. Empty string is tolerated (falls back to a
+  // placeholder tag) but the daemon always supplies a real client id.
+  const clientId = (config.clientId as string | undefined) ?? "";
   const claudeCodeExecutable =
     (config.claudeCodeExecutable as string | undefined) ?? resolveClaudeCodeExecutable().path ?? "claude";
 
@@ -296,7 +306,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
     const sessionId = resumeSessionId ?? randomUUID();
-    const sessionName = deriveSessionName(sessionCtx.agent.agentId, sessionCtx.chatId);
+    const sessionName = deriveSessionName(clientId, sessionCtx.agent.agentId, sessionCtx.chatId);
     if (await sessionExists(sessionName)) {
       await killSession(sessionName);
     }
@@ -609,7 +619,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       // into a second turn the instant startClaude sets tmuxSessionName.
       turnRunning = true;
       try {
-        await orphanSweep();
+        await orphanSweep(clientId);
         ctx = sessionCtx;
         cwd = acquireAgentHome(workspaceRoot);
 
@@ -649,7 +659,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     async resume(message, sessionId, sessionCtx) {
       turnRunning = true;
       try {
-        await orphanSweep();
+        await orphanSweep(clientId);
         ctx = sessionCtx;
         cwd = acquireAgentHome(workspaceRoot);
 

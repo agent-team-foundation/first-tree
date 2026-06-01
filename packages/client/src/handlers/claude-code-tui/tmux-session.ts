@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { READY_MARKER, TMUX_SESSION_PREFIX, USER_RE } from "./tui-markers.js";
@@ -90,6 +90,12 @@ export async function newSession(input: NewSessionInput): Promise<void> {
  * -p` uses bracketed paste so multi-line content and shell metacharacters
  * (\ ` $ etc.) are delivered without interpretation. A small delay before
  * Enter avoids races where claude's reader misses the trailing newline.
+ *
+ * Cleanup matters for confidentiality: the tmux buffer lives on the shared
+ * tmux *server*, not in our session, so even after our session is killed the
+ * message text stays readable via `tmux show-buffer` from any other surviving
+ * session. We delete the buffer (`paste-buffer -d` plus a finally backstop) and
+ * remove the whole temp directory, not just the file.
  */
 export async function pasteText(sessionName: string, text: string): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "ftth-tui-"));
@@ -98,12 +104,16 @@ export async function pasteText(sessionName: string, text: string): Promise<void
   const bufferName = `${sessionName}-msg`;
   try {
     await tmuxOrThrow(["load-buffer", "-b", bufferName, file]);
-    await tmuxOrThrow(["paste-buffer", "-b", bufferName, "-t", sessionName, "-p"]);
+    // `-d` deletes the buffer once pasted, so the text doesn't linger server-side.
+    await tmuxOrThrow(["paste-buffer", "-b", bufferName, "-t", sessionName, "-p", "-d"]);
     await new Promise((r) => setTimeout(r, 150));
     await tmuxOrThrow(["send-keys", "-t", sessionName, "Enter"]);
   } finally {
+    // Backstop: if paste failed before `-d` could delete the buffer, drop it
+    // explicitly. Best-effort (no throw if already gone).
+    await runTmux(["delete-buffer", "-b", bufferName]);
     try {
-      unlinkSync(file);
+      rmSync(dir, { recursive: true, force: true });
     } catch {
       /* ignore */
     }
@@ -143,10 +153,15 @@ export async function listSessions(): Promise<string[]> {
     .filter((s) => s.length > 0);
 }
 
-/** List ftth-prefixed sessions only. */
-export async function listOwnedSessions(): Promise<string[]> {
+/**
+ * List sessions whose name starts with `prefix`. The orphan sweep passes the
+ * client-scoped prefix from `ownedSessionPrefix(clientId)` so it only ever
+ * matches sessions THIS client created — never another live client process or
+ * a parallel QA slot, which carry a different client tag.
+ */
+export async function listOwnedSessions(prefix: string): Promise<string[]> {
   const all = await listSessions();
-  return all.filter((name) => name.startsWith(TMUX_SESSION_PREFIX));
+  return all.filter((name) => name.startsWith(prefix));
 }
 
 export type WaitForReadyInput = {
@@ -174,14 +189,32 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
 }
 
 /**
- * Derive a deterministic, tmux-safe session name from `(agentId, chatId)`.
- * tmux disallows `:` and `.` in session names — strip them out and cap at
- * 32 chars so the name comfortably fits inside any tmux client display.
+ * Per-client tag embedded in every session name so each client process owns a
+ * disjoint slice of the `ftth-` namespace. Derived from the trailing chars of
+ * the client id (the unique hex in `client_<hex>`); stable across restarts of
+ * the same client (so the sweep finds its own crashed-run leftovers) but
+ * distinct from any other client / QA process.
  */
-export function deriveSessionName(agentId: string, chatId: string): string {
+function clientTag(clientId: string): string {
+  const s = sanitise(clientId);
+  return s.length >= 4 ? s.slice(-8) : "nocid";
+}
+
+/** Prefix matching exactly the sessions a given client owns: `ftth-<clientTag>-`. */
+export function ownedSessionPrefix(clientId: string): string {
+  return `${TMUX_SESSION_PREFIX}${clientTag(clientId)}-`;
+}
+
+/**
+ * Derive a deterministic, tmux-safe session name from `(clientId, agentId,
+ * chatId)`. tmux disallows `:` and `.` in session names — strip them out. The
+ * client tag scopes ownership so the orphan sweep never touches another
+ * process's sessions; agent/chat are capped at 8 chars to keep the name short.
+ */
+export function deriveSessionName(clientId: string, agentId: string, chatId: string): string {
   const a = sanitise(agentId).slice(0, 8);
   const c = sanitise(chatId).slice(0, 8);
-  return `${TMUX_SESSION_PREFIX}${a}-${c}`;
+  return `${ownedSessionPrefix(clientId)}${a}-${c}`;
 }
 
 function sanitise(input: string): string {
