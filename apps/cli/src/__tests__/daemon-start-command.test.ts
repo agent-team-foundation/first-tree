@@ -20,6 +20,7 @@ const coreMocks = vi.hoisted(() => ({
   getClientServiceStatus: vi.fn(),
   handleClientOrgMismatch: vi.fn(),
   isServiceSupported: vi.fn(),
+  listPinnedAgents: vi.fn(),
   loadCredentials: vi.fn(),
   migrateLocalAgentDirs: vi.fn(),
   promptMissingFields: vi.fn(),
@@ -95,6 +96,9 @@ beforeEach(() => {
   });
   coreMocks.startClientService.mockReturnValue({ ok: true });
   coreMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
+  coreMocks.listPinnedAgents.mockResolvedValue([
+    { agentId: "agent-1", clientId: "client_1234abcd", runtimeProvider: "claude-code", status: "active" },
+  ]);
   coreMocks.promptMissingFields.mockResolvedValue(undefined);
   coreMocks.createApiNameResolver.mockReturnValue(async () => "kael");
   coreMocks.createExecuteUpdate.mockReturnValue(async () => undefined);
@@ -231,11 +235,43 @@ describe("daemon start command", () => {
     expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: "client_1234abcd", capabilities: { "claude-code": { state: "ok" } } }),
     );
+    expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({
+      serverUrl: "https://first-tree.example",
+      accessToken: "access-token",
+    });
     expect(coreMocks.uploadAgentSkills).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "agent-1", skills: [{ name: "review", description: "Review code." }] }),
     );
     expect(runtimeInstance.watchAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
     expect(output()).toContain("Error: stop after watch");
+  });
+
+  it("skips skill upload for stale local aliases that are not pinned to this client", async () => {
+    mkdirSync(join(home, "config", "agents", "developer"), { recursive: true });
+    writeFileSync(
+      join(home, "config", "agents", "developer", "agent.yaml"),
+      "agentId: stale-agent\nruntime: claude-code\n",
+    );
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(runtimeInstance.addAgent).toHaveBeenCalledWith(
+      "developer",
+      expect.objectContaining({ agentId: "stale-agent" }),
+    );
+    expect(coreMocks.uploadAgentSkills).toHaveBeenCalledTimes(1);
+    expect(coreMocks.uploadAgentSkills).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-1" }));
+    expect(output()).toContain("skills upload for developer skipped");
+    expect(output()).toContain("agent prune --dry-run");
+  });
+
+  it("keeps best-effort skill upload when pinned-agent filtering is unavailable", async () => {
+    coreMocks.listPinnedAgents.mockRejectedValueOnce(new Error("pin check failed"));
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(coreMocks.uploadAgentSkills).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-1" }));
+    expect(output()).toContain("skills upload pin check skipped: pin check failed");
   });
 
   it("uses service-mode logging and non-interactive prompts for supervisor children", async () => {

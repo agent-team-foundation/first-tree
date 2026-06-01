@@ -13,6 +13,21 @@ type AuthoritativePinnedAgent = {
   status?: string;
 };
 
+export type PinnedAgentRuntimeRecord = AuthoritativePinnedAgent;
+
+export async function listPinnedAgents(opts: {
+  serverUrl: string;
+  accessToken: string;
+}): Promise<PinnedAgentRuntimeRecord[]> {
+  const res = await cliFetch(`${opts.serverUrl}/api/v1/me/pinned-agents`, {
+    headers: { Authorization: `Bearer ${opts.accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`server returned ${res.status} on /me/pinned-agents`);
+  }
+  return (await res.json()) as PinnedAgentRuntimeRecord[];
+}
+
 /**
  * Pre-flight reconciliation called before the agents loop spawns. Pulls
  * authoritative `runtime_provider` for every non-deleted agent the calling
@@ -28,13 +43,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
   agentsDir: string;
   log?: LogFn;
 }): Promise<void> {
-  const res = await cliFetch(`${opts.serverUrl}/api/v1/me/pinned-agents`, {
-    headers: { Authorization: `Bearer ${opts.accessToken}` },
-  });
-  if (!res.ok) {
-    throw new Error(`server returned ${res.status} on /clients/me/agents`);
-  }
-  const items = (await res.json()) as AuthoritativePinnedAgent[];
+  const items = await listPinnedAgents(opts);
   const byAgentId = new Map(items.map((it) => [it.agentId, it]));
 
   if (!existsSync(opts.agentsDir)) return;

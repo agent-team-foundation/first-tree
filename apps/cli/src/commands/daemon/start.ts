@@ -30,6 +30,7 @@ import {
   getClientServiceStatus,
   handleClientOrgMismatch,
   isServiceSupported,
+  listPinnedAgents,
   loadCredentials,
   migrateLocalAgentDirs,
   promptMissingFields,
@@ -272,9 +273,32 @@ export function registerDaemonStartCommand(daemon: Command): void {
               warn: (msg) => print.status("⚠️", `skill scan: ${msg}`),
             });
             const accessToken = await ensureFreshAccessToken();
+            let pinnedByAgentId: Map<string, { agentId: string; clientId: string }> | null = null;
+            try {
+              const pinned = await listPinnedAgents({ serverUrl: config.server.url, accessToken });
+              pinnedByAgentId = new Map(pinned.map((agent) => [agent.agentId, agent]));
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              print.status("⚠️", `skills upload pin check skipped: ${msg}`);
+            }
             await Promise.all(
               claudeAgents.map(async ([name, c]) => {
                 try {
+                  const pinned = pinnedByAgentId?.get(c.agentId);
+                  if (pinnedByAgentId && !pinned) {
+                    print.status(
+                      "⚠️",
+                      `skills upload for ${name} skipped: local agent ${c.agentId} is not pinned to this user; run \`first-tree agent prune --dry-run\` to inspect stale aliases.`,
+                    );
+                    return;
+                  }
+                  if (pinned && pinned.clientId !== config.client.id) {
+                    print.status(
+                      "⚠️",
+                      `skills upload for ${name} skipped: local agent ${c.agentId} is pinned to another client (${pinned.clientId}); run \`first-tree agent prune --dry-run\` to inspect stale aliases.`,
+                    );
+                    return;
+                  }
                   await uploadAgentSkills({
                     serverUrl: config.server.url,
                     accessToken,
