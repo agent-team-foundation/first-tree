@@ -184,17 +184,6 @@ export const contextTreeIoSourceSchema = z.enum([
 ]);
 export type ContextTreeIoSource = z.infer<typeof contextTreeIoSourceSchema>;
 
-export const contextTreeIoCandidateSchema = z.object({
-  action: contextTreeIoActionSchema,
-  source: contextTreeIoSourceSchema,
-  treeRepoUrl: z.string().min(1),
-  treeBranch: z.string().min(1).optional(),
-  targetKind: contextTreeIoTargetKindSchema,
-  targetPath: z.string().min(1),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-export type ContextTreeIoCandidate = z.infer<typeof contextTreeIoCandidateSchema>;
-
 export const contextTreeIoBucketSchema = z.object({
   agentCount: z.number().int().nonnegative(),
   eventCount: z.number().int().nonnegative(),

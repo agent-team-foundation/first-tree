@@ -11,12 +11,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  AgentRuntimeConfigPayload,
-  ContextTreeIoCandidate,
-  SessionEvent,
-  SupportedImageMime,
-} from "@first-tree/shared";
+import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime, ToolFileRef } from "@first-tree/shared";
 import {
   isImageBatchRefContent,
   isImageRefContent,
@@ -311,10 +306,9 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
- * View tools whose `file_path` argument names a single file the model is
- * reading. A read of a file under the Context Tree root is the honest
- * "agent consulted the tree" signal (see `treeNodePathOf`). Search tools
- * (Grep/Glob) are excluded — they scan, they don't read a specific node.
+ * Tools whose `file_path` argument names a single file. Search tools
+ * (Grep/Glob) are excluded because they need server-side command/query
+ * semantics before they can be treated as an explicit file IO fact.
  */
 const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
 const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
@@ -345,43 +339,25 @@ export function treeNodePathOf(filePath: string, contextTreePath: string): strin
   return rel.length > 0 ? rel : null;
 }
 
-/**
- * If a tool with this name + input is a tree-file read, return the node path
- * it read; else null.
- */
-function treeReadNodePath(toolName: string, input: unknown, contextTreePath: string): string | null {
-  if (!TREE_READ_TOOL_NAMES.has(toolName)) return null;
-  const filePath = readFilePathArg(input);
-  if (filePath === null) return null;
-  return treeNodePathOf(filePath, contextTreePath);
-}
-
-/** Context Tree binding the tool-call processor needs to emit usage signals. */
+/** Local Context Tree repo mapping available to the tool-call processor. */
 export type ContextTreeBinding = { path: string | null; repoUrl: string | null; branch?: string | null };
 
-function treeWriteCandidate(
-  toolName: string,
-  toolUseId: string,
-  input: unknown,
-  contextTree: ContextTreeBinding,
-): ContextTreeIoCandidate | null {
-  if (!TREE_WRITE_TOOL_NAMES.has(toolName) || !contextTree.path || !contextTree.repoUrl) return null;
+function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTreeBinding): ToolFileRef | null {
+  if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  const targetPath = treeNodePathOf(filePath, contextTree.path);
-  if (targetPath === null) return null;
+  const repoRelativePath = contextTree?.path ? treeNodePathOf(filePath, contextTree.path) : null;
   return {
-    action: "write",
-    source: "claude_write_tool",
-    treeRepoUrl: contextTree.repoUrl,
-    ...(contextTree.branch ? { treeBranch: contextTree.branch } : {}),
-    targetKind: "file",
-    targetPath,
-    metadata: {
-      toolName,
-      toolUseId,
-      localPath: filePath,
-    },
+    origin: "tool_arg",
+    localPath: filePath,
+    pathKind: "file",
+    ...(contextTree?.repoUrl && repoRelativePath !== null
+      ? {
+          repoUrl: contextTree.repoUrl,
+          ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
+          repoRelativePath,
+        }
+      : {}),
   };
 }
 
@@ -389,11 +365,10 @@ function treeWriteCandidate(
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
  * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
  *
- * When a `contextTree` binding is supplied, a view tool whose read of a file
- * under the tree root SUCCEEDS ALSO emits a `context_tree_usage` event carrying
- * the node path — the honest replacement for the old per-inbound-message emit.
- * Emitting on the successful tool_result (not the tool_use request) means
- * failed/aborted reads never inflate the signal.
+ * Successful single-file read/write tools carry generic `toolFileRefs`
+ * evidence. When the local path can be mapped to a known repo checkout, the ref
+ * includes repo evidence. The server derives Context Tree IO from that evidence
+ * and the actual runtime/tool.
  */
 export type ToolCallProcessor = {
   onMessage(message: unknown): void;
@@ -414,11 +389,9 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
-    const contextTreeIo =
-      status === "ok" && contextTree
-        ? [treeWriteCandidate(entry.name, entry.toolUseId, entry.args, contextTree)].filter(
-            (candidate): candidate is ContextTreeIoCandidate => candidate !== null,
-          )
+    const toolFileRefs =
+      status === "ok"
+        ? [toolFileRef(entry.name, entry.args, contextTree)].filter((ref): ref is ToolFileRef => ref !== null)
         : [];
 
     emit({
@@ -430,25 +403,9 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(contextTreeIo.length > 0 ? { contextTreeIo } : {}),
+        ...(toolFileRefs.length > 0 ? { toolFileRefs } : {}),
       },
     });
-
-    // Honest Context Tree usage: a view tool that successfully read a file
-    // under the tree root means the agent actually consulted that node. Emit
-    // here (on the successful tool_result), not on the tool_use request, so
-    // failed reads (is_error) and aborted/unanswered reads never count.
-    // Carries the node path so the web feed can show which node was read.
-    // Replaces the old unconditional per-inbound-message emit (the vanity metric).
-    if (status === "ok" && contextTree?.path) {
-      const nodePath = treeReadNodePath(entry.name, entry.args, contextTree.path);
-      if (nodePath !== null) {
-        emit({
-          kind: "context_tree_usage",
-          payload: { purpose: "design_decision", treeRepoUrl: contextTree.repoUrl, nodePath },
-        });
-      }
-    }
 
     pending.delete(block.tool_use_id);
   }

@@ -2,14 +2,15 @@ import { posix } from "node:path";
 import {
   type ContextTreeIoAction,
   type ContextTreeIoBucket,
-  type ContextTreeIoCandidate,
   type ContextTreeIoEvent,
+  type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
-  contextTreeIoCandidateSchema,
   contextTreeIoSourceSchema,
   type SessionEvent,
   sessionEventSchema,
+  type ToolFileRef,
+  toolFileRefSchema,
 } from "@first-tree/shared";
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -42,14 +43,17 @@ export type RecordContextTreeIoInput = {
   };
 };
 
-type CandidateRecord = {
-  candidate: ContextTreeIoCandidate;
+type FileRefRecord = {
+  ref: ToolFileRef;
   sourceIndex: number;
 };
 
-type NormalizedCandidate = {
+type EventIoDerivation = {
   action: ContextTreeIoAction;
-  source: ContextTreeIoCandidate["source"];
+  source: ContextTreeIoSource;
+};
+
+type NormalizedFileRef = {
   treeRepoUrl: string;
   treeBranch: string;
   targetKind: ContextTreeIoTargetKind;
@@ -101,93 +105,74 @@ function isClaudeRuntime(runtimeProvider: string): boolean {
   return runtimeProvider === "claude-code" || runtimeProvider === "claude-code-tui";
 }
 
-function candidateMatchesEvent(
-  candidate: ContextTreeIoCandidate,
-  event: SessionEvent,
-  runtimeProvider: string,
-): boolean {
-  if (candidate.source === "legacy_context_tree_usage") {
-    return event.kind === "context_tree_usage" && candidate.action === "read";
-  }
-  if (event.kind !== "tool_call") return false;
+function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDerivation | null {
+  if (event.kind === "context_tree_usage") return { action: "read", source: "legacy_context_tree_usage" };
+  if (event.kind !== "tool_call" || event.payload.status !== "ok") return null;
 
   const toolName = event.payload.name;
-  if (candidate.source === "codex_file_change") {
-    return runtimeProvider === "codex" && toolName === "file_change" && candidate.action === "write";
+  if (runtimeProvider === "codex" && toolName === "file_change") {
+    return { action: "write", source: "codex_file_change" };
   }
-  if (candidate.source === "claude_read_tool") {
-    return isClaudeRuntime(runtimeProvider) && CLAUDE_READ_TOOLS.has(toolName) && candidate.action === "read";
+  if (isClaudeRuntime(runtimeProvider) && CLAUDE_READ_TOOLS.has(toolName)) {
+    return { action: "read", source: "claude_read_tool" };
   }
-  if (candidate.source === "claude_write_tool") {
-    return isClaudeRuntime(runtimeProvider) && CLAUDE_WRITE_TOOLS.has(toolName) && candidate.action === "write";
+  if (isClaudeRuntime(runtimeProvider) && CLAUDE_WRITE_TOOLS.has(toolName)) {
+    return { action: "write", source: "claude_write_tool" };
   }
-  if (candidate.source === "shell_command") {
-    // P1 only: shell read candidates need a server-side command parser before
-    // they can become trusted facts. Until then, ignore client-provided shell
-    // candidates even when the runtime/tool shape looks plausible.
-    return false;
-  }
-  return false;
+
+  // P1 only: shell read tracking needs a server-side command parser before it
+  // can become a trusted fact. Bash/Codex command tool calls are ignored here.
+  return null;
 }
 
-function legacyCandidate(
-  event: SessionEvent,
-  bindingRepo: string,
-  bindingBranch: string,
-): ContextTreeIoCandidate | null {
+function legacyFileRef(event: SessionEvent, bindingRepo: string, bindingBranch: string): ToolFileRef | null {
   if (event.kind !== "context_tree_usage") return null;
   const nodePath = event.payload.nodePath;
   return {
-    action: "read",
-    source: "legacy_context_tree_usage",
-    treeRepoUrl: event.payload.treeRepoUrl ?? bindingRepo,
-    treeBranch: bindingBranch,
-    targetKind: nodePath ? "file" : "repo",
-    targetPath: nodePath ?? "/",
-    metadata: {},
+    origin: "runtime_metadata",
+    repoUrl: event.payload.treeRepoUrl ?? bindingRepo,
+    repoBranch: bindingBranch,
+    repoRelativePath: nodePath ?? "/",
+    pathKind: nodePath ? "file" : "repo",
   };
 }
 
-function extractCandidates(event: SessionEvent, bindingRepo: string, bindingBranch: string): CandidateRecord[] {
-  const legacy = legacyCandidate(event, bindingRepo, bindingBranch);
-  if (legacy) return [{ candidate: legacy, sourceIndex: 0 }];
+function extractFileRefs(event: SessionEvent, bindingRepo: string, bindingBranch: string): FileRefRecord[] {
+  const legacy = legacyFileRef(event, bindingRepo, bindingBranch);
+  if (legacy) return [{ ref: legacy, sourceIndex: 0 }];
 
   if (event.kind !== "tool_call" || event.payload.status !== "ok") return [];
-  const candidates = event.payload.contextTreeIo ?? [];
-  const records: CandidateRecord[] = [];
-  for (let index = 0; index < candidates.length; index++) {
-    const candidate = candidates[index];
-    if (candidate) records.push({ candidate, sourceIndex: index });
+  const refs = event.payload.toolFileRefs ?? [];
+  const records: FileRefRecord[] = [];
+  for (let index = 0; index < refs.length; index++) {
+    const ref = refs[index];
+    if (ref) records.push({ ref, sourceIndex: index });
   }
   return records;
 }
 
-function normalizeCandidate(
-  candidate: ContextTreeIoCandidate,
-  bindingRepo: string,
-  bindingBranch: string,
-  event: SessionEvent,
-  runtimeProvider: string,
-): NormalizedCandidate | null {
-  const parsed = contextTreeIoCandidateSchema.safeParse(candidate);
+function normalizeFileRef(ref: ToolFileRef, bindingRepo: string, bindingBranch: string): NormalizedFileRef | null {
+  const parsed = toolFileRefSchema.safeParse(ref);
   if (!parsed.success) return null;
-  if (!candidateMatchesEvent(parsed.data, event, runtimeProvider)) return null;
 
   const expectedRepo = canonicalRepoUrl(bindingRepo);
-  const reportedRepo = canonicalRepoUrl(parsed.data.treeRepoUrl);
+  const reportedRepo = canonicalRepoUrl(parsed.data.repoUrl);
   if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) return null;
 
-  const targetPath = normalizeTargetPath(parsed.data.targetPath, parsed.data.targetKind);
+  const targetKind = parsed.data.pathKind ?? "file";
+  if (!parsed.data.repoRelativePath) return null;
+  const targetPath = normalizeTargetPath(parsed.data.repoRelativePath, targetKind);
   if (!targetPath) return null;
 
   return {
-    action: parsed.data.action,
-    source: parsed.data.source,
     treeRepoUrl: bindingRepo,
-    treeBranch: parsed.data.treeBranch ?? bindingBranch,
-    targetKind: parsed.data.targetKind,
+    treeBranch: parsed.data.repoBranch ?? bindingBranch,
+    targetKind,
     targetPath,
-    metadata: parsed.data.metadata ?? {},
+    metadata: {
+      origin: parsed.data.origin,
+      ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
+    },
   };
 }
 
@@ -197,8 +182,10 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
   const bindingBranch = binding.branch ?? "main";
 
   const event = sessionEventSchema.parse({ kind: input.sessionEvent.kind, payload: input.sessionEvent.payload });
-  const candidates = extractCandidates(event, binding.repo, bindingBranch);
-  if (candidates.length === 0) return;
+  const derivation = deriveEventIo(event, input.runtimeProvider);
+  if (!derivation) return;
+  const refs = extractFileRefs(event, binding.repo, bindingBranch);
+  if (refs.length === 0) return;
 
   const [chat] = await db
     .select({ id: chats.id })
@@ -209,8 +196,8 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
 
   const createdAt = new Date(input.sessionEvent.createdAt);
   const rows = [];
-  for (const { candidate, sourceIndex } of candidates) {
-    const normalized = normalizeCandidate(candidate, binding.repo, bindingBranch, event, input.runtimeProvider);
+  for (const { ref, sourceIndex } of refs) {
+    const normalized = normalizeFileRef(ref, binding.repo, bindingBranch);
     if (!normalized) continue;
     rows.push({
       id: `${input.sessionEvent.id}:${sourceIndex}`,
@@ -220,8 +207,8 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
       sourceSessionEventId: input.sessionEvent.id,
       sourceIndex,
       runtimeProvider: input.runtimeProvider,
-      action: normalized.action,
-      source: normalized.source,
+      action: derivation.action,
+      source: derivation.source,
       treeRepoUrl: normalized.treeRepoUrl,
       treeBranch: normalized.treeBranch,
       targetKind: normalized.targetKind,

@@ -288,7 +288,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   function consumeEntry(entry: RawTranscriptEntry, sessionCtx: SessionContext, state: TurnState): void {
     // Feed the shared processor — it emits all the session events we'd
     // otherwise have to reimplement (assistant_text / thinking / tool_call
-    // pending / tool_call final, plus context_tree_usage when bound).
+    // pending / tool_call final, including tool file refs when available).
     processor(sessionCtx).onMessage(entry);
 
     if (entry?.type !== "assistant") return;

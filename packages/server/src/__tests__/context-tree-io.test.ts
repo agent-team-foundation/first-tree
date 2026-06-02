@@ -78,7 +78,7 @@ describe("context-tree IO service", () => {
     });
   });
 
-  it("records validated tool-call write candidates and skips mismatches", async () => {
+  it("derives validated tool-call write IO from file refs and skips mismatches", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
 
@@ -89,39 +89,28 @@ describe("context-tree IO service", () => {
         name: "file_change",
         args: {},
         status: "ok",
-        contextTreeIo: [
+        toolFileRefs: [
           {
-            action: "write",
-            source: "codex_file_change",
-            treeRepoUrl: TREE_REPO,
-            treeBranch: "main",
-            targetKind: "file",
-            targetPath: "members/alice/NODE.md",
-            metadata: { localPath: "/tmp/tree/members/alice/NODE.md" },
+            origin: "file_change",
+            localPath: "/tmp/tree/members/alice/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "members/alice/NODE.md",
+            pathKind: "file",
           },
           {
-            action: "write",
-            source: "codex_file_change",
-            treeRepoUrl: "https://github.com/acme/other.git",
-            treeBranch: "main",
-            targetKind: "file",
-            targetPath: "members/bob/NODE.md",
+            origin: "file_change",
+            repoUrl: "https://github.com/acme/other.git",
+            repoBranch: "main",
+            repoRelativePath: "members/bob/NODE.md",
+            pathKind: "file",
           },
           {
-            action: "write",
-            source: "codex_file_change",
-            treeRepoUrl: TREE_REPO,
-            treeBranch: "main",
-            targetKind: "file",
-            targetPath: "../escape.md",
-          },
-          {
-            action: "write",
-            source: "claude_write_tool",
-            treeRepoUrl: TREE_REPO,
-            treeBranch: "main",
-            targetKind: "file",
-            targetPath: "members/eve/NODE.md",
+            origin: "file_change",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "../escape.md",
+            pathKind: "file",
           },
         ],
       },
@@ -151,6 +140,67 @@ describe("context-tree IO service", () => {
     const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
     expect(summary.summary.write).toMatchObject({ agentCount: 1, eventCount: 1, targetCount: 1 });
     expect(summary.agents[0]).toMatchObject({ readCount: 0, writeCount: 1, runtimeProvider: "codex" });
+  });
+
+  it("derives Claude read and write source from tool name, not client-provided action", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const read = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-read",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "domains/runtime/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    const write = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-write",
+        name: "Write",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "domains/runtime/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    for (const persisted of [read, write]) {
+      await recordFromSessionEvent(app.db, {
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        runtimeProvider: "claude-code",
+        sessionEvent: persisted,
+      });
+    }
+
+    const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, seed.chatId));
+    expect(rows).toHaveLength(2);
+    expect(
+      rows.map((row) => ({ action: row.action, source: row.source })).sort((a, b) => a.source.localeCompare(b.source)),
+    ).toEqual([
+      { action: "read", source: "claude_read_tool" },
+      { action: "write", source: "claude_write_tool" },
+    ]);
   });
 
   it("summarizes unrecorded legacy rows as compatibility fallback", async () => {
@@ -202,7 +252,7 @@ describe("context-tree IO service", () => {
     expect(invalidPathRows).toHaveLength(0);
   });
 
-  it("rejects shell command candidates until server-side command parsing exists", async () => {
+  it("rejects shell command file refs until server-side command parsing exists", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
 
@@ -213,14 +263,13 @@ describe("context-tree IO service", () => {
         name: "Bash",
         args: { command: "cat /tmp/context-tree/NODE.md" },
         status: "ok",
-        contextTreeIo: [
+        toolFileRefs: [
           {
-            action: "read",
-            source: "shell_command",
-            treeRepoUrl: TREE_REPO,
-            treeBranch: "main",
-            targetKind: "file",
-            targetPath: "NODE.md",
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
           },
         ],
       },

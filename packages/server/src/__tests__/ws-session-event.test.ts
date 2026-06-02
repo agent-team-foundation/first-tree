@@ -254,14 +254,13 @@ describe("Agent WS — session event protocol (S10)", () => {
               name: "Write",
               args: {},
               status: "ok",
-              contextTreeIo: [
+              toolFileRefs: [
                 {
-                  action: "write",
-                  source: "claude_write_tool",
-                  treeRepoUrl,
-                  treeBranch: "main",
-                  targetKind: "file",
-                  targetPath: "domains/runtime/NODE.md",
+                  origin: "tool_arg",
+                  repoUrl: treeRepoUrl,
+                  repoBranch: "main",
+                  repoRelativePath: "domains/runtime/NODE.md",
+                  pathKind: "file",
                 },
               ],
             },

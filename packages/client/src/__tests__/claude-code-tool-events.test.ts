@@ -288,66 +288,75 @@ describe("createToolCallProcessor", () => {
 });
 
 /**
- * P0 Context Tree usage signal. The processor emits `context_tree_usage` only
- * when a view tool SUCCESSFULLY reads a file under the configured tree root,
- * carrying the tree-root-relative node path — replacing the old
- * per-inbound-message vanity emit. The emit fires on the successful
- * tool_result (not the tool_use request), so failed/aborted reads never count.
- * When no tree binding is configured, it emits nothing.
+ * The processor reports generic local file facts on successful single-file
+ * Claude tools. The server decides whether those facts are Context Tree IO.
  */
-describe("createToolCallProcessor — Context Tree usage signal", () => {
+describe("createToolCallProcessor — Context Tree file refs", () => {
   const TREE = "/home/op/.first-tree/tree";
   const binding = { path: TREE, repoUrl: "https://github.com/example/tree" } as const;
-
-  function usageEvents(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>) {
-    return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "context_tree_usage");
-  }
 
   function toolCallEvents(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>) {
     return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "tool_call");
   }
 
-  it("emits context_tree_usage with the node path when a tree Read succeeds", () => {
+  function usageEventCount(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>): number {
+    return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "context_tree_usage").length;
+  }
+
+  it("attaches file refs when a tree Read succeeds", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
     processor.onMessage(assistantToolUse("r1", "Read", { file_path: `${TREE}/members/Gandy2025/NODE.md` }));
-    // No usage on the tool_use request — only after the read succeeds.
-    expect(usageEvents(emit)).toHaveLength(0);
     processor.onMessage(userToolResult("r1", "file contents"));
 
-    const usage = usageEvents(emit);
-    expect(usage).toHaveLength(1);
-    const ev = usage[0];
-    if (!ev || ev.kind !== "context_tree_usage") throw new Error("expected context_tree_usage");
-    expect(ev.payload.nodePath).toBe("members/Gandy2025/NODE.md");
-    expect(ev.payload.treeRepoUrl).toBe("https://github.com/example/tree");
-    expect(ev.payload.purpose).toBe("design_decision");
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r1" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: `${TREE}/members/Gandy2025/NODE.md`,
+        repoUrl: "https://github.com/example/tree",
+        repoRelativePath: "members/Gandy2025/NODE.md",
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("emits for NotebookRead under the tree as well", () => {
+  it("attaches file refs for NotebookRead under the tree as well", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
     processor.onMessage(assistantToolUse("r2", "NotebookRead", { file_path: `${TREE}/designs/spike.md` }));
     processor.onMessage(userToolResult("r2", "cells"));
 
-    const usage = usageEvents(emit);
-    expect(usage).toHaveLength(1);
-    expect(usage[0]?.kind === "context_tree_usage" && usage[0].payload.nodePath).toBe("designs/spike.md");
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r2" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs?.[0]).toMatchObject({
+      origin: "tool_arg",
+      repoRelativePath: "designs/spike.md",
+    });
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT emit when a tree Read FAILS (is_error)", () => {
+  it("does NOT attach file refs when a tree Read FAILS (is_error)", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
     processor.onMessage(assistantToolUse("r3", "Read", { file_path: `${TREE}/missing/NODE.md` }));
     processor.onMessage(userToolResult("r3", "ENOENT: no such file", true));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r3" && event.payload.status === "error",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT emit for an aborted tree Read that never returns a result", () => {
+  it("does NOT attach file refs for an aborted tree Read that never returns a result", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
@@ -355,20 +364,34 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
     // Turn aborted before the tool_result arrives.
     processor.flush();
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r4" && event.payload.status === "pending",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT emit when Read targets a file outside the tree", () => {
+  it("attaches local-only file refs when Read targets a file outside the tree", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
     processor.onMessage(assistantToolUse("r5", "Read", { file_path: "/home/op/project/src/index.ts" }));
     processor.onMessage(userToolResult("r5", "code"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r5" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: "/home/op/project/src/index.ts",
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT match a sibling dir that shares the tree-root prefix", () => {
+  it("does not attach repo evidence for a sibling dir that shares the tree-root prefix", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
@@ -376,10 +399,20 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
     processor.onMessage(assistantToolUse("r6", "Read", { file_path: "/home/op/.first-tree/tree-other/NODE.md" }));
     processor.onMessage(userToolResult("r6", "x"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r6" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: "/home/op/.first-tree/tree-other/NODE.md",
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT emit for a non-view tool even if an arg path is under the tree", () => {
+  it("does NOT attach file refs for unsupported tools even if an arg path is under the tree", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
@@ -388,55 +421,88 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
     );
     processor.onMessage(userToolResult("r7", "contents"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r7" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("emits nothing when no Context Tree binding is configured", () => {
+  it("attaches local-only file refs when no Context Tree binding is configured", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit); // no binding
 
     processor.onMessage(assistantToolUse("r8", "Read", { file_path: `${TREE}/NODE.md` }));
     processor.onMessage(userToolResult("r8", "x"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r8" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: `${TREE}/NODE.md`,
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("emits nothing when the binding path is null", () => {
+  it("attaches local-only file refs when the binding path is null", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, { path: null, repoUrl: null });
 
     processor.onMessage(assistantToolUse("r9", "Read", { file_path: `${TREE}/NODE.md` }));
     processor.onMessage(userToolResult("r9", "x"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r9" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: `${TREE}/NODE.md`,
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("carries a null treeRepoUrl through when the binding has no repo url", () => {
+  it("attaches local-only file refs when the binding has no repo url", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, { path: TREE, repoUrl: null });
 
     processor.onMessage(assistantToolUse("r10", "Read", { file_path: `${TREE}/NODE.md` }));
     processor.onMessage(userToolResult("r10", "x"));
 
-    const usage = usageEvents(emit);
-    expect(usage).toHaveLength(1);
-    const ev = usage[0];
-    if (!ev || ev.kind !== "context_tree_usage") throw new Error("expected context_tree_usage");
-    expect(ev.payload.treeRepoUrl).toBeNull();
-    expect(ev.payload.nodePath).toBe("NODE.md");
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r10" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: `${TREE}/NODE.md`,
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT emit when Read input has no string file_path", () => {
+  it("does NOT attach file refs when Read input has no string file_path", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
 
     processor.onMessage(assistantToolUse("r11", "Read", { offset: 0 }));
     processor.onMessage(userToolResult("r11", "x"));
 
-    expect(usageEvents(emit)).toHaveLength(0);
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r11" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
+    expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("attaches a write IO candidate when a tree Write succeeds", () => {
+  it("attaches file refs when a tree Write succeeds", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, { ...binding, branch: "main" });
 
@@ -445,22 +511,17 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
 
     const toolCalls = toolCallEvents(emit);
     const final = toolCalls.find((event) => event.payload.toolUseId === "w1" && event.payload.status === "ok");
-    expect(final?.payload.contextTreeIo).toEqual([
+    expect(final?.payload.toolFileRefs).toEqual([
       {
-        action: "write",
-        source: "claude_write_tool",
-        treeRepoUrl: "https://github.com/example/tree",
-        treeBranch: "main",
-        targetKind: "file",
-        targetPath: "members/Gandy2025/NODE.md",
-        metadata: {
-          toolName: "Write",
-          toolUseId: "w1",
-          localPath: `${TREE}/members/Gandy2025/NODE.md`,
-        },
+        origin: "tool_arg",
+        localPath: `${TREE}/members/Gandy2025/NODE.md`,
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "members/Gandy2025/NODE.md",
+        pathKind: "file",
       },
     ]);
-    expect(usageEvents(emit)).toHaveLength(0);
+    expect(usageEventCount(emit)).toBe(0);
   });
 });
 
