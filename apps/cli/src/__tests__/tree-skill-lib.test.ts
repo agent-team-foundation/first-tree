@@ -216,13 +216,13 @@ describe("tree skill library", () => {
 
   it("manages the WHITEPAPER symlink without replacing user files or directories", () => {
     expect(upsertWhitepaperFile(root)).toBe("created");
-    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
+    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
     expect(upsertWhitepaperFile(root)).toBe("unchanged");
 
     unlinkSync(join(root, "WHITEPAPER.md"));
     symlinkSync("old-target", join(root, "WHITEPAPER.md"));
     expect(upsertWhitepaperFile(root)).toBe("updated");
-    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
+    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
 
     unlinkSync(join(root, "WHITEPAPER.md"));
     writeFileSync(join(root, "WHITEPAPER.md"), "custom\n");

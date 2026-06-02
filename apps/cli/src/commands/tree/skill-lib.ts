@@ -111,7 +111,12 @@ const FIRST_TREE_CONTEXT_REFERENCE_FILES = [
 const STANDARD_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION", join("agents", "openai.yaml")] as const;
 
 const WHITEPAPER_FILE = "WHITEPAPER.md";
-const WHITEPAPER_SYMLINK_TARGET = join(".agents", "skills", "first-tree", "SKILL.md");
+// Whitepaper content (Context Tree concepts, principles, ownership, methodology)
+// lives in `first-tree-context/SKILL.md` after the skill-topology restructure
+// (proposal: skill-restructure.20260602). The top-level `first-tree/SKILL.md` is
+// now a routing + pre-task hygiene dispatcher, not methodology — so pointing the
+// installed `<repo>/WHITEPAPER.md` symlink at it would make name and content drift.
+const WHITEPAPER_SYMLINK_TARGET = join(".agents", "skills", "first-tree-context", "SKILL.md");
 
 function layoutForSkill(name: SkillName): SkillLayout {
   return {

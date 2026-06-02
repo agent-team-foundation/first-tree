@@ -40,12 +40,17 @@ first-tree tree inspect --json
 
 The `role` field tells you what kind of root this is:
 
+The `role` enum is defined in `apps/cli/src/commands/tree/inspect.ts` —
+six possible values:
+
 | `role` | What you're looking at | Where to go next |
 |---|---|---|
 | `tree-repo` | The Context Tree repo itself | Use `first-tree-context` to read/write tree content directly. Do not run `first-tree-onboarding` here. |
 | `source-repo-bound` | A source repo bound to a tree | OK to proceed with any source-side task. |
-| `workspace-root-bound` | A workspace root (multi-repo container) bound to a tree | OK to proceed; remember workspace-member sub-repos inherit the binding. |
-| `unbound` | No binding metadata | Run `first-tree-onboarding` first. Do not skip — downstream skills depend on the binding. |
+| `workspace-root-bound` | A workspace root (multi-repo container) bound to a tree | OK to proceed; workspace-member sub-repos inherit the binding. |
+| `unbound-source-repo` | A git repo with no `FIRST-TREE-SOURCE-INTEGRATION` block | Run `first-tree-onboarding` first. Do not skip — downstream skills depend on the binding. |
+| `unbound-workspace-root` | A multi-repo workspace root with no binding | Run `first-tree-onboarding --scope workspace` first. |
+| `unknown` | Cannot classify (folder without git, or unexpected state) | Re-check `cwd`; if intentional, run `first-tree tree inspect` (without `--json`) and read the human-readable summary before deciding. |
 
 ### 2. Tree HEAD freshness
 
