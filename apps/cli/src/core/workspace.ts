@@ -175,6 +175,13 @@ function listImmediateChildDirs(root: string): string[] {
  * Read the `origin` remote URL from a directory, or `undefined` if the
  * directory is not a git repo or has no `origin` remote configured. Never
  * throws; failures degrade to `undefined`.
+ *
+ * Note: `apps/cli/src/commands/tree/shared.ts` ships a same-named helper.
+ * We deliberately do NOT import that one — `core/` must not depend on
+ * `commands/` (per the project's New Feature Steps for Command: business
+ * logic flows down to `core/`, never up from it). The slight duplication
+ * is intentional and will be consolidated when PR-5 / PR-6 remove the
+ * legacy tree-command modules.
  */
 export function readGitRemoteUrl(repoDir: string, remote = "origin"): string | undefined {
   if (!isGitRepoDir(repoDir)) {

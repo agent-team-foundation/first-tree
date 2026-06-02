@@ -44,7 +44,6 @@ export {
   printResults,
   promptAddAgent,
   promptMissingFields,
-  readGitRemoteUrl,
   readWorkspaceManifest,
   resolveAccessToken,
   resolveCliInvocation,
