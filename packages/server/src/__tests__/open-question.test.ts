@@ -4,7 +4,7 @@ import { chatUserState } from "../db/schema/chat-user-state.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { listMeChats } from "../services/me-chat.js";
-import { sendMessage } from "../services/message.js";
+import { editMessage, sendMessage } from "../services/message.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -215,6 +215,67 @@ describe("open-question (format=request) + open_request_count", () => {
       inReplyTo: question.id,
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a request-shaped reply to an already-resolved request opens a fresh count (+1)", async () => {
+    // Review #3: a threaded follow-up question must be independently countable.
+    // Raise → target answers (count 0) → asker asks a NEW request replying to
+    // the resolved one → it's a new open question, so count must be 1 again
+    // (the new request +1; the supersede of the already-resolved parent is a
+    // no-op, not a double -1).
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: q1 } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "web", format: "text", content: "5%", inReplyTo: q1.id });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+
+    // Asker follows up with a NEW request replying to the resolved q1.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "follow-up",
+      inReplyTo: q1.id,
+      metadata: { mentions: [human.uuid], request: { question: "and the timing?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+  });
+
+  it("editMessage refuses to change a message's format to or from 'request'", async () => {
+    // Review #2: the counter is maintained only on send; a format edit would
+    // desync it, so edits touching `request` are rejected.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    const { message: plain } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "fyi",
+      metadata: { mentions: [human.uuid] },
+    });
+
+    await expect(editMessage(app.db, chat.id, question.id, asker.agent.uuid, { format: "text" })).rejects.toThrow(
+      /format to or from 'request'/i,
+    );
+    await expect(editMessage(app.db, chat.id, plain.id, asker.agent.uuid, { format: "request" })).rejects.toThrow(
+      /format to or from 'request'/i,
+    );
+    // A content-only edit of the request is still allowed.
+    const edited = await editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "ratio (clarified)?" });
+    expect(edited.format).toBe("request");
   });
 });
 

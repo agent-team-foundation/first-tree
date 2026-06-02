@@ -492,56 +492,58 @@ async function sendMessageInner(
     });
 
     // 7. Open-question counter (`chat_user_state.open_request_count`) — see
-    //    proposals/group-chat-unified-send §D1. Two mutually exclusive paths,
-    //    keyed on `inReplyTo`:
-    //      +1 — a FRESH request (`format=request`, no `inReplyTo`): the single
-    //           validated human target now owes an answer.
-    //      -1 — a reply (`inReplyTo=M`) that answers a request M directed at
-    //           THIS sender; only the sender's FIRST reply to M decrements
-    //           (idempotent), and `GREATEST(0, …)` floors at zero.
-    //    A reply that is itself a new request takes NEITHER path: it has an
-    //    `inReplyTo` (so not +1) and its sender is the asking agent, not M's
-    //    human target (so not -1) — zero count change, by design.
+    //    proposals/group-chat-unified-send §D1. TWO INDEPENDENT effects (a
+    //    single message can trigger both):
+    //      +1 — ANY `format=request` opens a question for its single human
+    //           target, including a request-shaped reply (the new request
+    //           stands on its own and is independently answerable).
+    //      -1 — a reply that RESOLVES the parent request: the target answers
+    //           it, OR the asking agent replies to its own request (a
+    //           non-request reply withdraws it; a request-shaped reply
+    //           supersedes it). Idempotent — only the first resolving reply
+    //           decrements; `GREATEST(0, …)` floors at zero.
+    //    A request-shaped reply by the author thus does both: +1 the new
+    //    question and -1 (supersede) the parent → nets zero when both target
+    //    the same human; +1 only when the parent was already resolved/closed.
     const requestTarget = mergedMentions[0];
-    if (data.format === MESSAGE_FORMATS.REQUEST && !data.inReplyTo && requestTarget) {
+    if (data.format === MESSAGE_FORMATS.REQUEST && requestTarget) {
       await tx.execute(sql`
         INSERT INTO chat_user_state (chat_id, agent_id, open_request_count)
         VALUES (${chatId}, ${requestTarget}, 1)
         ON CONFLICT (chat_id, agent_id)
         DO UPDATE SET open_request_count = chat_user_state.open_request_count + 1
       `);
-    } else if (data.inReplyTo) {
+    }
+    if (data.inReplyTo) {
+      // Lock the parent request row FIRST so concurrent resolving replies to
+      // the SAME request serialise — otherwise two answers/closes could both
+      // observe `alreadyResolved=false` under READ COMMITTED and each
+      // decrement the same row (double-decrement).
       const [parent] = await tx
         .select({ format: messages.format, metadata: messages.metadata, senderId: messages.senderId })
         .from(messages)
         .where(and(eq(messages.id, data.inReplyTo), eq(messages.chatId, chatId)))
+        .for("update")
         .limit(1);
       const parentMentions = Array.isArray(parent?.metadata?.mentions) ? parent.metadata.mentions : [];
       const target =
         parent?.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
       if (typeof target === "string") {
-        // A reply RESOLVES the open question (clears the target's count) when it is:
-        //   - the target answering it (sender === target), OR
-        //   - the asking agent actively closing it with a NON-request reply
-        //     (sender === request author, format !== "request").
-        // A request-shaped reply by the author is a REPLACEMENT, not a close —
-        // the new request carries the open count, so it is excluded here.
-        // See proposals/group-chat-unified-send §D1 (resolved / closed).
+        // Resolving = the target answers (sender === target) OR the asking
+        // agent replies to its own request (any format — withdraw or supersede).
         const isAnswer = senderId === target;
-        const isAuthorClose = senderId === parent?.senderId && data.format !== MESSAGE_FORMATS.REQUEST;
-        if (isAnswer || isAuthorClose) {
-          // Idempotency: only the FIRST resolving reply to this request decrements
-          // (exclude the row we just inserted); answer-then-close, double-close,
-          // etc. are all no-ops afterward.
+        const isAuthorReply = senderId === parent?.senderId;
+        if (isAnswer || isAuthorReply) {
+          // Idempotency: only the FIRST resolving reply decrements (exclude the
+          // row we just inserted). Serialised by the parent FOR UPDATE lock; a
+          // prior resolving reply is one from the target or the asking author.
           const priors = await tx
-            .select({ senderId: messages.senderId, format: messages.format })
+            .select({ senderId: messages.senderId })
             .from(messages)
             .where(
               and(eq(messages.chatId, chatId), eq(messages.inReplyTo, data.inReplyTo), ne(messages.id, messageId)),
             );
-          const alreadyResolved = priors.some(
-            (p) => p.senderId === target || (p.senderId === parent?.senderId && p.format !== MESSAGE_FORMATS.REQUEST),
-          );
+          const alreadyResolved = priors.some((p) => p.senderId === target || p.senderId === parent?.senderId);
           if (!alreadyResolved) {
             await tx.execute(sql`
               UPDATE chat_user_state
@@ -634,6 +636,20 @@ export async function editMessage(
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
   if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
+
+  // The open-question counter (`open_request_count`) is maintained only on the
+  // send path, keyed off `format=request`. Allowing an edit to flip a message
+  // into or out of `request` would desync that counter (a request edited to
+  // text leaves a stuck +1; text edited to request renders an open card with
+  // no count). Forbid format changes that touch `request`; content edits and
+  // other format changes are unaffected. See proposals/group-chat-unified-send §D1.
+  if (
+    data.format !== undefined &&
+    data.format !== msg.format &&
+    (data.format === MESSAGE_FORMATS.REQUEST || msg.format === MESSAGE_FORMATS.REQUEST)
+  ) {
+    throw new BadRequestError("Cannot change a message's format to or from 'request'.");
+  }
 
   const setClause: Record<string, unknown> = {};
   if (data.format !== undefined) setClause.format = data.format;
