@@ -6,6 +6,7 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
+import { SegmentedControl } from "../../components/ui/segmented-control.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 
 export type { RowAction };
@@ -34,7 +35,13 @@ export type HumanRow = {
   displayName: string;
   role: string;
   isSelf: boolean;
-  delegate: { uuid: string; name: string | null; displayName: string } | null;
+  delegate: {
+    uuid: string;
+    name: string | null;
+    displayName: string;
+    colorToken: string | null;
+    avatarImageUrl: string | null;
+  } | null;
   /** Whether the viewer can edit this human's delegate (self only, per spec). */
   canEditDelegate: boolean;
   /** Humanized "active X ago"; null renders "—" (Phase 2 wires the data). */
@@ -76,10 +83,10 @@ function rowOpenProps(onOpen: () => void, label: string) {
   } as const;
 }
 const ROW_GAP = "var(--sp-5)";
-// Agent middle band sub-grid: Owner | Runs on | Usage. The Usage min width is
-// kept generous to fit "1.24M · 142t" cells without ellipsis at the dominant
-// content density.
-const AGENT_MIDDLE_GRID = "minmax(0, 1.3fr) minmax(0, 1fr) minmax(calc(var(--sp-20) + var(--sp-10)), 1fr)";
+// Agent middle band sub-grid: Owner | Runs on | Usage. Usage is now just the
+// token magnitude (no turns), so its min track is trimmed — the reclaimed width
+// goes to Owner, which gained a small avatar before the name.
+const AGENT_MIDDLE_GRID = "minmax(0, 1.4fr) minmax(0, 1fr) minmax(var(--sp-16), 0.9fr)";
 // Compact (<64rem): collapse to Name | Status | Actions; fold the rest into
 // the name cell's meta line, all actions into one always-visible kebab.
 const COMPACT_GRID = "minmax(0, 1fr) auto auto";
@@ -91,6 +98,12 @@ const COMPACT_GRID = "minmax(0, 1fr) auto auto";
 // indentation. Kept as a single knob so the indent can be reintroduced if the
 // disclosure affordance ever returns to the left.
 const SECTION_BODY_INDENT = "0";
+
+// Avatar sizing. The Name-column identity avatar is the larger anchor; the
+// Owner / Delegate relationship avatars (which visualise the human⇄agent
+// delegation link) are a step smaller so the primary identity stays dominant.
+const NAME_AVATAR_SIZE = 24;
+const RELATION_AVATAR_SIZE = 18;
 
 /**
  * Per-section collapse state, persisted to localStorage so a member's
@@ -161,6 +174,9 @@ export type TeamTableProps = {
   onSetDelegate: (humanAgentId: string, delegateUuid: string | null) => void;
   /** Empty-state copy when search filters everything out. */
   searchActive: boolean;
+  /** Agent-only scope filter, surfaced in the Agent teammates header. */
+  agentFilter: "all" | "mine";
+  onAgentFilter: (next: "all" | "mine") => void;
 };
 
 export function TeamTable(props: TeamTableProps) {
@@ -178,38 +194,30 @@ export function TeamTable(props: TeamTableProps) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function AgentSection(props: TeamTableProps & { compact: boolean }) {
-  const { publicAgents, privateAgents, agentCount, compact } = props;
+  const { publicAgents, privateAgents, agentCount, compact, agentFilter, onAgentFilter } = props;
   const [collapsed, toggle] = useCollapsed("team.collapse.agents");
   return (
     <section>
-      {/* Collapsible section header: icon + title + count sit flush-left, the
-          disclosure caret is right-aligned (accordion pattern). The whole row
-          is the toggle. The All/Mine filter lives in the page's filter toolbar
-          now, not here. */}
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={!collapsed}
-        className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
-        style={{
-          gap: "var(--sp-2)",
-          padding: "var(--sp-5) var(--sp-1) var(--sp-3)",
-          border: 0,
-          background: "transparent",
-          cursor: "pointer",
-          borderRadius: "var(--radius-input)",
-        }}
-      >
-        <Bot className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
-        <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
-          Agent teammates
-        </h2>
-        <span className="text-label" style={{ color: "var(--fg-4)" }}>
-          {agentCount}
-        </span>
-        <span style={{ flex: 1 }} />
-        <CollapseCaret collapsed={collapsed} />
-      </button>
+      {/* The All/Mine scope filter lives in this header (it is agent-only — it
+          never affects the Human section), sitting to the left of the right-edge
+          disclosure caret. It is a sibling of the toggle buttons, never nested. */}
+      <SectionHeading
+        icon={Bot}
+        title="Agent teammates"
+        count={agentCount}
+        collapsed={collapsed}
+        onToggle={toggle}
+        actions={
+          <SegmentedControl
+            value={agentFilter}
+            onChange={onAgentFilter}
+            options={[
+              { value: "all", label: "All" },
+              { value: "mine", label: "Mine" },
+            ]}
+          />
+        }
+      />
 
       {collapsed ? null : (
         <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
@@ -237,6 +245,76 @@ function AgentSection(props: TeamTableProps & { compact: boolean }) {
   );
 }
 
+/**
+ * Collapsible section header (right accordion). Icon + title + count sit
+ * flush-left in a toggle button that fills the row; the disclosure caret is a
+ * separate toggle button at the right edge. An optional `actions` slot (e.g.
+ * the Agent section's All/Mine filter) renders just left of the caret as a
+ * SIBLING — never nested inside a button, which would be invalid markup.
+ */
+function SectionHeading({
+  icon: Icon,
+  title,
+  count,
+  collapsed,
+  onToggle,
+  actions,
+}: {
+  icon: LucideIcon;
+  title: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  actions?: ReactNode;
+}) {
+  return (
+    <div
+      className="flex w-full items-center"
+      style={{ gap: "var(--sp-2)", padding: "var(--sp-5) var(--sp-1) var(--sp-3)" }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex flex-1 items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+        style={{
+          gap: "var(--sp-2)",
+          minWidth: 0,
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+          borderRadius: "var(--radius-input)",
+        }}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden style={{ color: "var(--fg-3)" }} />
+        <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
+          {title}
+        </h2>
+        <span className="text-label" style={{ color: "var(--fg-4)" }}>
+          {count}
+        </span>
+        <span style={{ flex: 1 }} />
+      </button>
+      {actions}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={`Toggle ${title}`}
+        className="flex items-center transition-colors hover:bg-[var(--bg-hover)]"
+        style={{
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+          borderRadius: "var(--radius-input)",
+          padding: "var(--sp-1)",
+        }}
+      >
+        <CollapseCaret collapsed={collapsed} />
+      </button>
+    </div>
+  );
+}
+
 // Usage aggregation window is fixed at 7 days — the header is a plain
 // "Usage" label with no picker. Compact viewport omits the header row
 // entirely (the row's value still renders, just no column legend), which
@@ -260,7 +338,9 @@ function AgentColumnHeader() {
         {/* Right-aligned: Usage is a numeric column, so it reads as one and
             sits clear of the Runs-on column to its left. */}
         <span className="inline-flex items-center" style={{ justifySelf: "end" }}>
-          <HeaderLabel>Usage</HeaderLabel>
+          {/* Window is fixed at 7 days; the label makes that explicit so the
+              magnitude has a time context (no picker — fixed 7d). */}
+          <HeaderLabel>Usage · 7d</HeaderLabel>
         </span>
       </div>
       <span className="text-eyebrow" style={{ color: "var(--fg-4)", justifySelf: "end" }}>
@@ -378,7 +458,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         hasTaglineSlot={false}
       />
       <div className="grid items-center min-w-0" style={{ gridTemplateColumns: AGENT_MIDDLE_GRID, gap: "var(--sp-4)" }}>
-        <OwnerCell managerLabel={managerLabel} isSelf={isOwnedBySelf} dim={dimOwner} />
+        <OwnerCell managerLabel={managerLabel} managerId={agent.managerId} isSelf={isOwnedBySelf} dim={dimOwner} />
         <RunsOnCell provider={agent.runtimeProvider} host={clientHost} />
         <UsageCell usage={usage} loading={usageLoading} />
       </div>
@@ -388,7 +468,17 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
   );
 }
 
-function OwnerCell({ managerLabel, isSelf, dim }: { managerLabel: string | null; isSelf: boolean; dim: boolean }) {
+function OwnerCell({
+  managerLabel,
+  managerId,
+  isSelf,
+  dim,
+}: {
+  managerLabel: string | null;
+  managerId: string | null;
+  isSelf: boolean;
+  dim: boolean;
+}) {
   if (!managerLabel) {
     return (
       <span className="text-label" style={{ color: "var(--fg-4)" }}>
@@ -396,10 +486,12 @@ function OwnerCell({ managerLabel, isSelf, dim }: { managerLabel: string | null;
       </span>
     );
   }
-  // Name only — the Owner chip intentionally drops the avatar (the leftmost
-  // Name column keeps its avatar). Keeps the middle band lean.
+  // The owner's small avatar precedes the name to make the human⇄agent
+  // ownership link legible at a glance; it's seeded by the manager's member id,
+  // so it matches that same person's avatar in the Human section.
   return (
-    <div className="flex items-center min-w-0" style={{ opacity: dim ? 0.5 : 1 }}>
+    <div className="flex items-center min-w-0" style={{ gap: "var(--sp-1_5)", opacity: dim ? 0.5 : 1 }}>
+      <Avatar name={managerLabel} seed={managerId ?? managerLabel} size={RELATION_AVATAR_SIZE} />
       {isSelf ? (
         <span className="text-body font-semibold truncate" style={{ color: "var(--fg)" }}>
           You
@@ -443,6 +535,9 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
     );
   }
   const totalTokens = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens;
+  // Show only the token magnitude — the turn count was dropped from the cell (it
+  // crowded the column and truncated); turns remain in the hover title for the
+  // rare case someone wants the breakdown.
   return (
     <div
       className="text-caption mono truncate"
@@ -450,7 +545,6 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
       title={`Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · ${usage.turns} turns`}
     >
       {formatCompactCount(totalTokens)}
-      <span style={{ color: "var(--fg-4)" }}>{` · ${usage.turns} turn${usage.turns === 1 ? "" : "s"}`}</span>
     </div>
   );
 }
@@ -700,10 +794,18 @@ function DelegateCell({
   return <DelegateChip delegate={row.delegate} />;
 }
 
-function DelegateChip({ delegate }: { delegate: { uuid: string; name: string | null; displayName: string } }) {
-  // Name only — the Delegate chip drops the avatar (parallels the Owner chip).
+function DelegateChip({ delegate }: { delegate: NonNullable<HumanRow["delegate"]> }) {
+  // The delegate agent's small avatar precedes the name (parallels the Owner
+  // chip) so the human⇄agent delegation link reads at a glance.
   return (
-    <span className="inline-flex items-center min-w-0">
+    <span className="inline-flex items-center min-w-0" style={{ gap: "var(--sp-1_5)" }}>
+      <Avatar
+        name={delegate.displayName}
+        src={delegate.avatarImageUrl}
+        colorToken={delegate.colorToken}
+        seed={delegate.uuid}
+        size={RELATION_AVATAR_SIZE}
+      />
       <span className="text-body truncate" style={{ color: "var(--fg-2)" }} title={delegate.displayName}>
         {delegate.displayName}
       </span>
@@ -815,7 +917,7 @@ function NameCell({
 }) {
   return (
     <div className="flex items-center min-w-0" style={{ gap: "var(--sp-2_5)" }}>
-      <Avatar name={displayName} src={avatarUrl} colorToken={colorToken} seed={seed} size={30} />
+      <Avatar name={displayName} src={avatarUrl} colorToken={colorToken} seed={seed} size={NAME_AVATAR_SIZE} />
       <div className="min-w-0">
         <div className="flex items-baseline min-w-0" style={{ gap: "var(--sp-1_5)" }}>
           <span className="text-subtitle truncate" style={{ color: "var(--fg)" }} title={displayName}>
@@ -935,9 +1037,10 @@ function agentMetaLine(
   usage: UsageByAgentRow | null,
 ): string {
   const owner = isSelf ? "You" : (managerLabel ?? "—");
+  // Token magnitude only — turns were dropped from the Usage display.
   const usageStr =
     usage && usage.turns > 0
-      ? `${formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)} · ${usage.turns} turn${usage.turns === 1 ? "" : "s"}`
+      ? formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)
       : "—";
   return `${owner} · ${provider} · ${usageStr}`;
 }
