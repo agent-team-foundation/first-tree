@@ -36,6 +36,7 @@ import * as activityService from "../../services/activity.js";
 import * as agentService from "../../services/agent.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
+import * as contextTreeIoService from "../../services/context-tree-io.js";
 import * as inboxService from "../../services/inbox.js";
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
@@ -132,7 +133,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       // table is the authority for an agent's org, and frames that need to
       // emit org-scoped NOTIFY (admin WS broadcast filter) read it from this
       // cache rather than the long-retired session.organizationId.
-      const boundAgents = new Map<string, { agentId: string; inboxId: string; organizationId: string }>();
+      const boundAgents = new Map<
+        string,
+        { agentId: string; inboxId: string; organizationId: string; runtimeProvider: string }
+      >();
 
       /**
        * Per-agent in-flight `inbox:deliver` counter for backpressure. Lives on
@@ -641,6 +645,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 agentId: agent.id,
                 inboxId: agent.inboxId,
                 organizationId: agent.organizationId,
+                runtimeProvider: agent.runtimeProvider,
               });
 
               // Subscribe to NOTIFY traffic with a per-socket push handler so
@@ -874,7 +879,32 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
-                  await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+                  const persistedEvent = await sessionEventService.appendEvent(
+                    app.db,
+                    agentId,
+                    payload.chatId,
+                    payload.event,
+                    {
+                      deferSideEffects: true,
+                    },
+                  );
+                  if (boundInfo) {
+                    await contextTreeIoService
+                      .recordFromSessionEvent(app.db, {
+                        organizationId: boundInfo.organizationId,
+                        agentId,
+                        chatId: payload.chatId,
+                        runtimeProvider: boundInfo.runtimeProvider,
+                        sessionEvent: persistedEvent,
+                      })
+                      .catch((err) => {
+                        app.log.warn(
+                          { err, agentId, chatId: payload.chatId },
+                          "context-tree IO record failed (non-fatal)",
+                        );
+                      });
+                  }
+                  sessionEventService.emitAppendEventSideEffects(app.db, agentId, payload.chatId, payload.event);
                   if (boundInfo) {
                     // Best-effort cross-instance kick so admin WS sockets in
                     // the same org can invalidate `liveActivity` without

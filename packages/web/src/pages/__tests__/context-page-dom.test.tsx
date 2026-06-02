@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ContextTreeSnapshot, ContextTreeUsageEvent } from "@first-tree/shared";
+import type { ContextTreeIoEvent, ContextTreeSnapshot } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -122,6 +122,7 @@ function snapshot(overrides: Partial<ContextTreeSnapshot> = {}): ContextTreeSnap
     contextStatus: overrides.contextStatus ?? MOCK_CONTEXT_SNAPSHOT.contextStatus,
     summary: overrides.summary ?? MOCK_CONTEXT_SNAPSHOT.summary,
     usage: overrides.usage ?? MOCK_CONTEXT_SNAPSHOT.usage,
+    io: overrides.io ?? MOCK_CONTEXT_SNAPSHOT.io,
     nodes: overrides.nodes ?? MOCK_CONTEXT_SNAPSHOT.nodes,
     updates: overrides.updates ?? MOCK_CONTEXT_SNAPSHOT.updates,
     edges: overrides.edges ?? MOCK_CONTEXT_SNAPSHOT.edges,
@@ -129,15 +130,20 @@ function snapshot(overrides: Partial<ContextTreeSnapshot> = {}): ContextTreeSnap
   };
 }
 
-function usageEvent(index: number, overrides: Partial<ContextTreeUsageEvent> = {}): ContextTreeUsageEvent {
+function ioEvent(index: number, overrides: Partial<ContextTreeIoEvent> = {}): ContextTreeIoEvent {
+  const isWrite = index % 3 === 0;
   return {
-    id: `event-${index}`,
+    id: `io-event-${index}`,
     agentId: `agent-${index}`,
     agentName: index % 2 === 0 ? `qa.bot-${index}` : `Reviewer ${index}`,
     agentAvatarColorToken: index % 2 === 0 ? "hue-2" : null,
+    runtimeProvider: isWrite ? "codex" : "claude-code",
+    action: isWrite ? "write" : "read",
+    source: isWrite ? "codex_file_change" : "claude_read_tool",
+    targetKind: "file",
+    targetPath: `domains/topic-${index}/NODE.md`,
     chatId: `chat-${index}`,
     chatTitle: index % 3 === 0 ? "" : `topic-${index}`,
-    nodePath: index % 4 === 0 ? null : `domains/topic-${index}/NODE.md`,
     viewerCanAccess: index % 5 !== 0,
     createdAt: new Date(Date.UTC(2026, 4, 28, 12, 0, 0) - index * 60_000).toISOString(),
     ...overrides,
@@ -161,17 +167,15 @@ afterEach(() => {
 });
 
 describe("ContextPage DOM behavior", () => {
-  it("renders live preview, selects change groups, expands usage, and navigates accessible chats", async () => {
+  it("renders live preview, selects change groups, expands IO, and navigates accessible chats", async () => {
     vi.setSystemTime(new Date("2026-05-28T12:15:00.000Z"));
     const { ContextPage } = await import("../context.js");
-    const events = Array.from({ length: 12 }, (_, index) => usageEvent(index + 1));
+    const events = Array.from({ length: 12 }, (_, index) => ioEvent(index + 1));
     const liveSnapshot = snapshot({
       contextStatus: { label: "Needs attention", detail: "Tree sync is stale.", severity: "warning" },
       summary: { addedCount: 2, editedCount: 8, removedCount: 1, changedNodeCount: 3 },
-      usage: {
-        windowDays: 1,
-        agentCount: 1,
-        usageCount: 1,
+      io: {
+        ...MOCK_CONTEXT_SNAPSHOT.io,
         recentEvents: events,
       },
     });
@@ -180,12 +184,13 @@ describe("ContextPage DOM behavior", () => {
     expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Context tree is live");
     expect(container.textContent).toContain("Tree sync is stale.");
-    expect(container.textContent).toContain("1 agent");
-    expect(container.textContent).toContain("once");
+    expect(container.textContent).toContain("4 agents");
+    expect(container.textContent).toContain("18 reads");
+    expect(container.textContent).toContain("2 agents");
+    expect(container.textContent).toContain("5 writes");
     expect(container.textContent).toContain("23total nodes");
     expect(container.textContent).toContain("+6 updates");
     expect(container.textContent).toContain("QB");
-    expect(container.textContent).toContain("read the context tree");
     expect(container.textContent).toContain("#chat-3");
 
     await click(buttonByText(container, "Show all 12"));
@@ -199,9 +204,9 @@ describe("ContextPage DOM behavior", () => {
 
     const nextSnapshot = snapshot({
       ...liveSnapshot,
-      usage: {
-        ...liveSnapshot.usage,
-        recentEvents: [usageEvent(99, { id: "new-event", agentName: "Fresh Agent" }), ...events],
+      io: {
+        ...liveSnapshot.io,
+        recentEvents: [ioEvent(99, { id: "new-event", agentName: "Fresh Agent" }), ...events],
       },
     });
     await rerender(root, queryClient, <ContextPage previewSnapshot={nextSnapshot} />);
@@ -220,13 +225,22 @@ describe("ContextPage DOM behavior", () => {
         usageCount: 0,
         recentEvents: [],
       },
+      io: {
+        windowDays: 7,
+        summary: {
+          read: { agentCount: 0, eventCount: 0, targetCount: 0 },
+          write: { agentCount: 0, eventCount: 0, targetCount: 0 },
+        },
+        agents: [],
+        recentEvents: [],
+      },
       nodes: MOCK_CONTEXT_SNAPSHOT.nodes.map((node) => ({ ...node, changeType: null, changedAtCommit: null })),
       updates: [],
     });
 
     const { container, root } = await renderDom(<ContextPage previewSnapshot={empty} />);
     expect(container.textContent).toContain("No context updates in the past 7 days.");
-    expect(container.textContent).toContain("No agent has read the context tree in the last 7 days.");
+    expect(container.textContent).toContain("No explicit Context Tree read/write recorded in the last 7 days.");
     expect(container.textContent).not.toContain("LIVE");
     await act(async () => root.unmount());
   });
