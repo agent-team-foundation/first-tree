@@ -1,26 +1,26 @@
 ---
 name: first-tree-onboarding
-version: 0.5.0
+version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "tree bound, real content drafted, daemon running, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the daemon. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, and the final doctor checks.
+description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "workspace.json bound, real content drafted, daemon running, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", "migrate this workspace to W1", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the daemon. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, the W1 migration of legacy multi-mode workspaces, and the final doctor checks.
 ---
 
 # First Tree Onboarding (one-shot command)
 
 When the user invokes this skill, you (the agent) drive onboarding **end to end**. Phases A→F below run in order. Within a phase, **execute without asking** unless the action is irreversible or genuinely ambiguous (see "When to ask the user"). At the end, print the wrap-up summary in Phase F.
 
-Read first: [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md) and [`../first-tree-context/references/structure.md`](../first-tree-context/references/structure.md). They define the tree concepts the rest of this skill assumes.
+Read first: [`../first-tree/SKILL.md`](../first-tree/SKILL.md) and [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md). They define the workspace and tree concepts the rest of this skill assumes.
 
 ## Success criteria (do not claim done until ALL pass)
 
-1. `first-tree tree inspect --json` (from the source repo) reports `role: source-repo-bound` or `workspace-root-bound`.
-2. The bound tree exists on disk, and `first-tree tree verify --tree-path <tree_root>` exits 0.
+1. `first-tree tree status --json` reports a `workspaceRoot`, a `manifest.tree`, and a non-empty `boundSources[]` whose entries are present on disk (`present: true`).
+2. The bound tree exists on disk at `<workspaceRoot>/<manifest.tree>`, and `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>` exits 0.
 3. The tree's `NODE.md`, `members/owner/NODE.md`, and `.first-tree/org.yaml` contain real content (no remaining placeholder strings — see [`references/content-drafting.md`](references/content-drafting.md) §Detection).
-4. `first-tree tree skill doctor --root <source_root>` exits 0.
+4. `first-tree tree skill doctor` exits 0 from the workspace root.
 5. If the user opted in to the daemon: `first-tree github scan doctor` exits 0.
-6. The agent has confirmed that Tier 0's `validate.yml` exists, explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <tree_root>` and recorded the returned stage.
-7. The user has explicitly confirmed which agent templates to keep in `.first-tree/agent-templates/`.
+6. Tier 0's `validate.yml` exists inside the tree subdir, the agent has explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>` and recorded the returned stage.
+7. The user has explicitly confirmed which agent templates to keep in `<workspaceRoot>/<manifest.tree>/.first-tree/agent-templates/`.
 
 If any of these fails, stop and report — never silently mark onboarding complete.
 
@@ -29,8 +29,8 @@ If any of these fails, stop and report — never silently mark onboarding comple
 Ask **only** before:
 
 - Pushing a branch or PR to a remote (always show diff first).
-- Choosing tree mode when both dedicated and shared make sense.
-- Recursing into nested repos (`--recursive` cascade) when the workspace contains submodules, vendored code, or private sibling repos.
+- Choosing where the tree lives when both "create new tree" and "bind existing tree" make sense.
+- Promoting a single-repo legacy layout into a workspace dir during migration (`migrate-to-w1` Case B/C). The move is destructive, so the CLI prompts; if you pre-decided a name, pass `--workspace-name <name>`.
 - Creating a new GitHub repo for the tree (`gh repo create`) — visibility (public/private) must be confirmed.
 - Deleting partial state to recover from a corrupt binding.
 
@@ -46,52 +46,63 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 
 **Action:**
 
-1. `first-tree tree inspect --json` from cwd → record `role`, `binding.treeRepoName`, `binding.treeRemoteUrl`, `binding.treeMode`, `binding.bindingMode`, `rootPath`.
+1. `first-tree tree status --json` from cwd → record `workspaceRoot`, `manifest.tree`, `manifest.sources`, `boundSources[]`, `unboundGitSiblings[]`.
 2. `first-tree --version` → record CLI version.
 3. `gh auth status` → record success/failure (do not stop on failure yet).
-4. Compute paths the rest of the skill will use:
-   - `source_root` = `rootPath` from inspect.
-   - If bound and `treeRepoName` present: `tree_root_candidate` = `<dirname(source_root)>/<treeRepoName>` (dedicated sibling). If that path exists and contains `.first-tree/`, use it as `tree_root`. Otherwise mark `tree_root = unresolved` and resolve in Phase B.
+4. Branch on the status output:
 
-**Branch on `role`:**
+| Status output                                              | Next                                                                                                  |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Reports a workspace root + tree + bound sources (W1)       | Skip Phase B; jump to Phase B-refresh, then Phase C.                                                  |
+| "not inside a First Tree workspace" / no `workspace.json`  | Phase B (single repo) or Phase B (workspace) — decide by what's on disk (see Phase B entry table).    |
+| Falls back to legacy `inspect` output with `role: *-bound` | The workspace is on the legacy multi-mode layout — go to Phase A.5 (migrate) **before** Phase C.       |
+| `role: tree-repo`                                          | **STOP.** Tell the user: "You're inside the tree subdir of a workspace. cd to the workspace root and re-run." |
+| `role: unknown`                                            | Ask: "Not a recognized git repo or workspace. Run `git init` here, or did you mean a different path?" |
 
-| `role`                                       | Next                                                                                                  |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `tree-repo`                                  | **STOP.** Tell the user: "You're inside the tree repo. cd to the source repo and re-run."             |
-| `source-repo-bound` / `workspace-root-bound` | Skip Phase B; jump to Phase B-refresh, then Phase C.                                                  |
-| `unbound-source-repo`                        | Phase B (single repo).                                                                                |
-| `unbound-workspace-root`                     | Phase B (workspace).                                                                                  |
-| `unknown`                                    | Ask: "Not a recognized git repo or workspace. Run `git init` here, or did you mean a different path?" |
+**Exit gate:** workspace shape classified; `workspaceRoot` known when bound, or "needs binding" / "needs migration" flag set.
 
-**Exit gate:** role classified; `source_root` known; daemon-eligible flag set (gh ok).
+### Phase A.5 — Migrate legacy workspace (only when Phase A detected legacy state)
+
+**Entry signal:** Phase A reported the workspace is on the legacy multi-mode binding (`.first-tree-workspace` marker, `<tree>/.first-tree/bindings/`, or `<source>/.first-tree/source.json` survive without a `workspace.json`).
+
+**Action:**
+
+1. `first-tree tree migrate-to-w1 --dry-run` from cwd → review the plan (which legacy artifacts get removed; what `workspace.json.sources` will look like).
+2. If the plan looks correct: `first-tree tree migrate-to-w1`. For single-repo Case B/C layouts the command prompts before the `mv` step; if the user already named a workspace dir, pass `--workspace-name <name>`. To skip the prompt in scripted runs use `--yes`.
+3. Re-run `first-tree tree status --json` → confirm the new layout.
+4. The migration leaves dirty working-tree edits in the tree and each source repo; tell the user to inspect and commit before continuing.
+
+**Exit gate:** `first-tree tree status --json` reports `workspaceRoot` + `manifest.tree` + non-empty `manifest.sources` (the W1 shape, not the legacy `inspect` fallback). The migration result is separate — its own JSON output reports `dryRun: false`, an empty `warnings[]` (or only acceptable warnings the user has acknowledged), and no `kind: "not-applicable"` from the prior dry-run. Use `tree status` for the post-migration shape check; use the migrate output for the cleanup audit trail. Do not conflate the two.
 
 ### Phase B — Bind (auto unless ambiguous)
 
-**Entry signal:** Phase A reported `unbound-*`.
+**Entry signal:** Phase A reported "needs binding" (no workspace anywhere up the path).
 
 **Action:**
 
-1. `first-tree tree skill install --root <source_root>` (idempotent).
-2. Decide flags. Defaults below — only ask the user if marked ⚠.
-   - `unbound-source-repo` → `--tree-mode dedicated`.
-   - `unbound-workspace-root` → `--scope workspace --tree-mode shared --workspace-id <slug-of-source-root>`.
-   - **⚠ recursion:** if workspace cwd contains nested git repos that look distinct (private repos, submodules, `trusted-external/*`, vendored code), default to `--no-recursive` and **ask** before cascading.
-   - **⚠ existing tree:** if user mentioned an existing tree URL, add `--tree-url <url> --tree-mode shared` and skip `--tree-mode dedicated`.
-3. `first-tree tree init <flags>`.
-4. Resolve `tree_root` from the binding written by `tree init`. For dedicated mode it is the sibling dir; for `--tree-url` it is the temp clone under `<source_root>/.first-tree/tmp/<treeRepoName>/`.
-5. `first-tree tree verify --tree-path <tree_root>`.
+1. Decide tree mode. Defaults below — only ask the user if marked ⚠.
+   - **Lone source repo (no parent workspace dir yet)** → W1 requires source + tree as siblings under a workspace root, so the source has to live inside that root before `init` can write the manifest. Pre-create the workspace dir, move the source into it, then init from there:
+     1. Pick a workspace dir name (default = `<source-name>-workspace`). Ask the user before moving if they have a preferred name.
+     2. From the source repo's parent: `mkdir <workspace-name>` and `mv <source-repo> <workspace-name>/`. The source repo path changes — warn the user before the `mv`.
+     3. `cd <workspace-name>`.
+     4. `first-tree tree init --scope workspace --tree-path ./<tree-name> --tree-mode dedicated --workspace-id <slug> --no-recursive` (or `--tree-mode shared --tree-url <url>` for an existing remote tree). `--no-recursive` is required: without it init would also try to bind the newly-scaffolded tree dir as a source.
+   - **Workspace root with multiple child repos (cwd is already the workspace dir)** → `first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug-of-source-root>`. Adds `--tree-url <url>` for an existing remote tree.
+   - **⚠ recursion:** if cwd contains nested git repos that look distinct (private repos, submodules, `trusted-external/*`, vendored code), default to NOT recursing and **ask** before adding them to `workspace.json.sources`.
+2. `first-tree tree init` runs all of: install the five shipped skills at the workspace root, write framework `AGENTS.md` / `CLAUDE.md` at the workspace root, scaffold the tree subdir (when no `--tree-url`) or clone it (when `--tree-url`), and write `<workspaceRoot>/.first-tree/workspace.json` with the source(s) discovered at the workspace root.
+3. After init succeeds, walk `unboundGitSiblings[]` from a fresh `first-tree tree status` and ask the user which to add to `sources`. Adding a source is an in-place edit to `workspace.json.sources`; no separate CLI command is needed.
+4. `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`.
 
-**Exit gate:** `tree verify` exits 0. `tree inspect --json` now reports `role: source-repo-bound` or `workspace-root-bound`.
+**Exit gate:** `tree verify` exits 0. `tree status --json` reports a workspace (`workspaceRoot` + `manifest.tree` + non-empty `boundSources[]`) — not a legacy `role: *-bound` fallback. If status reports no workspace at all, init most likely ran from the wrong cwd (inside the source rather than the pre-created workspace dir) and produced a sibling-tree layout. Use the "tree init exits 0 but tree status still reports no workspace" edge-case row below for recovery.
 
 ### Phase B-refresh — Already bound (auto)
 
-**Entry signal:** Phase A reported `*-bound`.
+**Entry signal:** Phase A reported a W1 workspace.
 
 **Action:**
 
-1. `first-tree tree skill upgrade --root <source_root>` (idempotent, picks up newer shipped skills).
-2. `first-tree tree workspace sync` only if role is `workspace-root-bound` (re-discovers child repos; safe to rerun).
-3. `first-tree tree verify --tree-path <tree_root>`.
+1. `first-tree tree skill upgrade` from the workspace root (idempotent, picks up newer shipped skills).
+2. Re-run `first-tree tree status` and surface any `unboundGitSiblings[]` or `missingBoundSources[]` to the user. Adding a sibling = append its name to `workspace.json.sources`. Cloning a missing source = standard `git clone <remoteUrl> <name>` next to the tree (read `<missingBoundSources[?].name>` for the subdir name; `boundSources[?].remoteUrl` for the URL when present).
+3. `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`.
 
 **Exit gate:** verify passes. Continue to Phase C.
 
@@ -99,20 +110,20 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 
 **Entry signal:** any of:
 
-- `<tree_root>/NODE.md` body still contains the literal string `"The living source of truth for your organization"`, OR
-- `<tree_root>/members/owner/NODE.md` still contains `"Default bootstrap member node"`, OR
-- `<tree_root>/.first-tree/org.yaml` `companyContext.industry` is the empty string `""`.
+- `<workspaceRoot>/<manifest.tree>/NODE.md` body still contains the literal string `"The living source of truth for your organization"`, OR
+- `<workspaceRoot>/<manifest.tree>/members/owner/NODE.md` still contains `"Default bootstrap member node"`, OR
+- `<workspaceRoot>/<manifest.tree>/.first-tree/org.yaml` `companyContext.industry` is the empty string `""`.
 
 If none match → skip Phase C. The combined check is reliable because all three placeholders come from the CLI's bootstrap templates — the moment a human or agent has drafted real content, at least one will have changed.
 
 **Action:** follow [`references/content-drafting.md`](references/content-drafting.md) verbatim. Summary:
 
-1. Open the tree on disk (already resolved as `tree_root` in Phase A/B).
-2. `git -C <tree_root> checkout -b chore/initial-content-draft` (if not already on it).
-3. Read source signals: `README.md`, top-level dir layout, `package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod` / etc., recent `git log --since='6 months ago' --format='%aN <%aE>'`, `gh repo view --json description,topics,homepageUrl` (if gh ok).
+1. Set `TREE=<workspaceRoot>/<manifest.tree>` (read both from `tree status --json`).
+2. `git -C $TREE checkout -b chore/initial-content-draft` (if not already on it).
+3. Read source signals from each `<workspaceRoot>/<sourceName>`: `README.md`, top-level dir layout, `package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod` / etc., recent `git log --since='6 months ago' --format='%aN <%aE>'`, `gh repo view --json description,topics,homepageUrl` (if gh ok).
 4. For each tree field listed in `content-drafting.md` §Extraction Rules, run the matching rule. Mark every field with `# unverified — source: <where>` if confidence is low. **Never invent facts not present in the source signals.**
-5. `git -C <tree_root> diff --staged` and present to user. Get explicit "yes" before remote actions.
-6. `git -C <tree_root> commit` → `git -C <tree_root> push -u origin chore/initial-content-draft` → `gh pr create --repo <slug> --title "..." --body "..."` (or, if user prefers, push to `main` directly — ask).
+5. `git -C $TREE diff --staged` and present to user. Get explicit "yes" before remote actions.
+6. `git -C $TREE commit` → `git -C $TREE push -u origin chore/initial-content-draft` → `gh pr create --repo <slug> --title "..." --body "..."` (or, if user prefers, push to `main` directly — ask).
    **Exit gate:** all three placeholder strings from the entry signal are gone in the on-disk tree. If the user chose the PR flow and the PR is still open (not merged), treat Phase C as **deferred** — print the deferred summary in Phase F and exit; the user re-runs `/first-tree-onboarding` after merging to finish the remaining phases.
 
 ### Phase D — GitHub Scan daemon (auto if gh ok; otherwise stop here)
@@ -123,7 +134,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 1. If gh auth failed in Phase A: stop. Tell user `gh auth login`, do not attempt install. Skip to Phase E only when the user explicitly says "skip the daemon".
 2. Ask once: "Install the GitHub Scan daemon for `<owner/repo>`? It polls notifications and dispatches PR-driven tree updates. (yes/skip)". Default = yes.
-3. Decide `--allow-repo`: start with the bound source repo only — `<owner>/<repo>`. Wider globs are a follow-up the user opts into later.
+3. Decide `--allow-repo`: start with each bound source repo's `<owner>/<repo>` from `boundSources[].remoteUrl`. Wider globs are a follow-up the user opts into later.
 4. `first-tree github scan install --allow-repo <owner/repo>`.
 5. `first-tree github scan doctor`.
 
@@ -135,7 +146,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 **Action:**
 
-1. Confirm `<tree_root>/.github/workflows/validate.yml` exists. If it does not, run `first-tree tree upgrade --tree-path <tree_root>` once and re-check.
+1. Confirm `<workspaceRoot>/<manifest.tree>/.github/workflows/validate.yml` exists. If it does not, run `first-tree tree upgrade --tree-path <workspaceRoot>/<manifest.tree>` once and re-check.
 2. Tell the user, explicitly:
    - Tier 0 (`validate.yml`) is installed by default and is rule-based.
    - Tier 1 (AI PR review) is **not** installed by this skill and belongs to `first-tree cloud`.
@@ -143,7 +154,7 @@ If none match → skip Phase C. The combined check is reliable because all three
    - The exact current parity target with `first-tree-context`'s rule layer lives in [`references/github-automation.md`](references/github-automation.md). Use that file as the source of truth for what "proper tree GitHub automation" means.
 3. Ask once: "Do you want to start Tier 2 now, or leave it for later?"
 4. If the user says "start now", run:
-   `first-tree tree automation install --tier 2 --tree-path <tree_root>`
+   `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>`
    Then follow the returned stage:
    - `write_rule_layer`: workflow files were written or still need to land on the default branch. Show the tree diff. If the user wants a PR, follow the usual "show diff -> get explicit yes -> push / PR" rule. Do **not** run any printed `gh api` commands.
    - `create_ruleset` or `activate_ruleset`: print the command(s) and stop. The user runs them in their own terminal.
@@ -162,7 +173,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 **Action:**
 
-1. List `<tree_root>/.first-tree/agent-templates/`. Confirm `developer.yaml` and `code-reviewer.yaml` exist (CLI wrote them in Phase B).
+1. List `<workspaceRoot>/<manifest.tree>/.first-tree/agent-templates/`. Confirm `developer.yaml` and `code-reviewer.yaml` exist (CLI wrote them in Phase B).
 2. Ask: "Keep developer + code-reviewer? Add custom roles (designer / qa / etc.)?"
 3. Apply changes per [`references/agent-templates.md`](references/agent-templates.md). For drops: `git rm`. For adds: copy `developer.yaml` as schema and edit the prompt + skills list.
 4. Commit any changes to the tree.
@@ -173,26 +184,27 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 **Action:**
 
-1. `first-tree tree skill doctor --root <source_root>` → must exit 0.
+1. `first-tree tree skill doctor` from the workspace root → must exit 0.
 2. `first-tree github scan doctor` if Phase D ran → must exit 0.
-3. `first-tree tree inspect --json` → confirm `role` is `*-bound`.
+3. `first-tree tree status --json` → confirm a workspace root, tree, and at least one bound source.
 4. Print the summary. Format:
 
    ```
    First Tree onboarding complete.
 
-   Source repo: <source_root>
-   Tree repo:   <tree_root> (<bindingMode>, <treeMode>)
-   Tree URL:    <treeRemoteUrl or "not published">
+   Workspace:   <workspaceRoot>
+   Tree:        <manifest.tree>  (<workspaceRoot>/<manifest.tree>)
+   Sources:     <comma-separated sources from manifest>
+   Tree URL:    <boundSources[?].remoteUrl or "not published">
    Daemon:      <running for <owner/repo> | skipped>
    GitHub Actions: validate.yml installed (Tier 0, rule-based)
    AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
-   Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
+   Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <treePath>` | configured>
    Agents:      <comma-separated template names>
 
    Next:
-   - Edit <tree_root>/.first-tree/org.yaml to fill in stage/industry if marked unverified.
-   - Open a PR in the source repo to see github scan dispatch the developer agent.
+   - Edit <workspaceRoot>/<manifest.tree>/.first-tree/org.yaml to fill in stage/industry if marked unverified.
+   - Open a PR in any source repo to see github scan dispatch the developer agent.
    - Run /first-tree-sync any time you suspect tree drift.
    ```
 
@@ -202,32 +214,33 @@ If none match → skip Phase C. The combined check is reliable because all three
 | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm install -g first-tree@latest` errors with `Unsupported URL Type "workspace:"` | Don't retry. Fall back to building from a local `agent-team-foundation/first-tree` checkout: `pnpm install && pnpm --filter first-tree build`, then run via `node <repo>/apps/cli/dist/index.js`.                                                       |
 | `gh auth status` fails                                                             | Stop at Phase D entry. Don't install daemon. Don't push tree branches in Phase C — keep work local until `gh auth login`.                                                                                                                               |
-| `tree init` exits 0 but `inspect` still shows `unbound-*`                          | Read source `AGENTS.md` for the managed `FIRST-TREE-SOURCE-INTEGRATION` block. If absent → re-run `tree init`. If present but corrupt (missing `BINDING-MODE` or `TREE-REPO`) → ask user before deleting and re-running. Never patch the block by hand. |
-| `tree verify` fails after Phase B                                                  | Print the failures, stop. Most common cause: the sibling tree dir was created but `tree init` was interrupted mid-write. Recovery: `rm -rf <tree_root>` then re-run `tree init`. **Always ask before rm.**                                              |
+| `tree init` exits 0 but `tree status` still reports no workspace                   | `init` writes `workspace.json` only when scope is workspace-level AND the tree resolves to an immediate child of cwd. Common cause: init ran from inside the lone source repo (which produces a sibling tree and no manifest). `migrate-to-w1` does not detect this layout — it looks for `.first-tree-workspace`, `bindings/`, or `source.json`, none of which the current init writes. Recover by undoing the init and following Phase B's lone-repo flow: show the user what init wrote (the new sibling `<source>-tree/` dir; `AGENTS.md` / `CLAUDE.md` / `WHITEPAPER.md` / `.agents/` / `.claude/` inside the source) and ask before deleting. After cleanup, pre-create the workspace dir, `mv` the source in, `cd` in, and run `first-tree tree init --scope workspace --tree-path ./<tree> --tree-mode dedicated --workspace-id <slug> --no-recursive`. Do NOT hand-create `workspace.json` here — the hand-repair path in `references/cli-quickref.md` is for recovering a corrupted manifest in an existing W1 workspace only, not for fresh onboarding. |
+| `tree verify` fails after Phase B                                                  | Print the failures, stop. Most common cause: the sibling tree dir was created but `tree init` was interrupted mid-write. Recovery: `rm -rf <treePath>` then re-run `tree init`. **Always ask before rm.**                                                |
+| `migrate-to-w1` reports `kind: "not-applicable"` with a clear reason               | Surface the reason and stop. Common causes: cwd is a workspace-member source whose parent is already a workspace (cd up), or `source.json` points at a non-sibling tree path (out-of-scope under W1's side-by-side assumption).                          |
 | Phase C: source repo has no README and < 5 commits                                 | Generate the minimal scaffolding-replacement (real domain list from top-level dirs only) and mark every other field `# unverified — source repo too sparse to infer`. Open the PR anyway so the user can fill in.                                       |
-| Phase C: tree was published to remote but local sibling dir is missing             | Clone to `<source_root>/.first-tree/tmp/<treeRepoName>/` per the source `AGENTS.md` managed block fallback. Use that as `tree_root` for Phase C. After commit/push, **delete the temp clone**.                                                          |
-| Workspace root has many nested repos                                               | Default `--no-recursive`. List the nested repos to the user and ask which to bind. Only cascade when the user confirms.                                                                                                                                 |
+| Phase C: tree was published to remote but local sibling dir is missing             | `tree status --json` exposes the tree separately from sources: read `treePresent` (and `treeRemoteUrl` when set). The tree is NEVER an entry in `boundSources[]` — that array is `manifest.sources` only. If `treePresent === false`, ask the user for the tree's remote URL (or use `treeRemoteUrl` if set) and `git clone <url> <workspaceRoot>/<manifest.tree>`. Re-run Phase C once `treePresent` flips to `true`. |
+| Workspace root has many nested repos                                               | Default to NOT adding nested repos to `sources` automatically. List them to the user and ask which to bind.                                                                                                                                              |
 | User re-runs the skill on already-bound repo                                       | Phase A → Phase B-refresh → Phase C (will skip if progress.md is fully checked) → Phase F. The skill is idempotent.                                                                                                                                     |
 | Tree on a private GitHub org, gh user lacks repo-create scope                      | Skip `gh repo create` in Phase B. Commit locally and tell the user the manual `git remote add origin … && git push -u origin main` steps.                                                                                                               |
 | Source repo and tree repo are on different GitHub accounts                         | Ask once which account the tree should live under. Default = same owner as source.                                                                                                                                                                      |
-| Tier 2 command reports `create_ruleset` / `activate_ruleset`                       | Print the command from `first-tree tree automation install --tier 2 --tree-path <tree_root>`. Do not execute it yourself. Those repo-policy operations belong to the user.                                                                              |
+| Tier 2 command reports `create_ruleset` / `activate_ruleset`                       | Print the command from `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>`. Do not execute it yourself. Those repo-policy operations belong to the user.                                                          |
 
 ## Hard rules (never violate)
 
-- **Never edit the managed First Tree blocks** (`<!-- BEGIN FIRST-TREE-* -->`) by hand. Re-run the relevant CLI (`tree init`, `tree publish`, `tree workspace sync`).
 - **Never push to the tree's main branch without an explicit "yes"** from the user. Default for Phase C content is a PR.
 - **Never start an agent runtime in Phase E.** Templates only. The daemon spawns agents.
 - **Never claim onboarding done if any Phase F doctor exits non-zero.**
-- **Never run onboarding inside a tree repo** (`role: tree-repo`). Stop and explain.
+- **Never run onboarding inside the tree subdir.** `tree status` from there will detect it; stop and explain.
 - **Never invent content in Phase C.** If a fact isn't in the source signals listed in `content-drafting.md`, leave the field empty with a `# unverified` marker.
 - **Never bypass `gh auth status` failures** by hand-crafting tokens. Stop and instruct the user.
 - **Never execute the Tier 2 ruleset `gh api` commands yourself.** Print them for the user and explain why they are manual.
+- **Never run `migrate-to-w1 --yes` without first showing the dry-run output** — the promote step is destructive (`mv` source + tree into a new parent dir).
 
 ## References
 
 - [`references/recipe.md`](references/recipe.md) — exact commands and verification per phase.
 - [`references/content-drafting.md`](references/content-drafting.md) — Phase C extraction rules, confidence labels, tree-path resolution, PR flow.
 - [`references/github-automation.md`](references/github-automation.md) — Phase D.5: Tier 0/Tier 1/Tier 2 split, Tier 2 stage meanings, and the manual-command boundary.
-- [`references/role-decisions.md`](references/role-decisions.md) — role × action matrix used by Phase A.
+- [`references/role-decisions.md`](references/role-decisions.md) — workspace position × action matrix used by Phase A.
 - [`references/agent-templates.md`](references/agent-templates.md) — Phase E template schema and add/drop rules.
 - [`references/cli-quickref.md`](references/cli-quickref.md) — every CLI invocation this skill makes, in one place.

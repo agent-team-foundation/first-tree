@@ -1,9 +1,9 @@
 ---
 name: first-tree
-version: 0.5.0
+version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Top-level routing skill for First Tree. Explains what First Tree is — a unified CLI with two arms: (1) workspace collaboration (agent-to-agent today; agent-to-human is being rebuilt on top of the messages table by the group-chat-unified-send redesign), and (2) Context management. Use when you need a high-level "what is First Tree" map, are unsure whether the task is workspace or context, or need to enforce per-task hygiene before acting (binding check, tree HEAD freshness, source vs. workspace classification). For workspace tasks go to `first-tree-cloud`; for context tasks go to `first-tree-context`.
+description: Top-level routing skill for First Tree. Explains what First Tree is — a unified CLI with two arms: (1) workspace collaboration (agent-to-agent today; agent-to-human is being rebuilt on top of the messages table by the group-chat-unified-send redesign), and (2) Context management. Use when you need a high-level "what is First Tree" map, are unsure whether the task is workspace or context, or need to enforce per-task hygiene before acting (workspace binding check, tree HEAD freshness, source vs. workspace classification). For workspace tasks go to `first-tree-cloud`; for context tasks go to `first-tree-context`.
 ---
 
 # First Tree — Top-Level Routing
@@ -32,34 +32,41 @@ three checks **in order**. They are cheap, they prevent the most common
 class of mistakes (acting on stale state or the wrong role), and the
 downstream skills assume you have done them.
 
-### 1. Binding check
+### 1. Workspace binding check
 
 ```bash
-first-tree tree inspect --json
+first-tree tree status --json
 ```
 
-The `role` field tells you what kind of root this is:
+The workspace-rooted layout (W1, shipped 2026-06) consolidates all
+binding state into a single file at
+`<workspace-root>/.first-tree/workspace.json`. `tree status` walks up
+from `cwd` looking for that file, then reports:
 
-The `role` enum is defined in `apps/cli/src/commands/tree/inspect.ts` —
-six possible values:
-
-| `role` | What you're looking at | Where to go next |
+| Field | What you're looking at | Where to go next |
 |---|---|---|
-| `tree-repo` | The Context Tree repo itself | Use `first-tree-context` to read/write tree content directly. Do not run `first-tree-onboarding` here. |
-| `source-repo-bound` | A source repo bound to a tree | OK to proceed with any source-side task. |
-| `workspace-root-bound` | A workspace root (multi-repo container) bound to a tree | OK to proceed; workspace-member sub-repos inherit the binding. |
-| `unbound-source-repo` | A git repo with no `FIRST-TREE-SOURCE-INTEGRATION` block | Run `first-tree-onboarding` first. Do not skip — downstream skills depend on the binding. |
-| `unbound-workspace-root` | A multi-repo workspace root with no binding | Run `first-tree-onboarding --scope workspace` first. |
-| `unknown` | Cannot classify (folder without git, or unexpected state) | Re-check `cwd`; if intentional, run `first-tree tree inspect` (without `--json`) and read the human-readable summary before deciding. |
+| `workspaceRoot` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
+| `manifest.tree` | the tree subdirectory name (sibling of source repos under `workspaceRoot`) | Use `<workspaceRoot>/<manifest.tree>` for any tree read or write. |
+| `manifest.sources` | bound source repo subdirectory names | Each is a sibling of the tree under `workspaceRoot`. |
+| `boundSources[].present === false` | a bound source is listed but not cloned locally | `git clone` it as a sibling of the tree, or remove from `sources` if it should not be tracked. |
+| `unboundGitSiblings[]` | a git repo under `workspaceRoot` that is not in `sources` | If it should be part of the team's context, add its name to `workspace.json.sources`. |
+
+If `status` exits with "not inside a First Tree workspace", the current
+cwd is unbound. Run `first-tree-onboarding` before doing context work.
+
+For workspaces that have not yet been migrated from the legacy
+multi-mode binding (`.first-tree-workspace` marker + tree/`.first-tree/bindings/`),
+`status` falls back to the legacy `inspect` reporter — that's a signal to
+run `first-tree tree migrate-to-w1` next.
 
 ### 2. Tree HEAD freshness
 
-If the binding points at a tree checkout that exists locally, verify it is
-not stale:
+The tree lives at `<workspaceRoot>/<manifest.tree>` — a git repo. Verify
+it is not stale:
 
 ```bash
-git -C <tree.localPath> fetch origin
-git -C <tree.localPath> log -1 --since=24h --oneline
+git -C <workspaceRoot>/<manifest.tree> fetch origin
+git -C <workspaceRoot>/<manifest.tree> log -1 --since=24h --oneline
 ```
 
 If `log` is empty (no commit in 24h) or the local HEAD is behind
@@ -68,13 +75,24 @@ content is the #1 source of advice that conflicts with current decisions.
 
 ### 3. Source vs. workspace vs. tree role-fork
 
-Many skills branch on the three roles in §1. Confirm the role you're acting
-under matches what the user asked for:
+W1 reduces "what kind of root are you at" to three positions, all of
+which are computable from `workspaceRoot` + `cwd`:
 
-- User said "the tree": you should be in `tree-repo`.
-- User said "this repo" / "this codebase": likely `source-repo-bound` (or
-  the source half of a `workspace-root-bound` parent).
-- User said "all our repos" / "the workspace": likely `workspace-root-bound`.
+- **Tree** — `cwd` resolves to or under `<workspaceRoot>/<manifest.tree>`.
+  Use this for direct tree reads / writes.
+- **Source** — `cwd` resolves to or under one of `<workspaceRoot>/<manifest.sources[i]>`.
+  Use this for source-side tasks.
+- **Workspace** — `cwd` is `<workspaceRoot>` itself, or sits outside any
+  declared tree / source. Use this when the task spans multiple sources
+  or is about the workspace as a whole.
+
+Confirm the role you're acting under matches what the user asked for:
+
+- User said "the tree": you should be at or under the tree subdir.
+- User said "this repo" / "this codebase": likely one of the source
+  subdirs.
+- User said "all our repos" / "the workspace": you can be at the
+  workspace root.
 
 If the user's intent doesn't match the role you found, **stop and clarify
 before acting** — running tree-write commands from inside the wrong root
@@ -87,7 +105,7 @@ Once hygiene checks pass, drop into the right sub-skill:
 - Talk to another agent / send a chat / install daemon / change agent config → **`first-tree-cloud`**
 - Ask a human a question / notify a human of an event → **for now, use `chat send` via `first-tree-cloud`**. The dedicated NHA primitive was removed in PR #747; a message-archetype rebuild is in flight via the `group-chat-unified-send` proposal. A `first-tree-attention` skill will return once that rebuild lands.
 - Don't know what a Context Tree is / need ownership / node concepts → **`first-tree-context`**
-- Bind an unbound repo to a tree → **`first-tree-onboarding`**
+- Bind an unbound repo to a tree, or migrate a legacy multi-mode workspace to W1 → **`first-tree-onboarding`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
 - "Reflect this PR / doc / note into the tree" (specific source given) → **`first-tree-write`**
 - Daemon spawned an agent for a GitHub notification → **`first-tree-github-scan`**

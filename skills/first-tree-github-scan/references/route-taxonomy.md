@@ -40,7 +40,7 @@ follow-up suggestion for the other.
 | Mention with no actionable ask                                          | `reply` (acknowledge briefly, set `done`)     |
 | CI failure where the cause is environmental                             | `reply` (link to logs, set `done`)            |
 | CI failure where a tree-stated invariant is now broken                  | `sync`                                        |
-| New repo joins the workspace, tree's `source-repos.md` is silent        | `write` (the repo registration is the source) |
+| New repo joins the workspace, `workspace.json.sources` is silent        | `sync` (manifest is the source of truth; sync owns adding it)  |
 
 ## GITHUB_SCAN_RESULT Format
 
