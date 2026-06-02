@@ -155,10 +155,11 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
   });
 
-  it("an agent's reply that is itself a new request changes no count", async () => {
+  it("a replacement request (asker re-asks) nets zero — supersede old, open new", async () => {
     // The asking agent re-asks by replying to its own question with a new
-    // request. It carries inReplyTo (⇒ not the +1 path) and its sender is the
-    // agent, not the human target (⇒ not the -1 path) → zero count change.
+    // request. The new request +1s the target AND supersedes (resolves) the
+    // parent it replies to (-1), so for the same target the count nets zero —
+    // staying at one open question (now the new one).
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -179,8 +180,7 @@ describe("open-question (format=request) + open_request_count", () => {
       metadata: { mentions: [human.uuid], request: { question: "5%, 10%, or 20%?" } },
     });
 
-    // Still exactly 1 — the re-ask neither adds (has inReplyTo) nor removes
-    // (sender is the agent, not the target).
+    // Still exactly 1 — new request +1, parent superseded -1, net zero.
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
   });
 
