@@ -328,9 +328,7 @@ describe("ConversationList", () => {
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
-    await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "By time") ?? null,
-    );
+    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Time") ?? null);
     expect(container.textContent).toContain("Older");
 
     await click(container.querySelector('button[aria-label="Filter"]'));
