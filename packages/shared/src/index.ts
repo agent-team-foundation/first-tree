@@ -673,3 +673,10 @@ export {
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "./schemas/ws-auth.js";
+export {
+  classifyShellCommandIo,
+  type ShellIoClassification,
+  type ShellIoPathArg,
+  type ShellIoPathKindHint,
+  type ShellIoUnsupportedReason,
+} from "./shell-command-io.js";

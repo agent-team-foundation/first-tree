@@ -412,17 +412,52 @@ describe("createToolCallProcessor — Context Tree file refs", () => {
     expect(usageEventCount(emit)).toBe(0);
   });
 
-  it("does NOT attach file refs for unsupported tools even if an arg path is under the tree", () => {
+  it("attaches file refs when Bash reads a Context Tree file", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
-    const processor = createToolCallProcessor(emit, binding);
+    const processor = createToolCallProcessor(emit, { ...binding, branch: "main" }, { cwd: "/home/op/project" });
 
-    processor.onMessage(
-      assistantToolUse("r7", "Bash", { command: `cat ${TREE}/NODE.md`, file_path: `${TREE}/NODE.md` }),
-    );
+    processor.onMessage(assistantToolUse("r7", "Bash", { command: `cat ${TREE}/NODE.md` }));
     processor.onMessage(userToolResult("r7", "contents"));
 
     const final = toolCallEvents(emit).find(
       (event) => event.payload.toolUseId === "r7" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: `${TREE}/NODE.md`,
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
+    expect(usageEventCount(emit)).toBe(0);
+  });
+
+  it("does NOT attach Bash file refs when the shell command fails", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding, { cwd: "/home/op/project" });
+
+    processor.onMessage(assistantToolUse("r7-fail", "Bash", { command: `cat ${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r7-fail", "ENOENT", true));
+
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r7-fail" && event.payload.status === "error",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
+    expect(usageEventCount(emit)).toBe(0);
+  });
+
+  it("does NOT attach file refs for unsupported tools even if an arg path is under the tree", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r7-unsupported", "TodoWrite", { file_path: `${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r7-unsupported", "contents"));
+
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r7-unsupported" && event.payload.status === "ok",
     );
     expect(final?.payload.toolFileRefs).toBeUndefined();
     expect(usageEventCount(emit)).toBe(0);
