@@ -889,7 +889,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     },
                   );
                   if (boundInfo) {
-                    contextTreeIoService
+                    await contextTreeIoService
                       .recordFromSessionEvent(app.db, {
                         organizationId: boundInfo.organizationId,
                         agentId,

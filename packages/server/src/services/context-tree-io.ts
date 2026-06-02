@@ -12,7 +12,7 @@ import {
   type ToolFileRef,
   toolFileRefSchema,
 } from "@first-tree/shared";
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -227,7 +227,7 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
     });
 }
 
-async function backfillLegacyContextTreeUsage(db: Database, organizationId: string, since: Date): Promise<void> {
+async function backfillContextTreeIoSessionEvents(db: Database, organizationId: string, since: Date): Promise<void> {
   const rows = await db
     .select({
       id: sessionEvents.id,
@@ -243,7 +243,24 @@ async function backfillLegacyContextTreeUsage(db: Database, organizationId: stri
     .where(
       and(
         eq(agents.organizationId, organizationId),
-        eq(sessionEvents.kind, "context_tree_usage"),
+        or(
+          eq(sessionEvents.kind, "context_tree_usage"),
+          and(
+            eq(sessionEvents.kind, "tool_call"),
+            sql`${sessionEvents.payload}->>'status' = 'ok'`,
+            sql`EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(${sessionEvents.payload}->'toolFileRefs') = 'array'
+                  THEN ${sessionEvents.payload}->'toolFileRefs'
+                  ELSE '[]'::jsonb
+                END
+              ) AS ref
+              WHERE ref ? 'repoUrl' AND ref ? 'repoRelativePath'
+            )`,
+          ),
+        ),
         gte(sessionEvents.createdAt, since),
         sql`NOT EXISTS (
           SELECT 1
@@ -339,7 +356,7 @@ export async function summarizeContextTreeIo(
 ): Promise<ContextTreeIoSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
-  await backfillLegacyContextTreeUsage(db, organizationId, since);
+  await backfillContextTreeIoSessionEvents(db, organizationId, since);
 
   const countRows = await db.execute<{
     action: string;

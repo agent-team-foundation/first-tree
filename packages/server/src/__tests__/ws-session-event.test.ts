@@ -351,6 +351,20 @@ describe("Agent WS — session event protocol (S10)", () => {
       expect(items).toHaveLength(1);
       expect(errorFrames).toHaveLength(0);
       expect(ioRows).toHaveLength(0);
+
+      ioSpy.mockRestore();
+      const summary = await contextTreeIoService.summarizeContextTreeIo(app.db, seed.organizationId, 7);
+      const replayedRows = await app.db
+        .select()
+        .from(contextTreeIoEvents)
+        .where(eq(contextTreeIoEvents.chatId, chatId));
+      expect(summary.summary.write.eventCount).toBeGreaterThanOrEqual(1);
+      expect(replayedRows).toHaveLength(1);
+      expect(replayedRows[0]).toMatchObject({
+        action: "write",
+        source: "claude_write_tool",
+        targetPath: "domains/runtime/NODE.md",
+      });
     } finally {
       ioSpy.mockRestore();
       ws.close();
