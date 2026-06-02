@@ -108,10 +108,10 @@ describe("tree skill command actions", () => {
 
   it("installs and upgrades shipped skills", async () => {
     await runSkillCommand(["install", "--root", root]);
-    expect(stdout).toContain("Installed 6 shipped first-tree skills");
+    expect(stdout).toContain("Installed 7 shipped first-tree skills");
 
     stdout = "";
     await runSkillCommand(["upgrade", "--root", root]);
-    expect(stdout).toContain("Upgraded 6 shipped first-tree skills");
+    expect(stdout).toContain("Upgraded 7 shipped first-tree skills");
   });
 });

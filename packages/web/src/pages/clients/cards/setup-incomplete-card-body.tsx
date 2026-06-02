@@ -53,9 +53,9 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
             display: "grid",
             gap: "var(--sp-3)",
             // Side-by-side install boxes when the card is wide enough,
-            // stacked 1-up below the breakpoint (17.5rem ≈ 280 baseline
+            // stacked 1-up below the breakpoint (--sp-70 = 280 baseline
             // for the install-command pre block).
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, var(--sp-70)), 1fr))",
           }}
         >
           {installableProviders.map((provider) => (

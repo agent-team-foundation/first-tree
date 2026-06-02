@@ -1,8 +1,8 @@
 ---
 name: first-tree
-version: 0.4.0-alpha.1
+version: 0.5.0
 cliCompat:
-  first-tree: ">=0.4.0 <0.5.0"
+  first-tree: ">=0.5.0 <0.6.0"
 description: Canonical whitepaper and routing skill for First Tree. Explains what belongs in a Context Tree, how source or workspace roots, tree repos, and bindings relate, and how the current `first-tree tree` and `first-tree github scan` surfaces fit together. Use when you need shared First Tree concepts, need to choose between onboarding, sync, write, or GitHub notification workflows, or need the high-level CLI map before acting.
 ---
 

@@ -1,8 +1,8 @@
 ---
 name: first-tree-onboarding
-version: 0.4.0-alpha.2
+version: 0.5.0
 cliCompat:
-  first-tree: ">=0.4.0 <0.5.0"
+  first-tree: ">=0.5.0 <0.6.0"
 description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "tree bound, real content drafted, daemon running, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the daemon. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, and the final doctor checks.
 ---
 

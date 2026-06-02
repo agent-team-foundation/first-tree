@@ -260,22 +260,3 @@ is no self-host path. Use this section when scaling out the *client* side.
   type a URL.
 - Windows is unsupported. `login <token>` falls back to inline mode there;
   use a user-managed supervisor for permanent deployment.
-
-## 10. "Change how the CLI behaves" (code change)
-
-Use this when the task is a code change, not an operation.
-
-### Flow
-
-1. Find the matching command handler under `apps/cli/src/commands/`.
-2. Move reusable logic into `apps/cli/src/core/`.
-3. If flags / env vars / schema change, update `packages/shared/src/config/*.ts`.
-4. Register new top-level commands from `apps/cli/src/cli/index.ts`.
-5. Update `docs/cli-reference.md` (and `docs/onboarding-guide.md` if onboarding flow changes).
-6. Run the smallest relevant validation first: `pnpm check`, `pnpm typecheck`, `pnpm --filter first-tree test`.
-
-### What to remember
-
-- Command handlers stay thin; core modules carry the logic.
-- Onboarding changes usually touch both `commands/onboard.ts` (argument shape) and `core/onboard.ts` (actual behavior).
-- See `references/developer-map.md` for the full source layout.
