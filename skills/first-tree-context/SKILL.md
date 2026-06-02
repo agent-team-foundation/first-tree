@@ -2,7 +2,7 @@
 name: first-tree-context
 version: 0.5.0
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
+  first-tree: ">=0.6.0 <0.7.0"
 description: Context Tree concepts and routing sub-entry. Explains what a Context Tree is, the ownership model, what belongs in a node vs. a source system, and how to navigate domains and soft_links. Use whenever you need shared Context Tree concepts, are unsure whether your task is onboarding / sync / write / github-scan, or need the structural primer before acting on the tree. For binding a repo, use `first-tree-onboarding`; for drift audit, `first-tree-sync`; for writing from a specific source, `first-tree-write`; for daemon-spawned GitHub notifications, `first-tree-github-scan`.
 ---
 

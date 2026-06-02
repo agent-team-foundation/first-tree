@@ -4,10 +4,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { writeTreeState } from "../src/commands/tree/binding-state.js";
 import { initializeSourceRoot } from "../src/commands/tree/init.js";
-import { publishTreeRoot } from "../src/commands/tree/publish.js";
-import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 
 const tempDirs: string[] = [];
 
@@ -25,60 +22,6 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-});
-
-describe("publishTreeRoot", () => {
-  it("publishes using an existing tree remote and refreshes a source root", () => {
-    const treeRoot = makeTempDir("first-tree-publish-tree-");
-    const sourceRoot = makeTempDir("first-tree-publish-source-");
-    writeFileSync(join(treeRoot, ".git"), "gitdir: /tmp/tree\n");
-    writeFileSync(join(sourceRoot, ".git"), "gitdir: /tmp/source\n");
-
-    writeTreeState(treeRoot, {
-      published: {
-        remoteUrl: "https://github.com/acme/context-tree.git",
-      },
-      treeId: "context-tree",
-      treeMode: "shared",
-      treeRepoName: "context-tree",
-    });
-    writeFileSync(
-      join(sourceRoot, "AGENTS.md"),
-      `${buildSourceIntegrationBlock("context-tree", {
-        bindingMode: "shared-source",
-        entrypoint: "/repos/product-repo",
-        treeMode: "shared",
-        treeRepoName: "context-tree",
-      })}\n`,
-    );
-
-    const commandRunner = vi.fn((command: string, args: string[]) => {
-      if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
-        return "https://github.com/acme/context-tree.git";
-      }
-      if (command === "gh" && args[0] === "repo" && args[1] === "view") {
-        return "";
-      }
-      if (command === "git" && args[0] === "push") {
-        return "";
-      }
-      if (command === "git" && args[0] === "remote" && args[1] === "set-url") {
-        return "";
-      }
-      throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
-    });
-
-    const summary = publishTreeRoot(treeRoot, {
-      commandRunner,
-      sourceRepoPath: sourceRoot,
-    });
-
-    expect(summary.publishedTreeUrl).toBe("https://github.com/acme/context-tree.git");
-    expect(summary.refreshedSourceRoots).toEqual([sourceRoot]);
-    expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toContain("https://github.com/acme/context-tree.git");
-    expect(commandRunner).toHaveBeenCalledWith("gh", ["repo", "view", "acme/context-tree"], treeRoot);
-    expect(commandRunner).toHaveBeenCalledWith("git", ["push", "-u", "origin", "HEAD:main"], treeRoot);
-  });
 });
 
 describe("initializeSourceRoot", () => {

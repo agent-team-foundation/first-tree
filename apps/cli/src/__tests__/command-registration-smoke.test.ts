@@ -109,25 +109,18 @@ describe("CLI command registration", () => {
     const tree = command(root, "tree");
     expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
       "automation",
-      "bind",
-      "bootstrap",
       "claude-hook",
       "codeowners",
       "help",
       "init",
       "inject",
-      "inspect",
-      "integrate",
       "migrate-to-w1",
-      "publish",
       "review",
       "skill",
       "status",
       "upgrade",
       "verify",
-      "workspace",
     ]);
-    expect(subcommands(tree, "workspace")).toEqual(["sync"]);
     expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "install-core", "link", "list", "upgrade"]);
     expect(subcommands(root, "github")).toEqual(["scan"]);
   });
@@ -151,14 +144,5 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
-    expect(optionNames(command(command(root, "tree"), "bind"))).toEqual([
-      "--entrypoint",
-      "--mode",
-      "--tree-mode",
-      "--tree-path",
-      "--tree-url",
-      "--workspace-id",
-      "--workspace-root",
-    ]);
   });
 });

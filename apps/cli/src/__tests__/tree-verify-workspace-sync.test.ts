@@ -160,30 +160,7 @@ describe("tree verify command", () => {
   });
 });
 
-describe("tree workspace sync command", () => {
-  it("prints a dry-run plan for child repos", async () => {
-    const workspace = makeTempDir("ft-workspace-sync-dry-");
-    makeGitRepo(join(workspace, "repo-a"));
-    makeGitRepo(join(workspace, "nested", "repo-b"));
-    const tree = makeTempDir("ft-workspace-sync-tree-");
-    writeValidTree(tree);
-    process.chdir(workspace);
-    const { workspaceSyncCommand } = await import("../commands/tree/workspace-sync.js");
-
-    workspaceSyncCommand.action(
-      context(commandWithOptions({ dryRun: true, treePath: tree, workspaceId: "acme-workspace" }), false),
-    );
-
-    const output = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(output).toContain("Context Tree Workspace Sync");
-    expect(output).toContain("Workspace id:   acme-workspace");
-    expect(output).toContain("repo-a");
-    expect(output).toContain(join("nested", "repo-b"));
-  });
-
+describe("syncWorkspaceMembersFromRoot", () => {
   it("binds child repositories and updates workspace gitignore", async () => {
     const workspace = makeTempDir("ft-workspace-sync-apply-");
     makeGitRepo(workspace);
@@ -209,19 +186,12 @@ describe("tree workspace sync command", () => {
     expect(readFileSync(join(repoB, "CLAUDE.md"), "utf8")).toContain("context-tree");
   });
 
-  it("sets exitCode when no shared tree can be resolved", async () => {
+  it("throws when no shared tree can be resolved", async () => {
     const workspace = makeTempDir("ft-workspace-sync-missing-tree-");
-    process.chdir(workspace);
-    const { workspaceSyncCommand } = await import("../commands/tree/workspace-sync.js");
+    const { syncWorkspaceMembersFromRoot } = await import("../commands/tree/workspace-sync.js");
 
-    workspaceSyncCommand.action(context(commandWithOptions({}), false));
-
-    expect(
-      vi
-        .mocked(console.error)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain("Could not resolve the shared tree");
-    expect(process.exitCode).toBe(1);
+    expect(() => syncWorkspaceMembersFromRoot({ workspaceRoot: workspace })).toThrow(
+      "Could not resolve the shared tree",
+    );
   });
 });

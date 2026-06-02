@@ -201,8 +201,8 @@ export function resolveGitHubScanBinding(args: readonly string[]): BindingResolu
     ok: false,
     error: [
       "first-tree github scan requires a bound tree repo before it can start scanning.",
-      "Bind this repo first with `first-tree tree bind ...`, or retry with `--tree-repo <owner/repo>`.",
-      "Expected binding metadata in the managed First Tree integration block in `AGENTS.md` or `CLAUDE.md`.",
+      "Bind this repo first with `first-tree tree init --scope workspace ...`, or retry with `--tree-repo <owner/repo>`.",
+      "Expected binding metadata in `<workspaceRoot>/.first-tree/workspace.json`.",
       "Legacy `.first-tree/source.json` metadata is still accepted during migration.",
     ].join("\n"),
   };
