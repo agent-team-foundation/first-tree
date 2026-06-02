@@ -72,7 +72,7 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 3. Re-run `first-tree tree status --json` → confirm the new layout.
 4. The migration leaves dirty working-tree edits in the tree and each source repo; tell the user to inspect and commit before continuing.
 
-**Exit gate:** `status` reports a real workspace root with a `workspace.json`; no `migrationDetection.kind === "not-applicable"` warnings remain.
+**Exit gate:** `first-tree tree status --json` reports `workspaceRoot` + `manifest.tree` + non-empty `manifest.sources` (the W1 shape, not the legacy `inspect` fallback). The migration result is separate — its own JSON output reports `dryRun: false`, an empty `warnings[]` (or only acceptable warnings the user has acknowledged), and no `kind: "not-applicable"` from the prior dry-run. Use `tree status` for the post-migration shape check; use the migrate output for the cleanup audit trail. Do not conflate the two.
 
 ### Phase B — Bind (auto unless ambiguous)
 
@@ -81,15 +81,17 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 **Action:**
 
 1. Decide tree mode. Defaults below — only ask the user if marked ⚠.
-   - Lone source repo → create a sibling tree: `first-tree tree init --tree-mode dedicated` (default).
-   - Workspace root with multiple child repos: `first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug-of-source-root>`.
-   - **⚠ existing tree:** if the user mentioned an existing tree URL, add `--tree-url <url> --tree-mode shared` to either command instead so the existing tree is cloned as the sibling.
+   - **Lone source repo (no parent workspace dir yet)** → two-step flow because the current `init` only writes `workspace.json` when scope is workspace AND the tree is an immediate child of the scope root. A dedicated tree is a sibling, not a child, so `init` alone cannot produce W1 for a lone repo. Use:
+     1. `first-tree tree init --tree-mode dedicated` (or `--tree-url <url> --tree-mode shared` for an existing tree) — writes the legacy `bindings/` + `source.json` + sibling tree.
+     2. `cd ..` to the parent dir (now contains source + sibling tree).
+     3. `first-tree tree migrate-to-w1 --dry-run` then `first-tree tree migrate-to-w1` — Case A migration writes `<parent>/.first-tree/workspace.json` and strips the legacy state. `<parent>` becomes the workspace root.
+   - **Workspace root with multiple child repos** → `first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug-of-source-root>`. Adds `--tree-url <url>` for an existing remote tree.
    - **⚠ recursion:** if cwd contains nested git repos that look distinct (private repos, submodules, `trusted-external/*`, vendored code), default to NOT recursing and **ask** before adding them to `workspace.json.sources`.
-2. `first-tree tree init` runs all of: install the five shipped skills at the workspace root, write framework `AGENTS.md` / `CLAUDE.md` at the workspace root, scaffold the tree subdir (when no `--tree-url`) or clone it (when `--tree-url`), and write `<workspaceRoot>/.first-tree/workspace.json` (when scope is workspace and the tree resolves to an immediate child).
-3. After init succeeds, walk `unboundGitSiblings[]` from a fresh `first-tree tree status` and ask the user which to add to `sources`. Adding a source is an in-place edit to `workspace.json.sources`; no separate CLI command is needed.
+2. For the workspace-scope path, `first-tree tree init` runs all of: install the five shipped skills at the workspace root, write framework `AGENTS.md` / `CLAUDE.md` at the workspace root, scaffold the tree subdir (when no `--tree-url`) or clone it (when `--tree-url`), and write `<workspaceRoot>/.first-tree/workspace.json`. For the lone-repo path, init writes the legacy state; the follow-up `migrate-to-w1` produces the manifest.
+3. After init (+ migrate-to-w1 for lone-repo case) succeeds, walk `unboundGitSiblings[]` from a fresh `first-tree tree status` and ask the user which to add to `sources`. Adding a source is an in-place edit to `workspace.json.sources`; no separate CLI command is needed.
 4. `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`.
 
-**Exit gate:** `tree verify` exits 0. `tree status --json` reports a workspace with the expected tree and at least one bound source.
+**Exit gate:** `tree verify` exits 0. `tree status --json` reports a workspace (`workspaceRoot` + `manifest.tree` + non-empty `boundSources[]`) — not a legacy `role: *-bound` fallback. If status reports the legacy fallback for a lone-repo path, the `migrate-to-w1` step was skipped or failed — go back to step 1.
 
 ### Phase B-refresh — Already bound (auto)
 
@@ -98,7 +100,7 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 **Action:**
 
 1. `first-tree tree skill upgrade` from the workspace root (idempotent, picks up newer shipped skills).
-2. Re-run `first-tree tree status` and surface any `unboundGitSiblings[]` or `missingLocally[]` to the user. Adding a sibling = append its name to `workspace.json.sources`. Cloning a missing source = standard `git clone <url> <name>` next to the tree.
+2. Re-run `first-tree tree status` and surface any `unboundGitSiblings[]` or `missingBoundSources[]` to the user. Adding a sibling = append its name to `workspace.json.sources`. Cloning a missing source = standard `git clone <remoteUrl> <name>` next to the tree (read `<missingBoundSources[?].name>` for the subdir name; `boundSources[?].remoteUrl` for the URL when present).
 3. `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`.
 
 **Exit gate:** verify passes. Continue to Phase C.

@@ -38,7 +38,8 @@ For each tree-worthy item, find the right node:
 | The decision belongs to an existing domain | Update that domain's `NODE.md` or add a leaf in that domain                           |
 | The decision spans two domains             | Add a leaf in the more-specific domain; add a `soft_links` entry from the broader one |
 | The decision is genuinely new              | Add a new domain directory with its own `NODE.md`                                     |
-| Ownership or workspace map change          | Update `members/` or `source-repos.md`, not a domain leaf                             |
+| Ownership change                           | Update `members/`, not a domain leaf                                                  |
+| Workspace map change (new bound source)    | Edit `<workspaceRoot>/.first-tree/workspace.json` directly — that file is not in the tree, and it's not write's job to author it. Hand the source pointer to `first-tree-sync` instead. |
 
 Bias hard toward editing existing nodes. Adding new domains is a high-bar
 move — only when no existing domain fits.

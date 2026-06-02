@@ -9,11 +9,14 @@ first-tree tree status --json
 ```
 
 Always the first call. Walks up from cwd looking for
-`<workspaceRoot>/.first-tree/workspace.json`. JSON output includes
-`workspaceRoot`, `manifest.tree`, `manifest.sources`, `boundSources[]`,
-`unboundGitSiblings[]`, `missingLocally[]`. If no workspace.json is
-found the output describes the legacy `inspect` `role` (back-compat
-during the W1 transition); in that case go to Phase A.5.
+`<workspaceRoot>/.first-tree/workspace.json`. JSON output is the
+`WorkspaceStatus` shape — see [`recipe.md` §Reading status output](recipe.md) for the full schema.
+The fields onboarding consumes most are `workspaceRoot`,
+`manifest.tree`, `manifest.sources`, `boundSources[]`,
+`unboundGitSiblings[]`, and `missingBoundSources[]` (declared-but-not-cloned
+sources). If no `workspace.json` is found, the output describes the
+legacy `inspect` `role` (back-compat during the W1 transition); in
+that case go to Phase A.5.
 
 ## Phase A.5 — Migrate legacy multi-mode workspace
 
@@ -38,11 +41,15 @@ The migration leaves dirty working-tree edits in the tree and each source repo. 
 ## Phase B — Init
 
 ```bash
-# Lone source repo, scaffold a new sibling tree (dedicated mode)
+# Lone source repo path — TWO STEPS because dedicated tree is a sibling,
+# not a child, so init alone cannot write workspace.json.
+#   Step 1
 first-tree tree init --tree-mode dedicated
-
-# Lone source repo, clone an existing tree as sibling (shared mode)
+# Or for an existing remote tree:
 first-tree tree init --tree-url <url> --tree-mode shared
+#   Step 2
+cd ..
+first-tree tree migrate-to-w1            # Case A migration writes workspace.json
 
 # Workspace-level init (cwd is the workspace root; tree is a child of cwd)
 first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug>
@@ -52,8 +59,11 @@ first-tree tree init --scope workspace --tree-url <url> --tree-mode shared --wor
 `init` writes the workspace-root framework (skills under
 `.agents/skills/` + `.claude/skills/`, framework `AGENTS.md` / `CLAUDE.md`),
 scaffolds or clones the tree, and writes
-`<workspaceRoot>/.first-tree/workspace.json` when cwd is the workspace
-root and the tree resolves to an immediate child. After init, surface
+`<workspaceRoot>/.first-tree/workspace.json` when scope is workspace
+and the tree resolves to an immediate child of the scope root. For
+lone-repo onboarding (single source with sibling tree) the manifest
+is produced by the follow-up `migrate-to-w1` step above, not by
+`init`. After init (+ migrate when applicable), surface
 `unboundGitSiblings[]` from a fresh `first-tree tree status` and ask
 the user which to add to `workspace.json.sources`.
 
@@ -112,12 +122,18 @@ Phase C is agent-driven, not CLI-driven. The only commands invoked are
 `diff`, `commit`, `push`) plus `gh pr create`. See
 [`content-drafting.md`](content-drafting.md).
 
-## workspace.json schema (for manual repair)
+## workspace.json schema (for read + hand-repair)
 
-When `tree init` can't write the file (lone single-repo case where the
-tree is not an immediate child of cwd), create
-`<workspaceRoot>/.first-tree/workspace.json` by hand. The schema is two
-fields and strict on each:
+For lone-single-repo onboarding the canonical path is **not** to
+hand-create the manifest — use the two-step Phase B flow above
+(`init` followed by `cd ..` and `migrate-to-w1`). Migration's Case A
+cleanup writes the manifest and strips the legacy state in one
+operation, which is what the spec calls for.
+
+Hand-create `<workspaceRoot>/.first-tree/workspace.json` only when
+recovering from a corrupted manifest in an existing workspace (e.g.
+the file went missing but the layout still matches the manifest's
+shape). The schema is two fields and strict on each:
 
 ```json
 {

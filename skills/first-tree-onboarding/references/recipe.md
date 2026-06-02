@@ -25,16 +25,27 @@ during the W1 transition. The W1 shape is:
     "tree": "<immediate-subdir-name>",
     "sources": ["<source-1>", "<source-2>"]
   },
+  "treePath": "<workspaceRoot>/<manifest.tree>",
+  "treePresent": true,
+  "treeRemoteUrl": "https://github.com/<owner>/<tree-repo>",
   "boundSources": [
-    { "name": "<source-1>", "present": true, "remoteUrl": "https://github.com/<owner>/<repo>" },
-    { "name": "<source-2>", "present": false }
+    { "name": "<source-1>", "path": "<workspaceRoot>/<source-1>", "present": true,  "remoteUrl": "https://github.com/<owner>/<source-1>" },
+    { "name": "<source-2>", "path": "<workspaceRoot>/<source-2>", "present": false }
   ],
   "unboundGitSiblings": [
-    { "name": "<sibling-name>", "remoteUrl": "https://github.com/<owner>/<repo>" }
+    { "name": "<sibling>", "path": "<workspaceRoot>/<sibling>", "remoteUrl": "https://github.com/<owner>/<sibling>" }
   ],
-  "missingLocally": ["<source-2>"]
+  "missingBoundSources": [
+    { "name": "<source-2>", "path": "<workspaceRoot>/<source-2>", "present": false }
+  ]
 }
 ```
+
+`missingBoundSources` is the subset of `boundSources` whose `present`
+is `false` (declared by the manifest but not cloned locally). It is an
+array of objects, not strings — read `name` for the subdir name and
+look up the corresponding `boundSources[?].remoteUrl` when prompting
+the user to clone.
 
 The legacy fallback shape is the `inspect` JSON with `role` etc. — see
 [`role-decisions.md`](role-decisions.md) for the legacy mapping.
@@ -114,24 +125,41 @@ cleanup flow above runs normally.
 
 ### Single repo (lone source repo, no parent workspace)
 
-```bash
-# Scaffold a new dedicated sibling tree (default mode)
-first-tree tree init --tree-mode dedicated
+The current CLI's `init` only writes `workspace.json` when scope is
+workspace AND the tree is an immediate child of the scope root. A
+dedicated tree is a sibling, not a child, so `init` alone cannot
+produce W1 for a lone repo. Use this two-step flow:
 
-# Bind to an existing tree (URL)
+```bash
+# Step 1: lay down the legacy state (sibling tree + legacy bindings)
+first-tree tree init --tree-mode dedicated
+# Or, for an existing remote tree:
 first-tree tree init --tree-url <url> --tree-mode shared
 
-# Verify
+# Step 2: cd to the parent dir (which now contains source + sibling tree)
+cd ..
+
+# Step 3: migrate the de-facto workspace into the W1 layout
+first-tree tree migrate-to-w1 --dry-run
+first-tree tree migrate-to-w1
+
+# Step 4: verify the tree
 first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>
 ```
 
-`init` writes:
+After step 3, `<parent>/` is the W1 `workspaceRoot`,
+`<parent>/.first-tree/workspace.json` exists with `manifest.tree =
+"<source>-tree"` (or whatever the tree subdir is named) and
+`manifest.sources = ["<source>"]`. The migration cleanup strips the
+legacy `.first-tree/source.json` from the source, `bindings/` from
+the tree, framework block from source AGENTS.md / CLAUDE.md, per-source
+skill installs, and `WHITEPAPER.md`. The framework `AGENTS.md` /
+`CLAUDE.md` + skills land at the workspace root by way of init's
+workspace-root pass.
 
-- `<workspaceRoot>/.agents/skills/<five-shipped-skills>/`
-- `<workspaceRoot>/.claude/skills/<five-shipped-skills>/`
-- `<workspaceRoot>/AGENTS.md` and `<workspaceRoot>/CLAUDE.md` (with the framework block at the top)
-- `<workspaceRoot>/.first-tree/workspace.json` (when scope is workspace AND the tree resolves to an immediate child of the source root)
-- The tree subdir at `<workspaceRoot>/<manifest.tree>` (newly scaffolded for dedicated mode, or cloned from `--tree-url`)
+If you forget the migrate step, `tree status` will fall back to the
+legacy `inspect` reporter and report `role: source-repo-bound`,
+which Phase A.5 then catches and routes here.
 
 ### Workspace root (multiple sibling source repos)
 
@@ -173,7 +201,7 @@ first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>
 
 `tree skill upgrade` is safe to rerun — it copies the latest shipped skill payloads from the CLI into `.agents/skills/` and `.claude/skills/` at the workspace root. (Per-source skill installs are gone in W1; agents launch at the workspace root and pick up the workspace-root install.)
 
-If `tree status` shows `unboundGitSiblings[]` or `missingLocally[]`, surface those to the user and ask whether to bind / clone. Adding to `sources` is a one-line JSON edit; cloning a missing source is `git clone <remoteUrl> <name>` next to the tree.
+If `tree status` shows `unboundGitSiblings[]` or `missingBoundSources[]`, surface those to the user and ask whether to bind / clone. Adding to `sources` is a one-line JSON edit; cloning a missing source is `git clone <remoteUrl> <name>` next to the tree (each `missingBoundSources[?]` is an object — read `name` for the subdir name, and look up the corresponding `boundSources[?].remoteUrl` for the URL).
 
 ## Phase C — Draft initial tree content
 

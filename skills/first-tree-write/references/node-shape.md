@@ -62,7 +62,7 @@ a 60-line one if it captures the same decision.
 | Domain `NODE.md`         | Domain-level decisions, ownership of the whole domain, `soft_links` to siblings |
 | Leaf `*.md` in a domain  | Specific decisions, constraints, supersession notes                             |
 | `members/<id>/NODE.md`   | One person's responsibilities and review scope                                  |
-| `source-repos.md` (root) | The list of source repos that consume this tree                                 |
+| `workspace.json` (at `<workspaceRoot>/.first-tree/`, OUTSIDE the tree) | The list of source repos bound to this tree, in `manifest.sources`. Write does not edit this file — adding new sources is sync's responsibility via direct JSON edits. |
 
 If you cannot figure out where a fact goes, ask the user. Do not invent
 a new top-level domain just to have somewhere to put it.
