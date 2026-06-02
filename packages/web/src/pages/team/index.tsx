@@ -26,7 +26,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
-import { SegmentedControl } from "../../components/ui/segmented-control.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { formatRelative } from "../../lib/utils.js";
 import { InviteLinkPanel } from "../invite-link-panel.js";
@@ -278,7 +277,12 @@ export function TeamPage() {
         title="Team"
         subtitle="Agents and humans on your team."
         right={
+          // Page-level controls live on the title row: full-page search (it
+          // filters BOTH sections) sits left of the create actions. The
+          // agent-only All/Mine scope is NOT here — it lives in the Agent
+          // teammates header (it doesn't affect Human teammates).
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+            <SearchBar query={query} onQuery={setQuery} />
             {/* Brand-green cta is reserved for the one creation/hero action. */}
             <Button size="sm" variant="cta" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3.5 w-3.5" />
@@ -302,26 +306,6 @@ export function TeamPage() {
           gap: "var(--sp-1)",
         }}
       >
-        {/* Filter toolbar: the high-frequency All/Mine scope toggle leads (it
-            behaves as the default-view selector), with search adjacent to its
-            right. Grouped tight on the left as one cluster — not split to
-            opposite ends, which left dead space and read as stranded controls. */}
-        <div className="flex items-center" style={{ gap: "var(--sp-4)", marginBottom: "var(--sp-2)" }}>
-          {/* All/Mine scopes only the Agent section (Human teammates is never
-              filtered by it). Scope is carried by "Mine" = ownership semantics
-              and by the toggle sitting directly above the Agent section — no
-              explicit qualifier needed (it would just echo the section title). */}
-          <SegmentedControl
-            value={agentFilter}
-            onChange={setAgentFilter}
-            options={[
-              { value: "all", label: "All" },
-              { value: "mine", label: "Mine" },
-            ]}
-          />
-          <SearchBar query={query} onQuery={setQuery} />
-        </div>
-
         {agentsQuery.isLoading || membersQuery.isLoading ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
@@ -353,6 +337,8 @@ export function TeamPage() {
               setDelegateMut.mutate({ humanAgentId, delegateMention: delegateUuid })
             }
             searchActive={search.length > 0}
+            agentFilter={agentFilter}
+            onAgentFilter={setAgentFilter}
           />
         )}
       </div>
@@ -430,8 +416,11 @@ function formatError(err: unknown): string {
 }
 
 function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+  // Lives on the page title row next to the create buttons; fixed 180-wide
+  // (--sp-45) and h-8 so it sits at the same height as the adjacent `sm`
+  // buttons without crowding them.
   return (
-    <div className="relative" style={{ width: "var(--sp-60)", maxWidth: "100%" }}>
+    <div className="relative" style={{ width: "var(--sp-45)", maxWidth: "100%" }}>
       <Search
         aria-hidden
         className="h-3.5 w-3.5"
@@ -448,7 +437,7 @@ function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => 
         onChange={(e) => onQuery(e.target.value)}
         placeholder="Search name or @handle"
         aria-label="Search team"
-        className="h-7 text-caption"
+        className="h-8 text-caption"
         style={{ paddingLeft: "var(--sp-5)" }}
       />
     </div>
@@ -506,7 +495,13 @@ export function buildTeamData(args: {
     if (!human?.delegateMention) return null;
     const d = agentByUuid.get(human.delegateMention);
     if (!d) return null;
-    return { uuid: d.uuid, name: d.name, displayName: d.displayName };
+    return {
+      uuid: d.uuid,
+      name: d.name,
+      displayName: d.displayName,
+      colorToken: d.avatarColorToken,
+      avatarImageUrl: d.avatarImageUrl,
+    };
   };
 
   const humans: HumanRow[] = members
