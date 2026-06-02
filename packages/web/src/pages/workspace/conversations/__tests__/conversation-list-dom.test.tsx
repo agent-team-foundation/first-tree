@@ -376,4 +376,29 @@ describe("ConversationList", () => {
     const draft = await renderDom(<StatefulList selectedChatId={DRAFT_CHAT_ID} nextCursor={null} />);
     expect(buttonByText(draft, "New chat").getAttribute("aria-current")).toBe("page");
   });
+
+  it("keeps the unread filter selected when there are no unread chats", async () => {
+    const readOnlyRows = [row({ chatId: "chat-read", title: "Read chat" })];
+    const container = await renderDom(
+      <StatefulList rows={readOnlyRows} nextCursor={null} />,
+      createClient(readOnlyRows, null),
+    );
+
+    expect(buttonByText(container, "Unread").getAttribute("aria-pressed")).toBe("false");
+
+    await click(buttonByText(container, "Unread"));
+
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
+      filter: "unread",
+      engagement: "active",
+      watching: undefined,
+      origin: undefined,
+      with: undefined,
+    });
+    expect(buttonByText(container, "Unread").getAttribute("aria-pressed")).toBe("true");
+    expect(buttonByText(container, "All").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).toContain("No unread conversations.");
+    expect(container.textContent).toContain("All caught up.");
+    expect(container.textContent).not.toContain("Start with New chat.");
+  });
 });
