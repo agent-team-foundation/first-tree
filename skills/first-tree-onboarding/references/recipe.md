@@ -125,41 +125,67 @@ cleanup flow above runs normally.
 
 ### Single repo (lone source repo, no parent workspace)
 
-The current CLI's `init` only writes `workspace.json` when scope is
-workspace AND the tree is an immediate child of the scope root. A
-dedicated tree is a sibling, not a child, so `init` alone cannot
-produce W1 for a lone repo. Use this two-step flow:
+W1 requires source + tree as siblings under a workspace root. `init`
+writes the `workspace.json` manifest only when scope is workspace AND
+the tree resolves to an immediate child of cwd — so the source has to
+already live inside the workspace root when init runs. The recipe is:
+pre-create the workspace dir, move the source in, then init from
+there.
 
 ```bash
-# Step 1: lay down the legacy state (sibling tree + legacy bindings)
-first-tree tree init --tree-mode dedicated
+# Step 1: pick a workspace dir name. Default = "<source-name>-workspace".
+#         Ask the user if they have a preferred name.
+WORKSPACE=<workspace-name>
+TREE=<tree-name>            # e.g. "<workspace-name>-tree" or "context-tree"
+SLUG=<workspace-slug>       # kebab-case identifier for workspace_id
+
+# Step 2: from the source repo's parent directory, create the workspace
+#         and move the source repo into it. The repo path changes —
+#         warn the user before running the mv.
+mkdir $WORKSPACE
+mv <source-repo> $WORKSPACE/
+
+# Step 3: cd into the new workspace and run init from there.
+cd $WORKSPACE
+
+# Dedicated tree (new tree scaffolded locally):
+first-tree tree init --scope workspace \
+  --tree-path ./$TREE \
+  --tree-mode dedicated \
+  --workspace-id $SLUG \
+  --no-recursive
+
 # Or, for an existing remote tree:
-first-tree tree init --tree-url <url> --tree-mode shared
+first-tree tree init --scope workspace \
+  --tree-path ./$TREE \
+  --tree-url <url> \
+  --tree-mode shared \
+  --workspace-id $SLUG \
+  --no-recursive
 
-# Step 2: cd to the parent dir (which now contains source + sibling tree)
-cd ..
-
-# Step 3: migrate the de-facto workspace into the W1 layout
-first-tree tree migrate-to-w1 --dry-run
-first-tree tree migrate-to-w1
-
-# Step 4: verify the tree
-first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>
+# Step 4: verify
+first-tree tree status --json                          # must report W1 shape
+first-tree tree verify --tree-path ./$TREE             # must exit 0
 ```
 
-After step 3, `<parent>/` is the W1 `workspaceRoot`,
-`<parent>/.first-tree/workspace.json` exists with `manifest.tree =
-"<source>-tree"` (or whatever the tree subdir is named) and
-`manifest.sources = ["<source>"]`. The migration cleanup strips the
-legacy `.first-tree/source.json` from the source, `bindings/` from
-the tree, framework block from source AGENTS.md / CLAUDE.md, per-source
-skill installs, and `WHITEPAPER.md`. The framework `AGENTS.md` /
-`CLAUDE.md` + skills land at the workspace root by way of init's
-workspace-root pass.
+`--no-recursive` is required here. Without it, init's workspace-scope
+cascade would notice the freshly-scaffolded tree dir at cwd and try
+to bind it as a source, which is wrong (the tree is `manifest.tree`,
+not a `manifest.sources` entry). With `--no-recursive`, init binds
+exactly the one source repo you placed at the workspace root.
 
-If you forget the migrate step, `tree status` will fall back to the
-legacy `inspect` reporter and report `role: source-repo-bound`,
-which Phase A.5 then catches and routes here.
+After step 3, `$WORKSPACE/` is the W1 `workspaceRoot`,
+`$WORKSPACE/.first-tree/workspace.json` exists with `manifest.tree =
+"$TREE"` and `manifest.sources = ["<source>"]`, the source repo is
+clean (no `.first-tree/source.json`, no legacy `bindings/`), and the
+framework `AGENTS.md` / `CLAUDE.md` + skills land at the workspace
+root.
+
+If a user has already run `init` inside a lone source repo from a
+previous (pre-W1) onboarding and ended up with a sibling tree, that
+is a legacy multi-mode layout. Route through Phase A.5
+(`migrate-to-w1`) — do not try to re-run this recipe over the
+existing layout.
 
 ### Workspace root (multiple sibling source repos)
 
