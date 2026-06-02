@@ -36,6 +36,16 @@ export {
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
 export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
+// Workspace migration to W1
+export type {
+  MigrateOptions,
+  MigrationArtifactKind,
+  MigrationDetection,
+  MigrationResult,
+  PromoteOptions,
+  PromoteResult,
+} from "./migrate-workspace.js";
+export { detectMigrationState, migrateWorkspaceToW1, promoteToWorkspace } from "./migrate-workspace.js";
 // Onboard
 export {
   formatCheckReport,

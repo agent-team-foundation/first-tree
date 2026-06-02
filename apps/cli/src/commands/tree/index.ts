@@ -10,6 +10,7 @@ import { initCommand } from "./init.js";
 import { injectCommand } from "./inject.js";
 import { inspectCommand } from "./inspect.js";
 import { integrateCommand } from "./integrate.js";
+import { migrateCommand } from "./migrate.js";
 import { publishCommand } from "./publish.js";
 import { reviewCommand } from "./review.js";
 import { skillSubcommands } from "./skill.js";
@@ -40,6 +41,7 @@ const treeSubcommands: SubcommandModule[] = [
   bootstrapCommand,
   bindCommand,
   integrateCommand,
+  migrateCommand,
   verifyCommand,
   upgradeCommand,
   publishCommand,

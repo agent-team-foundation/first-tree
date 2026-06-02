@@ -118,6 +118,7 @@ describe("CLI command registration", () => {
       "inject",
       "inspect",
       "integrate",
+      "migrate-to-w1",
       "publish",
       "review",
       "skill",
