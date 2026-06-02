@@ -435,6 +435,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
       setSelectedRuntime: vi.fn(),
       cliCommand: "first-tree-dev login token",
       tokenError: null,
+      retry: vi.fn(),
     },
     agentDisplayName: "Gandy's assistant",
     setAgentDisplayName: vi.fn(),

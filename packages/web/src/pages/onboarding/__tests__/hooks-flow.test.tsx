@@ -209,11 +209,16 @@ describe("onboarding hooks and flow", () => {
     await act(async () => root?.unmount());
     root = null;
     activityMocks.listClients.mockResolvedValue([]);
-    clientMocks.api.post.mockRejectedValueOnce(new Error("token failed"));
+    // All mint attempts fail. The hook retries silently a few times (with
+    // backoff) before surfacing the error, so reject persistently and wait the
+    // backoff window out before asserting.
+    clientMocks.api.post.mockRejectedValue(new Error("token failed"));
     await renderProbe(<Probe />);
-    await flush();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2400));
+    });
     expect(expectHookValue(latest.current).tokenError).toBe("token failed");
-  });
+  }, 10_000);
 
   it("creates an agent, stores its uuid, reports onboarding, and reaches online", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };

@@ -47,8 +47,15 @@ export type StepCopy = {
 export const STEP_COPY: Record<StepId, StepCopy> = {
   team: {
     label: "Welcome",
-    title: "Name your team",
-    why: "The shared space where you, your teammates, and your AI agents work together. Rename it anytime.",
+    // The admin's first screen is their welcome moment (the invitee path has
+    // one too) — landing straight on a bare "Name your team" form felt abrupt.
+    // The title greets, the why sets expectations, and naming the team becomes
+    // a warm first action below rather than a cold prompt.
+    title: "Welcome to First Tree",
+    // Lead with the team (the thing being named right below), not the agent —
+    // otherwise the value line and the naming field talk past each other. The
+    // agent is introduced in the journey preview / its own step.
+    why: "Let's start with your team — where you, your teammates, and your AI agents work together.",
   },
   "connect-code": {
     label: "Connect code",
@@ -57,13 +64,17 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
   "connect-computer": {
     label: "Connect computer",
-    title: "Connect a computer",
-    why: "Your agent needs a real computer — link one to your team so it has somewhere to run.",
+    title: "Connect your computer",
+    why: "Run the command below on the computer where your agent should run.",
   },
   "create-agent": {
     label: "Create agent",
-    title: "Create your agent",
-    why: "Name your agent and pick who can work with it. You'll be chatting in a moment.",
+    // "an agent", not "your agent": it can be team-visible (see the Visibility
+    // choice), so "your" would over-claim private ownership. Matches the rail
+    // label too. No `why` — the title + form are self-explanatory; a subtitle
+    // would only restate the fields.
+    title: "Create an agent",
+    why: "",
   },
   kickoff: {
     label: { admin: "Start tree", invitee: "Start work" },
@@ -75,7 +86,10 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   welcome: {
     label: "Welcome",
     title: "Welcome to the team",
-    why: "Your team is already set up. Let's get your own agent working in a couple of quick steps.",
+    // The personalized one-liner (with the team name) lives in StepWelcome's
+    // body, so the static why stays empty — avoids the old why+body
+    // duplication, and the step list is dropped (the progress bar covers it).
+    why: "",
   },
 };
 
@@ -89,6 +103,15 @@ export const COPY = {
   skipForNow: "Skip for now",
   finishLater: "I'll finish later",
   hideSetup: "Hide setup",
+  /** team (opening / welcome) states */
+  team: {
+    // Welcome-screen copy, kept terse — greeting + value live in STEP_COPY;
+    // here are just the field label and a 3-word reassurance. No step preview:
+    // the progress bar already names where you are once you start, so listing
+    // the steps here only added reading + chore-list weight.
+    nameLabel: "What should we call your team?",
+    renameHint: "Rename it anytime.",
+  },
   /** connect-code states */
   connectCode: {
     // `intro` was deleted (R1 from baixiaohang review): it duplicated
@@ -134,7 +157,7 @@ export const COPY = {
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
-      "Your computer is connected, but it doesn't have an AI engine ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
+      "Your computer is connected, but it doesn't have an AI coding tool ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
     detecting: "Checking what's installed…",
     stuckTitle: "Taking a while? A few common reasons:",
     stuckReasons: [
@@ -144,6 +167,16 @@ export const COPY = {
     ],
     nodeLinkLabel: "Install Node.js (free)",
     nodeUrl: "https://nodejs.org",
+    /** "Need help?" disclosure — label, and the stuck variant it switches to. */
+    helpStuckLabel: "Taking a while? Need help?",
+    /** Troubleshooting block inside the disclosure (neutral title — it can be
+        opened proactively, not only when stuck). Reuses `stuckReasons`. */
+    troubleshootTitle: "If it's not connecting:",
+    /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).
+        Calm + recoverable: the auto-retry handles transient blips, so by the
+        time this shows it's worth a manual Try again. */
+    tokenErrorTitle: "We couldn't prepare your setup command — this is usually temporary.",
+    retry: "Try again",
   },
   /** create-agent states */
   createAgent: {
@@ -152,7 +185,7 @@ export const COPY = {
     creatingHint: "Usually about 10 seconds",
     timeoutTitle: "This is taking longer than expected.",
     timeoutBody:
-      "Your agent was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI engine couldn't start. Check that computer, then try again.",
+      "Your agent was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI coding tool couldn't start. Check that computer, then try again.",
     retry: "Try again",
   },
   /** kickoff / "Start" states (title/why are per-state, rendered by the step) */

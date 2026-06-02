@@ -8,7 +8,6 @@ import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeMode } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
-import { ProgressRail } from "./onboarding/progress-rail.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
@@ -104,6 +103,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   tokenError: {
     connectedClient: null,
@@ -113,6 +113,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: null,
     tokenError: "Failed to generate connect command",
+    retry: NOOP,
   },
   detecting: {
     connectedClient: HOST,
@@ -122,6 +123,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   noRuntime: {
     connectedClient: HOST,
@@ -131,6 +133,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   ready: {
     connectedClient: HOST,
@@ -140,6 +143,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
 };
 
@@ -292,7 +296,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-cc-noruntime",
-    label: "Connected · no AI engine",
+    label: "Connected · no AI tool",
     group: "2 · Connect computer",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
@@ -551,7 +555,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "inv-cc-noruntime",
-    label: "Connected · no AI engine",
+    label: "Connected · no AI tool",
     group: "2 · Connect computer",
     role: "invitee",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
@@ -769,7 +773,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   return (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={flow}>
-        <OnboardingShell rail={<ProgressRail />}>{spec.body ?? <StepBody step={spec.step} />}</OnboardingShell>
+        <OnboardingShell>{spec.body ?? <StepBody step={spec.step} />}</OnboardingShell>
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );

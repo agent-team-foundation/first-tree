@@ -7,6 +7,7 @@ import {
   inferInitialStepIndex,
   resolveInviteeKickoffState,
   resolveOnboardingPath,
+  resolveStepProgress,
   shouldEnterOnboarding,
   shouldLeaveOnboarding,
   stepVisualState,
@@ -19,6 +20,24 @@ describe("resolveOnboardingPath", () => {
   it("members and unknown roles take the invitee path", () => {
     expect(resolveOnboardingPath("member")).toBe("invitee");
     expect(resolveOnboardingPath(null)).toBe("invitee");
+  });
+});
+
+describe("resolveStepProgress", () => {
+  it("tracks only the config steps — admin sees 3, in sequence order", () => {
+    expect(resolveStepProgress("admin", "connect-computer")).toEqual({ index: 0, total: 3 });
+    expect(resolveStepProgress("admin", "create-agent")).toEqual({ index: 1, total: 3 });
+    expect(resolveStepProgress("admin", "connect-code")).toEqual({ index: 2, total: 3 });
+  });
+  it("invitee sees 2 config steps", () => {
+    expect(resolveStepProgress("invitee", "connect-computer")).toEqual({ index: 0, total: 2 });
+    expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 1, total: 2 });
+  });
+  it("returns null on the bookends so the indicator hides there", () => {
+    expect(resolveStepProgress("admin", "team")).toBeNull();
+    expect(resolveStepProgress("admin", "kickoff")).toBeNull();
+    expect(resolveStepProgress("invitee", "welcome")).toBeNull();
+    expect(resolveStepProgress("invitee", "kickoff")).toBeNull();
   });
 });
 

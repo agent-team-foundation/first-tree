@@ -2,7 +2,6 @@ import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { OnboardingFlowProvider, useOnboardingFlow } from "./onboarding-flow.js";
 import { OnboardingShell } from "./onboarding-shell.js";
-import { ProgressRail } from "./progress-rail.js";
 import { StepConnectCode } from "./steps/step-connect-code.js";
 import { StepConnectComputer } from "./steps/step-connect-computer.js";
 import { StepCreateAgent } from "./steps/step-create-agent.js";
@@ -37,7 +36,7 @@ export function OnboardingPage() {
   const path = resolveOnboardingPath(role);
   return (
     <OnboardingFlowProvider path={path}>
-      <OnboardingShell rail={<ProgressRail />}>
+      <OnboardingShell>
         <OnboardingBody />
       </OnboardingShell>
     </OnboardingFlowProvider>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
+import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
@@ -154,10 +155,16 @@ export function InviteAcceptCard({
   return (
     <Card className="w-full max-w-sm">
       <CardHeader className="text-center">
+        {/* Brand + product context: this card is the first thing a signed-out
+            stranger sees, so it names First Tree (logo) and frames the org as a
+            team on it — otherwise "join Acme Inc" lacks any product anchor. */}
+        <div className="mb-2 flex justify-center text-foreground">
+          <FirstTreeLogo width={26} height={30} />
+        </div>
         <CardTitle className="text-title">
-          You're invited to join
+          You're invited to join the
           <br />
-          {preview.organizationDisplayName}
+          {preview.organizationDisplayName} team on First Tree
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
