@@ -482,7 +482,7 @@ function makeRecordingExec(impl: (call: ExecCall) => void = () => {}): {
 }
 
 describe("installFirstTreeIntegration", () => {
-  it("shells out to `first-tree tree integrate` with the expected arguments", () => {
+  it("shells out to `first-tree tree skill install --root <workspace>` with the expected arguments", () => {
     const workspace = join(tmpBase, "integrate-happy");
     const treePath = join(tmpBase, "ctx-tree");
     mkdirSync(workspace, { recursive: true });
@@ -503,21 +503,7 @@ describe("installFirstTreeIntegration", () => {
     expect(result).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe("first-tree");
-    // No `--source-path` flag: the first-tree CLI resolves the source from
-    // the process cwd (set via options.cwd below). Passing a flag the CLI
-    // doesn't recognise made every invocation exit 1.
-    expect(calls[0]?.args).toEqual([
-      "tree",
-      "integrate",
-      "--tree-path",
-      treePath,
-      "--mode",
-      "workspace-root",
-      "--workspace-id",
-      "chat-xyz",
-      "--tree-url",
-      "https://github.com/org/tree",
-    ]);
+    expect(calls[0]?.args).toEqual(["tree", "skill", "install", "--root", workspace]);
     expect(calls[0]?.options.cwd).toBe(workspace);
     expect(logs.join("\n")).toContain("first-tree (PATH)");
   });

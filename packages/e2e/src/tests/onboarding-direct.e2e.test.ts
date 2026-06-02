@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execCli } from "../framework/cli-driver/exec.js";
 import { runCliJson } from "../framework/cli-json.js";
@@ -16,22 +16,23 @@ import { type LocalGitFixture, makeLocalGitFixture } from "../framework/local-gi
  * this test does not inherit flake from any demo repo on github.com.
  *
  * Sequence:
- *   1. tree inspect       → role must be `unbound-source-repo`
- *   2. tree init           → emits treeRoot (sibling dedicated tree dir)
- *   3. tree inspect        → role must be `source-repo-bound`
- *   4. tree verify         → ok === true
+ *   1. mv source repo into a freshly-created workspace dir
+ *   2. tree init --scope workspace → emits treeRoot (child of workspace root)
+ *   3. tree status                 → reports the W1 workspace shape
+ *   4. tree verify                 → ok === true
  *   5. tree automation install --tier 2 --dry-run → stage === `write_rule_layer`
- *   6. tree skill doctor   → runs to completion, emits valid JSON
+ *   6. tree skill doctor           → runs to completion, emits valid JSON
  *
  * File-landing assertions after the chain:
- *   - source/AGENTS.md, source/CLAUDE.md (source repo gets the managed block)
+ *   - workspace/AGENTS.md, workspace/CLAUDE.md (workspace-root framework)
+ *   - workspace/.first-tree/workspace.json (W1 manifest)
  *   - tree/.github/workflows/validate.yml (first line is the template marker)
  *   - tree/.first-tree/agent-templates/{developer,code-reviewer}.yaml
  *   - tree/.first-tree/org.yaml
  */
 
-type InspectResult = { role: string };
 type InitResult = { treeRoot: string };
+type StatusResult = { workspaceRoot: string; manifest: { tree: string; sources: string[] } };
 type VerifyResult = { ok: boolean };
 type AutomationDryRunResult = { stage: string };
 
@@ -52,44 +53,53 @@ afterAll(() => {
 });
 
 describe("direct CLI onboarding — local fixture, no external clone", () => {
-  it("walks inspect → init → verify → skill doctor against a fresh source repo", async () => {
-    const cwd = fixture.repoRoot;
-    const cliEnv = { home: handle.clientHome, serverBaseUrl: handle.serverBaseUrl };
+  it("walks init → status → verify → skill doctor against a fresh source repo", async () => {
+    const sourceRepo = fixture.repoRoot;
+    const sourceName = basename(sourceRepo);
+    const workspaceRoot = resolve(dirname(sourceRepo), `${sourceName}-workspace`);
+    mkdirSync(workspaceRoot, { recursive: true });
+    const movedSource = resolve(workspaceRoot, sourceName);
+    renameSync(sourceRepo, movedSource);
 
-    const before = await runCliJson<InspectResult>({
-      ...cliEnv,
-      cwd,
-      args: ["tree", "inspect", "--json"],
-    });
-    expect(before.json.role, "fresh fixture should report as unbound-source-repo before init").toBe(
-      "unbound-source-repo",
-    );
+    const treeName = `${sourceName}-tree`;
+    const cliEnv = { home: handle.clientHome, serverBaseUrl: handle.serverBaseUrl };
 
     const init = await runCliJson<InitResult>({
       ...cliEnv,
-      cwd,
-      args: ["tree", "init", "--json", "--no-recursive"],
+      cwd: workspaceRoot,
+      args: [
+        "tree",
+        "init",
+        "--json",
+        "--scope",
+        "workspace",
+        "--tree-path",
+        `./${treeName}`,
+        "--tree-mode",
+        "dedicated",
+      ],
     });
     expect(init.json.treeRoot, "tree init should report a treeRoot path").toBeTruthy();
     const treeRoot = init.json.treeRoot;
 
-    const after = await runCliJson<InspectResult>({
+    const status = await runCliJson<StatusResult>({
       ...cliEnv,
-      cwd,
-      args: ["tree", "inspect", "--json"],
+      cwd: workspaceRoot,
+      args: ["tree", "status", "--json"],
     });
-    expect(after.json.role, "source repo should be bound after tree init").toBe("source-repo-bound");
+    expect(status.json.workspaceRoot, "status should report the workspace root").toBe(workspaceRoot);
+    expect(status.json.manifest.tree, "status manifest.tree should match the tree subdir name").toBe(treeName);
 
     const verify = await runCliJson<VerifyResult>({
       ...cliEnv,
-      cwd,
+      cwd: workspaceRoot,
       args: ["tree", "verify", "--json", "--tree-path", treeRoot],
     });
     expect(verify.json.ok, "tree verify should report ok=true on a freshly onboarded tree").toBe(true);
 
     const automation = await runCliJson<AutomationDryRunResult>({
       ...cliEnv,
-      cwd,
+      cwd: workspaceRoot,
       args: ["tree", "automation", "install", "--tier", "2", "--tree-path", treeRoot, "--dry-run", "--json"],
     });
     expect(automation.json.stage, "automation install --dry-run should report stage=write_rule_layer").toBe(
@@ -103,15 +113,23 @@ describe("direct CLI onboarding — local fixture, no external clone", () => {
     // will add a dedicated skill-doctor health test).
     const doctor = await execCli({
       ...cliEnv,
-      cwd,
-      args: ["tree", "skill", "doctor", "--json", "--root", cwd],
+      cwd: workspaceRoot,
+      args: ["tree", "skill", "doctor", "--json", "--root", workspaceRoot],
     });
     expect(doctor.stdout.trim(), "skill doctor should emit JSON to stdout").not.toBe("");
     expect(() => JSON.parse(doctor.stdout), `skill doctor stdout was not valid JSON:\n${doctor.stdout}`).not.toThrow();
 
-    // Source repo: managed-block files land on the source side.
-    expect(existsSync(resolve(cwd, "AGENTS.md")), "AGENTS.md should be written into the source repo").toBe(true);
-    expect(existsSync(resolve(cwd, "CLAUDE.md")), "CLAUDE.md should be written into the source repo").toBe(true);
+    // Workspace root: framework files + W1 manifest land here, not in the source.
+    expect(existsSync(resolve(workspaceRoot, "AGENTS.md")), "AGENTS.md should be written at the workspace root").toBe(
+      true,
+    );
+    expect(existsSync(resolve(workspaceRoot, "CLAUDE.md")), "CLAUDE.md should be written at the workspace root").toBe(
+      true,
+    );
+    expect(
+      existsSync(resolve(workspaceRoot, ".first-tree/workspace.json")),
+      "workspace.json manifest should be written at the workspace root",
+    ).toBe(true);
 
     // Tree repo: workflow + agent templates + org config land on the tree side.
     const validateYml = resolve(treeRoot, ".github/workflows/validate.yml");

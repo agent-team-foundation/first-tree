@@ -283,177 +283,59 @@ describe("tree automation", () => {
   });
 });
 
-describe("bindSourceRoot and workspace sync helpers", () => {
-  it("binds by remote URL and infers workspace metadata", async () => {
-    const parent = makeTempDir("ft-tree-bind-url-");
-    const source = join(parent, "source");
-    makeGitRepo(source, "https://github.com/acme/source.git");
-    const calls: string[] = [];
-    const { bindSourceRoot } = await import("../commands/tree/bind.js");
-    const shared = await import("../commands/tree/shared.js");
-    const runCommandSpy = vi.spyOn(shared, "runCommand").mockImplementation((command, args, cwd) => {
-      calls.push(`${command} ${args.join(" ")} ${cwd}`);
-      if (command === "git" && args[0] === "clone") {
-        makeGitRepo(String(args[2]), "https://github.com/acme/team-tree.git");
-      }
-      return "";
-    });
-
-    const summary = bindSourceRoot(
-      source,
-      {
-        mode: "workspace-member",
-        treeMode: "shared",
-        treeUrl: "https://github.com/acme/team-tree.git",
-        workspaceRoot: parent,
-      },
-      source,
-    );
-
-    expect(summary).toMatchObject({ bindingMode: "workspace-member", treeMode: "shared", workspaceId: "source" });
-    expect(calls.some((call) => call.includes("git clone https://github.com/acme/team-tree.git"))).toBe(true);
-    runCommandSpy.mockRestore();
-  });
-
-  it("reports bind validation errors for missing checkout, invalid modes, and same-root binds", async () => {
-    const root = makeTempDir("ft-tree-bind-errors-");
-    makeGitRepo(root);
-    const { bindSourceRoot } = await import("../commands/tree/bind.js");
-
-    expect(() => bindSourceRoot(root, {}, root)).toThrow("Missing --tree-path or --tree-url");
-    expect(() => bindSourceRoot(root, { treePath: join(root, "missing") }, root)).toThrow("not a git repository");
-    expect(() => bindSourceRoot(root, { treePath: root }, root)).toThrow("same path");
-
-    const tree = join(root, "tree");
-    makeGitRepo(tree);
-    expect(() => bindSourceRoot(root, { treePath: tree, treeMode: "invalid" as never }, root)).toThrow(
-      "Unsupported value for --tree-mode",
-    );
-    expect(() => bindSourceRoot(root, { treePath: tree, mode: "invalid" as never }, root)).toThrow(
-      "Unsupported value for --mode",
-    );
-  });
-
-  it("syncWorkspaceMembersFromRoot throws when no shared tree can be resolved", async () => {
-    const parent = makeTempDir("ft-tree-workspace-sync-extra-");
-    const workspace = join(parent, "workspace");
-    makeGitRepo(workspace, "https://github.com/acme/workspace.git");
-    const { syncWorkspaceMembersFromRoot } = await import("../commands/tree/workspace-sync.js");
-
-    expect(() => syncWorkspaceMembersFromRoot({ workspaceRoot: workspace })).toThrow(
-      "Could not resolve the shared tree",
-    );
-  });
-});
-
-describe("tree init and bind", () => {
-  it("initializes a repo with nested repo cascade and supports command JSON output", async () => {
+describe("tree init", () => {
+  it("scaffolds a sibling tree, writes workspace.json, and supports JSON output", async () => {
     const workspace = makeTempDir("ft-tree-init-source-");
     makeGitRepo(workspace, "https://github.com/acme/workspace.git");
-    makeGitRepo(join(workspace, "packages", "api"), "https://github.com/acme/api.git");
-    const tree = makeTempDir("ft-tree-init-tree-");
+    makeGitRepo(join(workspace, "packages-api"), "https://github.com/acme/api.git");
+    const treeName = "context-tree";
     process.chdir(workspace);
-    const { initCommand, initializeSourceRoot } = await import("../commands/tree/init.js");
+    const { initCommand, initializeWorkspaceRoot } = await import("../commands/tree/init.js");
 
-    const summary = initializeSourceRoot(workspace, "git-repo", {
-      recursive: true,
-      treeMode: "dedicated",
-      treePath: tree,
-    });
-
-    expect(summary).toMatchObject({
-      bindingMode: "standalone-source",
-      recursive: true,
-      treeMode: "dedicated",
-      treeRoot: tree,
-    });
-    expect(summary.cascadedRepos?.map((repo) => repo.relativePath)).toEqual([join("packages", "api")]);
-    expect(readFileSync(join(workspace, "AGENTS.md"), "utf8")).toContain("dedicated");
-    expect(readFileSync(join(tree, "AGENTS.md"), "utf8")).toContain("acme/api");
-
-    initCommand.action(context(commandWithOptions({ recursive: false, treePath: tree }), true));
-    const payload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as { recursive: boolean };
-    expect(payload.recursive).toBe(false);
-  });
-
-  it("prints init human summaries, cascaded repos, workspace sync failures, and errors", async () => {
-    const workspace = makeTempDir("ft-tree-init-human-");
-    makeGitRepo(workspace, "https://github.com/acme/workspace.git");
-    makeGitRepo(join(workspace, "packages", "api"), "https://github.com/acme/api.git");
-    const tree = makeTempDir("ft-tree-init-human-tree-");
-    process.chdir(workspace);
-    const { initCommand, initializeSourceRoot } = await import("../commands/tree/init.js");
-
-    const summary = initializeSourceRoot(workspace, "workspace-root", {
-      recursive: true,
+    const summary = initializeWorkspaceRoot(workspace, {
       scope: "workspace",
-      treePath: tree,
-      workspaceId: "workspace-1",
+      treeMode: "dedicated",
+      treePath: `./${treeName}`,
     });
+
     expect(summary).toMatchObject({
       bindingMode: "workspace-root",
-      treeMode: "shared",
-      workspaceId: "workspace-1",
+      treeMode: "dedicated",
     });
-    expect(process.exitCode).toBeUndefined();
-    expect(readFileSync(join(tree, "source-repos.md"), "utf8")).toContain("api");
+    expect(summary.workspaceManifest.tree).toBe(treeName);
+    expect(summary.workspaceManifest.sources).toContain("packages-api");
+    expect(readFileSync(join(workspace, "AGENTS.md"), "utf8")).toContain("workspace");
 
-    process.exitCode = undefined;
-    initCommand.action(context(commandWithOptions({ recursive: true, treePath: tree }), false));
-    const human = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(human).toContain("Context Tree Init");
-    expect(human).toContain("Context Tree Workspace Sync");
-    expect(human).toContain(`packages${"/"}api`);
+    initCommand.action(context(commandWithOptions({ scope: "workspace", treePath: `./${treeName}` }), true));
+    const payload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as { bindingMode: string };
+    expect(payload.bindingMode).toBe("workspace-root");
+  });
 
-    const repoParent = makeTempDir("ft-tree-init-human-repo-parent-");
-    const repoSource = join(repoParent, "source");
-    const repoTree = join(repoParent, "source-tree");
-    makeGitRepo(repoSource, "https://github.com/acme/source.git");
-    makeGitRepo(join(repoSource, "packages", "worker"), "https://github.com/acme/worker.git");
-    process.chdir(repoSource);
-    initCommand.action(context(commandWithOptions({ recursive: true, treePath: repoTree }), false));
-    const repoHuman = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(repoHuman).toContain("Cascaded nested repos:");
-    expect(repoHuman).toContain(`packages${"/"}worker`);
+  it("rejects init when the resolved tree path is the same as the workspace root", async () => {
+    const workspace = makeTempDir("ft-tree-init-same-root-");
+    process.chdir(workspace);
+    const { initCommand } = await import("../commands/tree/init.js");
 
-    process.chdir(repoSource);
-    initCommand.action(context(commandWithOptions({ treePath: "." }), false));
+    initCommand.action(context(commandWithOptions({ scope: "workspace", treePath: "." }), false));
     expect(process.exitCode).toBe(1);
     expect(
       vi
         .mocked(console.error)
         .mock.calls.map((call) => String(call[0]))
         .join("\n"),
-    ).toContain("source/workspace root and tree repo resolved to the same path");
-
-    const remoteParent = makeTempDir("ft-tree-init-url-parent-");
-    const remoteSource = join(remoteParent, "source");
-    const remoteTree = join(remoteParent, "context-tree");
-    makeGitRepo(remoteSource, "https://github.com/acme/source.git");
-    makeGitRepo(remoteTree, "https://github.com/acme/context-tree.git");
-    process.chdir(remoteSource);
-    const remoteSummary = initializeSourceRoot(remoteSource, "git-repo", {
-      recursive: false,
-      treeUrl: "https://github.com/acme/context-tree.git",
-    });
-    expect(remoteSummary.treeRoot).toBe(remoteTree);
+    ).toContain("workspace root and tree repo resolved to the same path");
   });
 
-  it("binds remote tree URLs by cloning a sibling checkout", async () => {
-    const parent = makeTempDir("ft-tree-bind-parent-");
-    const source = join(parent, "source");
-    makeGitRepo(source, "https://github.com/acme/source.git");
-    const tree = join(parent, "context-tree");
-    const { bindSourceRoot } = await import("../commands/tree/bind.js");
-    writeTreeRoot(tree);
+  it("rejects --scope repo with a pointer at the workspace recipe", async () => {
+    const workspace = makeTempDir("ft-tree-init-repo-scope-");
+    const { initializeWorkspaceRoot } = await import("../commands/tree/init.js");
 
-    const summary = bindSourceRoot(source, { treePath: tree, treeMode: "shared" }, source);
-    expect(summary).toMatchObject({ bindingMode: "shared-source", treeMode: "shared", treeRoot: tree });
+    expect(() =>
+      initializeWorkspaceRoot(workspace, {
+        scope: "repo",
+        treeMode: "dedicated",
+        treePath: "./tree",
+      }),
+    ).toThrow("workspace-scope recipe");
   });
 });

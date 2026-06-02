@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -157,41 +157,5 @@ describe("tree verify command", () => {
         .join("\n"),
     ).toContain("Verify the tree repo instead");
     expect(process.exitCode).toBe(1);
-  });
-});
-
-describe("syncWorkspaceMembersFromRoot", () => {
-  it("binds child repositories and updates workspace gitignore", async () => {
-    const workspace = makeTempDir("ft-workspace-sync-apply-");
-    makeGitRepo(workspace);
-    const repoA = join(workspace, "repo-a");
-    const repoB = join(workspace, "repo-b");
-    makeGitRepo(repoA);
-    makeGitRepo(repoB);
-    const tree = makeTempDir("ft-workspace-sync-apply-tree-");
-    writeValidTree(tree);
-    const { syncWorkspaceMembersFromRoot } = await import("../commands/tree/workspace-sync.js");
-
-    const hadFailure = syncWorkspaceMembersFromRoot({
-      workspaceRoot: workspace,
-      workspaceId: "acme-workspace",
-      treePath: tree,
-      treeUrl: "https://github.com/acme/context-tree.git",
-    });
-
-    expect(hadFailure).toBe(false);
-    expect(readFileSync(join(workspace, ".gitignore"), "utf8")).toContain(".first-tree/tmp/");
-    expect(readFileSync(join(repoA, "AGENTS.md"), "utf8")).toContain("workspace member");
-    expect(readFileSync(join(repoA, "AGENTS.md"), "utf8")).toContain("acme-workspace");
-    expect(readFileSync(join(repoB, "CLAUDE.md"), "utf8")).toContain("context-tree");
-  });
-
-  it("throws when no shared tree can be resolved", async () => {
-    const workspace = makeTempDir("ft-workspace-sync-missing-tree-");
-    const { syncWorkspaceMembersFromRoot } = await import("../commands/tree/workspace-sync.js");
-
-    expect(() => syncWorkspaceMembersFromRoot({ workspaceRoot: workspace })).toThrow(
-      "Could not resolve the shared tree",
-    );
   });
 });

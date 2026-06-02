@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { initializeSourceRoot } from "../src/commands/tree/init.js";
+import { initializeWorkspaceRoot } from "../src/commands/tree/init.js";
 
 const tempDirs: string[] = [];
 
@@ -12,6 +12,11 @@ function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function makeGitRepo(path: string): void {
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, ".git"), "gitdir: /tmp/mock\n");
 }
 
 afterEach(() => {
@@ -24,99 +29,84 @@ afterEach(() => {
   }
 });
 
-describe("initializeSourceRoot", () => {
-  it("creates a sibling dedicated tree and binds the source repo", () => {
-    const sourceRoot = makeTempDir("first-tree-init-source-");
-    writeFileSync(join(sourceRoot, ".git"), "gitdir: /tmp/source\n");
-    const previousCwd = process.cwd();
-    process.chdir(sourceRoot);
+describe("initializeWorkspaceRoot", () => {
+  it("scaffolds a sibling tree, writes workspace.json, and installs workspace-root framework", () => {
+    const workspaceRoot = makeTempDir("first-tree-init-workspace-");
+    const sourceName = "source-a";
+    makeGitRepo(join(workspaceRoot, sourceName));
+    const treeName = `${basename(workspaceRoot)}-tree`;
 
-    try {
-      const summary = initializeSourceRoot(sourceRoot, "unbound-source-repo");
+    const summary = initializeWorkspaceRoot(workspaceRoot, {
+      scope: "workspace",
+      treeMode: "dedicated",
+      treePath: `./${treeName}`,
+    });
 
-      expect(summary.bindingMode).toBe("standalone-source");
-      expect(summary.recursive).toBe(true);
-      expect(summary.treeRoot).toBe(resolve(dirname(sourceRoot), `${sourceRoot.split("/").pop()}-tree`));
-      expect(
-        readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8"),
-      ).toContain("name: developer");
-      expect(
-        readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"), "utf8"),
-      ).toContain("name: code-reviewer");
-      expect(readFileSync(join(summary.treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain("humanInvolveRules:");
-    } finally {
-      process.chdir(previousCwd);
-    }
+    expect(summary.bindingMode).toBe("workspace-root");
+    expect(summary.treeMode).toBe("dedicated");
+    expect(summary.treeRoot).toBe(join(workspaceRoot, treeName));
+    expect(summary.workspaceManifest.tree).toBe(treeName);
+    expect(summary.workspaceManifest.sources).toEqual([sourceName]);
+
+    expect(readFileSync(join(workspaceRoot, ".first-tree", "workspace.json"), "utf8")).toContain(treeName);
+    expect(readFileSync(join(workspaceRoot, "AGENTS.md"), "utf8")).toContain("First Tree integration");
+    expect(readFileSync(join(workspaceRoot, "CLAUDE.md"), "utf8")).toContain("First Tree integration");
+    expect(existsSync(join(workspaceRoot, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(workspaceRoot, ".claude", "skills", "first-tree"))).toBe(true);
+
+    expect(existsSync(join(summary.treeRoot, "NODE.md"))).toBe(true);
+    expect(readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8")).toContain(
+      "name: developer",
+    );
+    expect(
+      readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"), "utf8"),
+    ).toContain("name: code-reviewer");
+    expect(readFileSync(join(summary.treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain("humanInvolveRules:");
   });
 
-  it("adds skills directories to .gitignore so installed skills are not committed", () => {
-    const sourceRoot = makeTempDir("first-tree-init-gitignore-");
-    writeFileSync(join(sourceRoot, ".git"), "gitdir: /tmp/source\n");
-    const previousCwd = process.cwd();
-    process.chdir(sourceRoot);
+  it("adds skills directories to the workspace .gitignore", () => {
+    const workspaceRoot = makeTempDir("first-tree-init-gitignore-");
+    makeGitRepo(join(workspaceRoot, "source-a"));
 
-    try {
-      initializeSourceRoot(sourceRoot, "unbound-source-repo");
+    initializeWorkspaceRoot(workspaceRoot, {
+      scope: "workspace",
+      treeMode: "dedicated",
+      treePath: "./tree",
+    });
 
-      const gitignore = readFileSync(join(sourceRoot, ".gitignore"), "utf8");
-      expect(gitignore).toContain(".agents/skills/");
-      expect(gitignore).toContain(".claude/skills/");
-      expect(gitignore).toContain(".first-tree/tmp/");
-    } finally {
-      process.chdir(previousCwd);
-    }
+    const gitignore = readFileSync(join(workspaceRoot, ".gitignore"), "utf8");
+    expect(gitignore).toContain(".agents/skills/");
+    expect(gitignore).toContain(".claude/skills/");
+    expect(gitignore).toContain(".first-tree/tmp/");
   });
 
-  it("cascades onboarding into nested git repos by default", () => {
-    const sourceRoot = makeTempDir("first-tree-init-cascade-parent-");
-    writeFileSync(join(sourceRoot, ".git"), "gitdir: /tmp/source\n");
+  it("does NOT install per-source framework files in workspace members", () => {
+    const workspaceRoot = makeTempDir("first-tree-init-no-cascade-");
+    const sourceName = "source-a";
+    const sourcePath = join(workspaceRoot, sourceName);
+    makeGitRepo(sourcePath);
 
-    const childDir = join(sourceRoot, "packages", "child-pkg");
-    mkdirSync(childDir, { recursive: true });
-    writeFileSync(join(childDir, ".git"), "gitdir: /tmp/child\n");
+    initializeWorkspaceRoot(workspaceRoot, {
+      scope: "workspace",
+      treeMode: "dedicated",
+      treePath: "./tree",
+    });
 
-    const previousCwd = process.cwd();
-    process.chdir(sourceRoot);
-
-    try {
-      const summary = initializeSourceRoot(sourceRoot, "unbound-source-repo");
-
-      expect(summary.recursive).toBe(true);
-      expect(summary.cascadedRepos).toBeDefined();
-      expect(summary.cascadedRepos).toHaveLength(1);
-      expect(summary.cascadedRepos?.[0]?.relativePath).toBe(join("packages", "child-pkg"));
-
-      expect(existsSync(join(childDir, "AGENTS.md"))).toBe(true);
-      expect(readFileSync(join(childDir, "AGENTS.md"), "utf8")).toContain("First Tree integration");
-      expect(existsSync(join(childDir, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
-      expect(readFileSync(join(childDir, ".gitignore"), "utf8")).toContain(".agents/skills/");
-    } finally {
-      process.chdir(previousCwd);
-    }
+    expect(existsSync(join(sourcePath, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(sourcePath, "CLAUDE.md"))).toBe(false);
+    expect(existsSync(join(sourcePath, ".agents", "skills"))).toBe(false);
+    expect(existsSync(join(sourcePath, ".first-tree", "source.json"))).toBe(false);
   });
 
-  it("skips nested git repos when --no-recursive is requested", () => {
-    const sourceRoot = makeTempDir("first-tree-init-no-recursive-parent-");
-    writeFileSync(join(sourceRoot, ".git"), "gitdir: /tmp/source\n");
+  it("rejects scope=repo with guidance pointing at the workspace recipe", () => {
+    const workspaceRoot = makeTempDir("first-tree-init-repo-scope-");
 
-    const childDir = join(sourceRoot, "packages", "child-pkg");
-    mkdirSync(childDir, { recursive: true });
-    writeFileSync(join(childDir, ".git"), "gitdir: /tmp/child\n");
-
-    const previousCwd = process.cwd();
-    process.chdir(sourceRoot);
-
-    try {
-      const summary = initializeSourceRoot(sourceRoot, "unbound-source-repo", {
-        recursive: false,
-      });
-
-      expect(summary.recursive).toBe(false);
-      expect(summary.cascadedRepos).toBeUndefined();
-      expect(existsSync(join(childDir, "AGENTS.md"))).toBe(false);
-      expect(existsSync(join(childDir, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(false);
-    } finally {
-      process.chdir(previousCwd);
-    }
+    expect(() =>
+      initializeWorkspaceRoot(workspaceRoot, {
+        scope: "repo",
+        treeMode: "dedicated",
+        treePath: "./tree",
+      }),
+    ).toThrow("workspace-scope recipe");
   });
 });

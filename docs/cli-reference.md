@@ -346,7 +346,7 @@ Context Tree onboarding, validation, automation, and skill management.
 ```
 first-tree tree
 ├── status                                  # workspace status
-├── init                                    # onboard a repo or workspace to a Context Tree
+├── init                                    # onboard a workspace root to a Context Tree
 ├── migrate-to-w1                           # migrate a legacy multi-mode layout to W1
 ├── verify                                  # validate a Context Tree repo
 ├── upgrade                                 # refresh integration and metadata

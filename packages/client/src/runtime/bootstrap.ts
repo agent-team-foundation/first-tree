@@ -626,8 +626,8 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 }
 
 /**
- * Install the first-tree skill and FIRST-TREE-SOURCE-INTEGRATION block into
- * the workspace by shelling out to the channel-resolved CLI's `tree integrate`.
+ * Install the shipped first-tree skill payloads into the workspace by shelling
+ * out to the channel-resolved CLI's `tree skill install --root <workspacePath>`.
  *
  * Resolution order for the CLI binary (binName/packageName are channel-aware,
  * see {@link getCliBinding}):
@@ -636,32 +636,23 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
  *      Skipped for the dev channel (`packageName === null`) because dev
  *      binaries are not published to npm.
  *
+ * Framework files (workspace.json, AGENTS.md / CLAUDE.md) are written once at
+ * onboarding by `tree init`, not re-emitted per session — this hook only
+ * refreshes the on-disk skill payloads under `.agents/skills/` and
+ * `.claude/skills/` so each session picks up the latest shipped versions.
+ *
  * Graceful degradation: returns false on failure and logs. The session still
  * starts; the agent just doesn't have the first-tree skill wired up.
  */
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
-  const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
+  const { workspacePath, log } = options;
   const exec = options.exec ?? defaultInstallExec;
   const { binName, packageName } = getCliBinding();
 
-  // `<binName> tree integrate` resolves the source/workspace path from the
-  // process cwd — it does NOT accept a `--source-path` flag. We set
-  // `cwd: workspacePath` below; passing a flag the CLI doesn't recognise
-  // makes every invocation exit 1 with "unknown option '--source-path'".
-  const integrateArgs = [
-    "tree",
-    "integrate",
-    "--tree-path",
-    contextTreePath,
-    "--mode",
-    "workspace-root",
-    "--workspace-id",
-    workspaceId,
-    ...(treeRepoUrl ? ["--tree-url", treeRepoUrl] : []),
-  ];
+  const installArgs = ["tree", "skill", "install", "--root", workspacePath];
 
   const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: binName, args: integrateArgs, label: `${binName} (PATH)` },
+    { command: binName, args: installArgs, label: `${binName} (PATH)` },
     // Dev channel publishes no npm tarball, so skip the npx fallback entirely
     // — there is nothing to fetch. Falls through to "PATH attempt failed →
     // graceful degradation" which is the right behaviour for dev anyway:
@@ -671,7 +662,7 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
       ? [
           {
             command: "npx",
-            args: ["-y", `${packageName}@latest`, ...integrateArgs],
+            args: ["-y", `${packageName}@latest`, ...installArgs],
             label: `npx ${packageName}@latest`,
           },
         ]

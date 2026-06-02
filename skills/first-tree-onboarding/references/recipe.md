@@ -15,8 +15,8 @@ gh auth status
 ### Reading status output
 
 `tree status --json` returns the W1 workspace report when a workspace
-exists up the path, or falls back to the legacy `inspect` reporter
-during the W1 transition. The W1 shape is:
+exists up the path, and exits 1 with "No First Tree workspace found"
+otherwise. The W1 shape is:
 
 ```json
 {
@@ -47,36 +47,30 @@ array of objects, not strings — read `name` for the subdir name and
 look up the corresponding `boundSources[?].remoteUrl` when prompting
 the user to clone.
 
-The legacy fallback shape is the `inspect` JSON with `role` etc. — see
-[`role-decisions.md`](role-decisions.md) for the legacy mapping.
-
 ### Path computation
 
 ```text
-workspace_root  = workspaceRoot                                       (W1)
-tree_root       = workspaceRoot + "/" + manifest.tree                 (W1)
-source_roots[]  = workspaceRoot + "/" + s for s in manifest.sources   (W1)
+workspace_root  = workspaceRoot
+tree_root       = workspaceRoot + "/" + manifest.tree
+source_roots[]  = workspaceRoot + "/" + s for s in manifest.sources
 ```
-
-For unmigrated workspaces (legacy fallback), compute the tree root from
-`binding.treeRepoName` and `rootPath` as before, then go to Phase A.5 to
-migrate before doing anything else.
 
 ### Exit gate
 
 You should know:
 
-- Whether the workspace is W1, legacy-bound, unbound, or "stop and ask".
+- Whether the workspace is W1, unbound, or "stop and ask".
 - `workspaceRoot` + `tree_root` (W1) OR a "needs binding" / "needs migration" flag.
 - Whether `gh` is authenticated.
 - The CLI version.
 
-If `tree status` says cwd is the tree subdir (under `workspaceRoot/manifest.tree`), stop. Tell the user, do not advance.
+If `tree status` succeeded and cwd resolves to or under `workspaceRoot/manifest.tree`, stop. Tell the user, do not advance.
 
 ## Phase A.5 — Migrate legacy multi-mode workspace
 
-Only runs when Phase A reported a legacy `role: *-bound` shape (no
-`workspace.json` present yet).
+Only runs when Phase A's `tree status` exited 1 AND legacy markers
+exist on disk (`.first-tree-workspace`, `<tree>/.first-tree/bindings/`,
+or `<source>/.first-tree/source.json`).
 
 ### Commands
 
@@ -152,40 +146,34 @@ cd $WORKSPACE
 first-tree tree init --scope workspace \
   --tree-path ./$TREE \
   --tree-mode dedicated \
-  --workspace-id $SLUG \
-  --no-recursive
+  --workspace-id $SLUG
 
 # Or, for an existing remote tree:
 first-tree tree init --scope workspace \
   --tree-path ./$TREE \
   --tree-url <url> \
   --tree-mode shared \
-  --workspace-id $SLUG \
-  --no-recursive
+  --workspace-id $SLUG
 
 # Step 4: verify
 first-tree tree status --json                          # must report W1 shape
 first-tree tree verify --tree-path ./$TREE             # must exit 0
 ```
 
-`--no-recursive` is required here. Without it, init's workspace-scope
-cascade would notice the freshly-scaffolded tree dir at cwd and try
-to bind it as a source, which is wrong (the tree is `manifest.tree`,
-not a `manifest.sources` entry). With `--no-recursive`, init binds
-exactly the one source repo you placed at the workspace root.
+Init lists every immediate-child git repo at the workspace root as a
+source — it does not bind the tree subdir as a source, and it does not
+recurse into nested git repos inside the source(s).
 
 After step 3, `$WORKSPACE/` is the W1 `workspaceRoot`,
 `$WORKSPACE/.first-tree/workspace.json` exists with `manifest.tree =
-"$TREE"` and `manifest.sources = ["<source>"]`, the source repo is
-clean (no `.first-tree/source.json`, no legacy `bindings/`), and the
-framework `AGENTS.md` / `CLAUDE.md` + skills land at the workspace
-root.
+"$TREE"` and `manifest.sources = ["<source>"]`, and the framework
+`AGENTS.md` / `CLAUDE.md` + skills land at the workspace root.
 
 If a user has already run `init` inside a lone source repo from a
-previous (pre-W1) onboarding and ended up with a sibling tree, that
-is a legacy multi-mode layout. Route through Phase A.5
-(`migrate-to-w1`) — do not try to re-run this recipe over the
-existing layout.
+pre-0.6.0 onboarding and ended up with a sibling tree plus per-source
+binding state, that is a legacy multi-mode layout. Route through
+Phase A.5 (`migrate-to-w1`) — do not try to re-run this recipe over
+the existing layout.
 
 ### Workspace root (multiple sibling source repos)
 
