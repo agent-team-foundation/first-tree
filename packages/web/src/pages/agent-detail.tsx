@@ -741,10 +741,8 @@ function ConfirmDialog(props: {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
+          <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 text-body" style={{ color: "var(--fg-2)" }}>
-          {props.description}
-        </div>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)} disabled={props.pending}>
             Cancel
