@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type SessionEvent } from "@first-tree/shared";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  type AgentRuntimeConfigPayload,
+  deriveRepoLocalPath,
+  type SessionEvent,
+  type ToolFileRef,
+} from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
@@ -353,6 +358,74 @@ export function buildCodexAgentBriefing(
   return lines.join("\n").concat("\n");
 }
 
+function contextTreeTargetPathOf(
+  filePath: string,
+  contextTreePath: string | null,
+  workspaceCwd: string,
+): string | null {
+  if (!contextTreePath) return null;
+  const absolutePath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceCwd, filePath);
+  const root = resolve(contextTreePath);
+  const rel = relative(root, absolutePath);
+  if (!rel || rel === "." || rel.startsWith("..") || isAbsolute(rel)) return null;
+  return rel.replaceAll("\\", "/");
+}
+
+export function collectCodexFileChangePaths(changes: unknown): string[] {
+  const paths: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      paths.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    for (const key of ["path", "file_path", "filePath", "filename"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string") paths.push(candidate);
+    }
+    for (const key of Object.keys(record)) {
+      if (key.includes("/") || key.includes("\\")) paths.push(key);
+    }
+  };
+  visit(changes);
+  return paths;
+}
+
+export function toolFileRefsFromCodexFileChange(input: {
+  changes: unknown;
+  workspaceCwd: string;
+  contextTreePath: string | null;
+  contextTreeRepoUrl: string | null;
+  contextTreeBranch?: string | null;
+}): ToolFileRef[] {
+  const refs: ToolFileRef[] = [];
+  const seen = new Set<string>();
+  for (const filePath of collectCodexFileChangePaths(input.changes)) {
+    const fileKey = isAbsolute(filePath) ? filePath : resolve(input.workspaceCwd, filePath);
+    if (seen.has(fileKey)) continue;
+    seen.add(fileKey);
+    const repoRelativePath = contextTreeTargetPathOf(filePath, input.contextTreePath, input.workspaceCwd);
+    refs.push({
+      origin: "file_change",
+      localPath: filePath,
+      pathKind: "file",
+      ...(input.contextTreeRepoUrl && repoRelativePath
+        ? {
+            repoUrl: input.contextTreeRepoUrl,
+            ...(input.contextTreeBranch ? { repoBranch: input.contextTreeBranch } : {}),
+            repoRelativePath,
+          }
+        : {}),
+    });
+  }
+  return refs;
+}
+
 /**
  * Codex Handler — session-oriented handler using `@openai/codex-sdk`.
  *
@@ -377,6 +450,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
@@ -565,6 +639,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       args: unknown;
       status: "ok" | "error" | "pending";
       resultPreview?: string;
+      toolFileRefs?: ToolFileRef[];
     },
   ): void {
     const event: SessionEvent = {
@@ -575,6 +650,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         args: payload.args,
         status: payload.status,
         ...(payload.resultPreview ? { resultPreview: payload.resultPreview.slice(0, RESULT_PREVIEW_LIMIT) } : {}),
+        ...(payload.toolFileRefs && payload.toolFileRefs.length > 0 ? { toolFileRefs: payload.toolFileRefs } : {}),
       },
     };
     sessionCtx.emitEvent(event);
@@ -616,11 +692,22 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
       case "file_change": {
         const status = item.status === "completed" ? ("ok" as const) : ("error" as const);
+        const toolFileRefs =
+          status === "ok" && cwd
+            ? toolFileRefsFromCodexFileChange({
+                changes: item.changes,
+                workspaceCwd: cwd,
+                contextTreePath,
+                contextTreeRepoUrl,
+                contextTreeBranch,
+              })
+            : undefined;
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "file_change",
           args: { changes: item.changes },
           status,
+          toolFileRefs,
         });
         return "";
       }

@@ -42,6 +42,10 @@ export type SessionEventRow = {
   createdAt: string;
 };
 
+type AppendEventOptions = {
+  deferSideEffects?: boolean;
+};
+
 function rowToEvent(row: {
   id: string;
   agentId: string;
@@ -62,12 +66,29 @@ function rowToEvent(row: {
   };
 }
 
+export function emitAppendEventSideEffects(db: Database, agentId: string, chatId: string, event: SessionEvent): void {
+  const validated = sessionEventSchema.parse(event);
+  // Side-effect: when a tool_call event reports the agent just created a
+  // GitHub PR/Issue, write the chat ↔ entity mapping eagerly so the
+  // incoming `*.opened` webhook routes back to this chat instead of
+  // forking a fresh one. Fire-and-forget — the main session-event write
+  // has already succeeded and must not be unwound on bookkeeping
+  // failures. Status filter avoids spurious DB queries: only `ok` events
+  // carry a stdout preview worth extracting from.
+  if (validated.kind === "tool_call" && validated.payload.status === "ok") {
+    maybeBindGithubEntityFromToolCall(db, agentId, chatId, validated.payload).catch((err) => {
+      log.warn({ err, agentId, chatId }, "agent_binding side-effect failed");
+    });
+  }
+}
+
 /** Append one event; throws after MAX_SEQ_RETRIES on persistent seq contention. */
 export async function appendEvent(
   db: Database,
   agentId: string,
   chatId: string,
   event: SessionEvent,
+  options: AppendEventOptions = {},
 ): Promise<SessionEventRow> {
   const validated = sessionEventSchema.parse(event);
 
@@ -114,17 +135,8 @@ export async function appendEvent(
         createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
       });
 
-      // Side-effect: when a tool_call event reports the agent just created a
-      // GitHub PR/Issue, write the chat ↔ entity mapping eagerly so the
-      // incoming `*.opened` webhook routes back to this chat instead of
-      // forking a fresh one. Fire-and-forget — the main session-event write
-      // has already succeeded and must not be unwound on bookkeeping
-      // failures. Status filter avoids spurious DB queries: only `ok` events
-      // carry a stdout preview worth extracting from.
-      if (validated.kind === "tool_call" && validated.payload.status === "ok") {
-        maybeBindGithubEntityFromToolCall(db, agentId, chatId, validated.payload).catch((err) => {
-          log.warn({ err, agentId, chatId }, "agent_binding side-effect failed");
-        });
+      if (!options.deferSideEffects) {
+        emitAppendEventSideEffects(db, agentId, chatId, validated);
       }
 
       return persisted;

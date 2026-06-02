@@ -11,6 +11,22 @@ export const sessionEventKind = z.enum([
 ]);
 export type SessionEventKind = z.infer<typeof sessionEventKind>;
 
+export const toolFileRefPathKindSchema = z.enum(["file", "directory", "repo"]);
+export type ToolFileRefPathKind = z.infer<typeof toolFileRefPathKindSchema>;
+
+export const toolFileRefOriginSchema = z.enum(["tool_arg", "file_change", "runtime_metadata"]);
+export type ToolFileRefOrigin = z.infer<typeof toolFileRefOriginSchema>;
+
+export const toolFileRefSchema = z.object({
+  localPath: z.string().min(1).optional(),
+  repoUrl: z.string().min(1).optional(),
+  repoBranch: z.string().min(1).optional(),
+  repoRelativePath: z.string().min(1).optional(),
+  pathKind: toolFileRefPathKindSchema.optional(),
+  origin: toolFileRefOriginSchema,
+});
+export type ToolFileRef = z.infer<typeof toolFileRefSchema>;
+
 export const toolCallEventPayload = z.object({
   toolUseId: z.string(),
   name: z.string(),
@@ -18,6 +34,7 @@ export const toolCallEventPayload = z.object({
   status: z.enum(["pending", "ok", "error"]),
   durationMs: z.number().int().nonnegative().optional(),
   resultPreview: z.string().max(400).optional(),
+  toolFileRefs: z.array(toolFileRefSchema).optional(),
 });
 export type ToolCallEventPayload = z.infer<typeof toolCallEventPayload>;
 

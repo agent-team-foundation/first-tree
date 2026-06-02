@@ -81,6 +81,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
   // Identifies this client process; scopes tmux session ownership so the orphan
   // sweep and session names never collide with another live client / QA slot
@@ -287,7 +288,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   function consumeEntry(entry: RawTranscriptEntry, sessionCtx: SessionContext, state: TurnState): void {
     // Feed the shared processor — it emits all the session events we'd
     // otherwise have to reimplement (assistant_text / thinking / tool_call
-    // pending / tool_call final, plus context_tree_usage when bound).
+    // pending / tool_call final, including tool file refs when available).
     processor(sessionCtx).onMessage(entry);
 
     if (entry?.type !== "assistant") return;
@@ -308,7 +309,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     if (!turnProcessor) {
       turnProcessor = createToolCallProcessor(
         (event) => sessionCtx.emitEvent(event),
-        contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl } : undefined,
+        contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl, branch: contextTreeBranch } : undefined,
       );
     }
     return turnProcessor;
