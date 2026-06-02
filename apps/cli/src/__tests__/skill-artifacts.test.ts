@@ -56,10 +56,19 @@ describe("skill artifacts", () => {
       expect(referenceMd).toMatch(/recipient MUST be a participant/);
       expect(referenceMd).toMatch(/Reaching another agent/);
       expect(referenceMd).toMatch(/only addresses agents by name/);
-      // The retired escape hatches must NOT be taught.
-      expect(referenceMd).not.toMatch(/--direct/);
-      expect(referenceMd).not.toMatch(/--chat <chatId>/);
-      expect(referenceMd).not.toMatch(/--chat <directChatId>/);
+      // The retired escape hatches must NOT be taught. The doc may still
+      // mention `--direct` (or the other retired flags) in prose to
+      // redirect agents that learned the old form ("no `--direct` flag
+      // exists; use `chat invite` instead"). Only flag them when they
+      // appear inside a fenced code block — that's where copy-execute
+      // happens, and that's what makes a flag "taught" rather than
+      // "described".
+      const codeBlocks = referenceMd.match(/```[\s\S]*?```/gu) ?? [];
+      for (const block of codeBlocks) {
+        expect(block).not.toMatch(/--direct\b/u);
+        expect(block).not.toMatch(/--chat <chatId>/u);
+        expect(block).not.toMatch(/--chat <directChatId>/u);
+      }
       // Anti-double-encode (Issue #389) — the long form lives here; tools.md
       // also pins the one-line invariant.
       expect(referenceMd).toContain("JSON.stringify");
