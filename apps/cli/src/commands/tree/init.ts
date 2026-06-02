@@ -1,7 +1,8 @@
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { writeWorkspaceManifest } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { bindSourceRoot } from "./bind.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
@@ -34,6 +35,16 @@ type InitSummary = {
   treeRoot: string;
   treeMode: "dedicated" | "shared";
   workspaceId?: string;
+  /**
+   * Set when init also wrote `<sourceRoot>/.first-tree/workspace.json` as part of
+   * the workspace-rooted layout simplification (see workspace-layout-simplification.md).
+   * Only populated when `scope === "workspace"` AND the resolved tree subdir
+   * is an immediate child of `sourceRoot`.
+   */
+  workspaceManifest?: {
+    tree: string;
+    sources: string[];
+  };
 };
 
 export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--tree-name NAME] [--tree-mode dedicated|shared] [--scope repo|workspace] [--workspace-id ID] [--no-recursive]
@@ -152,6 +163,8 @@ export function initializeSourceRoot(sourceRoot: string, role: string, options: 
     }
   }
 
+  const writtenManifest = maybeWriteWorkspaceManifest(sourceRoot, scope, resolvedTreeRoot);
+
   return {
     bindingMode: bindingSummary.bindingMode,
     ...(cascadedRepos.length > 0 ? { cascadedRepos } : {}),
@@ -160,7 +173,61 @@ export function initializeSourceRoot(sourceRoot: string, role: string, options: 
     treeRoot: resolvedTreeRoot,
     treeMode,
     ...(bindingSummary.workspaceId ? { workspaceId: bindingSummary.workspaceId } : {}),
+    ...(writtenManifest ? { workspaceManifest: writtenManifest } : {}),
   };
+}
+
+/**
+ * Forward-compatibility shim for the workspace-rooted layout simplification.
+ *
+ * When init runs with `scope === "workspace"` AND the resolved tree is an
+ * immediate child of `sourceRoot`, also write the new
+ * `<sourceRoot>/.first-tree/workspace.json` manifest so future CLI invocations
+ * (status, future migrate-to-w1, future skill rewrites) can resolve binding
+ * state through the workspace.json path. The legacy `bindings/`,
+ * `source.json`, framework block, and per-source skill install written by
+ * `bindSourceRoot` are unchanged — both layouts coexist until PR-5 / PR-6
+ * remove the legacy pieces.
+ *
+ * Returns the manifest that was written, or `undefined` when no write was
+ * appropriate (legacy sibling-tree layout, repo scope, or a tree path
+ * resolved outside the workspace root).
+ */
+function maybeWriteWorkspaceManifest(
+  sourceRoot: string,
+  scope: "repo" | "workspace",
+  treeRoot: string | undefined,
+): { tree: string; sources: string[] } | undefined {
+  if (scope !== "workspace" || treeRoot === undefined) {
+    return undefined;
+  }
+
+  const sourceResolved = resolve(sourceRoot);
+  const treeResolved = resolve(treeRoot);
+
+  if (dirname(treeResolved) !== sourceResolved) {
+    return undefined;
+  }
+
+  const treeName = basename(treeResolved);
+  const sources = discoverWorkspaceRepos(sourceResolved)
+    .filter((candidate) => resolve(candidate.root) !== treeResolved)
+    .map((candidate) => candidate.name)
+    .filter((name) => name.length > 0 && !name.includes("/") && !name.startsWith("."))
+    .sort((a, b) => a.localeCompare(b));
+
+  const manifest = { tree: treeName, sources };
+
+  try {
+    writeWorkspaceManifest(sourceResolved, manifest);
+  } catch (error) {
+    console.error(
+      `Warning: failed to write workspace.json manifest: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+
+  return manifest;
 }
 
 function cascadeRepoScopeOnboarding(sourceRoot: string, treeRoot: string, treeUrl: string | undefined): CascadedRepo[] {
@@ -227,6 +294,11 @@ function runInitCommand(context: CommandContext): void {
       for (const repo of summary.cascadedRepos) {
         console.log(`    - ${repo.relativePath} (${repo.bindingMode})`);
       }
+    }
+    if (summary.workspaceManifest) {
+      console.log(
+        `  Workspace manifest:    .first-tree/workspace.json (tree=${summary.workspaceManifest.tree}, ${summary.workspaceManifest.sources.length} sources)`,
+      );
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

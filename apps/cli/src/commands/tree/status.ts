@@ -1,9 +1,80 @@
+import { computeWorkspaceStatus, discoverWorkspaceRoot, type WorkspaceStatus } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 
 import { runInspectCommand } from "./inspect.js";
 
+/**
+ * Read-only status report for the workspace-rooted layout.
+ *
+ * Preference order:
+ *   1. If the current working directory (or any ancestor) contains
+ *      `.first-tree/workspace.json`, render the new workspace-rooted status
+ *      report.
+ *   2. Otherwise, fall back to the legacy `inspect` report for back-compat
+ *      with unmigrated workspaces. PR-3 ships the migration command;
+ *      until users run it, legacy invocations still work as before.
+ *
+ * Implements the §status contract in
+ *   first-tree-context: first-tree-skill-cli/workspace-layout-simplification.md
+ */
 export function runStatusCommand(context: CommandContext): void {
-  runInspectCommand(context);
+  const workspaceRoot = discoverWorkspaceRoot(process.cwd());
+
+  if (workspaceRoot === undefined) {
+    runInspectCommand(context);
+    return;
+  }
+
+  let status: WorkspaceStatus;
+  try {
+    status = computeWorkspaceStatus(workspaceRoot);
+  } catch (error) {
+    console.error(`Failed to read workspace manifest: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (context.options.json) {
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+
+  printWorkspaceStatus(status);
+}
+
+function printWorkspaceStatus(status: WorkspaceStatus): void {
+  console.log("First Tree Workspace Status\n");
+  console.log(`  Workspace:  ${status.workspaceRoot}`);
+  console.log(`  Tree:       ${status.manifest.tree}${status.treePresent ? "" : "  (missing on disk)"}`);
+  console.log();
+
+  if (status.boundSources.length === 0) {
+    console.log("  Bound sources (0):  none\n");
+  } else {
+    console.log(`  Bound sources (${status.boundSources.length}):`);
+    for (const source of status.boundSources) {
+      const marker = source.present ? "✓" : "·";
+      const suffix = source.present ? "" : "  (not cloned locally)";
+      console.log(`    ${marker} ${source.name}${suffix}`);
+    }
+    console.log();
+  }
+
+  if (status.missingBoundSources.length > 0) {
+    console.log(`  Missing locally (${status.missingBoundSources.length}):`);
+    for (const source of status.missingBoundSources) {
+      console.log(`    - ${source.name}  (clone next to the tree, then run \`status\` again)`);
+    }
+    console.log();
+  }
+
+  if (status.unboundGitSiblings.length > 0) {
+    console.log(`  Unbound git siblings (${status.unboundGitSiblings.length}):`);
+    for (const sibling of status.unboundGitSiblings) {
+      console.log(`    ? ${sibling.name}  (add to workspace.json sources to bind)`);
+    }
+    console.log();
+  }
 }
 
 export const statusCommand: SubcommandModule = {
