@@ -56,10 +56,11 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skills
 
+- `skills/first-tree/SKILL.md` — top-level dispatcher (routing + mandatory pre-task hygiene checklist). Always start here.
+- `skills/first-tree-context/SKILL.md` — Context Tree concepts + sub-entry for `first-tree-onboarding` / `first-tree-sync` / `first-tree-write` / `first-tree-github-scan`. Carries the methodology references.
 - `skills/first-tree-cloud/SKILL.md` — collaboration flows (login, daemon, agent, chat, org, config).
-- `skills/first-tree/SKILL.md` — Context Tree flows.
 - `skills/first-tree-github-scan/` — GitHub Scan daemon work.
-- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step needed. Other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) follow the same convention.
+- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step needed. Other repo-local skills (`first-tree`, `first-tree-context`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) follow the same convention.
 
 ## Monorepo Structure
 

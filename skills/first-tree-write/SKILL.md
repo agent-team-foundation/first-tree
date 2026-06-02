@@ -10,9 +10,9 @@ description: Write Context Tree updates from explicit source material — code P
 
 Read these first:
 
-- `../first-tree/SKILL.md`
-- `../first-tree/references/anti-patterns.md`
-- `../first-tree/references/maintenance.md`
+- `../first-tree-context/SKILL.md`
+- `../first-tree-context/references/anti-patterns.md`
+- `../first-tree-context/references/maintenance.md`
 
 ## What This Skill Does
 

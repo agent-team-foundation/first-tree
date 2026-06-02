@@ -153,8 +153,12 @@ describe("tree skill library", () => {
     );
   });
 
-  it("accepts a complete first-tree skill with reference files", () => {
-    const skillRoot = installSkill("first-tree");
+  it("accepts a complete first-tree-context skill with reference files", () => {
+    // Context Tree concept references migrated from `first-tree/` to
+    // `first-tree-context/` in the skill-topology restructure (proposal:
+    // skill-restructure.20260602). The top-level `first-tree` skill no
+    // longer carries references — it is a routing/hygiene entry point.
+    const skillRoot = installSkill("first-tree-context");
     for (const file of [
       join("references", "structure.md"),
       join("references", "functions.md"),
@@ -166,6 +170,16 @@ describe("tree skill library", () => {
       mkdirSync(join(skillRoot, "references"), { recursive: true });
       writeFileSync(join(skillRoot, file), "content\n");
     }
+    linkClaudeSkill("first-tree-context");
+
+    const row = collectSkillDiagnosis(root).find((candidate) => candidate.name === "first-tree-context");
+    expect(row).toMatchObject({ ok: true, problems: [] });
+  });
+
+  it("does not require references on the top-level first-tree skill", () => {
+    const skillRoot = installSkill("first-tree");
+    // Intentionally NO references/ subtree — first-tree is routing-only post-restructure.
+    expect(existsSync(join(skillRoot, "references"))).toBe(false);
     linkClaudeSkill("first-tree");
 
     const row = collectSkillDiagnosis(root).find((candidate) => candidate.name === "first-tree");
@@ -202,13 +216,13 @@ describe("tree skill library", () => {
 
   it("manages the WHITEPAPER symlink without replacing user files or directories", () => {
     expect(upsertWhitepaperFile(root)).toBe("created");
-    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
+    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
     expect(upsertWhitepaperFile(root)).toBe("unchanged");
 
     unlinkSync(join(root, "WHITEPAPER.md"));
     symlinkSync("old-target", join(root, "WHITEPAPER.md"));
     expect(upsertWhitepaperFile(root)).toBe("updated");
-    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
+    expect(readlinkSync(join(root, "WHITEPAPER.md"))).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
 
     unlinkSync(join(root, "WHITEPAPER.md"));
     writeFileSync(join(root, "WHITEPAPER.md"), "custom\n");
