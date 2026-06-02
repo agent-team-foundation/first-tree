@@ -268,6 +268,21 @@ describe("detectMigrationState", () => {
     }
   });
 
+  it("returns 'not-applicable' when running inside a source whose parent has a workspace.json (resume after partial parent migration)", () => {
+    const parentDir = tmpRoot;
+    mkdirSync(join(parentDir, ".first-tree"), { recursive: true });
+    writeJson(join(parentDir, ".first-tree", "workspace.json"), { tree: "context", sources: ["api"] });
+    const sourceRoot = makeRepo(parentDir, "api");
+    makeRepo(parentDir, "context");
+    writeJson(join(sourceRoot, ".first-tree", "source.json"), {
+      tree: { localPath: "../context" },
+    });
+
+    const detection = detectMigrationState(sourceRoot);
+
+    expect(detection.kind).toBe("not-applicable");
+  });
+
   it("returns 'not-applicable' when running inside a source whose parent has a .first-tree-workspace marker", () => {
     const parentDir = tmpRoot;
     writeFile(join(parentDir, ".first-tree-workspace"), "");
@@ -460,6 +475,76 @@ describe("migrateWorkspaceToW1 (Case A)", () => {
     // After success: manifest is present, marker is gone.
     expect(existsSync(join(fixture.workspaceRoot, ".first-tree", "workspace.json"))).toBe(true);
     expect(existsSync(join(fixture.workspaceRoot, ".first-tree-workspace"))).toBe(false);
+  });
+
+  it("re-detects as 'workspace' (not 'already-migrated') when manifest exists alongside legacy artifacts", () => {
+    // Resume scenario: a previous migrate-to-w1 wrote the manifest, then a
+    // cleanup step threw partway, leaving the marker / bindings / a source
+    // with source.json behind. Detection must NOT short-circuit on the
+    // manifest's presence — that would silently leave legacy state forever.
+    const fixture = makeCaseAWorkspace();
+    // Simulate a partial-failure state: manifest is written (step 1 ran),
+    // marker still present (step 4 never ran), one source already cleaned,
+    // the other still has source.json.
+    writeJson(join(fixture.workspaceRoot, ".first-tree", "workspace.json"), {
+      tree: "context",
+      sources: ["api", "web"],
+    });
+    rmSync(join(fixture.sourceRoots[0], ".first-tree"), { recursive: true, force: true });
+
+    const detection = detectMigrationState(fixture.workspaceRoot);
+
+    expect(detection.kind).toBe("workspace");
+  });
+
+  it("finishes cleanup on a resumed migration without losing already-cleaned sources", () => {
+    const fixture = makeCaseAWorkspace();
+    // Pre-state: manifest written, api already cleaned, web partial.
+    writeJson(join(fixture.workspaceRoot, ".first-tree", "workspace.json"), {
+      tree: "context",
+      sources: ["api", "web"],
+    });
+    // Clean api's source-side artifacts to simulate it succeeded.
+    rmSync(join(fixture.sourceRoots[0], ".first-tree"), { recursive: true, force: true });
+    rmSync(join(fixture.sourceRoots[0], ".agents"), { recursive: true, force: true });
+    rmSync(join(fixture.sourceRoots[0], ".claude"), { recursive: true, force: true });
+    rmSync(join(fixture.sourceRoots[0], "WHITEPAPER.md"), { force: true });
+    // Re-run.
+    const detection = detectMigrationState(fixture.workspaceRoot);
+    if (detection.kind !== "workspace") {
+      throw new Error(`expected workspace, got ${detection.kind}`);
+    }
+
+    const result = migrateWorkspaceToW1(detection);
+
+    // Manifest must still list api (read from old manifest, not re-derived
+    // from a now-clean filesystem).
+    expect(result.manifest.sources).toEqual(["api", "web"]);
+    // Web cleaned this time.
+    expect(existsSync(join(fixture.sourceRoots[1], ".first-tree", "source.json"))).toBe(false);
+    // Marker removed.
+    expect(existsSync(join(fixture.workspaceRoot, ".first-tree-workspace"))).toBe(false);
+    // Re-running again is now a true no-op.
+    expect(detectMigrationState(fixture.workspaceRoot).kind).toBe("already-migrated");
+  });
+
+  it("falls back to manifest.tree when bindings/ are already gone (resume case)", () => {
+    const fixture = makeCaseAWorkspace();
+    // Pre-state: manifest + marker + source.json survive; bindings/ already
+    // cleaned in the prior run.
+    writeJson(join(fixture.workspaceRoot, ".first-tree", "workspace.json"), {
+      tree: "context",
+      sources: ["api", "web"],
+    });
+    rmSync(join(fixture.treeRoot, ".first-tree", "bindings"), { recursive: true, force: true });
+
+    const detection = detectMigrationState(fixture.workspaceRoot);
+
+    expect(detection.kind).toBe("workspace");
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace");
+    }
+    expect(detection.treeRoot).toBe(fixture.treeRoot);
   });
 
   it("preserves the workspace marker when manifest write fails so re-detection still finds the workspace", () => {

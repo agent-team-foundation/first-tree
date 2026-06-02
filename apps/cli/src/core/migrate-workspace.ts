@@ -247,29 +247,76 @@ function pickTreeAmongChildren(workspaceRoot: string): string | undefined {
  * Classify the cwd into one of the four migration buckets. Read-only; never
  * touches disk beyond `stat` / `readFile` / `readdir`.
  */
+function pickChildWithSourceState(workspaceRoot: string): string | undefined {
+  for (const childName of listImmediateChildDirs(workspaceRoot)) {
+    if (isFile(join(workspaceRoot, childName, SOURCE_STATE_FILE))) {
+      return join(workspaceRoot, childName);
+    }
+  }
+  return undefined;
+}
+
 export function detectMigrationState(cwd: string): MigrationDetection {
   const resolved = resolve(cwd);
+  const manifestPresent = isFile(join(resolved, ".first-tree", "workspace.json"));
 
-  // 1. Already on the new model.
-  if (isFile(join(resolved, ".first-tree", "workspace.json"))) {
+  // Probe for any surviving legacy artifacts BEFORE classifying as
+  // `already-migrated`. Cleanup happens in steps (manifest write → clean
+  // sources → clean tree → delete marker) and is non-atomic; if any
+  // intermediate step throws AFTER the manifest write, the manifest is
+  // present but legacy state (marker, tree bindings, source.json files)
+  // still survives. Returning `already-migrated` in that state would silently
+  // park the user on a half-finished migration — `migrate-to-w1` would say
+  // "nothing to do" while bindings/, source.json, framework blocks etc.
+  // remain. Instead, route any workspace with both manifest AND any
+  // detectable legacy artifact through the `workspace` branch so cleanup
+  // re-runs idempotently.
+  const markerPresent = isFile(join(resolved, WORKSPACE_MARKER));
+  const treeRoot = pickTreeAmongChildren(resolved);
+  // Cleanup-resumability: any child with a surviving `.first-tree/source.json`
+  // is a legacy artifact even when the marker and `bindings/` are already
+  // gone. Real-world partial-failure paths reach this exactly: source A
+  // cleans, source B's `writeFileSync` throws (EACCES / EBUSY / ENOSPC /
+  // EROFS), manifest already written, marker still present until step 4 —
+  // re-running must NOT short-circuit on the manifest.
+  const sourceStateChild = pickChildWithSourceState(resolved);
+  const anyLegacyArtifact = markerPresent || treeRoot !== undefined || sourceStateChild !== undefined;
+
+  if (manifestPresent && !anyLegacyArtifact) {
     return { kind: "already-migrated", workspaceRoot: resolved };
   }
 
-  // 2. Cwd is a workspace root that hasn't been migrated yet — either has the
-  //    legacy `.first-tree-workspace` marker, or contains a tree subdir with
-  //    `bindings/`. Both shapes converge on Case A.
-  const markerPresent = isFile(join(resolved, WORKSPACE_MARKER));
-  const treeRoot = pickTreeAmongChildren(resolved);
-  if (markerPresent || treeRoot !== undefined) {
-    if (treeRoot === undefined) {
+  // 2. Cwd is a workspace root that hasn't been migrated yet (legacy state
+  //    only), OR was partially migrated (manifest present alongside surviving
+  //    legacy state — same cleanup needs to finish). Either way, run the
+  //    workspace branch. We require a tree subdir with bindings/ for the
+  //    cleanup to have a tree to clean; if marker / source.json exist but
+  //    no tree-with-bindings remains, the tree was either already cleaned
+  //    or was never there.
+  if (markerPresent || treeRoot !== undefined || sourceStateChild !== undefined) {
+    // In a partial-migration resume case, `bindings/` may have already been
+    // cleaned even though source.json or the marker survive. Fall back to
+    // the manifest's recorded tree name to identify the tree subdir so
+    // cleanup can finish the source side regardless of whether the tree
+    // side already finished.
+    let effectiveTreeRoot = treeRoot;
+    if (effectiveTreeRoot === undefined && manifestPresent) {
+      const manifestPath = join(resolved, ".first-tree", "workspace.json");
+      const manifestRaw = readJsonObject(manifestPath);
+      const treeFromManifest = typeof manifestRaw?.tree === "string" ? manifestRaw.tree : undefined;
+      if (treeFromManifest !== undefined) {
+        effectiveTreeRoot = join(resolved, treeFromManifest);
+      }
+    }
+    if (effectiveTreeRoot === undefined) {
       return {
         kind: "not-applicable",
-        reason: `Found legacy workspace marker at ${resolved} but no child directory contains a tree binding (.first-tree/bindings/).`,
+        reason: `Found legacy workspace state at ${resolved} but no child directory contains a tree binding (.first-tree/bindings/) and no workspace.json records a tree subdir.`,
       };
     }
 
-    const treeName = basename(treeRoot);
-    const declaredSources = readBindingsSourceNames(treeRoot);
+    const treeName = basename(effectiveTreeRoot);
+    const declaredSources = treeRoot !== undefined ? readBindingsSourceNames(treeRoot) : [];
     const sourceRoots: string[] = [];
     const seen = new Set<string>();
     const missingFromBindings: string[] = [];
@@ -304,10 +351,33 @@ export function detectMigrationState(cwd: string): MigrationDetection {
       }
     }
 
+    // Resume case: an existing manifest may list sources that have already
+    // been fully cleaned (so they're invisible to the bindings + source.json
+    // scans above). Pull those names in so the re-written manifest preserves
+    // the workspace's full source roster across a partial-failure re-run.
+    if (manifestPresent) {
+      const manifestPath = join(resolved, ".first-tree", "workspace.json");
+      const manifestRaw = readJsonObject(manifestPath);
+      const manifestSources = Array.isArray(manifestRaw?.sources) ? manifestRaw.sources : [];
+      for (const value of manifestSources) {
+        if (typeof value !== "string" || value.length === 0 || value === treeName) {
+          continue;
+        }
+        const candidate = join(resolved, value);
+        if (seen.has(candidate)) {
+          continue;
+        }
+        if (isDirectory(candidate)) {
+          sourceRoots.push(candidate);
+          seen.add(candidate);
+        }
+      }
+    }
+
     return {
       kind: "workspace",
       workspaceRoot: resolved,
-      treeRoot,
+      treeRoot: effectiveTreeRoot,
       sourceRoots,
       ...(missingFromBindings.length > 0 ? { missingFromBindings } : {}),
     };
@@ -331,6 +401,7 @@ export function detectMigrationState(cwd: string): MigrationDetection {
     // intended action and there are no other members to break.
     const parentDir = dirname(resolved);
     const parentHasMarker = isFile(join(parentDir, WORKSPACE_MARKER));
+    const parentHasManifest = isFile(join(parentDir, ".first-tree", "workspace.json"));
     let parentHasOtherSourceSibling = false;
     for (const siblingName of listImmediateChildDirs(parentDir)) {
       if (join(parentDir, siblingName) === resolved) {
@@ -341,7 +412,7 @@ export function detectMigrationState(cwd: string): MigrationDetection {
         break;
       }
     }
-    if (parentHasMarker || parentHasOtherSourceSibling) {
+    if (parentHasMarker || parentHasManifest || parentHasOtherSourceSibling) {
       return {
         kind: "not-applicable",
         reason:
