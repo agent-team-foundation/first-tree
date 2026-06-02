@@ -193,6 +193,7 @@
   --color-state-idle: var(--state-idle);
   --color-state-working: var(--state-working);
   --color-state-blocked: var(--state-blocked);
+  --color-state-needs-you: var(--state-needs-you);
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
 
@@ -203,8 +204,15 @@
   --color-state-idle-soft: var(--state-idle-soft);
   --color-state-working-soft: var(--state-working-soft);
   --color-state-blocked-soft: var(--state-blocked-soft);
+  --color-state-needs-you-soft: var(--state-needs-you-soft);
   --color-state-error-soft: var(--state-error-soft);
   --color-state-offline-soft: var(--state-offline-soft);
+
+  /* Strong fg companion for the needs-you amber — the one state hue rendered as
+     readable text on its own -soft fill (the draft "changed" chip). Mirrors the
+     callout family's --fg-*-strong (raw amber is too light for AA on -soft);
+     raw values on :root / .dark below. */
+  --color-state-needs-you-strong: var(--fg-needs-you-strong);
 
   /* ---- Semantic inline-callout tokens ------------------------------------- */
   /* Each state exposes two Tailwind-addressable colors: the strong variant
@@ -272,6 +280,7 @@
   --state-blocked: oklch(
     0.74 0.18 58
   ); /* stuck / blocked + the shared caution/warning hue — a warm orange, still clearly not error-red */
+  --state-needs-you: oklch(0.82 0.18 75); /* unsaved/user-action-needed — amber distinct from blocked orange */
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
   /* Unread / attention semantic. Aliased to --state-error today because
@@ -288,6 +297,7 @@
   --state-working-soft: color-mix(in oklch, var(--state-working) 14%, transparent);
   --state-idle-soft: color-mix(in oklch, var(--state-idle) 14%, transparent);
   --state-blocked-soft: color-mix(in oklch, var(--state-blocked) 14%, transparent);
+  --state-needs-you-soft: color-mix(in oklch, var(--state-needs-you) 14%, transparent);
   --state-error-soft: color-mix(in oklch, var(--state-error) 14%, transparent);
   --state-offline-soft: color-mix(in oklch, var(--state-offline) 14%, transparent);
 
@@ -366,6 +376,7 @@
   --fg-error-strong: oklch(0.42 0.17 25);
   --bg-warn-soft: oklch(0.97 0.04 58);
   --fg-warn-strong: oklch(0.48 0.14 58);
+  --fg-needs-you-strong: oklch(0.48 0.14 75); /* amber 75 darkened for AA text on --state-needs-you-soft */
   --bg-success-soft: oklch(0.96 0.04 150);
   --fg-success-strong: oklch(0.42 0.12 150);
   /* info — blue (hue 245, the presence-idle hue). Matched L/C to the other
@@ -516,6 +527,7 @@
   --fg-error-strong: oklch(0.82 0.14 25);
   --bg-warn-soft: oklch(0.3 0.06 58);
   --fg-warn-strong: oklch(0.86 0.14 58);
+  --fg-needs-you-strong: oklch(0.86 0.14 75); /* amber 75 for AA text on --state-needs-you-soft (dark) */
   --bg-success-soft: oklch(0.28 0.05 150);
   --fg-success-strong: oklch(0.82 0.14 150);
   --bg-info-soft: oklch(0.28 0.06 245);
@@ -557,6 +569,7 @@
   --fg-error-strong: oklch(0.82 0.14 25);
   --bg-warn-soft: oklch(0.3 0.06 58);
   --fg-warn-strong: oklch(0.86 0.14 58);
+  --fg-needs-you-strong: oklch(0.86 0.14 75); /* amber 75 for AA text on --state-needs-you-soft (dark) */
   --bg-success-soft: oklch(0.28 0.05 150);
   --fg-success-strong: oklch(0.82 0.14 150);
   --bg-info-soft: oklch(0.28 0.06 245);

@@ -111,9 +111,10 @@ async function pointerDown(element: Element | null): Promise<void> {
   await flush();
 }
 
-async function keyDown(key: string): Promise<void> {
+async function keyDownOn(element: Element | null, key: string): Promise<void> {
+  if (!element) throw new Error("Expected element to receive keydown");
   await act(async () => {
-    document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   });
   await flush();
 }
@@ -123,15 +124,6 @@ async function setInputValue(element: HTMLInputElement, value: string): Promise<
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     setter?.call(element, value);
     element.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await flush();
-}
-
-async function setSelectValue(element: HTMLSelectElement, value: string): Promise<void> {
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-    setter?.call(element, value);
     element.dispatchEvent(new Event("change", { bubbles: true }));
   });
   await flush();
@@ -147,6 +139,11 @@ async function setFileInput(element: HTMLInputElement, file: File): Promise<void
 
 function buttonByText(scope: ParentNode, text: string): HTMLButtonElement | null {
   return [...scope.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
+}
+
+async function chooseSelectOption(trigger: Element | null, optionText: string): Promise<void> {
+  await click(trigger);
+  await click(buttonByText(document.body, optionText));
 }
 
 function installBrowserStubs(): void {
@@ -311,8 +308,8 @@ describe("IdentitySection", () => {
     expect(disabledName?.disabled).toBe(true);
 
     const displayInput = document.body.querySelector<HTMLInputElement>("#id-display");
-    const visibilitySelect = document.body.querySelector<HTMLSelectElement>("#id-visibility");
-    const delegateSelect = document.body.querySelector<HTMLSelectElement>("#id-delegate");
+    const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#id-visibility");
+    const delegateSelect = document.body.querySelector<HTMLButtonElement>("#id-delegate");
     if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected identity fields");
 
     await setInputValue(displayInput, " ");
@@ -321,8 +318,8 @@ describe("IdentitySection", () => {
     expect(onSave).not.toHaveBeenCalled();
 
     await setInputValue(displayInput, "Bestony Renamed");
-    await setSelectValue(visibilitySelect, "organization");
-    await setSelectValue(delegateSelect, "delegate-2");
+    await chooseSelectOption(visibilitySelect, "Organization");
+    await chooseSelectOption(delegateSelect, "Second Helper");
     await click(buttonByText(document.body, "Save"));
     expect(onSave).toHaveBeenCalledWith({
       displayName: "Bestony Renamed",
@@ -345,7 +342,7 @@ describe("IdentitySection", () => {
     );
 
     await click(buttonByText(container, "Edit"));
-    const visibilitySelect = document.body.querySelector<HTMLSelectElement>("#id-visibility");
+    const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#id-visibility");
     expect(visibilitySelect?.disabled).toBe(true);
     expect(document.body.textContent).toContain("Only the manager or an admin can change this agent's visibility.");
 
@@ -374,9 +371,10 @@ describe("IdentitySection", () => {
   });
 });
 
-describe("OptionDropdown", () => {
+describe("Select", () => {
   it("opens in a portal, selects values, dismisses on outside pointer and Escape, and renders changed state", async () => {
-    const { ChangedChip, OptionDropdown } = await import("../option-dropdown.js");
+    const { DraftStatusChip } = await import("../../../components/ui/draft-status-chip.js");
+    const { Select } = await import("../../../components/ui/select.js");
     const onChange = vi.fn();
     const getRect = vi.spyOn(HTMLButtonElement.prototype, "getBoundingClientRect");
     getRect.mockReturnValue({
@@ -393,16 +391,16 @@ describe("OptionDropdown", () => {
 
     const { container, root } = await renderDom(
       <>
-        <OptionDropdown
+        <Select
           value="alpha"
           onChange={onChange}
-          items={[
+          options={[
             { value: "", label: "Unset", hint: "fallback" },
             { value: "alpha", label: "Alpha", hint: "current" },
             { value: "beta", label: "Beta", hint: "new" },
           ]}
         />
-        <ChangedChip />
+        <DraftStatusChip status="modified" />
         <button type="button">Outside</button>
       </>,
     );
@@ -430,7 +428,7 @@ describe("OptionDropdown", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 
     await click(trigger);
-    await keyDown("Escape");
+    await keyDownOn(document.body.querySelector('[role="listbox"]'), "Escape");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
 
@@ -439,12 +437,12 @@ describe("OptionDropdown", () => {
   });
 
   it("stays closed when disabled and falls back to the raw value for unknown selections", async () => {
-    const { OptionDropdown } = await import("../option-dropdown.js");
+    const { Select } = await import("../../../components/ui/select.js");
     const onChange = vi.fn();
     const { container, root } = await renderDom(
-      <OptionDropdown value="missing" disabled onChange={onChange} items={[{ value: "alpha", label: "Alpha" }]} />,
+      <Select value="missing" disabled onChange={onChange} options={[{ value: "alpha", label: "Alpha" }]} />,
     );
-    expect(container.textContent).toContain("Alpha");
+    expect(container.textContent).toContain("missing");
     const trigger = container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
     await click(trigger);
     expect(document.body.querySelector('[style*="z-index"]')).toBeNull();

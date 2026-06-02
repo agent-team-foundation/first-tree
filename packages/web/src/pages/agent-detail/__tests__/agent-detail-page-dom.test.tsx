@@ -261,6 +261,11 @@ function lastExactButtonByText(container: ParentNode, text: string): HTMLButtonE
   );
 }
 
+async function chooseSelectOption(trigger: Element | null, optionText: string): Promise<void> {
+  await click(trigger);
+  await click(buttonByText(document.body, optionText));
+}
+
 beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
@@ -378,13 +383,7 @@ describe("AgentDetailPage", () => {
     await click(exactButtonByText(second.container, "Re-bind"));
     await waitForText(document.body, "Currently:");
     expect(document.body.textContent).toContain("Currently:");
-    const select = document.body.querySelector<HTMLSelectElement>("select");
-    if (!select) throw new Error("Re-bind select missing");
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-      setter?.call(select, "client-2");
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await chooseSelectOption(document.body.querySelector('button[aria-label="Computer"]'), "alice-linux");
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Claude Code (TUI)")) ??
         null,

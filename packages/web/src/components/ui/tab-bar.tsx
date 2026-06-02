@@ -32,14 +32,22 @@ type TabProps = {
   active?: boolean;
   onClick?: () => void;
   children: ReactNode;
-};
+  /** Shows an amber "unsaved changes" dot after the label (green-liveness: needs-you). */
+  dirty?: boolean;
+  className?: string;
+} & Pick<HTMLAttributes<HTMLButtonElement>, "role" | "aria-selected" | "aria-controls" | "id">;
 
-export function Tab({ active, onClick, children }: TabProps) {
+export function Tab({ active, onClick, children, dirty, className, ...rest }: TabProps) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 bg-transparent text-body font-medium rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      className={cn(
+        // No border-radius: the active state is a straight bottom border, and a
+        // corner radius would bow its ends upward into little hooks.
+        "inline-flex items-center gap-1.5 bg-transparent text-body font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        className,
+      )}
       style={{
         padding: "var(--sp-1_75) var(--sp-3)",
         marginBottom: -1,
@@ -54,9 +62,28 @@ export function Tab({ active, onClick, children }: TabProps) {
       onMouseLeave={(e) => {
         if (!active) e.currentTarget.style.color = "var(--fg-3)";
       }}
+      {...rest}
     >
       {children}
+      {dirty && <TabDirtyDot />}
     </button>
+  );
+}
+
+/** Small amber dot marking a tab whose section has unsaved draft changes. */
+export function TabDirtyDot() {
+  return (
+    <span
+      role="img"
+      aria-label="unsaved changes"
+      style={{
+        width: "var(--sp-1_5)",
+        height: "var(--sp-1_5)",
+        borderRadius: "50%",
+        background: "var(--state-needs-you)",
+        flexShrink: 0,
+      }}
+    />
   );
 }
 

@@ -1605,12 +1605,14 @@ describe("web DOM interaction coverage", () => {
 
     await click(container.querySelector('button[title="Edit"]'));
     await waitForText("Edit MCP server", document.body);
-    const transport = document.body.querySelector<HTMLSelectElement>("#mcp-transport");
-    if (!transport) throw new Error("MCP transport select missing");
-    await act(async () => {
-      transport.value = "http";
-      transport.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    // Transport is the custom Select primitive (button trigger + portal listbox),
+    // not a native <select>: open it, then click the "http" option.
+    const transportTrigger = document.body.querySelector<HTMLButtonElement>("#mcp-transport");
+    if (!transportTrigger) throw new Error("MCP transport trigger missing");
+    await click(transportTrigger);
+    const httpOption = [...document.body.querySelectorAll('[role="option"]')].find((el) => el.textContent === "http");
+    if (!httpOption) throw new Error("MCP transport http option missing");
+    await click(httpOption);
     await flush();
 
     const url = document.body.querySelector<HTMLInputElement>("#mcp-url");
