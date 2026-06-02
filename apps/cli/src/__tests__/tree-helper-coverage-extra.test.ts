@@ -101,7 +101,7 @@ describe("tree helper coverage", () => {
 
     expect(readManagedWhitepaperTarget(root)).toBeNull();
     expect(ensureWhitepaperSymlink(root)).toBe("created");
-    expect(readManagedWhitepaperTarget(root)).toBe(join(".agents", "skills", "first-tree", "SKILL.md"));
+    expect(readManagedWhitepaperTarget(root)).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
     removeManagedWhitepaper(root);
     expect(existsSync(join(root, "WHITEPAPER.md"))).toBe(false);
   });
