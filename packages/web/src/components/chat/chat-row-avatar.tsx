@@ -120,9 +120,10 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { failed: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou?: boolean; unread: number }): string | null {
   const parts: string[] = [];
   if (opts.failed) parts.push("failed");
+  if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -134,6 +135,7 @@ export function ChatRowAvatar({
   selfAgentId,
   unreadCount,
   failed = false,
+  needsYou = false,
   size = 36,
   muted = false,
   badge = true,
@@ -152,6 +154,10 @@ export function ChatRowAvatar({
   /** Any speaker in this chat is in the composite `failed` state. Outranks
    *  unread for the corner badge. */
   failed?: boolean;
+  /** Caller has an unanswered open question (`format=request`) directed at
+   *  them here (`openRequestCount > 0`). Amber corner dot; ranks between
+   *  failed and unread. */
+  needsYou?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
   /** Use the desaturated companion hues — set by the conversation list so a
@@ -178,7 +184,7 @@ export function ChatRowAvatar({
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
   const peer = peers[0];
 
-  const ariaLabel = buildAvatarAriaLabel({ failed, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -206,7 +212,7 @@ export function ChatRowAvatar({
         <CompositeAvatar size={size} peers={peers} muted={muted} />
       )}
       {badge && <AttentionBadge failed={failed} unread={unreadCount} />}
-      {statusDot && <ListCornerMark failed={failed} unread={unreadCount > 0} />}
+      {statusDot && <ListCornerMark failed={failed} needsYou={needsYou} unread={unreadCount > 0} />}
     </span>
   );
 }
@@ -220,11 +226,13 @@ const CORNER_OFFSET = -2;
 
 /**
  * Conversation-list corner marker (mainstream-IM placement: avatar top-right).
- * Failed uses a semantic `!` glyph; plain unread (no failed state) is a dot.
- * Priority: failed > unread; renders nothing otherwise.
+ * Failed uses a semantic `!` glyph; `needs_you` (an unanswered open question
+ * directed at you) is an amber dot; plain unread is a red dot.
+ * Priority: failed > needs_you > unread; renders nothing otherwise.
  */
-function ListCornerMark({ failed, unread }: { failed: boolean; unread: boolean }) {
+function ListCornerMark({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: boolean }) {
   if (failed) return <CornerMark background="var(--state-error)" fg="var(--fg-on-vivid)" glyph="!" />;
+  if (needsYou) return <CornerMark background="var(--state-needs-you)" />;
   if (unread) return <CornerMark background="var(--state-unread)" />;
   return null;
 }

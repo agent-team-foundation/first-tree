@@ -554,6 +554,7 @@ export function ConversationList({
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
                           failed={failed}
+                          needsYou={row.openRequestCount > 0}
                           size={26}
                           muted
                           badge={false}

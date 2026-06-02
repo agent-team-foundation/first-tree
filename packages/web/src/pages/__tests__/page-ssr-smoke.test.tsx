@@ -281,6 +281,7 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     lastMessageAt: overrides.lastMessageAt ?? NOW,
     lastMessagePreview: overrides.lastMessagePreview ?? "Please review the launch checklist.",
     unreadMentionCount: overrides.unreadMentionCount ?? 1,
+    openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity:

@@ -65,6 +65,7 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     lastMessageAt: overrides.lastMessageAt ?? "2026-05-28T11:59:00.000Z",
     lastMessagePreview: overrides.lastMessagePreview ?? `Preview for ${overrides.title}`,
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
+    openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,

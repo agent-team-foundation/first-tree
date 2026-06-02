@@ -34,6 +34,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     lastMessageAt: overrides.lastMessageAt ?? new Date().toISOString(),
     lastMessagePreview: overrides.lastMessagePreview ?? null,
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
+    openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,

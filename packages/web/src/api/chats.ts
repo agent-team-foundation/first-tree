@@ -81,11 +81,18 @@ export function patchChatEngagement(
  * no `@` still reaches the recipient. Passing `[]` will reach the
  * server and 400.
  */
-export function sendChatMessage(chatId: string, content: string, mentions: string[]): Promise<Message> {
+export function sendChatMessage(
+  chatId: string,
+  content: string,
+  mentions: string[],
+  opts?: { inReplyTo?: string; broadcast?: boolean },
+): Promise<Message> {
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
     content,
     ...(mentions.length > 0 ? { metadata: { mentions } } : {}),
+    ...(opts?.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
+    ...(opts?.broadcast ? { broadcast: true } : {}),
   });
 }
 

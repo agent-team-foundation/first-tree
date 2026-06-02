@@ -3,11 +3,12 @@ import {
   imageBatchRefContentSchema,
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
+  MESSAGE_FORMATS,
   type SendMessage,
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -191,6 +192,7 @@ async function sendMessageInner(
           name: agents.name,
           displayName: agents.displayName,
           status: agents.status,
+          type: agents.type,
         })
         .from(chatMembership)
         .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
@@ -293,6 +295,24 @@ async function sendMessageInner(
     }
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
+    // Open-question contract: a `format=request` message is an "ask" directed
+    // at exactly one human (the sole `metadata.mentions` entry). Enforce here
+    // so the body (`content`) + `metadata.request.question` split and the
+    // open_request_count counter (below) have a single, validated target.
+    if (data.format === MESSAGE_FORMATS.REQUEST) {
+      const targetId = mergedMentions[0];
+      if (mergedMentions.length !== 1 || !targetId) {
+        throw new BadRequestError(
+          `A 'request' message must mention exactly one recipient (got ${mergedMentions.length}). ` +
+            "An open question is directed at a single human.",
+        );
+      }
+      const target = participantsById.get(targetId);
+      if (!target || target.type !== "human") {
+        throw new BadRequestError("A 'request' message must be directed at a human member.");
+      }
+    }
+
     // Centralise the bypass contract for `purpose` values. Each flag
     // describes what this purpose means for a downstream decision; adding a
     // new `purpose` value means defining its profile here once, not hunting
@@ -330,7 +350,12 @@ async function sendMessageInner(
     // `purpose === "agent-final-text"` bypasses via
     // `purposeProfile.skipMentionEnforcement` — final-text is silent-by-
     // construction so it never needs to name a recipient.
-    if (options.enforceMention && !purposeProfile.skipMentionEnforcement) {
+    //
+    // `data.broadcast` is the explicit opt-in broadcast intent (CLI
+    // `chat send --broadcast`, web no-`@` send): enter the stream, wake no
+    // one. It deliberately bypasses the guard — a broadcast names no
+    // recipient by definition. See proposals/group-chat-unified-send §D6.
+    if (options.enforceMention && !purposeProfile.skipMentionEnforcement && !data.broadcast) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       const hasAddressed = (options.addressedToAgentIds?.length ?? 0) > 0;
       if (recipientMentions.length === 0 && !hasAddressed) {
@@ -466,6 +491,68 @@ async function sendMessageInner(
       bumpForAgentFinalText: isAgentFinalText && senderRow.type !== "human",
     });
 
+    // 7. Open-question counter (`chat_user_state.open_request_count`) — see
+    //    proposals/group-chat-unified-send §D1. Two mutually exclusive paths,
+    //    keyed on `inReplyTo`:
+    //      +1 — a FRESH request (`format=request`, no `inReplyTo`): the single
+    //           validated human target now owes an answer.
+    //      -1 — a reply (`inReplyTo=M`) that answers a request M directed at
+    //           THIS sender; only the sender's FIRST reply to M decrements
+    //           (idempotent), and `GREATEST(0, …)` floors at zero.
+    //    A reply that is itself a new request takes NEITHER path: it has an
+    //    `inReplyTo` (so not +1) and its sender is the asking agent, not M's
+    //    human target (so not -1) — zero count change, by design.
+    const requestTarget = mergedMentions[0];
+    if (data.format === MESSAGE_FORMATS.REQUEST && !data.inReplyTo && requestTarget) {
+      await tx.execute(sql`
+        INSERT INTO chat_user_state (chat_id, agent_id, open_request_count)
+        VALUES (${chatId}, ${requestTarget}, 1)
+        ON CONFLICT (chat_id, agent_id)
+        DO UPDATE SET open_request_count = chat_user_state.open_request_count + 1
+      `);
+    } else if (data.inReplyTo) {
+      const [parent] = await tx
+        .select({ format: messages.format, metadata: messages.metadata, senderId: messages.senderId })
+        .from(messages)
+        .where(and(eq(messages.id, data.inReplyTo), eq(messages.chatId, chatId)))
+        .limit(1);
+      const parentMentions = Array.isArray(parent?.metadata?.mentions) ? parent.metadata.mentions : [];
+      const target =
+        parent?.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
+      if (typeof target === "string") {
+        // A reply RESOLVES the open question (clears the target's count) when it is:
+        //   - the target answering it (sender === target), OR
+        //   - the asking agent actively closing it with a NON-request reply
+        //     (sender === request author, format !== "request").
+        // A request-shaped reply by the author is a REPLACEMENT, not a close —
+        // the new request carries the open count, so it is excluded here.
+        // See proposals/group-chat-unified-send §D1 (resolved / closed).
+        const isAnswer = senderId === target;
+        const isAuthorClose = senderId === parent?.senderId && data.format !== MESSAGE_FORMATS.REQUEST;
+        if (isAnswer || isAuthorClose) {
+          // Idempotency: only the FIRST resolving reply to this request decrements
+          // (exclude the row we just inserted); answer-then-close, double-close,
+          // etc. are all no-ops afterward.
+          const priors = await tx
+            .select({ senderId: messages.senderId, format: messages.format })
+            .from(messages)
+            .where(
+              and(eq(messages.chatId, chatId), eq(messages.inReplyTo, data.inReplyTo), ne(messages.id, messageId)),
+            );
+          const alreadyResolved = priors.some(
+            (p) => p.senderId === target || (p.senderId === parent?.senderId && p.format !== MESSAGE_FORMATS.REQUEST),
+          );
+          if (!alreadyResolved) {
+            await tx.execute(sql`
+              UPDATE chat_user_state
+                 SET open_request_count = GREATEST(0, open_request_count - 1)
+               WHERE chat_id = ${chatId} AND agent_id = ${target}
+            `);
+          }
+        }
+      }
+    }
+
     return {
       message: msg,
       recipients,
@@ -503,16 +590,6 @@ async function sendMessageInner(
   // wake-up otherwise). Failure is dropped; web reconnect refetches.
   fireChatMessageKick(chatId, txResult.message.id);
 
-  // Echo-loop observation: scan the just-tail of this chat for the
-  // ping-pong pattern that the client-side silent-turn protocol is meant
-  // to prevent. We emit a structured warn-log only — `notify` is never
-  // mutated here. Frequent triggers signal client-side prompt drift and
-  // a need to revisit the agent template. Fire-and-forget so the hot send
-  // path is unaffected; failures are logged but never propagated.
-  void observeLoopPattern(db, chatId).catch((err) => {
-    log.error({ err, chatId }, "loop pattern observation failed");
-  });
-
   return { message: txResult.message, recipients: txResult.recipients };
 }
 
@@ -544,115 +621,6 @@ export function maybeUnwrapDoubleEncoded(content: string): string | null {
   } catch {
     return null;
   }
-}
-
-export const LOOP_OBSERVATION_WINDOW = 4;
-export const LOOP_OBSERVATION_SHORT_CHARS = 10;
-export const LOOP_OBSERVATION_TIME_WINDOW_MS = 30_000;
-
-function stripMentionPrefix(content: string): string {
-  return content.replace(/^(@\S+\s*)+/, "").trim();
-}
-
-/**
- * Reporting hook: what to do when a loop pattern is detected. Production
- * default goes through pino's structured `warn`; tests pass a fake so they
- * can assert on detection without raising the test app's log level (helpers
- * pin level=error for noise reduction).
- */
-export type LoopPatternObserver = (data: {
-  chatId: string;
-  recentMessageIds: string[];
-  windowSpanMs: number;
-  contentLengths: number[];
-}) => void;
-
-const defaultLoopObserver: LoopPatternObserver = (data) => {
-  log.warn(
-    { metric: "loop_pattern_observed_total", ...data },
-    "loop pattern observed (not blocked) — prompt discipline may be drifting",
-  );
-};
-
-/**
- * Pure observation: detect short, fast, two-agent ping-pong reply chains and
- * surface them via a structured log line. Does NOT modify the `notify` flag
- * or otherwise interfere with delivery — loop *prevention* lives client-side
- * (prompt + silent-turn protocol in `result-sink`). Six conjunctive
- * conditions (see design `agent-reply-loop-prevention-design.md` §3.4) so
- * normal multi-agent collaboration is never flagged:
- *
- *   C1 — every message is `format=text`
- *   C2 — no human sender in the window (any human reply resets the chain)
- *   C3 — exactly two senders, perfectly alternating
- *   C4 — strict `inReplyTo` chain across the whole window
- *   C5 — every message body (after stripping leading `@<name>` tokens) is
- *        ≤ `LOOP_OBSERVATION_SHORT_CHARS` characters
- *   C6 — the whole window spans ≤ `LOOP_OBSERVATION_TIME_WINDOW_MS` ms
- *
- * Exported for direct test coverage of the detection logic; the `sendMessage`
- * call site uses the default observer.
- */
-export async function observeLoopPattern(
-  db: Database,
-  chatId: string,
-  observer: LoopPatternObserver = defaultLoopObserver,
-): Promise<void> {
-  const window = await db
-    .select({
-      id: messages.id,
-      senderId: messages.senderId,
-      content: messages.content,
-      inReplyTo: messages.inReplyTo,
-      createdAt: messages.createdAt,
-      format: messages.format,
-      senderType: agents.type,
-    })
-    .from(messages)
-    .innerJoin(agents, eq(messages.senderId, agents.uuid))
-    .where(eq(messages.chatId, chatId))
-    .orderBy(desc(messages.createdAt))
-    .limit(LOOP_OBSERVATION_WINDOW);
-
-  if (window.length < LOOP_OBSERVATION_WINDOW) return;
-
-  // C1: all text format
-  if (window.some((m) => m.format !== "text")) return;
-  // C2: no human sender (any human turn naturally breaks the chain)
-  if (window.some((m) => m.senderType === "human")) return;
-  // C3: exactly two distinct senders, strictly alternating
-  if (new Set(window.map((m) => m.senderId)).size !== 2) return;
-  for (let i = 0; i < window.length - 1; i++) {
-    if (window[i]?.senderId === window[i + 1]?.senderId) return;
-  }
-  // C4: strict reply chain — each newer message replies to the one beneath it
-  for (let i = 0; i < window.length - 1; i++) {
-    if (window[i]?.inReplyTo !== window[i + 1]?.id) return;
-  }
-  // C5: every body short after stripping mention prefix. Non-string contents
-  //     (markdown JSON, file/card payloads, etc.) can't be classified by a
-  //     simple char count, so we bail rather than guess.
-  const lens: number[] = [];
-  for (const m of window) {
-    const text = typeof m.content === "string" ? m.content : null;
-    if (text === null) return;
-    const len = stripMentionPrefix(text).length;
-    if (len > LOOP_OBSERVATION_SHORT_CHARS) return;
-    lens.push(len);
-  }
-  // C6: tight time window across the whole tail
-  const newest = window[0];
-  const oldest = window[window.length - 1];
-  if (!newest || !oldest) return;
-  const spanMs = newest.createdAt.getTime() - oldest.createdAt.getTime();
-  if (spanMs > LOOP_OBSERVATION_TIME_WINDOW_MS) return;
-
-  observer({
-    chatId,
-    recentMessageIds: window.map((m) => m.id),
-    windowSpanMs: spanMs,
-    contentLengths: lens,
-  });
 }
 
 export async function editMessage(
