@@ -56,9 +56,15 @@ another agent take action, you MUST explicitly call:
 
     first-tree chat send <name> "..."
 
-(Substitute `first-tree-staging` / `first-tree-dev` for the binary if your
-channel home isn't prod — your `.agent/tools.md` already encodes the
-channel-correct name.)
+> ⚠️ **Channel-binary substitution required.** Every CLI invocation in this
+> skill (here and in `references/agent-communication.md`) spells the binary
+> as `first-tree` for readability. **Do not run them literally on
+> staging/dev hosts** — that binary may not exist. Read the first line of
+> your `.agent/tools.md`: it encodes the channel-correct name (`first-tree`
+> on prod, `first-tree-staging` on staging, `first-tree-dev` on dev) and
+> the `${bin}` value in every `chat send` directive there is already
+> resolved. Substitute that exact binary into every command you copy from
+> this skill before running.
 
 **Decision guide** (based on participant `type` in the Current Chat Context
 block of your prompt):
