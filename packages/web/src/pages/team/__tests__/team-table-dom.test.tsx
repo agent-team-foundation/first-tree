@@ -111,7 +111,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       displayName: "Gandy",
       role: "admin",
       isSelf: true,
-      delegate: { uuid: "agent-1", name: "kael", displayName: "Kael" },
+      delegate: { uuid: "agent-1", name: "kael", displayName: "Kael", colorToken: null, avatarImageUrl: null },
       canEditDelegate: true,
       lastActiveLabel: "active now",
     },
@@ -156,6 +156,8 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     ],
     onSetDelegate: vi.fn(),
     searchActive: false,
+    agentFilter: "all",
+    onAgentFilter: vi.fn(),
     ...overrides,
   };
 }

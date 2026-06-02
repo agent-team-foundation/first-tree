@@ -7,7 +7,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
-import { attentionsInChatQueryKey } from "../../../../api/attention.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
 import type { SessionEventRow } from "../../../../api/sessions.js";
 import { agentSessionsQueryKey } from "../../../../api/sessions.js";
@@ -31,10 +30,6 @@ const agentMocks = vi.hoisted(() => ({
 const attachmentMocks = vi.hoisted(() => ({
   fetchAttachmentBase64: vi.fn(),
   uploadImageAttachment: vi.fn(),
-}));
-
-const attentionMocks = vi.hoisted(() => ({
-  listAttentionsInChat: vi.fn(),
 }));
 
 const chatMocks = vi.hoisted(() => ({
@@ -91,11 +86,6 @@ vi.mock("../../../../api/agents.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../../../api/attachments.js", () => attachmentMocks);
-
-vi.mock("../../../../api/attention.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../../api/attention.js")>()),
-  listAttentionsInChat: attentionMocks.listAttentionsInChat,
-}));
 
 vi.mock("../../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/chats.js")>()),
@@ -467,7 +457,6 @@ function seedChat(
   queryClient.setQueryData(["chat-messages-cache", detail.id], page.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", detail.id], page);
   queryClient.setQueryData(["session-events", "agent-1", detail.id], SESSION_EVENTS);
-  queryClient.setQueryData(attentionsInChatQueryKey(detail.id), []);
   queryClient.setQueryData(["chat-read-state", detail.id], {
     chatId: detail.id,
     bottomVisibleMessageId: "msg-1",
@@ -614,7 +603,6 @@ beforeEach(() => {
   agentMocks.listAgents.mockResolvedValue({ items: ORG_AGENTS, nextCursor: null });
   attachmentMocks.fetchAttachmentBase64.mockResolvedValue({ base64: "image-base64", mimeType: "image/png" });
   attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 42 });
-  attentionMocks.listAttentionsInChat.mockResolvedValue([]);
   chatMocks.getChat.mockResolvedValue(chatDetail());
   chatMocks.listChatMessages.mockResolvedValue(BASE_MESSAGES);
   chatMocks.patchChatEngagement.mockResolvedValue({ chatId: "chat-1", engagementStatus: "active" });
