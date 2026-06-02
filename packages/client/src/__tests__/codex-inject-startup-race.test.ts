@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -10,6 +11,9 @@ const state = vi.hoisted(() => ({
   chatContextPromise: null as Promise<ChatContext> | null,
   resolveChatContext: null as ((value: ChatContext) => void) | null,
   runInputs: [] as unknown[],
+  agentMessagesByTurn: new Map<number, string[]>(),
+  failureByTurn: new Map<number, string>(),
+  streamErrorByTurn: new Map<number, string>(),
 }));
 
 vi.mock("@openai/codex-sdk", () => {
@@ -28,7 +32,20 @@ vi.mock("@openai/codex-sdk", () => {
       return {
         events: (async function* () {
           yield { type: "thread.started", thread_id: "thread-test" };
-          yield { type: "item.completed", item: { type: "agent_message", text: `reply ${turn}` } };
+          const messages = state.agentMessagesByTurn.get(turn) ?? [`reply ${turn}`];
+          for (const text of messages) {
+            yield { type: "item.completed", item: { type: "agent_message", text } };
+          }
+          const failure = state.failureByTurn.get(turn);
+          if (failure) {
+            yield { type: "turn.failed", error: { message: failure } };
+            return;
+          }
+          const streamError = state.streamErrorByTurn.get(turn);
+          if (streamError) {
+            yield { type: "error", message: streamError };
+            return;
+          }
           yield { type: "turn.completed", usage };
         })(),
       };
@@ -88,8 +105,15 @@ function makeMessage(id: string, content: string): SessionMessage {
   };
 }
 
-function makeContext(markCompleted: (count?: number) => void): SessionContext {
-  const sendMessage = vi.fn().mockResolvedValue(undefined);
+type SendMessageMock = ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
+
+function makeContext(
+  markCompleted: (count?: number) => void,
+  opts: { sendMessage?: SendMessageMock; emitEvent?: SessionContext["emitEvent"] } = {},
+): SessionContext {
+  const sendMessage =
+    opts.sendMessage ??
+    vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>().mockResolvedValue(undefined);
   return {
     agent: {
       agentId: AGENT_ID,
@@ -105,7 +129,7 @@ function makeContext(markCompleted: (count?: number) => void): SessionContext {
     log: () => {},
     touch: () => {},
     setRuntimeState: () => {},
-    emitEvent: () => {},
+    emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-startup-race"),
     markCompleted,
   };
@@ -114,6 +138,9 @@ function makeContext(markCompleted: (count?: number) => void): SessionContext {
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-startup-race-"));
   state.runInputs.length = 0;
+  state.agentMessagesByTurn.clear();
+  state.failureByTurn.clear();
+  state.streamErrorByTurn.clear();
   state.chatContextPromise = new Promise((resolve) => {
     state.resolveChatContext = resolve;
   });
@@ -185,6 +212,102 @@ describe("codex handler startup inject queue", () => {
     expect(String(state.runInputs[1])).toContain("second");
     expect(String(state.runInputs[1])).toContain("third");
     expect(completedCounts).toEqual([1, 2]);
+
+    await handler.shutdown();
+  });
+
+  it("forwards only the latest Codex agent_message as the final response", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(() => {}, { sendMessage, emitEvent });
+
+    state.agentMessagesByTurn.set(1, ["working note", "final answer"]);
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1].content).toBe("final answer");
+    expect(
+      emitEvent.mock.calls
+        .map(([event]) => (event.kind === "assistant_text" ? event.payload.text : null))
+        .filter((text): text is string => typeof text === "string"),
+    ).toEqual(["working note", "final answer"]);
+
+    await handler.shutdown();
+  });
+
+  it("does not forward partial Codex text when the turn later fails", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
+
+    state.agentMessagesByTurn.set(1, ["working note"]);
+    state.failureByTurn.set(1, "codex failed");
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      events.some(
+        (event) => event.kind === "error" && event.payload.source === "sdk" && event.payload.message === "codex failed",
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not forward partial Codex text when the stream emits a fatal error", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
+
+    state.agentMessagesByTurn.set(1, ["working note"]);
+    state.streamErrorByTurn.set(1, "codex stream error");
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "error" && event.payload.source === "sdk" && event.payload.message === "codex stream error",
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completedCounts).toEqual([1]);
 
     await handler.shutdown();
   });
