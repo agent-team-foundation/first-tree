@@ -13,6 +13,7 @@ import { ApiError } from "../../api/client.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
 
 const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
@@ -54,6 +55,7 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
   });
 
   const candidateClients = clientsQuery.data ?? [];
+  const clientOptions: SelectOption[] = candidateClients.map((c) => ({ value: c.id, label: clientLabel(c) }));
 
   // Capability snapshots ride along on every list row now (`/me/clients`
   // includes the `metadata.capabilities` blob), so the runtime picker
@@ -126,17 +128,13 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
 
           <div className="space-y-2">
             <Label>Computer</Label>
-            <select
+            <Select
               value={selectedClientId ?? ""}
-              onChange={(e) => setSelectedClientId(e.target.value || null)}
-              className="w-full rounded-[var(--radius-input)] border border-input bg-background px-3 py-2 text-body"
-            >
-              {candidateClients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {clientLabel(c)}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setSelectedClientId(v || null)}
+              options={clientOptions}
+              placeholder="Select a computer"
+              aria-label="Computer"
+            />
           </div>
 
           <div className="space-y-2">

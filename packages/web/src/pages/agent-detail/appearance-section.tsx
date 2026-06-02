@@ -48,9 +48,12 @@ function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
       />
     );
   }
+  // dynamic: scales with avatar size; no fixed token applies
+  const initialFontSize = Math.round(size * 0.42);
   return (
     <span
       aria-hidden="true"
+      className="font-bold"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -60,8 +63,7 @@ function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
         borderRadius: "50%",
         background: resolveAvatarHue(agent.avatarColorToken, agent.uuid),
         color: "var(--fg-on-vivid)",
-        fontSize: Math.round(size * 0.42),
-        fontWeight: 700,
+        fontSize: initialFontSize,
         lineHeight: 1,
         letterSpacing: "-0.02em",
         userSelect: "none",

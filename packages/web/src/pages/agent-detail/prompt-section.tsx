@@ -1,8 +1,10 @@
 import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Section } from "../../components/ui/section.js";
+import { Textarea } from "../../components/ui/textarea.js";
 
 /**
  * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
@@ -44,7 +46,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
       title={
         <span className="inline-flex items-center gap-2">
           System prompt append
-          {dirty && <ChangedChip />}
+          {dirty && <DraftStatusChip status="modified" />}
         </span>
       }
       action={action}
@@ -52,7 +54,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
       <div style={{ padding: "var(--sp-3) 0" }}>
         {editing ? (
           <div className="space-y-2">
-            <textarea
+            <Textarea
               ref={taRef}
               value={value}
               onChange={(e) => {
@@ -66,7 +68,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                   setEditing(false);
                 }
               }}
-              className="w-full resize-none overflow-hidden rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="resize-none overflow-hidden font-mono"
               style={{ minHeight: "10rem" }}
               placeholder="Appended to Claude Code's default system prompt."
               maxLength={32_000}
@@ -101,21 +103,5 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
         )}
       </div>
     </Section>
-  );
-}
-
-function ChangedChip() {
-  return (
-    <span
-      className="mono uppercase text-caption"
-      style={{
-        padding: "var(--hairline) var(--sp-1_5)",
-        borderRadius: "var(--radius-chip)",
-        background: "var(--state-blocked-soft)",
-        color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
-      }}
-    >
-      changed
-    </span>
   );
 }
