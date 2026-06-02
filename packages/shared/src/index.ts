@@ -639,13 +639,13 @@ export {
   userStatusSchema,
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
-// -- WebSocket handshake frames --
 export {
   WORKSPACE_MANIFEST_FILENAME,
   WORKSPACE_STATE_DIRNAME,
   type WorkspaceManifest,
   workspaceManifestSchema,
 } from "./schemas/workspace-manifest.js";
+// -- WebSocket handshake frames --
 export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
 export {
   serverCapabilitiesSchema,

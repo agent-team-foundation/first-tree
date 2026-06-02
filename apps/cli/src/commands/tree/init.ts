@@ -2,7 +2,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
-import { writeWorkspaceManifest } from "../../core/workspace.js";
+import { pickImmediateWorkspaceSources, writeWorkspaceManifest } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { bindSourceRoot } from "./bind.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
@@ -147,6 +147,8 @@ export function initializeSourceRoot(sourceRoot: string, role: string, options: 
   const resolvedTreeRoot = treeRoot ?? bindingSummary.treeRoot;
   const cascadedRepos: CascadedRepo[] = [];
 
+  let workspaceSyncFailed = false;
+
   if (recursive && resolvedTreeRoot) {
     if (scope === "workspace") {
       if (
@@ -157,13 +159,19 @@ export function initializeSourceRoot(sourceRoot: string, role: string, options: 
         })
       ) {
         process.exitCode = 1;
+        workspaceSyncFailed = true;
       }
     } else {
       cascadedRepos.push(...cascadeRepoScopeOnboarding(sourceRoot, resolvedTreeRoot, options.treeUrl));
     }
   }
 
-  const writtenManifest = maybeWriteWorkspaceManifest(sourceRoot, scope, resolvedTreeRoot);
+  // Skip the W1 manifest write when workspace sync failed — leaving a manifest
+  // that claims sources are bound while the legacy bind half is partially in
+  // place would make the workspace's state self-inconsistent.
+  const writtenManifest = workspaceSyncFailed
+    ? undefined
+    : maybeWriteWorkspaceManifest(sourceRoot, scope, resolvedTreeRoot);
 
   return {
     bindingMode: bindingSummary.bindingMode,
@@ -210,11 +218,12 @@ function maybeWriteWorkspaceManifest(
   }
 
   const treeName = basename(treeResolved);
-  const sources = discoverWorkspaceRepos(sourceResolved)
-    .filter((candidate) => resolve(candidate.root) !== treeResolved)
-    .map((candidate) => candidate.name)
-    .filter((name) => name.length > 0 && !name.includes("/") && !name.startsWith("."))
-    .sort((a, b) => a.localeCompare(b));
+  // The legacy `discoverWorkspaceRepos` walker recurses through non-git
+  // intermediate dirs and yields repos at arbitrary depth, which is the wrong
+  // surface for a `sources` field constrained to immediate children. Route
+  // through the workspace-rooted helper instead so the schema's immediate-
+  // subdirectory contract is enforced at write time, not just at read time.
+  const sources = pickImmediateWorkspaceSources(sourceResolved, treeName);
 
   const manifest = { tree: treeName, sources };
 

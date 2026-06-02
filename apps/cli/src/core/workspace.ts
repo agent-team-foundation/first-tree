@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -17,7 +18,8 @@ import {
  * - {@link discoverWorkspaceRoot}: walk up from a cwd looking for the closest
  *   ancestor with `.first-tree/workspace.json`.
  * - {@link readWorkspaceManifest}: load + validate the manifest.
- * - {@link writeWorkspaceManifest}: persist a validated manifest atomically.
+ * - {@link writeWorkspaceManifest}: persist a validated manifest (single
+ *   `writeFileSync`; single-writer local file — no temp-and-rename).
  * - {@link computeWorkspaceStatus}: derive the report consumed by
  *   `first-tree tree status` (bound sources, unbound git siblings, missing
  *   sources).
@@ -36,6 +38,12 @@ export type WorkspaceBoundSource = {
   path: string;
   /** Whether the subdirectory exists on disk. */
   present: boolean;
+  /**
+   * `origin` remote URL from `git remote get-url`, when the subdirectory
+   * exists on disk and has a remote. Absent when the subdirectory is
+   * missing or has no `origin` remote configured.
+   */
+  remoteUrl?: string;
 };
 
 export type WorkspaceUnboundSibling = {
@@ -43,6 +51,8 @@ export type WorkspaceUnboundSibling = {
   name: string;
   /** Absolute path on disk. */
   path: string;
+  /** `origin` remote URL, when configured. */
+  remoteUrl?: string;
 };
 
 export type WorkspaceStatus = {
@@ -54,6 +64,11 @@ export type WorkspaceStatus = {
   treePath: string;
   /** Whether the tree subdirectory exists on disk. */
   treePresent: boolean;
+  /**
+   * `origin` remote URL of the tree subdirectory when it exists on disk and
+   * has one configured. Absent otherwise.
+   */
+  treeRemoteUrl?: string;
   /** Bound source entries from the manifest, each annotated with on-disk presence. */
   boundSources: WorkspaceBoundSource[];
   /**
@@ -157,6 +172,63 @@ function listImmediateChildDirs(root: string): string[] {
 }
 
 /**
+ * Read the `origin` remote URL from a directory, or `undefined` if the
+ * directory is not a git repo or has no `origin` remote configured. Never
+ * throws; failures degrade to `undefined`.
+ */
+export function readGitRemoteUrl(repoDir: string, remote = "origin"): string | undefined {
+  if (!isGitRepoDir(repoDir)) {
+    return undefined;
+  }
+
+  try {
+    const output = execFileSync("git", ["remote", "get-url", remote], {
+      cwd: repoDir,
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf-8",
+    });
+    const trimmed = output.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Enumerate immediate-child git repos suitable for a workspace.json
+ * `sources` field. Returns the basenames (no nesting) of git repos that
+ * are direct children of `workspaceRoot`, sorted, excluding the tree itself
+ * and excluding any names in `excludeNames`.
+ *
+ * This is the source-of-truth filter for the §workspace.json `sources` field
+ * contract — only immediate subdirectories may appear. Callers that derive
+ * source lists from any other discovery surface (e.g. the legacy
+ * `discoverWorkspaceRepos`, which recurses through non-git intermediate
+ * dirs) MUST route through this helper to avoid writing nested basenames
+ * that violate the schema and would render `computeWorkspaceStatus` unable
+ * to locate them later.
+ */
+export function pickImmediateWorkspaceSources(
+  workspaceRoot: string,
+  treeName: string,
+  excludeNames: ReadonlySet<string> = new Set(),
+): string[] {
+  const resolvedRoot = resolve(workspaceRoot);
+  const names: string[] = [];
+
+  for (const childName of listImmediateChildDirs(resolvedRoot)) {
+    if (childName === treeName || excludeNames.has(childName)) {
+      continue;
+    }
+    if (isGitRepoDir(join(resolvedRoot, childName))) {
+      names.push(childName);
+    }
+  }
+
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+/**
  * Compute the read-only status report for a workspace. Used by
  * `first-tree tree status` to render the human-facing summary and by tests
  * to assert drift conditions.
@@ -167,10 +239,18 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
   const manifest = readWorkspaceManifest(workspaceRoot);
   const treePath = join(workspaceRoot, manifest.tree);
   const treePresent = isDirectory(treePath);
+  const treeRemoteUrl = treePresent ? readGitRemoteUrl(treePath) : undefined;
 
   const boundSources: WorkspaceBoundSource[] = manifest.sources.map((name) => {
     const sourcePath = join(workspaceRoot, name);
-    return { name, path: sourcePath, present: isDirectory(sourcePath) };
+    const present = isDirectory(sourcePath);
+    const remoteUrl = present ? readGitRemoteUrl(sourcePath) : undefined;
+    return {
+      name,
+      path: sourcePath,
+      present,
+      ...(remoteUrl ? { remoteUrl } : {}),
+    };
   });
 
   const missingBoundSources = boundSources.filter((entry) => !entry.present);
@@ -183,7 +263,12 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
     }
     const childPath = join(workspaceRoot, childName);
     if (isGitRepoDir(childPath)) {
-      unboundGitSiblings.push({ name: childName, path: childPath });
+      const remoteUrl = readGitRemoteUrl(childPath);
+      unboundGitSiblings.push({
+        name: childName,
+        path: childPath,
+        ...(remoteUrl ? { remoteUrl } : {}),
+      });
     }
   }
 
@@ -192,6 +277,7 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
     manifest,
     treePath,
     treePresent,
+    ...(treeRemoteUrl ? { treeRemoteUrl } : {}),
     boundSources,
     unboundGitSiblings,
     missingBoundSources,

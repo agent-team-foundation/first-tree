@@ -42,10 +42,15 @@ export function runStatusCommand(context: CommandContext): void {
   printWorkspaceStatus(status);
 }
 
+function formatRemote(remoteUrl: string | undefined): string {
+  return remoteUrl ? `  ${remoteUrl}` : "";
+}
+
 function printWorkspaceStatus(status: WorkspaceStatus): void {
   console.log("First Tree Workspace Status\n");
   console.log(`  Workspace:  ${status.workspaceRoot}`);
-  console.log(`  Tree:       ${status.manifest.tree}${status.treePresent ? "" : "  (missing on disk)"}`);
+  const treeStatusSuffix = status.treePresent ? "" : "  (missing on disk)";
+  console.log(`  Tree:       ${status.manifest.tree}${formatRemote(status.treeRemoteUrl)}${treeStatusSuffix}`);
   console.log();
 
   if (status.boundSources.length === 0) {
@@ -55,7 +60,7 @@ function printWorkspaceStatus(status: WorkspaceStatus): void {
     for (const source of status.boundSources) {
       const marker = source.present ? "✓" : "·";
       const suffix = source.present ? "" : "  (not cloned locally)";
-      console.log(`    ${marker} ${source.name}${suffix}`);
+      console.log(`    ${marker} ${source.name}${formatRemote(source.remoteUrl)}${suffix}`);
     }
     console.log();
   }
@@ -71,7 +76,7 @@ function printWorkspaceStatus(status: WorkspaceStatus): void {
   if (status.unboundGitSiblings.length > 0) {
     console.log(`  Unbound git siblings (${status.unboundGitSiblings.length}):`);
     for (const sibling of status.unboundGitSiblings) {
-      console.log(`    ? ${sibling.name}  (add to workspace.json sources to bind)`);
+      console.log(`    ? ${sibling.name}${formatRemote(sibling.remoteUrl)}  (add to workspace.json sources to bind)`);
     }
     console.log();
   }

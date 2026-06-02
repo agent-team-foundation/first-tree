@@ -95,6 +95,8 @@ export type { WorkspaceBoundSource, WorkspaceStatus, WorkspaceUnboundSibling } f
 export {
   computeWorkspaceStatus,
   discoverWorkspaceRoot,
+  pickImmediateWorkspaceSources,
+  readGitRemoteUrl,
   readWorkspaceManifest,
   writeWorkspaceManifest,
 } from "./workspace.js";
