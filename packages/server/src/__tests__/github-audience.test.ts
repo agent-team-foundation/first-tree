@@ -56,6 +56,7 @@ async function seedMapping(
     entityType: "issue" | "pull_request" | "discussion" | "commit";
     entityKey: string;
     chatId: string;
+    boundVia?: "direct" | "fixes_link" | "agent_created" | "human_fallback";
   },
 ): Promise<void> {
   await app.db.insert(githubEntityChatMappings).values({
@@ -65,9 +66,37 @@ async function seedMapping(
     entityType: opts.entityType,
     entityKey: opts.entityKey,
     chatId: opts.chatId,
-    boundVia: "direct",
+    boundVia: opts.boundVia ?? "direct",
   });
 }
+
+// Default `(rawEventType, rawAction)` per normalized `kind`, so a test's wire
+// fields stay coherent with the scenario it describes. The #766 subscribed-
+// suppression keys off `(rawEventType === "pull_request", rawAction ===
+// "opened")`, so a test that means "synchronize" must NOT leak a stray
+// `rawAction: "opened"`. Callers can still override either field explicitly.
+const KIND_TO_ACTION: Record<NormalizedEvent["kind"], string> = {
+  opened: "opened",
+  edited: "edited",
+  closed: "closed",
+  merged: "closed",
+  reopened: "reopened",
+  commented: "created",
+  reviewed: "submitted",
+  review_comment: "created",
+  review_requested: "review_requested",
+  synchronized: "synchronize",
+  assigned: "assigned",
+  commit_commented: "created",
+  other: "other",
+};
+
+const ENTITY_TO_EVENT_TYPE: Record<"issue" | "pull_request" | "discussion" | "commit", string> = {
+  issue: "issues",
+  pull_request: "pull_request",
+  discussion: "discussion",
+  commit: "commit_comment",
+};
 
 function makeEvent(opts: {
   orgId: string;
@@ -78,7 +107,10 @@ function makeEvent(opts: {
   actorIsBot?: boolean;
   involves?: Array<{ githubLogin: string; reason: "mentioned" | "review_requested" | "assigned" }>;
   kind?: NormalizedEvent["kind"];
+  rawEventType?: string;
+  rawAction?: string;
 }): NormalizedEvent {
+  const kind = opts.kind ?? "opened";
   return {
     source: {
       kind: "github-app-installation",
@@ -86,8 +118,8 @@ function makeEvent(opts: {
       organizationId: opts.orgId,
     },
     deliveryId: "delivery-1",
-    rawEventType: "pull_request",
-    rawAction: "opened",
+    rawEventType: opts.rawEventType ?? ENTITY_TO_EVENT_TYPE[opts.entityType],
+    rawAction: opts.rawAction ?? KIND_TO_ACTION[kind],
     entity: {
       type: opts.entityType,
       repo: "owner/repo",
@@ -96,7 +128,7 @@ function makeEvent(opts: {
       url: "https://github.com/owner/repo",
     },
     actor: { githubLogin: opts.actorLogin, isBot: opts.actorIsBot ?? false },
-    kind: opts.kind ?? "opened",
+    kind,
     involves: opts.involves ?? [],
     surface: { title: "X", body: "", url: "" },
     relatedRefs: [],
@@ -775,5 +807,145 @@ describe("resolveAudience", () => {
     expect(bobTarget?.involveReason).toBe("mentioned");
     expect(carolTarget?.involveLogin).toBe(carolName.toLowerCase());
     expect(carolTarget?.involveReason).toBe("mentioned");
+  });
+
+  it("#766: suppresses a subscribed pull_request.opened card minted by review routing", async () => {
+    // PR creation fires `opened` + `review_requested` near-simultaneously.
+    // When `review_requested` lands first it mints a `direct` mapping for the
+    // reviewer; the racing `opened` then sees that mapping and would fan out a
+    // redundant "opened this" next to the actionable "requested your review".
+    // The reviewer is not in the `opened` involves (normalize excludes
+    // reviewers), so the subscribed `opened` must be dropped.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `reviewer-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#500",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#500",
+        actorLogin: "outsider",
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toEqual([]);
+  });
+
+  it("#766: keeps a subscribed pull_request.opened card when the mapping is agent_created (PR confirmation)", async () => {
+    // The agent opened this PR inside the chat (`maybeBindGithubEntityFromToolCall`
+    // wrote an `agent_created` mapping). The `opened` webhook arrives as
+    // `<app>[bot]`; the "opened this" card is the deliberate confirmation that
+    // the PR was created and must survive.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `author-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#501",
+      chatId,
+      boundVia: "agent_created",
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#501",
+        actorLogin: "first-tree[bot]",
+        actorIsBot: true,
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
+  it("#766: keeps a subscribed pull_request.opened card when the target is explicitly assigned in the opened payload", async () => {
+    // A subscribed reviewer who is *also* an assignee (or @-mentioned) in the
+    // opened body is named explicitly by GitHub — a directed signal, not
+    // review-routing spillover — so the subscribed card is preserved.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `assignee-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#502",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#502",
+        actorLogin: "outsider",
+        involves: [{ githubLogin: humanName, reason: "assigned" }],
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.chatId).toBe(chatId);
   });
 });
