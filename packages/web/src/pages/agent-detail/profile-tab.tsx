@@ -23,10 +23,8 @@ export function ProfileTab() {
           />
         }
       />
-      {/* Agent lifecycle lives at the bottom of Profile — availability/delete
-          (suspend / delete) is identity-level, not runtime-level. Industry
-          pattern: GitHub / Linear / Stripe all put lifecycle/destructive controls at the end
-          of the identity/settings page, not mixed with config. */}
+      {/* Agent lifecycle is identity-level, so destructive controls stay at the
+          end of Profile instead of mixing with runtime configuration. */}
       {ctx.canManageAgent && (
         <DangerZone
           agent={ctx.agent}

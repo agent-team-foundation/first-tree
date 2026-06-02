@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 // NOTE: The old `ConfigSection` was removed in favour of the unified
 // `Section` component at `components/ui/section.tsx` (shared with Settings).
 // This file now hosts only the row primitives — ConfigRow, the help-icon
-// tooltip, and the dense table header used by Tools / Resources tabs.
+// tooltip, and the dense table header used by resource-style tables.
 
 type ConfigRowProps = {
   label: ReactNode;
