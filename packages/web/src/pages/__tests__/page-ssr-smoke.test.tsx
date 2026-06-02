@@ -869,7 +869,7 @@ describe("page SSR smoke coverage", () => {
     expect(renderPage(<StyleguidePreviewPage />)).toContain("First Tree");
     expect(renderPage(<OnboardingPreviewPage />)).toContain("Onboarding");
     expect(renderPage(<ChatRowAvatarPreviewPage />)).toContain("Chat Row Avatar");
-    expect(renderPage(<ContextPreviewPage />)).toContain("Context tree");
+    expect(renderPage(<ContextPreviewPage />)).toContain("Context Tree");
     expect(renderPage(<ComposeStatusBarPreviewPage />)).toContain("ComposeStatusBar");
     expect(renderPage(<TeamPreviewPage />)).toContain("Agent teammates");
   });
