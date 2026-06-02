@@ -127,8 +127,13 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
     expect(briefing).toContain("# First Tree Agent Runtime");
-    expect(briefing).toContain("## Communication Rules");
-    expect(briefing).toContain("first-tree-staging chat invite");
+    // Per proposal P3, the long-form Communication Rules / Sending Messages
+    // moved to the first-tree-cloud skill. tools.md still pins the
+    // load-bearing invariants (final-text contract, silent-turn, raw-string
+    // content rule) plus a pointer at the skill, and the channel-correct
+    // binary name (must survive into the briefing for staging/dev hosts).
+    expect(briefing).toContain("## Hub Collaboration");
+    expect(briefing).toContain("first-tree-cloud");
     expect(briefing).toContain("first-tree-staging chat send");
     expect(briefing).toContain("does NOT wake other agents");
     expect(briefing).not.toContain("`.agent/tools.md` for the");
