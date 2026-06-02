@@ -360,10 +360,7 @@ export function ConversationList({
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         {/* Row 1 — primary action (New chat) + filter entry (⚙). Kept on
             its own line so it never crowds against the filter triad. */}
-        <div
-          className="flex items-center"
-          style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3) var(--sp-2)" }}
-        >
+        <div className="flex items-center" style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3)" }}>
           <button
             type="button"
             onClick={onNewChat}
@@ -554,7 +551,7 @@ export function ConversationList({
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
                           failed={failed}
-                          size={28}
+                          size={26}
                           muted
                           badge={false}
                           statusDot
@@ -562,8 +559,8 @@ export function ConversationList({
                         <span
                           className="truncate text-subtitle"
                           style={{
-                            color: "var(--fg)",
-                            fontWeight: hasUnread ? 700 : 600,
+                            color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
+                            fontWeight: hasUnread ? 700 : 500,
                             flex: 1,
                             minWidth: 0,
                           }}
@@ -635,7 +632,7 @@ export function ConversationList({
 }
 
 /**
- * Header Group-by dropdown on the filter row (`By time` / `By source`).
+ * Header Group-by dropdown on the filter row (`Time` / `Source`).
  * Group-by is a visible header control — more discoverable, and doubles as a
  * soft filter via grouping — so the `⚙` popover holds only Status + Source.
  * Headless `Popover` + listbox semantics, matching the rail's de-chipped
@@ -665,10 +662,10 @@ function GroupDropdown({ group, onGroupChange }: { group: GroupMode; onGroupChan
             color: "var(--fg-2)",
           }}
         >
-          {/* Grouping-mode icon replaces the redundant "Group" word prefix
-              (was "Group By time" — Group + By read as duplicated). */}
+          {/* Grouping-mode icon carries the "group by" affordance; the visible
+              label stays compact (`Time` / `Source`) for the narrow rail. */}
           <ListTree size={13} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-hidden />
-          <span>{current?.label ?? "By time"}</span>
+          <span>{current?.label ?? "Time"}</span>
           <ChevronDown size={12} strokeWidth={1.75} />
         </button>
       )}

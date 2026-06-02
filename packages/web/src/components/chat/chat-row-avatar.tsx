@@ -214,9 +214,9 @@ export function ChatRowAvatar({
 /** Avatar top-right corner marker geometry (no design token covers a one-off
  *  badge; named here for self-documentation, matching `CORNER_BADGE_SIZE`).
  *  `DOT` = plain unread dot; `MARK` = the slightly larger failed glyph badge. */
-const CORNER_DOT_SIZE = 11;
-const CORNER_MARK_SIZE = 15;
-const CORNER_OFFSET = -3;
+const CORNER_DOT_SIZE = 9;
+const CORNER_MARK_SIZE = 13;
+const CORNER_OFFSET = -2;
 
 /**
  * Conversation-list corner marker (mainstream-IM placement: avatar top-right).
