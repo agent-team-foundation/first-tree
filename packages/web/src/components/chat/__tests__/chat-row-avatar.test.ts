@@ -87,7 +87,7 @@ describe("pickAvatarHue — deterministic per-agent fill color", () => {
       "019ee9f5-ccdd-7090-cf45-7a9b8d2c3e76",
       "019f0d16-eeff-7211-e056-8c9bad3e4f87",
     ];
-    const hues = new Set(seeds.map(pickAvatarHue));
+    const hues = new Set(seeds.map((s) => pickAvatarHue(s)));
     expect(hues.size).toBeGreaterThanOrEqual(4);
   });
 

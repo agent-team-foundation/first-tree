@@ -45,7 +45,13 @@ function initial(s: string): string {
  */
 const AVATAR_HUE_COUNT = 8;
 
-const FALLBACK_HUE = "var(--avatar-hue-0)";
+/** Suffix appended to a hue token when the muted (low-chroma) companion
+ *  is wanted — see the `--avatar-hue-*-muted` block in `index.css`. The
+ *  conversation list passes `muted` so a dense rail stays near-monochrome;
+ *  every other surface keeps the vivid hue. */
+function hueSuffix(muted: boolean): string {
+  return muted ? "-muted" : "";
+}
 
 /**
  * Hash a stable seed (usually an agent's UUID; falls back to display
@@ -54,29 +60,33 @@ const FALLBACK_HUE = "var(--avatar-hue-0)";
  * group composites, and page reloads. Cheap djb2 variant; no
  * allocations.
  *
+ * `muted` selects the low-chroma companion token (same hue family,
+ * desaturated) for dense contexts like the conversation list.
+ *
  * Empty seed lands on `--avatar-hue-0` deterministically. Exported
  * for unit testing the deterministic-mapping contract.
  */
-export function pickAvatarHue(seed: string): string {
-  if (seed.length === 0) return FALLBACK_HUE;
+export function pickAvatarHue(seed: string, muted = false): string {
+  if (seed.length === 0) return `var(--avatar-hue-0${hueSuffix(muted)})`;
   let hash = 5381;
   for (let i = 0; i < seed.length; i++) {
     hash = (hash * 33) ^ seed.charCodeAt(i);
   }
   const idx = Math.abs(hash) % AVATAR_HUE_COUNT;
-  return `var(--avatar-hue-${idx})`;
+  return `var(--avatar-hue-${idx}${hueSuffix(muted)})`;
 }
 
 /**
  * Manager override → hue. Accepts the loose `string | null` shape that
  * flows in from the API so unrecognised values quietly fall back to the
  * deterministic hash on `seed`. Valid tokens are "hue-0".."hue-7".
+ * `muted` selects the desaturated companion (see `pickAvatarHue`).
  */
-export function resolveAvatarHue(colorToken: string | null | undefined, seed: string): string {
+export function resolveAvatarHue(colorToken: string | null | undefined, seed: string, muted = false): string {
   if (typeof colorToken === "string" && /^hue-[0-7]$/.test(colorToken)) {
-    return `var(--avatar-${colorToken})`;
+    return `var(--avatar-${colorToken}${hueSuffix(muted)})`;
   }
-  return pickAvatarHue(seed);
+  return pickAvatarHue(seed, muted);
 }
 
 /**
@@ -128,6 +138,8 @@ export function ChatRowAvatar({
   needsYou = false,
   failed = false,
   size = 36,
+  muted = false,
+  badge = true,
 }: {
   /** Resolved chat title — used as a fallback initial when no peer exists. */
   title: string;
@@ -146,6 +158,16 @@ export function ChatRowAvatar({
   failed?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
+  /** Use the desaturated companion hues — set by the conversation list so a
+   *  dense rail of avatars stays near-monochrome (identity by hue family,
+   *  not saturation). Defaults to the vivid hues everywhere else. */
+  muted?: boolean;
+  /** Render the corner attention badge (`!` / `?` / unread count). The
+   *  conversation list disables it (`badge={false}`) because attention and
+   *  unread are carried by the row's left border + state chip + red dot
+   *  instead; the avatar stays a clean identity disc. The state still feeds
+   *  the avatar's `aria-label` regardless, so screen readers are unaffected. */
+  badge?: boolean;
 }) {
   const isDirect = type === "direct";
   // Defensive: older server builds may omit `participants` from the me/chats
@@ -177,11 +199,12 @@ export function ChatRowAvatar({
           hueSeed={peer?.agentId ?? title}
           colorToken={peer?.avatarColorToken ?? null}
           imageUrl={peer?.avatarImageUrl ?? null}
+          muted={muted}
         />
       ) : (
-        <CompositeAvatar size={size} peers={peers} />
+        <CompositeAvatar size={size} peers={peers} muted={muted} />
       )}
-      <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />
+      {badge && <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />}
     </span>
   );
 }
@@ -192,12 +215,14 @@ function SingleAvatar({
   hueSeed,
   colorToken,
   imageUrl,
+  muted = false,
 }: {
   size: number;
   name: string;
   hueSeed: string;
   colorToken?: string | null;
   imageUrl?: string | null;
+  muted?: boolean;
 }) {
   if (imageUrl) {
     return (
@@ -217,7 +242,7 @@ function SingleAvatar({
         width: size,
         height: size,
         borderRadius: "50%",
-        background: resolveAvatarHue(colorToken, hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed, muted),
         color: "var(--fg-on-vivid)",
         display: "flex",
         alignItems: "center",
@@ -234,7 +259,15 @@ function SingleAvatar({
   );
 }
 
-function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<Participant> }) {
+function CompositeAvatar({
+  size,
+  peers,
+  muted = false,
+}: {
+  size: number;
+  peers: ReadonlyArray<Participant>;
+  muted?: boolean;
+}) {
   // Layout decision keyed off `pickCompositeShape` (see header docstring):
   //   n2  → vertical bisection
   //   n3  → T-split (top spans full width, bottom is 2 cells)
@@ -274,12 +307,14 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -291,18 +326,21 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSizeTop}
             fullWidth
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -313,24 +351,28 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[3]?.displayName ?? "?"}
             hueSeed={peers[3]?.agentId ?? "3"}
             colorToken={peers[3]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -341,18 +383,21 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
@@ -367,12 +412,14 @@ function Seg({
   colorToken,
   fontSize,
   fullWidth,
+  muted = false,
 }: {
   name: string;
   hueSeed: string;
   colorToken?: string | null;
   fontSize: number;
   fullWidth?: boolean;
+  muted?: boolean;
 }) {
   return (
     <span
@@ -380,7 +427,7 @@ function Seg({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: resolveAvatarHue(colorToken, hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed, muted),
         color: "var(--fg-on-vivid)",
         fontSize,
         fontWeight: 700,
