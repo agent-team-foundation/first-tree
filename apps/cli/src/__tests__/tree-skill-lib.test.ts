@@ -13,10 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  bundledSkillsRootFrom,
   collectSkillDiagnosis,
   collectSkillStatus,
+  copyCoreSkills,
   inspectSkillEntry,
+  readBundledSkillVersion,
   repairClaudeSkillLinks,
+  resolveBundledSkillsRoot,
   SKILL_NAMES,
   type SkillName,
   upsertWhitepaperFile,
@@ -215,5 +219,57 @@ describe("tree skill library", () => {
     mkdirSync(join(root, "WHITEPAPER.md"));
     expect(upsertWhitepaperFile(root)).toBe("skipped");
     expect(existsSync(join(root, "WHITEPAPER.md"))).toBe(true);
+  });
+
+  it("resolves bundled skills and copies only core skills", () => {
+    const bundled = resolveBundledSkillsRoot();
+    expect(bundledSkillsRootFrom(process.cwd())).toBe(bundled);
+    expect(readBundledSkillVersion()).toMatch(/\d+\.\d+\.\d+/u);
+    expect(() => bundledSkillsRootFrom(join(tmpdir(), "definitely-missing-first-tree-skills"))).toThrow(
+      "Could not locate bundled `skills/` payloads",
+    );
+
+    const staleClaudeDir = join(root, ".claude", "skills", "attention");
+    mkdirSync(staleClaudeDir, { recursive: true });
+    writeFileSync(join(staleClaudeDir, "stale.txt"), "old\n");
+
+    copyCoreSkills(root);
+
+    expect(existsSync(join(root, ".agents", "skills", "attention", "SKILL.md"))).toBe(true);
+    expect(readlinkSync(join(root, ".claude", "skills", "attention"))).toBe("../../.agents/skills/attention");
+    expect(existsSync(join(root, ".agents", "skills", "first-tree"))).toBe(false);
+  });
+
+  it("handles unreadable metadata and missing CLI package versions", () => {
+    const isolated = mkdtempSync(join(tmpdir(), "ft-tree-skill-no-package-"));
+    try {
+      installSkill("attention", { version: "" });
+      linkClaudeSkill("attention");
+      const skillRoot = join(root, ".agents", "skills", "first-tree-onboarding");
+      mkdirSync(skillRoot, { recursive: true });
+      writeFileSync(join(skillRoot, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: "=not-semver"\n---\n');
+      writeFileSync(join(skillRoot, "VERSION"), "\n");
+      linkClaudeSkill("first-tree-onboarding");
+
+      expect(collectSkillStatus(root).find((row) => row.name === "attention")).toMatchObject({
+        compatible: true,
+        version: null,
+      });
+      expect(collectSkillDiagnosis(root).find((row) => row.name === "first-tree-onboarding")?.problems).toContain(
+        "first-tree-onboarding has an unreadable cliCompat range: =not-semver",
+      );
+
+      writeFileSync(join(isolated, "package.json"), "{ invalid json");
+      const localSkill = join(isolated, ".agents", "skills", "attention");
+      mkdirSync(join(localSkill, "agents"), { recursive: true });
+      writeFileSync(join(localSkill, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: ">0.0.0"\n---\n');
+      writeFileSync(join(localSkill, "VERSION"), "1.0.0\n");
+      writeFileSync(join(localSkill, "agents", "openai.yaml"), "name: test\n");
+      mkdirSync(join(isolated, ".claude", "skills"), { recursive: true });
+      symlinkSync(join("..", "..", ".agents", "skills", "attention"), join(isolated, ".claude", "skills", "attention"));
+      expect(collectSkillStatus(isolated).find((row) => row.name === "attention")?.cliVersion).toBeTypeOf("string");
+    } finally {
+      rmSync(isolated, { recursive: true, force: true });
+    }
   });
 });

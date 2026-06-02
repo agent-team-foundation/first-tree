@@ -857,14 +857,18 @@ describe("page SSR smoke coverage", () => {
 
   it("renders the large preview pages", async () => {
     const { ChatRowAvatarPreviewPage } = await import("../chat-row-avatar-preview.js");
+    const { ComposeStatusBarPreviewPage } = await import("../compose-status-bar-preview.js");
     const { ContextPreviewPage } = await import("../context-preview.js");
     const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
     const { StyleguidePreviewPage } = await import("../styleguide-preview.js");
+    const { TeamPreviewPage } = await import("../team-preview.js");
 
     expect(renderPage(<StyleguidePreviewPage />)).toContain("First Tree");
     expect(renderPage(<OnboardingPreviewPage />)).toContain("Onboarding");
     expect(renderPage(<ChatRowAvatarPreviewPage />)).toContain("Chat Row Avatar");
     expect(renderPage(<ContextPreviewPage />)).toContain("Context tree");
+    expect(renderPage(<ComposeStatusBarPreviewPage />)).toContain("ComposeStatusBar");
+    expect(renderPage(<TeamPreviewPage />)).toContain("Agent teammates");
   });
 
   it("renders public and settings pages with seeded query data", async () => {

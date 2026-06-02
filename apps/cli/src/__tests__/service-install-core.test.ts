@@ -19,6 +19,10 @@ import {
   uninstallClientService,
 } from "../core/service-install.js";
 
+const printMocks = vi.hoisted(() => ({
+  line: vi.fn(),
+}));
+
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 const userInfoMock = vi.hoisted(() => vi.fn(() => ({ uid: 501, username: "gandy" })));
@@ -37,6 +41,10 @@ vi.mock("node:os", async (importOriginal) => {
     userInfo: userInfoMock,
   };
 });
+
+vi.mock("../core/output.js", () => ({
+  print: printMocks,
+}));
 
 const originalPlatform = process.platform;
 const originalArgv = [...process.argv];
@@ -71,6 +79,7 @@ beforeEach(() => {
   spawnSyncMock.mockReset();
   homedirMock.mockReturnValue(home);
   userInfoMock.mockReturnValue({ uid: 501, username: "gandy" });
+  printMocks.line.mockClear();
   setPlatform(originalPlatform);
 });
 
@@ -294,6 +303,56 @@ describe("service install helpers", () => {
     ]);
   });
 
+  it("surfaces systemd install and uninstall warnings", () => {
+    setPlatform("linux");
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "reload failed" });
+    expect(() => installClientService()).toThrow("systemctl --user daemon-reload failed: reload failed");
+
+    spawnSyncMock.mockReset();
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "no\n", stderr: "" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "linger denied" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "enable failed" });
+    expect(() => installClientService()).toThrow("systemctl --user enable --now");
+    expect(printMocks.line).toHaveBeenCalledWith(
+      expect.stringContaining("loginctl enable-linger failed: linger denied"),
+    );
+
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(unitPath, "unit");
+    spawnSyncMock.mockReset();
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "disable failed" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "reload failed" });
+    expect(uninstallClientService()).toMatchObject({ state: "not-installed" });
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("systemctl disable during uninstall"));
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("systemctl daemon-reload during uninstall"));
+  });
+
+  it("handles systemd linger already enabled and unreadable drift checks", () => {
+    setPlatform("linux");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "yes\n", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
+
+    expect(installClientService()).toMatchObject({ platform: "systemd", state: "inactive" });
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["systemctl", ["--user", "daemon-reload"]],
+      ["loginctl", ["show-user", "gandy", "-p", "Linger", "--value"]],
+      ["systemctl", ["--user", "enable", "--now", channelConfig.serviceUnitFile]],
+      ["systemctl", ["--user", "is-active", channelConfig.serviceUnitFile]],
+    ]);
+
+    const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    rmSync(unitPath, { force: true });
+    mkdirSync(unitPath, { recursive: true });
+    expect(isServiceUnitDriftDetected()).toBe(true);
+  });
+
   it("uninstalls a systemd service and reloads the user manager", () => {
     setPlatform("linux");
     const unitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
@@ -348,6 +407,51 @@ describe("service install helpers", () => {
       ["launchctl", ["enable", `gui/501/${channelConfig.launchdLabel}`]],
       ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
     ]);
+  });
+
+  it("surfaces launchd bootstrap retry failures and warnings", () => {
+    setPlatform("darwin");
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(10_001);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootout failed" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootstrap failed once" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootstrap failed twice" });
+
+    expect(() => installClientService()).toThrow("launchctl bootstrap failed: bootstrap failed twice");
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("warning: launchctl bootout"));
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("bootout still settling"));
+    dateNowSpy.mockRestore();
+
+    spawnSyncMock.mockReset();
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootstrap failed once" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "enable failed" })
+      .mockReturnValueOnce({ status: 0, stdout: "state = stopped\n", stderr: "" });
+    expect(installClientService()).toMatchObject({ platform: "launchd", state: "inactive" });
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("warning: launchctl enable: enable failed"));
+  });
+
+  it("reports launchd uninstall and stop warnings", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    writeFileSync(plistPath, "plist");
+
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootout exploded" });
+    expect(uninstallClientService()).toMatchObject({ state: "not-installed" });
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("warning: bootout during uninstall"));
+
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "stop failed" });
+    expect(stopClientService()).toEqual({ ok: false, reason: "stop failed" });
+
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "kick failed" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "bootstrap failed" });
+    writeFileSync(plistPath, "plist");
+    expect(restartClientService()).toEqual({ ok: false, reason: "bootstrap failed" });
   });
 
   it("uninstalls launchd files even when bootout reports the label is absent", () => {

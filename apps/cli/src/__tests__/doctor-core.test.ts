@@ -46,8 +46,19 @@ afterEach(() => {
 
 describe("doctor core checks", () => {
   it("checks config, server reachability, websocket reachability, and local agents", async () => {
-    const { checkAgentConfigs, checkClientConfig, checkServerReachable, checkWebSocket, reconcileAgentConfigs } =
-      await import("../core/doctor.js");
+    const {
+      checkAgentConfigs,
+      checkClientConfig,
+      checkNodeVersion,
+      checkServerReachable,
+      checkWebSocket,
+      reconcileAgentConfigs,
+    } = await import("../core/doctor.js");
+
+    expect(checkNodeVersion()).toMatchObject({
+      label: "Node.js",
+      ok: true,
+    });
 
     expect(checkClientConfig()).toEqual({
       label: "Config",
@@ -80,6 +91,13 @@ describe("doctor core checks", () => {
     });
 
     cliFetchMock.mockRejectedValueOnce(new Error("network"));
+    await expect(checkServerReachable()).resolves.toEqual({
+      label: "Server URL",
+      ok: false,
+      detail: "unreachable at http://first-tree.test",
+    });
+
+    cliFetchMock.mockRejectedValueOnce(new Error("network"));
     await expect(checkWebSocket()).resolves.toEqual({
       label: "WebSocket",
       ok: false,
@@ -93,7 +111,19 @@ describe("doctor core checks", () => {
       detail: "ws://first-tree.test (server reachable)",
     });
 
+    cliFetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
+    await expect(checkWebSocket()).resolves.toEqual({
+      label: "WebSocket",
+      ok: false,
+      detail: "server not healthy",
+    });
+
     expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: false, detail: "no agents configured" });
+    mkdirSync(join(home, "config", "agents"), { recursive: true });
+    expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: false, detail: "no agents configured" });
+    writeAgent("broken", "agentId: [not-valid\n");
+    expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: false, detail: "error reading agent configs" });
+    rmSync(join(home, "config", "agents", "broken"), { recursive: true, force: true });
     writeAgent("kael", "agentId: agent-1\nruntime: claude-code\n");
     expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: true, detail: "1 configured (kael)" });
 
@@ -127,6 +157,18 @@ describe("doctor core checks", () => {
 
   it("handles reconciliation failures and background-service states", async () => {
     const { checkBackgroundService, printResults, reconcileAgentConfigs } = await import("../core/doctor.js");
+    const { checkServerReachable, checkWebSocket } = await import("../core/doctor.js");
+
+    await expect(checkServerReachable()).resolves.toEqual({
+      label: "Server URL",
+      ok: false,
+      detail: "not configured (FIRST_TREE_SERVER_URL or config file)",
+    });
+    await expect(checkWebSocket()).resolves.toEqual({
+      label: "WebSocket",
+      ok: false,
+      detail: "cannot check (no server URL)",
+    });
 
     await expect(
       reconcileAgentConfigs({
@@ -205,5 +247,9 @@ describe("doctor core checks", () => {
       { label: "Two", ok: false, detail: "bad" },
     ]);
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("1 issue(s) found.");
+
+    stderrMock.mockClear();
+    printResults([{ label: "One", ok: true, detail: "ok" }]);
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("All checks passed.");
   });
 });
