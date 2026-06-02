@@ -9,7 +9,15 @@ export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "@fir
 // public use case (URL derivation) already has a dedicated export.
 export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/_shared/connect-token.js";
 // Core types
-export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState } from "./core/index.js";
+export type {
+  CheckResult,
+  ServiceInfo,
+  ServiceOpResult,
+  ServiceState,
+  WorkspaceBoundSource,
+  WorkspaceStatus,
+  WorkspaceUnboundSibling,
+} from "./core/index.js";
 export {
   AuthRefreshFailedError,
   AuthRefreshRateLimitedError,
@@ -20,6 +28,8 @@ export {
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
+  computeWorkspaceStatus,
+  discoverWorkspaceRoot,
   ensureFreshAccessToken,
   ensureFreshAdminToken,
   formatCheckReport,
@@ -30,9 +40,11 @@ export {
   isServiceSupported,
   onboardCheck,
   onboardCreate,
+  pickImmediateWorkspaceSources,
   printResults,
   promptAddAgent,
   promptMissingFields,
+  readWorkspaceManifest,
   resolveAccessToken,
   resolveCliInvocation,
   resolveServerUrl,
@@ -42,4 +54,5 @@ export {
   status,
   stopClientService,
   uninstallClientService,
+  writeWorkspaceManifest,
 } from "./core/index.js";

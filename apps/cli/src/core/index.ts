@@ -90,3 +90,13 @@ export {
 } from "./update-state.js";
 // Command package version (bundle self-identification)
 export { CLI_USER_AGENT, COMMAND_VERSION } from "./version.js";
+// Workspace-rooted layout (workspace-layout-simplification.md)
+export type { WorkspaceBoundSource, WorkspaceStatus, WorkspaceUnboundSibling } from "./workspace.js";
+export {
+  computeWorkspaceStatus,
+  discoverWorkspaceRoot,
+  pickImmediateWorkspaceSources,
+  readGitRemoteUrl,
+  readWorkspaceManifest,
+  writeWorkspaceManifest,
+} from "./workspace.js";
