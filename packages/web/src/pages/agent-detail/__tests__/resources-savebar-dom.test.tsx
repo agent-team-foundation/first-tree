@@ -253,13 +253,14 @@ describe("ResourcesTab and SaveBar", () => {
     expect(container.querySelector(`#${sectionAnchorId("git")}`)).toBeTruthy();
     expect(container.textContent).toContain("OPENAI_API_KEY");
     expect(container.textContent).toContain("dry run diff");
-    expect(container.textContent).toContain("Preview server-side diff");
+    expect(container.textContent).toContain("Server preview");
+    expect(container.textContent).toContain("Preview diff");
     expect(container.textContent).toContain("web");
     expect(container.textContent).toContain("api");
     expect(container.textContent).not.toContain("Add");
 
     const preview = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Preview server-side diff"),
+      button.textContent?.includes("Preview diff"),
     );
     await click(preview ?? null);
     expect(ctx.onRunDryRun).toHaveBeenCalled();

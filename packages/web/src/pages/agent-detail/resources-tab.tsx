@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { Navigate } from "react-router";
+import { Button } from "../../components/ui/button.js";
+import { Section } from "../../components/ui/section.js";
 import { EnvSection } from "./env-section.js";
 import { GitSection } from "./git-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
@@ -47,7 +49,7 @@ export function ResourcesTab() {
           disabled={ctx.agent.status !== "active"}
         />
       </div>
-      <div id={sectionAnchorId("git")}>
+      <div id={sectionAnchorId("git")} style={{ marginTop: "var(--sp-8)" }}>
         <GitSection
           items={ctx.draft.draft.git}
           otherPaths={gitOtherPaths}
@@ -58,31 +60,43 @@ export function ResourcesTab() {
           disabled={ctx.agent.status !== "active"}
         />
       </div>
-      {ctx.dryRunText && (
-        <pre
-          className="whitespace-pre-wrap mono text-label"
-          style={{
-            padding: "var(--sp-2)",
-            borderRadius: "var(--radius-input)",
-            background: "var(--bg-sunken)",
-            border: "var(--hairline) solid var(--border-faint)",
-            color: "var(--fg-2)",
-          }}
-        >
-          {ctx.dryRunText}
-        </pre>
-      )}
       {ctx.draft.summary.anyDirty && (
-        <div className="text-label" style={{ color: "var(--fg-3)" }}>
-          <button
-            type="button"
-            onClick={ctx.onRunDryRun}
-            className="underline bg-transparent border-0 cursor-pointer"
-            style={{ color: "var(--fg-3)" }}
-            disabled={ctx.dryRunPending}
+        <div style={{ marginTop: "var(--sp-8)" }}>
+          <Section
+            title="Server preview"
+            description="Validate this resource draft with the same server-side merge used during save."
+            action={
+              <Button type="button" size="xs" variant="outline" onClick={ctx.onRunDryRun} disabled={ctx.dryRunPending}>
+                {ctx.dryRunPending ? "Computing…" : "Preview diff"}
+              </Button>
+            }
           >
-            {ctx.dryRunPending ? "Computing dry-run…" : "Preview server-side diff"}
-          </button>
+            {ctx.dryRunText ? (
+              <pre
+                className="whitespace-pre-wrap mono text-label"
+                style={{
+                  padding: "var(--sp-3)",
+                  margin: 0,
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
+                  color: "var(--fg-2)",
+                }}
+              >
+                {ctx.dryRunText}
+              </pre>
+            ) : (
+              <p
+                className="text-body"
+                style={{
+                  padding: "var(--sp-3) 0",
+                  margin: 0,
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
+                  color: "var(--fg-4)",
+                }}
+              >
+                No preview computed yet.
+              </p>
+            )}
+          </Section>
         </div>
       )}
     </>
