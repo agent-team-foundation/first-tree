@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { discoverWorkspaceRoot, readWorkspaceManifest } from "../../core/workspace.js";
 import { findUpwardsManagedSourceBinding, parseGitHubRepoReference } from "../tree/binding-contract.js";
-import { parseGitHubRemoteUrl, readGitRemoteUrl } from "../tree/shared.js";
+import { readGitRemoteUrl } from "../tree/shared.js";
 import { readTreeIdentityContract } from "../tree/tree-identity.js";
 
 const TREE_REPO_FLAG = "--tree-repo";
@@ -175,8 +175,7 @@ function resolveWorkspaceManifestBinding(startDir: string): WorkspaceManifestBin
   }
 
   const treeRoot = join(workspaceRoot, manifest.tree);
-  const remoteUrl =
-    readGitRemoteUrl(treeRoot) ?? readTreeIdentityContract(treeRoot)?.publishedTreeUrl ?? undefined;
+  const remoteUrl = readGitRemoteUrl(treeRoot) ?? readTreeIdentityContract(treeRoot)?.publishedTreeUrl ?? undefined;
   const treeRepo = remoteUrl ? parseGitHubRepoReference(remoteUrl) : undefined;
 
   return {

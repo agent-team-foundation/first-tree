@@ -9,8 +9,8 @@ import type { CommandContext, SubcommandModule } from "../types.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
 import { isGitRepoRoot, parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot, runCommand } from "./shared.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { upsertLocalTreeGitIgnore, upsertSourceIntegrationFiles } from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 import { upsertTreeCodeRepoRegistry } from "./tree-repo-registry.js";
 
