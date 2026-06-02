@@ -80,7 +80,6 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
                 }}
               />
               <ContextSignal snapshot={snapshot} />
-              <ContextIoByAgent snapshot={snapshot} />
               <ContextUsageFeed snapshot={snapshot} />
             </>
           )
@@ -227,15 +226,15 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
     snapshot.io.summary.read.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.read.agentCount} agents`;
   const writeAgentText =
     snapshot.io.summary.write.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.write.agentCount} agents`;
-  const readText =
-    snapshot.io.summary.read.eventCount === 1 ? "1 read" : `${snapshot.io.summary.read.eventCount} reads`;
-  const writeText =
-    snapshot.io.summary.write.eventCount === 1 ? "1 write" : `${snapshot.io.summary.write.eventCount} writes`;
+  const readTimesText =
+    snapshot.io.summary.read.eventCount === 1 ? "1 time" : `${snapshot.io.summary.read.eventCount} times`;
+  const writeTimesText =
+    snapshot.io.summary.write.eventCount === 1 ? "1 time" : `${snapshot.io.summary.write.eventCount} times`;
 
   if (snapshot.io.summary.read.eventCount === 0 && snapshot.io.summary.write.eventCount === 0) {
     return (
       <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
-        <span>No explicit Context Tree read/write recorded in the last {windowText}.</span>
+        <span>No Context Tree reads or writes in the past {windowText}.</span>
       </div>
     );
   }
@@ -243,46 +242,12 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   return (
     <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
       <span>
-        In the last {windowText}, <mark>{readAgentText}</mark>
+        In the past {windowText}, <mark>{readAgentText}</mark> read the tree <mark>{readTimesText}</mark>
       </span>
       <span>
-        made <mark>{readText}</mark> and <mark>{writeAgentText}</mark> made <mark>{writeText}</mark>.
+        and <mark>{writeAgentText}</mark> wrote <mark>{writeTimesText}</mark>.
       </span>
     </div>
-  );
-}
-
-function ContextIoByAgent({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const agents = snapshot.io.agents.slice(0, 8);
-  if (agents.length === 0) return null;
-
-  return (
-    <section className="context-io-agents" aria-label="Context Tree IO by agent">
-      <div className="context-io-agents-header">
-        <span>By agent</span>
-        <span>Explicit IO</span>
-      </div>
-      <ul className="context-io-agents-list">
-        {agents.map((agent) => {
-          const hue = resolveAvatarHue(agent.agentAvatarColorToken, agent.agentId);
-          return (
-            <li key={agent.agentId} className="context-io-agent-row">
-              <span className="context-usage-feed-avatar" aria-hidden="true" style={{ background: hue }}>
-                {agentInitials(agent.agentName)}
-              </span>
-              <span className="context-io-agent-main">
-                <span className="context-usage-feed-agent">{agent.agentName}</span>
-                <span className="context-usage-feed-action">{agent.runtimeProvider}</span>
-              </span>
-              <span className="context-io-agent-counts">
-                <span>{formatNumber(agent.readCount)} read</span>
-                <span>{formatNumber(agent.writeCount)} write</span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }
 

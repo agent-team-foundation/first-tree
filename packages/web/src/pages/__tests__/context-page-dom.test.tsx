@@ -187,9 +187,9 @@ describe("ContextPage DOM behavior", () => {
     expect(container.textContent).toContain("LIVE");
     expect(container.textContent).toContain("Tree sync is stale.");
     expect(container.textContent).toContain("4 agents");
-    expect(container.textContent).toContain("18 reads");
+    expect(container.textContent).toContain("read the tree 18 times");
     expect(container.textContent).toContain("2 agents");
-    expect(container.textContent).toContain("5 writes");
+    expect(container.textContent).toContain("wrote 5 times");
     expect(container.textContent).toContain("23total nodes");
     expect(container.textContent).toContain("+6 updates");
     expect(container.textContent).toContain("QB");
@@ -242,7 +242,7 @@ describe("ContextPage DOM behavior", () => {
 
     const { container, root } = await renderDom(<ContextPage previewSnapshot={empty} />);
     expect(container.textContent).toContain("No context updates in the past 7 days.");
-    expect(container.textContent).toContain("No explicit Context Tree read/write recorded in the last 7 days.");
+    expect(container.textContent).toContain("No Context Tree reads or writes in the past 7 days.");
     // LIVE reflects the tree's sync liveness, not usage: a synced (active)
     // snapshot shows the header LIVE chip even with zero reads/writes / no
     // events (the streaming IO feed is what hides when empty).
