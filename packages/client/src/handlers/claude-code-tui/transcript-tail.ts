@@ -44,78 +44,6 @@ export type RawTranscriptEntry = {
   [key: string]: unknown;
 };
 
-/** Mapped event used by tests and for the text-accumulation paths in the handler. */
-export type TranscriptEvent =
-  | { kind: "user_text"; text: string; ts?: string }
-  | { kind: "assistant_text"; text: string; ts?: string }
-  | { kind: "tool_use"; toolUseId: string; name: string; input: unknown; ts?: string }
-  | { kind: "tool_result"; toolUseId: string; isError: boolean; content: unknown; ts?: string }
-  | { kind: "thinking"; text: string; ts?: string };
-
-type AnthropicBlock = {
-  type?: string;
-  text?: string;
-  id?: string;
-  name?: string;
-  input?: unknown;
-  tool_use_id?: string;
-  is_error?: boolean;
-  content?: unknown;
-  thinking?: string;
-};
-
-/**
- * Convert one transcript entry into zero or more TranscriptEvents. Mostly
- * used in tests; the live handler also uses it to pick out assistant text
- * (for forwardResult) and tool_use blocks (for the shared tool-call processor).
- */
-export function transcriptEntryToEvents(entry: RawTranscriptEntry): TranscriptEvent[] {
-  if (entry?.type === "user") {
-    const content = entry.message?.content;
-    if (Array.isArray(content)) {
-      const out: TranscriptEvent[] = [];
-      for (const blk of content as AnthropicBlock[]) {
-        if (blk.type === "tool_result") {
-          out.push({
-            kind: "tool_result",
-            toolUseId: blk.tool_use_id ?? "",
-            isError: blk.is_error === true,
-            content: blk.content,
-            ts: entry.timestamp,
-          });
-        }
-      }
-      return out;
-    }
-    if (typeof content === "string") {
-      return [{ kind: "user_text", text: content, ts: entry.timestamp }];
-    }
-    return [];
-  }
-  if (entry?.type === "assistant") {
-    const content = entry.message?.content;
-    if (!Array.isArray(content)) return [];
-    const out: TranscriptEvent[] = [];
-    for (const blk of content as AnthropicBlock[]) {
-      if (blk.type === "text" && typeof blk.text === "string") {
-        out.push({ kind: "assistant_text", text: blk.text, ts: entry.timestamp });
-      } else if (blk.type === "tool_use") {
-        out.push({
-          kind: "tool_use",
-          toolUseId: blk.id ?? "",
-          name: blk.name ?? "",
-          input: blk.input,
-          ts: entry.timestamp,
-        });
-      } else if (blk.type === "thinking" && typeof blk.thinking === "string") {
-        out.push({ kind: "thinking", text: blk.thinking, ts: entry.timestamp });
-      }
-    }
-    return out;
-  }
-  return [];
-}
-
 /**
  * Tail an append-only JSONL transcript. Each `drainEntries()` returns raw
  * entries appended since the last call. Tolerates the file not yet existing
@@ -163,16 +91,5 @@ export class TranscriptTailer {
       }
     }
     return entries;
-  }
-
-  /** Convenience wrapper: read entries and immediately map them to events. */
-  drainEvents(): TranscriptEvent[] {
-    const out: TranscriptEvent[] = [];
-    for (const entry of this.drainEntries()) {
-      for (const ev of transcriptEntryToEvents(entry)) {
-        out.push(ev);
-      }
-    }
-    return out;
   }
 }
