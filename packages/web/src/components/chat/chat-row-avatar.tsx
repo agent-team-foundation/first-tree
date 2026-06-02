@@ -8,10 +8,9 @@
  *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
  *   2. Attention. A single corner badge encodes the highest-priority
  *      "do I need to look here" signal: failed (an agent errored, red `!`)
- *      outranks needs-you (a pending AskUserQuestion, amber `?`) outranks an
- *      unread-mention count (red N, numeric up to 99 then "99+"). Omitted when
- *      none apply. The activity axis ("an agent is producing output now")
- *      lives in the row's time slot (the scrolling `•••`), not here.
+ *      outranks an unread-mention count (red N, numeric up to 99 then "99+").
+ *      Omitted when none apply. The activity axis ("an agent is producing
+ *      output now") lives in the row's time slot (the scrolling `•••`), not here.
  *
  * The avatar no longer carries the engaged breathe ring — "engaged but
  * idle" was low-value at list-scan distance and is expressed per-agent
@@ -111,10 +110,9 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; unread: number }): string | null {
   const parts: string[] = [];
   if (opts.failed) parts.push("failed");
-  if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -125,7 +123,6 @@ export function ChatRowAvatar({
   participants,
   selfAgentId,
   unreadCount,
-  needsYou = false,
   failed = false,
   size = 36,
 }: {
@@ -139,10 +136,8 @@ export function ChatRowAvatar({
   selfAgentId: string;
   /** `chat_user_state.unread_mention_count`. */
   unreadCount: number;
-  /** Any speaker in this chat has a pending AskUserQuestion (needs-you). */
-  needsYou?: boolean;
   /** Any speaker in this chat is in the composite `failed` state. Outranks
-   *  needs-you and unread for the corner badge. */
+   *  unread for the corner badge. */
   failed?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
@@ -155,7 +150,7 @@ export function ChatRowAvatar({
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
   const peer = peers[0];
 
-  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -181,7 +176,7 @@ export function ChatRowAvatar({
       ) : (
         <CompositeAvatar size={size} peers={peers} />
       )}
-      <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />
+      <AttentionBadge failed={failed} unread={unreadCount} />
     </span>
   );
 }
@@ -417,25 +412,17 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
 /**
  * Attention badge on the whole avatar unit (single or group composite) —
  * one small corner circle encoding the highest-priority "do I need to look
- * here" signal. failed (an agent errored, red `!`) outranks needs-you (a
- * pending AskUserQuestion, amber `?`) outranks an unread-mention count (red N).
- * Renders nothing when none apply. All three share one circle; only the colour
- * and glyph differ — failed's `!` and unread's number are both red but never
- * co-occur (failed wins), and the glyph keeps them legible.
+ * here" signal. failed (an agent errored, red `!`) outranks an unread-mention
+ * count (red N). Renders nothing when none apply. Both share one circle; only
+ * the colour and glyph differ — failed's `!` and unread's number are both red
+ * but never co-occur (failed wins), and the glyph keeps them legible.
  *
  * A tight circle (not a horizontal pill) so it reads as an avatar badge, not a
  * standalone tag stealing the title's attention. Only the rare ≥3-char unread
  * ("99+") flexes to a small capsule; `!` / `?` / 1–2 digits stay circular.
  */
-function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
+function AttentionBadge({ failed, unread }: { failed: boolean; unread: number }) {
   if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
-  // Dark glyph on the light amber fill — white-on-amber (L≈0.82) is too low-contrast.
-  if (needsYou)
-    return (
-      <CornerBadge background="var(--state-needs-you)" fg="oklch(0.28 0.07 75)">
-        ?
-      </CornerBadge>
-    );
   const label = formatUnreadLabel(unread);
   if (label === null) return null;
   return (

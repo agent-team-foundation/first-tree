@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, Bot, LayoutDashboard, MessageSquare } from "lucide-react";
+import { Bot, LayoutDashboard, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router";
-import { listMyAttentions, myAttentionsQueryKey } from "../../../api/attention.js";
 import { listMeChats } from "../../../api/me-chats.js";
 import {
   CommandDialog,
@@ -12,7 +11,6 @@ import {
   CommandList,
   CommandSeparator,
 } from "../../../components/ui/command.js";
-import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 
 const STATIC_ROUTES = [
@@ -32,15 +30,12 @@ const STATIC_ROUTES = [
  *     request per managed agent.
  *   - Agents: `useOrgAgents` (`/agents?limit=100`), the same cache used by
  *     the participant picker and identity maps.
- *   - NHA: `GET /attention?state=open` (no chat filter), which the
- *     user-JWT route already scopes to the caller's human agent identities.
  *
  * Filtering is handled by `cmdk` — each item's `value` is a space-joined
  * string of every searchable token, and cmdk fuzzy-matches against it.
  */
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const navigate = useNavigate();
-  const agentName = useAgentNameMap();
 
   const { data: orgAgents } = useOrgAgents();
   const agents = orgAgents?.items ?? [];
@@ -62,14 +57,6 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   });
   const chats = chatsResp?.rows ?? [];
 
-  const { data: attentions } = useQuery({
-    queryKey: myAttentionsQueryKey,
-    queryFn: listMyAttentions,
-    enabled: open,
-    staleTime: 30_000,
-  });
-  const nhas = attentions ?? [];
-
   const go = (url: string) => {
     onOpenChange(false);
     navigate(url);
@@ -77,7 +64,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Jump to chat, agent, or NHA…" />
+      <CommandInput placeholder="Jump to chat or agent…" />
       <CommandList>
         <CommandEmpty>No results</CommandEmpty>
 
@@ -121,28 +108,6 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   {a.name ? <span className="text-caption text-muted-foreground ml-2">@{a.name}</span> : null}
                 </CommandItem>
               ))}
-            </CommandGroup>
-          </>
-        )}
-
-        {nhas.length > 0 && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Needs your reply">
-              {nhas.map((n) => {
-                const from = agentName(n.originAgentId);
-                return (
-                  <CommandItem
-                    key={n.id}
-                    value={`nha attention ${n.subject} ${n.body} ${from} ${n.id}`}
-                    onSelect={() => go(`/?c=${encodeURIComponent(n.originChatId)}`)}
-                  >
-                    <AlertCircle className="mr-2 h-4 w-4 shrink-0 text-warn" />
-                    <span className="flex-1 truncate">{n.subject}</span>
-                    <span className="text-caption text-muted-foreground ml-2 truncate max-w-[35%]">from {from}</span>
-                  </CommandItem>
-                );
-              })}
             </CommandGroup>
           </>
         )}

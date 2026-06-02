@@ -165,15 +165,12 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //         `metadata.mentions` — so an agent's plain `"ack"` to me in a DM
 //         correctly stays out of attention.
 //
-// Sort priority: `failed > mention`. The intermediate `needs_you` tier is
-// reserved in `ATTENTION_PRIORITY` for a future "open Attention targeting
-// me" rule (R3) that will be sourced from the NHA `attentions` table after
-// that subsystem stabilises; not yet exposed as a predicate branch.
+// Sort priority: `failed > mention`.
 //
 // This ladder is INTENTIONALLY separate from the shared agent-status
-// `compareMainStatus` (`failed`, `needs_you`, `working`, ...). `mention` is a
-// chat-level signal, not an agent main status — overloading the shared
-// comparator would couple two ladders that should evolve independently.
+// `compareMainStatus` (`failed`, `working`, ...). `mention` is a chat-level
+// signal, not an agent main status — overloading the shared comparator would
+// couple two ladders that should evolve independently.
 //
 // `=== true` checks (not truthy) on booleans: the web client does NOT run
 // rows through `meChatRowSchema.parse`, so the Zod `.default(false)` only
@@ -181,7 +178,7 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 // silently degrade the rule to "off" under strict equality (safer
 // direction).
 
-const ATTENTION_PRIORITY = ["failed", "needs_you", "mention"] as const;
+const ATTENTION_PRIORITY = ["failed", "mention"] as const;
 type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
 
 /**
@@ -191,7 +188,6 @@ type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
  */
 export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
   if (r.failedAgentIds.length > 0) return "failed";
-  if (r.chatHasOpenQuestion === true) return "needs_you";
   if (r.unreadMentionCount > 0 && r.chatHasExplicitMentionToMe === true) {
     return "mention";
   }
@@ -205,17 +201,6 @@ export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
  */
 export function rowIsFailed(r: MeChatRow): boolean {
   return r.failedAgentIds.length > 0;
-}
-
-/**
- * The row's "needs-you" indicator (orange `?` / left border). Fires when
- * the chat has at least one open NHA ask that is relevant to the caller —
- * server-side `me-chat.ts` populates `chatHasOpenQuestion` strictly:
- * `target=me OR origin agent IS one I manage`. Co-speakers in shared
- * chats who are neither target nor manager-of-origin stay dark.
- */
-export function rowNeedsYou(r: MeChatRow): boolean {
-  return r.chatHasOpenQuestion === true;
 }
 
 /**

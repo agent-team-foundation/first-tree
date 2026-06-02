@@ -6,7 +6,6 @@ const base: AgentChatStatusInput = {
   agentId: "a",
   reachable: true,
   errored: false,
-  needsYou: false,
   working: false,
   engagement: "none",
 };
@@ -20,10 +19,6 @@ describe("canPauseStatus — Pause only for an actively-working live session", (
   it("active session but NOT working (main=ready) → false", () => {
     // The codex blocker: an active-but-idle session must not surface Pause.
     expect(canPauseStatus(mk({ engagement: "active" }))).toBe(false);
-  });
-
-  it("needs-you on an active session → false (routes to Reply, not Pause)", () => {
-    expect(canPauseStatus(mk({ needsYou: true, engagement: "active" }))).toBe(false);
   });
 
   it("working but already suspended → false (server would 409)", () => {

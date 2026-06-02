@@ -1,4 +1,0 @@
-interface:
-  display_name: "Attention"
-  short_description: "Ask humans well via the NHA primitive"
-  default_prompt: "Use $attention to decide whether to raise an NHA, write its body, wait for response, and handle no-response — instead of free-form chat send when you need a human."

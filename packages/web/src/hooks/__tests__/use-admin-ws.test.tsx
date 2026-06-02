@@ -105,7 +105,6 @@ function makeStatus(overrides: Partial<AgentChatStatus> = {}): AgentChatStatus {
     reachable: overrides.reachable ?? true,
     engagement: overrides.engagement ?? "active",
     working: overrides.working ?? true,
-    needsYou: overrides.needsYou ?? false,
     errored: overrides.errored ?? false,
     activity: overrides.activity ?? null,
   };
@@ -161,7 +160,6 @@ describe("useAdminWs", () => {
     await act(async () => {
       socket.emit({ type: "session:event", agentId: "agent-1", chatId: "chat-1", status: makeStatus() });
       socket.emit({ type: "chat:message", chatId: "chat-1" });
-      socket.emit({ type: "attention:opened", chatId: "chat-1" });
       socket.emit({ type: "pulse:tick" });
       socket.emit("not json");
     });
@@ -169,7 +167,6 @@ describe("useAdminWs", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-events", "agent-1", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-messages", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-detail", "chat-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attentions", "chat", "chat-1"] });
   });
 
   it("refreshes access tokens on auth close and reconnects immediately", async () => {

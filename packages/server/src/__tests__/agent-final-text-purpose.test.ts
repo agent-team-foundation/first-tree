@@ -9,10 +9,9 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 /**
  * `purpose: "agent-final-text"` bypass channel.
  *
- * `result-sink.forwardResult` and `AskUserQuestion.canUseTool` (claude-code
- * handler) both call `sdk.sendMessage` with this tag set. Without the
- * bypass, the server's `enforceMention` guard rejects every write that
- * has no explicit `metadata.mentions` / `receiverNames` / `addressedTo`.
+ * `result-sink.forwardResult` calls `sdk.sendMessage` with this tag set.
+ * Without the bypass, the server's `enforceMention` guard rejects every
+ * write that has no explicit `metadata.mentions` / `receiverNames` / `addressedTo`.
  * These tests pin:
  *
  *   1. chat + no mentions + `purpose` tag → message stored, every fan-out

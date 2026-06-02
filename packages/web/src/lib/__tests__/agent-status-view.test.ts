@@ -2,7 +2,7 @@ import type { AgentMainStatus } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { type AgentStatusView, sessionStateToMain, viewOf } from "../agent-status-view.js";
 
-const ALL: AgentMainStatus[] = ["offline", "failed", "needs_you", "working", "paused", "ready"];
+const ALL: AgentMainStatus[] = ["offline", "failed", "working", "paused", "ready"];
 
 describe("viewOf — §9.1 visual vocabulary", () => {
   it("working = green solid dot with the working pulse", () => {
@@ -11,14 +11,6 @@ describe("viewOf — §9.1 visual vocabulary", () => {
     expect(v.shape).toBe("dot");
     expect(v.pulse).toBe("working");
     expect(v.animationClass).toBe("agent-status-pulse--working");
-  });
-
-  it("needs_you = amber solid dot with the calm pulse", () => {
-    const v = viewOf("needs_you");
-    expect(v.colorVar).toBe("var(--state-needs-you)");
-    expect(v.shape).toBe("dot");
-    expect(v.pulse).toBe("needs-you");
-    expect(v.animationClass).toBe("agent-status-pulse--needs-you");
   });
 
   it("failed = red solid dot, static", () => {

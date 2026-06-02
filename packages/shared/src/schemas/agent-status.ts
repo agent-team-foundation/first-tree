@@ -9,7 +9,6 @@ import { type LiveActivity, liveActivitySchema } from "./me-chat.js";
  *   - reachability (A) — is the runtime/client reachable at all
  *   - engagement   (C) — the per-(agent,chat) session lifecycle
  *   - activity     (D) — is the agent producing output right now
- *   - attention        — does a human need to act (failure / pending question)
  *
  * `deriveMainStatus` resolves the projection using `MAIN_STATUS_PRIORITY`.
  *
@@ -24,13 +23,12 @@ import { type LiveActivity, liveActivitySchema } from "./me-chat.js";
 export const AGENT_MAIN_STATUSES = {
   OFFLINE: "offline",
   FAILED: "failed",
-  NEEDS_YOU: "needs_you",
   WORKING: "working",
   PAUSED: "paused",
   READY: "ready",
 } as const;
 
-export const agentMainStatusSchema = z.enum(["offline", "failed", "needs_you", "working", "paused", "ready"]);
+export const agentMainStatusSchema = z.enum(["offline", "failed", "working", "paused", "ready"]);
 export type AgentMainStatus = z.infer<typeof agentMainStatusSchema>;
 
 /**
@@ -40,8 +38,7 @@ export type AgentMainStatus = z.infer<typeof agentMainStatusSchema>;
  *   1. logical gating — an unreachable agent cannot be "working", so
  *      `offline` dominates everything;
  *   2. attention value — among the rest, the more the human needs to act,
- *      the earlier it sorts (failure > pending question > working > paused >
- *      ready).
+ *      the earlier it sorts (failure > working > paused > ready).
  *
  * Lower index = higher priority. Also used by surfaces that *rank* agents
  * (e.g. the compose status bar puts the highest-priority agent on top).
@@ -49,7 +46,6 @@ export type AgentMainStatus = z.infer<typeof agentMainStatusSchema>;
 export const MAIN_STATUS_PRIORITY = [
   "offline",
   "failed",
-  "needs_you",
   "working",
   "paused",
   "ready",
@@ -86,8 +82,6 @@ export type DeriveMainStatusInput = {
   reachable: boolean;
   /** A concrete failure the user should see (session `errored` OR runtime `error`). */
   errored: boolean;
-  /** A pending AskUserQuestion is waiting on a human in this chat. */
-  needsYou: boolean;
   /** Activity (D): the agent is producing output right now (live activity present). */
   working: boolean;
   /** Engagement (C): the per-(agent,chat) session lifecycle. */
@@ -103,7 +97,6 @@ export function deriveMainStatus(input: DeriveMainStatusInput): AgentMainStatus 
   // Gating: nothing else can be true if the agent can't be reached.
   if (!input.reachable) return "offline";
   if (input.errored) return "failed";
-  if (input.needsYou) return "needs_you";
   if (input.working) return "working";
   if (input.engagement === "suspended") return "paused";
   return "ready";
@@ -120,7 +113,7 @@ export function compareMainStatus(a: AgentMainStatus, b: AgentMainStatus): numbe
 /**
  * Server-derived composite status for one agent in one chat. Produced
  * server-side — the authority, because only the server can aggregate
- * reachability, session, live activity, and pending-question across the
+ * reachability, session, and live activity across the
  * data plane — and consumed read-only by every UI surface.
  *
  * INVARIANT: `main === deriveMainStatus(the other fields)`. The schema's
@@ -136,7 +129,6 @@ export const agentChatStatusSchema = z
     reachable: z.boolean(),
     engagement: agentEngagementSchema,
     working: z.boolean(),
-    needsYou: z.boolean(),
     errored: z.boolean(),
     /**
      * The live activity driving `working` (tool name / "Thinking" / "Writing"
@@ -173,7 +165,6 @@ export function buildAgentChatStatus(input: AgentChatStatusInput): AgentChatStat
     reachable: input.reachable,
     engagement: input.engagement,
     working: input.working,
-    needsYou: input.needsYou,
     errored: input.errored,
     main: deriveMainStatus(input),
     activity: input.activity ?? null,

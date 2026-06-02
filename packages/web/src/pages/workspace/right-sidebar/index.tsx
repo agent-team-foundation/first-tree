@@ -1,5 +1,4 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
-import { AttentionsSection } from "./attentions-section.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -11,10 +10,9 @@ import { ParticipantsSection } from "./participants-section.js";
  * straight from the first eyebrow.
  *
  * Sections, top-to-bottom:
- *   1. Attention — chat-scoped NHA summary (open asks targeting this user).
- *   2. Participants — humans + agents with per-agent Suspend (matches the
+ *   1. Participants — humans + agents with per-agent Suspend (matches the
  *      legacy AgentRow capability).
- *   3. GitHub bindings — read-only list of PRs / Issues bound to this
+ *   2. GitHub bindings — read-only list of PRs / Issues bound to this
  *      chat. Hidden entirely when there are no bindings.
  *
  * Archive / Delete are intentionally NOT in this rail — the
@@ -55,7 +53,6 @@ export function ChatRightSidebar({
       }}
     >
       <div className="flex-1 overflow-y-auto">
-        <AttentionsSection chatId={chatId} />
         <ParticipantsSection
           chatId={chatId}
           participants={participants}

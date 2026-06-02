@@ -4,7 +4,6 @@ import { cn } from "../../lib/utils.js";
 
 const PULSE_CLASS: Record<NonNullable<AgentStatusPulse>, string> = {
   working: "agent-status-pulse--working",
-  "needs-you": "agent-status-pulse--needs-you",
 };
 
 /**
@@ -88,9 +87,9 @@ export function StatusGlyph({
     );
   }
 
-  // shape === "dot": a solid disc. working / needs-you breathe the disc's own
-  // opacity (no concentric ring) so every status point keeps an identical
-  // footprint — a long roster column stays aligned regardless of state.
+  // shape === "dot": a solid disc. working breathes the disc's own opacity
+  // (no concentric ring) so every status point keeps an identical footprint
+  // — a long roster column stays aligned regardless of state.
   return (
     <span
       className={cn("inline-block shrink-0", pulse ? PULSE_CLASS[pulse] : null, className)}
