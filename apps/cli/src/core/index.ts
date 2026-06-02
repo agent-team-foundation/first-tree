@@ -45,7 +45,12 @@ export type {
   PromoteOptions,
   PromoteResult,
 } from "./migrate-workspace.js";
-export { detectMigrationState, migrateWorkspaceToW1, promoteToWorkspace } from "./migrate-workspace.js";
+export {
+  detectMigrationState,
+  migrateWorkspaceToW1,
+  planPromotableDryRun,
+  promoteToWorkspace,
+} from "./migrate-workspace.js";
 // Onboard
 export {
   formatCheckReport,

@@ -57,11 +57,21 @@ export type MigrationDetection =
       treeRoot: string;
       /**
        * Absolute paths to bound source repo roots that the migration will
-       * clean up. Derived from the tree's `.first-tree/bindings/*.json` if
-       * present, otherwise from sibling subdirs containing a legacy
-       * `source.json`.
+       * clean up. Detection takes the union of two scans: (a) the tree's
+       * `.first-tree/bindings/*.json` resolved by `sourceName` to a child
+       * dir, and (b) immediate child dirs of `workspaceRoot` that carry a
+       * legacy `.first-tree/source.json`. Both scans are always run and
+       * deduped by resolved path, so a stale `sourceName` in one binding
+       * file cannot silently un-bind a real source repo.
        */
       sourceRoots: string[];
+      /**
+       * Names from `<tree>/.first-tree/bindings/*.json` whose corresponding
+       * `<workspaceRoot>/<name>/` directory does not exist on disk. Surfaced
+       * by the CLI as warnings so the user knows the migration could not
+       * clean those — they may have been deleted, renamed, or never cloned.
+       */
+      missingFromBindings?: string[];
     }
   | {
       kind: "promotable-source";
@@ -198,16 +208,29 @@ function readBindingsSourceNames(treeRoot: string): string[] {
   return [...names].sort((a, b) => a.localeCompare(b));
 }
 
-function siblingPathFromSourceState(sourceRoot: string, sourceState: Record<string, unknown>): string | undefined {
+type SiblingTreeResolution = { ok: true; treeRoot: string } | { ok: false; reason: string };
+
+function siblingTreeFromSourceState(sourceRoot: string, sourceState: Record<string, unknown>): SiblingTreeResolution {
   const tree = sourceState.tree;
   if (tree === null || typeof tree !== "object" || Array.isArray(tree)) {
-    return undefined;
+    return { ok: false, reason: "source.json has no `tree` object" };
   }
   const localPath = (tree as Record<string, unknown>).localPath;
   if (typeof localPath !== "string" || localPath.length === 0) {
-    return undefined;
+    return { ok: false, reason: "source.json `tree.localPath` is missing or empty" };
   }
-  return isAbsolute(localPath) ? resolve(localPath) : resolve(sourceRoot, localPath);
+  const resolvedTree = isAbsolute(localPath) ? resolve(localPath) : resolve(sourceRoot, localPath);
+  // `promotable-source` is specifically the legacy "single repo with sibling
+  // tree" layout; an absolute or `..`-escaping `localPath` that points
+  // outside the source's parent dir is not a sibling and must not be
+  // promoted into the workspace by a one-way `mv`. Reject those cases.
+  if (dirname(resolvedTree) !== dirname(sourceRoot)) {
+    return {
+      ok: false,
+      reason: `source.json points at ${resolvedTree}, which is not a sibling of ${sourceRoot}`,
+    };
+  }
+  return { ok: true, treeRoot: resolvedTree };
 }
 
 function pickTreeAmongChildren(workspaceRoot: string): string | undefined {
@@ -235,8 +258,9 @@ export function detectMigrationState(cwd: string): MigrationDetection {
   // 2. Cwd is a workspace root that hasn't been migrated yet — either has the
   //    legacy `.first-tree-workspace` marker, or contains a tree subdir with
   //    `bindings/`. Both shapes converge on Case A.
-  if (isFile(join(resolved, WORKSPACE_MARKER)) || pickTreeAmongChildren(resolved) !== undefined) {
-    const treeRoot = pickTreeAmongChildren(resolved);
+  const markerPresent = isFile(join(resolved, WORKSPACE_MARKER));
+  const treeRoot = pickTreeAmongChildren(resolved);
+  if (markerPresent || treeRoot !== undefined) {
     if (treeRoot === undefined) {
       return {
         kind: "not-applicable",
@@ -247,47 +271,107 @@ export function detectMigrationState(cwd: string): MigrationDetection {
     const treeName = basename(treeRoot);
     const declaredSources = readBindingsSourceNames(treeRoot);
     const sourceRoots: string[] = [];
+    const seen = new Set<string>();
+    const missingFromBindings: string[] = [];
+
     for (const name of declaredSources) {
       const candidate = join(resolved, name);
       if (isDirectory(candidate)) {
         sourceRoots.push(candidate);
+        seen.add(candidate);
+      } else {
+        missingFromBindings.push(name);
       }
     }
 
-    // Fallback: scan workspace children for a `.first-tree/source.json` if the
-    // bindings dir was missing or incomplete.
-    if (sourceRoots.length === 0) {
-      for (const childName of listImmediateChildDirs(resolved)) {
-        if (childName === treeName) {
-          continue;
-        }
-        const candidate = join(resolved, childName);
-        if (isFile(join(candidate, SOURCE_STATE_FILE))) {
-          sourceRoots.push(candidate);
-        }
+    // Always run the filesystem fallback (in addition to bindings) so that a
+    // partially-resolved bindings dir cannot silently drop a real source repo
+    // that still carries `.first-tree/source.json` on disk. Without this,
+    // migrating from a workspace where bindings/ holds a stale entry for
+    // `api` but `web/.first-tree/source.json` is real would write a manifest
+    // missing `web` and leave `web`'s legacy state intact.
+    for (const childName of listImmediateChildDirs(resolved)) {
+      if (childName === treeName) {
+        continue;
+      }
+      const candidate = join(resolved, childName);
+      if (seen.has(candidate)) {
+        continue;
+      }
+      if (isFile(join(candidate, SOURCE_STATE_FILE))) {
+        sourceRoots.push(candidate);
+        seen.add(candidate);
       }
     }
 
-    return { kind: "workspace", workspaceRoot: resolved, treeRoot, sourceRoots };
+    return {
+      kind: "workspace",
+      workspaceRoot: resolved,
+      treeRoot,
+      sourceRoots,
+      ...(missingFromBindings.length > 0 ? { missingFromBindings } : {}),
+    };
   }
 
   // 3. Cwd is a single source repo with a sibling tree (`shared-source` or
   //    `standalone-source`). Needs a promote step before Case A can run.
   const sourceStatePath = join(resolved, SOURCE_STATE_FILE);
   if (isFile(sourceStatePath)) {
+    // Guard: refuse to promote if the user is inside a workspace-member
+    // source whose parent is already populated as a legacy workspace —
+    // either has the `.first-tree-workspace` marker, or holds at least one
+    // OTHER source sibling. Moving this source + its tree out of that
+    // parent breaks the parent workspace (the other sources lose their
+    // tree). Tell the user to cd up and re-run instead.
+    //
+    // We deliberately do NOT trip on "parent has a tree with bindings/" by
+    // itself — for a true two-sibling legacy `shared-source` /
+    // `standalone-source` layout (just source + tree at the parent),
+    // promoting them into a dedicated workspace dir is the spec's
+    // intended action and there are no other members to break.
+    const parentDir = dirname(resolved);
+    const parentHasMarker = isFile(join(parentDir, WORKSPACE_MARKER));
+    let parentHasOtherSourceSibling = false;
+    for (const siblingName of listImmediateChildDirs(parentDir)) {
+      if (join(parentDir, siblingName) === resolved) {
+        continue;
+      }
+      if (isFile(join(parentDir, siblingName, SOURCE_STATE_FILE))) {
+        parentHasOtherSourceSibling = true;
+        break;
+      }
+    }
+    if (parentHasMarker || parentHasOtherSourceSibling) {
+      return {
+        kind: "not-applicable",
+        reason:
+          `${resolved} appears to be a member of a legacy workspace at ${parentDir} ` +
+          `(detected via .first-tree-workspace marker or another source sibling). ` +
+          `cd to ${parentDir} and re-run migrate-to-w1 from there so the other members are migrated together.`,
+      };
+    }
+
     const sourceState = readJsonObject(sourceStatePath);
-    const treeRoot = sourceState ? siblingPathFromSourceState(resolved, sourceState) : undefined;
-    if (treeRoot !== undefined && isDirectory(treeRoot)) {
+    if (sourceState === undefined) {
+      return {
+        kind: "not-applicable",
+        reason: `${sourceStatePath} exists but could not be parsed as JSON.`,
+      };
+    }
+    const resolution = siblingTreeFromSourceState(resolved, sourceState);
+    if (resolution.ok && isDirectory(resolution.treeRoot)) {
       return {
         kind: "promotable-source",
         sourceRoot: resolved,
-        treeRoot,
+        treeRoot: resolution.treeRoot,
         suggestedWorkspaceName: `${basename(resolved)}-workspace`,
       };
     }
     return {
       kind: "not-applicable",
-      reason: `${sourceStatePath} found but its tree.localPath does not resolve to an existing directory.`,
+      reason: resolution.ok
+        ? `${sourceStatePath} resolves a tree path at ${resolution.treeRoot} but that path is not an existing directory.`
+        : `Cannot promote ${resolved}: ${resolution.reason}.`,
     };
   }
 
@@ -357,6 +441,16 @@ function stripFrameworkBlock(
   if (!isFile(filePath)) {
     return { changed: false };
   }
+  // Note on line endings: this helper normalizes CRLF→LF up front and writes
+  // LF unconditionally on change. That changes the whole-file ending style of
+  // CRLF-authored files. In practice the only file this helper writes is one
+  // where the `<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->` block exists,
+  // which is itself authored by first-tree tooling and shipped as LF — so a
+  // CRLF host file with that block is the artifact of an editor / VCS
+  // configuration that already disagrees with how the file was authored.
+  // The change is safe (and effectively a no-op) for the supported flow; if
+  // a future use case needs faithful CRLF preservation, swap to a regex
+  // splice that touches only the block bytes.
   const raw = readFileSync(filePath, "utf-8").replaceAll("\r\n", "\n");
   if (!SOURCE_INTEGRATION_BLOCK_RE.test(raw)) {
     return { changed: false };
@@ -473,6 +567,42 @@ function cleanTreeRepo(workspaceRoot: string, treeRoot: string, result: Migratio
 }
 
 /**
+ * Synthesize a dry-run cleanup plan for a `promotable-source` detection
+ * *before* the actual `mv` runs. Because the planned post-move paths don't
+ * exist yet, calling {@link migrateWorkspaceToW1} against them would report
+ * an empty plan (every `tryRemove`/`stripFrameworkBlock` would see no
+ * files) and mislead the user about the real cleanup's blast radius.
+ *
+ * Instead we run cleanup detection against the still-live pre-move layout
+ * (parent dir treated as the synthetic workspace root for path-relativizing
+ * purposes), then re-anchor `workspaceRoot` to the planned post-move
+ * location so the report describes what the real run will produce.
+ *
+ * The reported relative paths preserve the source / tree basenames and
+ * therefore describe the post-move shape correctly (e.g. `api/AGENTS.md`,
+ * `context/.first-tree/bindings`).
+ */
+export function planPromotableDryRun(
+  detection: Extract<MigrationDetection, { kind: "promotable-source" }>,
+  plannedWorkspaceRoot: string,
+): MigrationResult {
+  const parentDir = dirname(detection.sourceRoot);
+  const planned = migrateWorkspaceToW1(
+    {
+      kind: "workspace",
+      workspaceRoot: parentDir,
+      treeRoot: detection.treeRoot,
+      sourceRoots: [detection.sourceRoot],
+    },
+    { dryRun: true },
+  );
+  return {
+    ...planned,
+    workspaceRoot: plannedWorkspaceRoot,
+  };
+}
+
+/**
  * Convert a detected Case-A workspace onto the new layout. Caller is
  * responsible for promoting `promotable-source` detections into Case A
  * first (via {@link promoteToWorkspace}). Returns a structured summary the
@@ -506,6 +636,17 @@ export function migrateWorkspaceToW1(
     dryRun,
   };
 
+  // Surface detection-time warnings (e.g. binding files that pointed at a
+  // source name with no matching subdir) so the CLI can show them.
+  if (detection.missingFromBindings !== undefined) {
+    for (const name of detection.missingFromBindings) {
+      result.warnings.push(
+        `Tree binding declares source "${name}" but ${join(detection.workspaceRoot, name)} does not exist; ` +
+          `migration could not clean its legacy state.`,
+      );
+    }
+  }
+
   // Validate that each declared source actually lives at workspaceRoot/<name>.
   const sourceRootsByName = new Map<string, string>();
   for (const sourceRoot of detection.sourceRoots) {
@@ -519,25 +660,32 @@ export function migrateWorkspaceToW1(
     sourceRootsByName.set(name, resolve(sourceRoot));
   }
 
-  // Step 1: clean each source repo.
+  // Step 1: write the W1 manifest FIRST. If a later cleanup step fails
+  // partway, the workspace at least gains the new detection signal so
+  // `migrate-to-w1` can be safely re-run. The prior order (manifest last)
+  // had a partial-failure mode where the cleanup steps had wiped every
+  // legacy detection marker (bindings/, source.json, .first-tree-workspace)
+  // before the manifest write threw, leaving the user in a state where
+  // re-detection saw nothing at all.
+  if (!dryRun) {
+    writeWorkspaceManifest(detection.workspaceRoot, manifest);
+  }
+
+  // Step 2: clean each source repo.
   for (const sourceRoot of sourceRootsByName.values()) {
     cleanSourceRepo(detection.workspaceRoot, sourceRoot, result, dryRun);
   }
 
-  // Step 2: clean the tree repo.
+  // Step 3: clean the tree repo.
   cleanTreeRepo(detection.workspaceRoot, detection.treeRoot, result, dryRun);
 
-  // Step 3: drop the legacy workspace marker file.
+  // Step 4: drop the legacy workspace marker file last so its absence is the
+  // commit signal that the cleanup ran. If anything earlier in steps 2/3
+  // fails, the marker survives and re-detection still hits the workspace
+  // branch.
   const markerPath = join(detection.workspaceRoot, WORKSPACE_MARKER);
   if (tryRemove(markerPath, { dryRun })) {
     result.removed.push({ path: relative(detection.workspaceRoot, markerPath), kind: "workspace-marker" });
-  }
-
-  // Step 4: write the W1 manifest. Done last so a mid-failure on cleanup
-  // doesn't leave the workspace claiming W1 state when legacy state still
-  // partly survives.
-  if (!dryRun) {
-    writeWorkspaceManifest(detection.workspaceRoot, manifest);
   }
 
   return result;

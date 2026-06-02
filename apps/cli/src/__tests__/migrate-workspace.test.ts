@@ -5,7 +5,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { detectMigrationState, migrateWorkspaceToW1, promoteToWorkspace } from "../core/migrate-workspace.js";
+import {
+  detectMigrationState,
+  migrateWorkspaceToW1,
+  planPromotableDryRun,
+  promoteToWorkspace,
+} from "../core/migrate-workspace.js";
 
 /**
  * These tests exercise `migrate-to-w1` against on-disk fixtures shaped like
@@ -209,6 +214,119 @@ describe("detectMigrationState", () => {
 
     expect(detection.kind).toBe("not-applicable");
   });
+
+  it("returns 'not-applicable' when source.json points at an absolute, non-sibling tree path", () => {
+    // Codex P1#2 regression: an absolute or `..`-escaping `tree.localPath`
+    // would have been promoted, which would `mv` an external repo into the
+    // new workspace.
+    const externalTreeParent = mkdtempSync(join(tmpdir(), "ft-external-"));
+    const externalTree = makeRepo(externalTreeParent, "context");
+    const sourceRoot = makeRepo(tmpRoot, "api");
+    writeJson(join(sourceRoot, ".first-tree", "source.json"), {
+      tree: { localPath: externalTree },
+    });
+
+    const detection = detectMigrationState(sourceRoot);
+
+    rmSync(externalTreeParent, { recursive: true, force: true });
+    expect(detection.kind).toBe("not-applicable");
+    if (detection.kind === "not-applicable") {
+      expect(detection.reason).toMatch(/not a sibling/u);
+    }
+  });
+
+  it("returns 'not-applicable' when source.json is malformed JSON (distinct from missing path)", () => {
+    const sourceRoot = makeRepo(tmpRoot, "api");
+    mkdirSync(join(sourceRoot, ".first-tree"), { recursive: true });
+    writeFileSync(join(sourceRoot, ".first-tree", "source.json"), "{ not valid", "utf-8");
+
+    const detection = detectMigrationState(sourceRoot);
+
+    expect(detection.kind).toBe("not-applicable");
+    if (detection.kind === "not-applicable") {
+      expect(detection.reason).toMatch(/could not be parsed/u);
+    }
+  });
+
+  it("returns 'not-applicable' when running inside a source whose parent already has another source sibling", () => {
+    // baixiaohang regression: promoting from a workspace-member source
+    // (parent has other sources) would break the parent workspace.
+    const parentDir = tmpRoot;
+    const otherSource = makeRepo(parentDir, "other");
+    writeJson(join(otherSource, ".first-tree", "source.json"), { tree: { localPath: "../context" } });
+    const sourceRoot = makeRepo(parentDir, "api");
+    makeRepo(parentDir, "context"); // sibling tree, no bindings/ — to skip the workspace branch
+    writeJson(join(sourceRoot, ".first-tree", "source.json"), {
+      tree: { localPath: "../context" },
+    });
+
+    const detection = detectMigrationState(sourceRoot);
+
+    expect(detection.kind).toBe("not-applicable");
+    if (detection.kind === "not-applicable") {
+      expect(detection.reason).toMatch(/member of a legacy workspace/u);
+    }
+  });
+
+  it("returns 'not-applicable' when running inside a source whose parent has a .first-tree-workspace marker", () => {
+    const parentDir = tmpRoot;
+    writeFile(join(parentDir, ".first-tree-workspace"), "");
+    const sourceRoot = makeRepo(parentDir, "api");
+    makeRepo(parentDir, "context");
+    writeJson(join(sourceRoot, ".first-tree", "source.json"), {
+      tree: { localPath: "../context" },
+    });
+
+    // Cwd is the source repo, but the marker at the parent should make
+    // detection refuse promote and point the user up.
+    const detection = detectMigrationState(sourceRoot);
+
+    expect(detection.kind).toBe("not-applicable");
+  });
+});
+
+describe("detectMigrationState — bindings + filesystem union (Codex P1#1)", () => {
+  it("picks up an existing source repo whose sourceName is missing from bindings", () => {
+    // Regression: bindings/ has only `api`; `web/.first-tree/source.json`
+    // exists but no binding references it. The fallback scan must still
+    // pick web up, OR the migration silently drops it.
+    const workspaceRoot = tmpRoot;
+    writeFile(join(workspaceRoot, ".first-tree-workspace"), "");
+    const treeRoot = makeRepo(workspaceRoot, "context");
+    writeJson(join(treeRoot, ".first-tree", "bindings", "api-1.json"), { sourceName: "api" });
+
+    const apiRoot = makeRepo(workspaceRoot, "api");
+    writeJson(join(apiRoot, ".first-tree", "source.json"), { tree: { treeRepoName: "context" } });
+
+    const webRoot = makeRepo(workspaceRoot, "web");
+    writeJson(join(webRoot, ".first-tree", "source.json"), { tree: { treeRepoName: "context" } });
+
+    const detection = detectMigrationState(workspaceRoot);
+
+    expect(detection.kind).toBe("workspace");
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+    expect(detection.sourceRoots.map((r) => r.split("/").pop()).sort()).toEqual(["api", "web"]);
+  });
+
+  it("surfaces a warning when a binding declares a source that does not exist on disk", () => {
+    const workspaceRoot = tmpRoot;
+    writeFile(join(workspaceRoot, ".first-tree-workspace"), "");
+    const treeRoot = makeRepo(workspaceRoot, "context");
+    writeJson(join(treeRoot, ".first-tree", "bindings", "api-1.json"), { sourceName: "api" });
+    writeJson(join(treeRoot, ".first-tree", "bindings", "ghost-2.json"), { sourceName: "ghost" });
+    const apiRoot = makeRepo(workspaceRoot, "api");
+    writeJson(join(apiRoot, ".first-tree", "source.json"), { tree: { treeRepoName: "context" } });
+
+    const detection = detectMigrationState(workspaceRoot);
+
+    expect(detection.kind).toBe("workspace");
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+    expect(detection.missingFromBindings).toEqual(["ghost"]);
+  });
 });
 
 describe("migrateWorkspaceToW1 (Case A)", () => {
@@ -308,6 +426,68 @@ describe("migrateWorkspaceToW1 (Case A)", () => {
     expect(redetection.kind).toBe("already-migrated");
   });
 
+  it("surfaces detection-time warnings (missingFromBindings) in the migration result", () => {
+    const workspaceRoot = tmpRoot;
+    writeFile(join(workspaceRoot, ".first-tree-workspace"), "");
+    const treeRoot = makeRepo(workspaceRoot, "context");
+    writeJson(join(treeRoot, ".first-tree", "bindings", "api-1.json"), { sourceName: "api" });
+    writeJson(join(treeRoot, ".first-tree", "bindings", "ghost-2.json"), { sourceName: "ghost" });
+    const apiRoot = makeRepo(workspaceRoot, "api");
+    writeJson(join(apiRoot, ".first-tree", "source.json"), { tree: { treeRepoName: "context" } });
+    const detection = detectMigrationState(workspaceRoot);
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+
+    const result = migrateWorkspaceToW1(detection);
+
+    expect(result.warnings.some((w) => w.includes("ghost"))).toBe(true);
+  });
+
+  it("writes the manifest BEFORE deleting the workspace marker (code-reviewer P2 ordering)", () => {
+    // Regression: if the manifest write throws after the marker delete +
+    // tree/source cleanup, a re-run can't detect anything. The new order
+    // is `writeManifest -> clean source -> clean tree -> delete marker`,
+    // so a failure during cleanup leaves the marker as a detection signal.
+    const fixture = makeCaseAWorkspace();
+    const detection = detectMigrationState(fixture.workspaceRoot);
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+
+    migrateWorkspaceToW1(detection);
+
+    // After success: manifest is present, marker is gone.
+    expect(existsSync(join(fixture.workspaceRoot, ".first-tree", "workspace.json"))).toBe(true);
+    expect(existsSync(join(fixture.workspaceRoot, ".first-tree-workspace"))).toBe(false);
+  });
+
+  it("preserves the workspace marker when manifest write fails so re-detection still finds the workspace", () => {
+    // Partial-failure regression (code-reviewer P2): if writeWorkspaceManifest
+    // throws, the marker must survive so `migrate-to-w1` can be safely
+    // re-run after the user resolves the underlying issue.
+    const fixture = makeCaseAWorkspace();
+    // Block the manifest write by placing a FILE at the .first-tree path
+    // so the mkdir(.first-tree, recursive:true) inside
+    // writeWorkspaceManifest throws EEXIST (path is a file, not a dir).
+    rmSync(join(fixture.workspaceRoot, ".first-tree"), { recursive: true, force: true });
+    writeFileSync(join(fixture.workspaceRoot, ".first-tree"), "blocker", "utf-8");
+
+    const detection = detectMigrationState(fixture.workspaceRoot);
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+
+    expect(() => migrateWorkspaceToW1(detection)).toThrow();
+
+    // Marker survives → re-run still detects the workspace branch.
+    expect(existsSync(join(fixture.workspaceRoot, ".first-tree-workspace"))).toBe(true);
+    expect(existsSync(join(fixture.treeRoot, ".first-tree", "bindings"))).toBe(true);
+    rmSync(join(fixture.workspaceRoot, ".first-tree"));
+    const redetection = detectMigrationState(fixture.workspaceRoot);
+    expect(redetection.kind).toBe("workspace");
+  });
+
   it("does not list a source twice if both bindings/ and filesystem fallback find it", () => {
     // Build a tree with a binding pointing to "api", and an "api" subdir at
     // the workspace root that also has a stale `source.json`. Both detection
@@ -382,6 +562,35 @@ describe("promoteToWorkspace (Case B/C)", () => {
     }
 
     expect(() => promoteToWorkspace(detection, { workspaceName: "evil/path" })).toThrow(/Invalid/u);
+  });
+
+  it("planPromotableDryRun reports the same cleanup the real run would do (Codex P2 / yuezengwu / code-reviewer / baixiaohang)", () => {
+    // Regression: before the fix, dry-run computed cleanup against
+    // post-move paths that did not exist yet, so the report was empty.
+    // Now the dry-run runs against the pre-move layout and re-anchors
+    // `workspaceRoot` to the planned location.
+    const fixture = makeCaseBLayout();
+    const detection = detectMigrationState(fixture.sourceRoot);
+    if (detection.kind !== "promotable-source") {
+      throw new Error("expected promotable-source detection");
+    }
+    const plannedRoot = join(fixture.parentDir, "my-workspace");
+
+    const plan = planPromotableDryRun(detection, plannedRoot);
+
+    expect(plan.dryRun).toBe(true);
+    expect(plan.workspaceRoot).toBe(plannedRoot);
+    expect(plan.manifest).toEqual({ tree: "context", sources: ["api"] });
+    // The pre-move layout had: source.json, .agents/skills/, AGENTS.md
+    // framework block, tree bindings/, tree.json. All should be in
+    // `removed` / `modified`.
+    const removedKinds = plan.removed.map((r) => r.kind);
+    expect(removedKinds).toContain("source-state");
+    expect(removedKinds).toContain("source-skills");
+    expect(removedKinds).toContain("tree-bindings");
+    expect(removedKinds).toContain("tree-state");
+    const modifiedKinds = plan.modified.map((m) => m.kind);
+    expect(modifiedKinds).toContain("source-framework-block");
   });
 
   it("end-to-end: promote then migrate yields a valid W1 workspace", () => {

@@ -8,6 +8,7 @@ import {
   type MigrationDetection,
   type MigrationResult,
   migrateWorkspaceToW1,
+  planPromotableDryRun,
   promoteToWorkspace,
 } from "../../core/migrate-workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
@@ -91,6 +92,7 @@ function printResult(result: MigrationResult, prefix: string): void {
 async function handlePromote(
   detection: Extract<MigrationDetection, { kind: "promotable-source" }>,
   options: MigrateCliOptions,
+  jsonOnly: boolean,
 ): Promise<{ ok: true; result: MigrationResult } | { ok: false; reason: string }> {
   const workspaceName = options.workspaceName ?? detection.suggestedWorkspaceName;
   const parentDir = dirname(detection.sourceRoot);
@@ -98,35 +100,39 @@ async function handlePromote(
   const newSourceRoot = join(workspaceRoot, basename(detection.sourceRoot));
   const newTreeRoot = join(workspaceRoot, basename(detection.treeRoot));
 
-  console.log(
-    "Single repo + sibling tree detected. To migrate, both repos will be moved into a new parent directory:\n",
-  );
-  console.log(`  Workspace root (new):   ${workspaceRoot}`);
-  console.log(`  Source repo (moves to): ${newSourceRoot}`);
-  console.log(`  Tree repo   (moves to): ${newTreeRoot}\n`);
-  console.log("Each repo's .git/ travels with the move; no git operations are performed.\n");
+  if (!jsonOnly) {
+    console.log(
+      "Single repo + sibling tree detected. To migrate, both repos will be moved into a new parent directory:\n",
+    );
+    console.log(`  Workspace root (new):   ${workspaceRoot}`);
+    console.log(`  Source repo (moves to): ${newSourceRoot}`);
+    console.log(`  Tree repo   (moves to): ${newTreeRoot}\n`);
+    console.log("Each repo's .git/ travels with the move; no git operations are performed.\n");
+  }
 
   if (options.dryRun) {
-    const plan = promoteToWorkspace(detection, { workspaceName, dryRun: true });
-    console.log(`Dry run — would mkdir ${plan.workspaceRoot} and move both repos into it.`);
-    const cleanupPlan = migrateWorkspaceToW1(
-      {
-        kind: "workspace",
-        workspaceRoot: plan.workspaceRoot,
-        treeRoot: plan.newTreeRoot,
-        sourceRoots: [plan.newSourceRoot],
-      },
-      { dryRun: true },
-    );
-    printResult(cleanupPlan, "Dry-run cleanup plan");
+    // No `mv` even in dry-run mode; the cleanup plan is synthesized from
+    // the still-live pre-move layout.
+    const cleanupPlan = planPromotableDryRun(detection, workspaceRoot);
+    if (!jsonOnly) {
+      console.log(`Dry run — would mkdir ${workspaceRoot} and move both repos into it.`);
+      printResult(cleanupPlan, "Dry-run cleanup plan");
+    }
     return { ok: true, result: cleanupPlan };
   }
 
-  if (!options.yes) {
+  if (!jsonOnly && !options.yes) {
     const accepted = await confirm({ message: "Proceed with the move?", default: false });
     if (!accepted) {
       return { ok: false, reason: "User declined the promote step. No changes made." };
     }
+  } else if (jsonOnly && !options.yes) {
+    // In JSON mode we cannot interact with the user, so an unconfirmed
+    // run is a misconfiguration — refuse rather than fall through.
+    return {
+      ok: false,
+      reason: "Refusing to promote in --json mode without --yes (would otherwise prompt interactively).",
+    };
   }
 
   const promote = promoteToWorkspace(detection, { workspaceName });
@@ -138,10 +144,12 @@ async function handlePromote(
       treeRoot: promote.newTreeRoot,
       sourceRoots: [promote.newSourceRoot],
     },
-    { dryRun: options.dryRun ?? false },
+    { dryRun: false },
   );
 
-  console.log(`Promoted to workspace: ${promote.workspaceRoot}`);
+  if (!jsonOnly) {
+    console.log(`Promoted to workspace: ${promote.workspaceRoot}`);
+  }
   return { ok: true, result };
 }
 
@@ -149,28 +157,34 @@ async function runMigrateCommand(context: CommandContext): Promise<void> {
   try {
     const options = readMigrateOptions(context.command);
     const detection = detectMigrationState(process.cwd());
-
-    if (context.options.json && detection.kind !== "workspace" && detection.kind !== "promotable-source") {
-      console.log(JSON.stringify({ detection }, null, 2));
-      return;
-    }
+    const jsonOnly = context.options.json === true;
 
     switch (detection.kind) {
       case "already-migrated": {
+        if (jsonOnly) {
+          console.log(JSON.stringify({ detection }, null, 2));
+          return;
+        }
         console.log(`Already migrated: ${detection.workspaceRoot}`);
         console.log("`.first-tree/workspace.json` is present. Nothing to do.");
         return;
       }
 
       case "not-applicable": {
-        console.error(`Cannot migrate: ${detection.reason}`);
+        if (jsonOnly) {
+          console.log(JSON.stringify({ detection }, null, 2));
+        } else {
+          console.error(`Cannot migrate: ${detection.reason}`);
+        }
+        // Exit non-zero either way so scripts/CI can detect the failure
+        // mode the same as humans do.
         process.exitCode = 1;
         return;
       }
 
       case "workspace": {
         const result = migrateWorkspaceToW1(detection, { dryRun: options.dryRun ?? false });
-        if (context.options.json) {
+        if (jsonOnly) {
           console.log(JSON.stringify(result, null, 2));
           return;
         }
@@ -179,12 +193,17 @@ async function runMigrateCommand(context: CommandContext): Promise<void> {
       }
 
       case "promotable-source": {
-        const outcome = await handlePromote(detection, options);
+        const outcome = await handlePromote(detection, options, jsonOnly);
         if (!outcome.ok) {
-          console.log(outcome.reason);
+          if (jsonOnly) {
+            console.log(JSON.stringify({ ok: false, reason: outcome.reason }, null, 2));
+          } else {
+            console.log(outcome.reason);
+          }
+          process.exitCode = 1;
           return;
         }
-        if (context.options.json) {
+        if (jsonOnly) {
           console.log(JSON.stringify(outcome.result, null, 2));
           return;
         }
