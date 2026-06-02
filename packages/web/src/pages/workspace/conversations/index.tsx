@@ -535,11 +535,12 @@ export function ConversationList({
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          // Single-line rows, but with comfortable vertical
-                          // breathing room (--sp-2_5) so the list doesn't read as
-                          // a dense wall — still well under the old two-line row.
-                          padding: "var(--sp-2_5) var(--sp-3)",
-                          gap: "var(--sp-2_5)",
+                          // Single-line rows tuned for desktop-inbox density:
+                          // tightened vertical padding (--sp-2) now that the
+                          // preview subtitle line is gone, so more conversations
+                          // fit per screen without reading as a dense wall.
+                          padding: "var(--sp-2) var(--sp-3)",
+                          gap: "var(--sp-2)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
                           // Left bar is the SELECTED affordance only (DESIGN.md:
                           // selected = green left-rail + tint). Attention no longer
