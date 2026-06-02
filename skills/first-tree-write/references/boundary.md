@@ -62,7 +62,7 @@ When sync hands off to write:
   escape hatch.
 - The requirement to run `first-tree tree verify` before any final
   commit.
-- The methodology in `../first-tree/SKILL.md` and its references.
+- The methodology in `../first-tree-context/SKILL.md` and its references.
 
-The shared parts let `first-tree` whitepaper own the methodology; sync
+The shared parts let `first-tree-context` own the methodology; sync
 and write own the _when_ and _what_ of applying it.

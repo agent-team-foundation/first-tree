@@ -28,6 +28,7 @@ export const CORE_SKILL_NAMES = [] as const;
  */
 export const TREE_SKILL_NAMES = [
   "first-tree",
+  "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
   "first-tree-write",
@@ -88,7 +89,14 @@ const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
 
 export type ManagedFileAction = "created" | "updated" | "unchanged" | "skipped";
 
-const FIRST_TREE_REFERENCE_FILES = [
+/**
+ * Files required for `first-tree-context`. The Context Tree concept and
+ * principle references migrated from `first-tree/` to `first-tree-context/`
+ * in the skill-topology restructure (proposal: skill-restructure.20260602);
+ * the top-level `first-tree` skill no longer carries references — it is a
+ * routing/hygiene entry point only.
+ */
+const FIRST_TREE_CONTEXT_REFERENCE_FILES = [
   "SKILL.md",
   "VERSION",
   join("agents", "openai.yaml"),
@@ -123,7 +131,7 @@ function coreSkillLayouts(): readonly SkillLayout[] {
 }
 
 function requiredFilesForSkill(name: SkillName): readonly string[] {
-  return name === "first-tree" ? FIRST_TREE_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
+  return name === "first-tree-context" ? FIRST_TREE_CONTEXT_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
 }
 
 export function bundledSkillsRootFrom(startDir: string): string {

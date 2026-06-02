@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree"
+  short_description: "Read the First Tree whitepaper"
+  default_prompt: "Use $first-tree to orient me on Context Tree concepts, the current CLI surface, and which First Tree skill I should use next."

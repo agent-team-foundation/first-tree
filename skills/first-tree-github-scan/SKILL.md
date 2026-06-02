@@ -10,9 +10,9 @@ description: Agent skill for handling a single GitHub notification spawned by th
 
 Read these first:
 
-- `../first-tree/SKILL.md`
-- `../first-tree/references/functions.md`
-- `../first-tree/references/anti-patterns.md`
+- `../first-tree-context/SKILL.md`
+- `../first-tree-context/references/functions.md`
+- `../first-tree-context/references/anti-patterns.md`
 
 ## What This Skill Does
 

@@ -10,9 +10,9 @@ description: Audit and repair drift between merged code and the Context Tree in 
 
 Read these first:
 
-- `../first-tree/SKILL.md`
-- `../first-tree/references/functions.md`
-- `../first-tree/references/maintenance.md`
+- `../first-tree-context/SKILL.md`
+- `../first-tree-context/references/functions.md`
+- `../first-tree-context/references/maintenance.md`
 
 ## What This Skill Does
 

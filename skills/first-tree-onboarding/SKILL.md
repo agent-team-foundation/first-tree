@@ -10,7 +10,7 @@ description: One-shot onboarding command for First Tree. Drives a repo or worksp
 
 When the user invokes this skill, you (the agent) drive onboarding **end to end**. Phases A→F below run in order. Within a phase, **execute without asking** unless the action is irreversible or genuinely ambiguous (see "When to ask the user"). At the end, print the wrap-up summary in Phase F.
 
-Read first: [`../first-tree/SKILL.md`](../first-tree/SKILL.md) and [`../first-tree/references/structure.md`](../first-tree/references/structure.md). They define the tree concepts the rest of this skill assumes.
+Read first: [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md) and [`../first-tree-context/references/structure.md`](../first-tree-context/references/structure.md). They define the tree concepts the rest of this skill assumes.
 
 ## Success criteria (do not claim done until ALL pass)
 
