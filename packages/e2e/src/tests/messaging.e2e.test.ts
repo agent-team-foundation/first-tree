@@ -76,7 +76,15 @@ describe("M2 messaging — user-scoped HTTP chat send + replyTo", () => {
     const res = await fetch(`${handle.serverBaseUrl}/api/v1/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
-      body: JSON.stringify({ format: "text", content: "hello from e2e" }),
+      // Group-chat policy requires an explicit recipient — declare routing via
+      // `metadata.mentions: [agentUuid]`, the same channel the client runtime
+      // uses (see services/message.ts + runtime-tui-fixture.ts). Without it the
+      // send is rejected 400.
+      body: JSON.stringify({
+        format: "text",
+        content: "hello from e2e",
+        metadata: { mentions: [testAgentId] },
+      }),
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string; chatId: string; senderId: string };
@@ -93,7 +101,7 @@ describe("M2 messaging — user-scoped HTTP chat send + replyTo", () => {
     const first = await fetch(`${handle.serverBaseUrl}/api/v1/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
-      body: JSON.stringify({ format: "text", content: "parent" }),
+      body: JSON.stringify({ format: "text", content: "parent", metadata: { mentions: [testAgentId] } }),
     });
     expect(first.status).toBe(201);
     const firstBody = (await first.json()) as { id: string };
@@ -101,7 +109,12 @@ describe("M2 messaging — user-scoped HTTP chat send + replyTo", () => {
     const reply = await fetch(`${handle.serverBaseUrl}/api/v1/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
-      body: JSON.stringify({ format: "text", content: "child", inReplyTo: firstBody.id }),
+      body: JSON.stringify({
+        format: "text",
+        content: "child",
+        inReplyTo: firstBody.id,
+        metadata: { mentions: [testAgentId] },
+      }),
     });
     expect(reply.status).toBe(201);
     const replyBody = (await reply.json()) as { id: string };
