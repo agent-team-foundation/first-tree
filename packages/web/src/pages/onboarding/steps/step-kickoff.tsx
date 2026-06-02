@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, Copy } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
@@ -14,23 +14,16 @@ import {
   putSourceReposSetting,
 } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
+import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
+import { CommandBox, FlowNote, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
-
-const LINK_STYLE = {
-  background: "transparent",
-  border: 0,
-  padding: 0,
-  cursor: "pointer",
-  color: "var(--primary)",
-} as const;
 
 function repoLabel(url: string): string {
   return url
@@ -225,20 +218,12 @@ function AdminKickoff() {
             <label htmlFor="onboarding-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
               {COPY.kickoff.existingUrlLabel}
             </label>
-            <input
+            <Input
               id="onboarding-tree-url"
               value={treeUrl}
               onChange={(e) => setTreeUrl(e.target.value)}
               placeholder="https://github.com/your-team/context-tree"
-              className="text-body mono"
-              style={{
-                padding: "var(--sp-2) var(--sp-3)",
-                background: "var(--bg)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg)",
-                outline: "none",
-              }}
+              className="mono"
             />
             {autoDetected ? (
               <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
@@ -246,28 +231,28 @@ function AdminKickoff() {
               </p>
             ) : null}
             {urlInvalid && <FlowNote>{COPY.kickoff.invalidUrl}</FlowNote>}
-            <button
+            <Button
               type="button"
+              variant="link"
+              className="h-auto p-0 text-label self-start"
               onClick={() => {
                 setTreeUrl("");
                 setTreeMode("new");
               }}
-              className="text-label self-start"
-              style={LINK_STYLE}
             >
               {COPY.kickoff.createInstead}
-            </button>
+            </Button>
           </div>
         ) : (
           // B (new tree, default): quiet secondary link to the existing path.
-          <button
+          <Button
             type="button"
+            variant="link"
+            className="h-auto p-0 text-label self-start"
             onClick={() => setTreeMode("existing")}
-            className="text-label self-start"
-            style={LINK_STYLE}
           >
             {COPY.kickoff.haveExisting}
-          </button>
+          </Button>
         )}
         {error && <FlowNote>{error}</FlowNote>}
         <div className="flex">
@@ -444,43 +429,11 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
         <TreeUrlDisplay treeUrl={treeUrl} />
         <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          {teamRepoUrls.map((url) => {
-            const active = chosen.includes(url);
-            return (
-              <label
-                key={url}
-                className="onboarding-choice flex items-center text-body"
-                style={{
-                  gap: "var(--sp-2_5)",
-                  padding: "var(--sp-2) var(--sp-2_5)",
-                  borderRadius: "var(--radius-input)",
-                  cursor: "pointer",
-                  background: active ? "color-mix(in oklch, var(--primary) 8%, transparent)" : "transparent",
-                  color: active ? "var(--fg)" : "var(--fg-2)",
-                }}
-              >
-                <input type="checkbox" checked={active} onChange={() => toggle(url)} className="sr-only" />
-                <span
-                  aria-hidden="true"
-                  className="inline-flex items-center justify-center"
-                  style={{
-                    width: "var(--sp-4)",
-                    height: "var(--sp-4)",
-                    flexShrink: 0,
-                    borderRadius: "var(--radius-input)",
-                    border: active
-                      ? "var(--hairline) solid var(--primary)"
-                      : "var(--hairline) solid var(--border-strong)",
-                    background: active ? "var(--primary)" : "transparent",
-                    color: "var(--primary-on)",
-                  }}
-                >
-                  {active && <Check className="h-3 w-3" />}
-                </span>
-                <span className="font-medium">{repoLabel(url)}</span>
-              </label>
-            );
-          })}
+          {teamRepoUrls.map((url) => (
+            <SelectableRow key={url} checked={chosen.includes(url)} onToggle={() => toggle(url)}>
+              <span className="font-medium">{repoLabel(url)}</span>
+            </SelectableRow>
+          ))}
         </div>
         {error && <FlowNote>{error}</FlowNote>}
         {/* Primary is never disabled by deselect-all; the bailout link
@@ -491,14 +444,9 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
             <span>{COPY.kickoff.start}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
-          <button
-            type="button"
-            onClick={() => void handleStart([])}
-            className="text-label"
-            style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
+          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
             {COPY.kickoff.inviteeContinueNoProject}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -585,14 +533,9 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
           {/* Always visible — covers empty, scope-missing, network, AND
               "I just don't want to pick one right now". No path is a
               dead end. */}
-          <button
-            type="button"
-            onClick={() => void handleStart([])}
-            className="text-label"
-            style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
+          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
             {COPY.kickoff.inviteeContinueNoProject}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -636,18 +579,10 @@ function InviteeWaiting() {
 function InviteeNoInstallation() {
   const { finishLater } = useOnboardingFlow();
   const [pageUrl, setPageUrl] = useState<string>("");
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") setPageUrl(window.location.href);
   }, []);
-
-  const handleCopy = async (): Promise<void> => {
-    if (!pageUrl) return;
-    await navigator.clipboard.writeText(pageUrl);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
@@ -660,49 +595,9 @@ function InviteeNoInstallation() {
           <p className="text-label" style={{ margin: 0, color: "var(--fg-2)" }}>
             {COPY.invitee.noInstallShareIntro}
           </p>
-          <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
-            <div
-              className="text-label"
-              title={pageUrl}
-              style={{
-                flex: 1,
-                minHeight: 38,
-                padding: "var(--sp-2_5) var(--sp-3)",
-                background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
-                border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg-2)",
-                minWidth: 0,
-                display: "flex",
-                alignItems: "center",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {pageUrl || "…"}
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleCopy()}
-              disabled={!pageUrl}
-              className="inline-flex items-center justify-center text-label font-medium"
-              style={{
-                gap: "var(--sp-1_5)",
-                padding: "0 var(--sp-3)",
-                minHeight: 38,
-                background: "color-mix(in oklch, var(--bg-raised) 48%, transparent)",
-                border: "var(--hairline) solid color-mix(in oklch, var(--border) 58%, transparent)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg-2)",
-                cursor: pageUrl ? "pointer" : "not-allowed",
-                opacity: pageUrl ? 1 : 0.6,
-              }}
-            >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
+          {/* Reuses the connect-computer CommandBox so the copy affordance is
+              identical everywhere; here the "command" is the shareable page URL. */}
+          <CommandBox command={pageUrl || null} placeholder="…" />
         </div>
 
         <div className="flex">
