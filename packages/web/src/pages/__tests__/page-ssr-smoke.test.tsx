@@ -2,7 +2,6 @@ import type {
   Agent,
   AgentChatStatus,
   AgentRuntimeConfig,
-  Attention,
   ChatDetail,
   ChatParticipantDetail,
   MeChatRow,
@@ -18,7 +17,6 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient, RuntimeAgent } from "../../api/activity.js";
 import { chatAgentStatusQueryKey } from "../../api/agent-status.js";
-import { attentionsInChatQueryKey } from "../../api/attention.js";
 import type { PaginatedMessages } from "../../api/chats.js";
 import type { GithubRepo } from "../../api/github.js";
 import { agentSessionsQueryKey, type SessionEventRow } from "../../api/sessions.js";
@@ -293,10 +291,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
         label: "Using Bash",
         startedAt: "2026-05-28T11:59:00.000Z",
       } satisfies MeChatRow["liveActivity"]),
-    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? ["agent-1"],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? ["agent-1"],
-    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? true,
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? true,
   };
 }
@@ -417,38 +413,6 @@ const SESSION_EVENTS: { items: SessionEventRow[]; nextCursor: number | null } = 
   nextCursor: null,
 };
 
-function attention(overrides: Partial<Attention> = {}): Attention {
-  return {
-    id: overrides.id ?? "attention-123456789",
-    originAgentId: overrides.originAgentId ?? "agent-1",
-    originChatId: overrides.originChatId ?? "chat-1",
-    targetHumanId: overrides.targetHumanId ?? "human-agent-self",
-    subject: overrides.subject ?? "Choose rollout scope",
-    body: overrides.body ?? "The deploy can proceed now or wait for the next maintenance window.",
-    requiresResponse: overrides.requiresResponse ?? true,
-    state: overrides.state ?? "open",
-    response: overrides.response ?? null,
-    respondedBy: overrides.respondedBy ?? null,
-    respondedAt: overrides.respondedAt ?? null,
-    cancelled: overrides.cancelled ?? false,
-    cancelledReason: overrides.cancelledReason ?? null,
-    metadata:
-      overrides.metadata ??
-      ({
-        options: {
-          mode: "single",
-          defaultValue: "now",
-          items: [
-            { value: "now", label: "Ship now", hint: "Proceed with the current release." },
-            { value: "later", label: "Wait", hint: "Defer until the next window." },
-          ],
-        },
-      } satisfies Attention["metadata"]),
-    createdAt: overrides.createdAt ?? "2026-05-28T11:54:00.000Z",
-    closedAt: overrides.closedAt ?? null,
-  };
-}
-
 const CHAT_STATUSES: AgentChatStatus[] = [
   {
     agentId: "agent-1",
@@ -456,7 +420,6 @@ const CHAT_STATUSES: AgentChatStatus[] = [
     reachable: true,
     engagement: "active",
     working: true,
-    needsYou: false,
     errored: false,
     activity: {
       agentId: "agent-1",
@@ -469,11 +432,10 @@ const CHAT_STATUSES: AgentChatStatus[] = [
   },
   {
     agentId: "agent-2",
-    main: "needs_you",
+    main: "ready",
     reachable: true,
     engagement: "active",
     working: false,
-    needsYou: true,
     errored: false,
     activity: null,
   },
@@ -610,8 +572,6 @@ function createClient(): QueryClient {
         entityType: "pull_request",
         unreadMentionCount: 0,
         busyAgentIds: [],
-        pendingQuestionAgentIds: [],
-        chatHasOpenQuestion: false,
         chatHasExplicitMentionToMe: false,
         engagementStatus: "archived",
         lastMessageAt: "2026-05-27T09:00:00.000Z",
@@ -633,8 +593,6 @@ function createClient(): QueryClient {
         entityType: "pull_request",
         unreadMentionCount: 0,
         busyAgentIds: [],
-        pendingQuestionAgentIds: [],
-        chatHasOpenQuestion: false,
         chatHasExplicitMentionToMe: false,
         engagementStatus: "archived",
       }),
@@ -651,16 +609,6 @@ function createClient(): QueryClient {
     latestKnownMessageId: "msg-1",
     updatedAt: Date.now(),
   });
-  queryClient.setQueryData(attentionsInChatQueryKey("chat-1"), [
-    attention(),
-    attention({
-      id: "attention-notify",
-      requiresResponse: false,
-      state: "closed",
-      subject: "Rollout noted",
-      closedAt: NOW,
-    }),
-  ]);
   queryClient.setQueryData(chatAgentStatusQueryKey("chat-1"), CHAT_STATUSES);
   queryClient.setQueryData(["agent-skills", "agent-1"], {
     skills: [{ name: "review", description: "Review a change list." }],
@@ -909,14 +857,18 @@ describe("page SSR smoke coverage", () => {
 
   it("renders the large preview pages", async () => {
     const { ChatRowAvatarPreviewPage } = await import("../chat-row-avatar-preview.js");
+    const { ComposeStatusBarPreviewPage } = await import("../compose-status-bar-preview.js");
     const { ContextPreviewPage } = await import("../context-preview.js");
     const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
     const { StyleguidePreviewPage } = await import("../styleguide-preview.js");
+    const { TeamPreviewPage } = await import("../team-preview.js");
 
     expect(renderPage(<StyleguidePreviewPage />)).toContain("First Tree");
     expect(renderPage(<OnboardingPreviewPage />)).toContain("Onboarding");
     expect(renderPage(<ChatRowAvatarPreviewPage />)).toContain("Chat Row Avatar");
     expect(renderPage(<ContextPreviewPage />)).toContain("Context tree");
+    expect(renderPage(<ComposeStatusBarPreviewPage />)).toContain("ComposeStatusBar");
+    expect(renderPage(<TeamPreviewPage />)).toContain("Agent teammates");
   });
 
   it("renders public and settings pages with seeded query data", async () => {
@@ -1068,7 +1020,6 @@ describe("page SSR smoke coverage", () => {
   });
 
   it("renders workspace surfaces with seeded chat data", async () => {
-    const { AttentionCard } = await import("../../components/chat/attention-card.js");
     const { AgentStatusPanel } = await import("../../components/chat/agent-status-panel.js");
     const { ComposeStatusBar } = await import("../../components/chat/compose-status-bar.js");
     const { NewAgentDialog } = await import("../../components/new-agent-dialog.js");
@@ -1110,7 +1061,6 @@ describe("page SSR smoke coverage", () => {
         <AgentRoster selectedAgentId="agent-1" selectedChatId="chat-1" onSelectAgent={noop} onSelectChat={noop} />,
       ),
     ).toContain("Launch planning");
-    expect(renderPage(<AttentionCard attention={attention()} />)).toContain("Choose rollout scope");
     expect(() => renderPage(<NewAgentDialog open onOpenChange={noop} onCreated={noop} />)).not.toThrow();
     expect(
       renderPage(
@@ -1135,8 +1085,7 @@ describe("page SSR smoke coverage", () => {
       ),
     ).toContain("Working");
     // The rail surfaces working / failed only — the working lead renders its
-    // goal (turnText) first; a needs_you agent is owned by the AttentionCard
-    // and must NOT appear here.
+    // goal (turnText) first.
     const statusRail = renderPage(
       <ComposeStatusBar
         chatId="chat-1"
@@ -1144,7 +1093,6 @@ describe("page SSR smoke coverage", () => {
       />,
     );
     expect(statusRail).toContain("Checking the rollout path.");
-    expect(statusRail).not.toContain("needs reply");
     expect(renderPage(<AgentContext agentId="agent-1" />)).toContain("Computer");
     expect(renderPage(<ChatView agentId="agent-1" chatId="chat-1" />)).toContain("Launch planning");
     expect(renderPage(<WorkspacePage />, "/?c=chat-1&origin=manual&with=agent-1&unread=1&watching=1")).toContain(
@@ -1155,9 +1103,7 @@ describe("page SSR smoke coverage", () => {
   it("renders ChatView alternate chrome, composer, and recovery states", async () => {
     const { ChatView } = await import("../workspace/center/chat-view.js");
 
-    const noAttentionClient = createClient();
-    noAttentionClient.setQueryData(attentionsInChatQueryKey("chat-1"), []);
-    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" />, noAttentionClient)).toContain(
+    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" />, createClient())).toContain(
       "Type @ to pick a recipient",
     );
 
@@ -1193,7 +1139,6 @@ describe("page SSR smoke coverage", () => {
       ["chat-detail", "chat-1"],
       chatDetail({ engagementStatus: "deleted", title: "Archived launch" }),
     );
-    deletedClient.setQueryData(attentionsInChatQueryKey("chat-1"), []);
     expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" />, deletedClient)).toContain("Restore");
 
     const emptyClient = createClient();
@@ -1201,15 +1146,12 @@ describe("page SSR smoke coverage", () => {
     emptyClient.setQueryData(["chat-messages-cache", "chat-empty"], []);
     emptyClient.setQueryData(["chat-messages", "chat-empty"], { items: [], nextCursor: null });
     emptyClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
-    emptyClient.setQueryData(attentionsInChatQueryKey("chat-empty"), []);
     expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-empty" />, emptyClient)).toContain(
       "Send a message to start",
     );
 
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
-    const sidebarClient = createClient();
-    sidebarClient.setQueryData(attentionsInChatQueryKey("chat-1"), []);
-    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, sidebarClient)).toContain(
+    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient())).toContain(
       "Participants",
     );
   });

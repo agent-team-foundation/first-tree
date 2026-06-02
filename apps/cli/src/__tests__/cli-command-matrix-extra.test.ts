@@ -1,0 +1,380 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sharedConfigMocks = vi.hoisted(() => ({
+  clientConfigSchema: {
+    server: { url: { _tag: "field" }, token: { _tag: "field", options: { secret: true } } },
+    update: { policy: { _tag: "field" } },
+  },
+  defaultConfigDir: vi.fn(),
+  defaultDataDir: vi.fn(),
+  defaultHome: vi.fn(),
+  getConfigValue: vi.fn(),
+  readConfigFile: vi.fn(),
+  setConfigValue: vi.fn(),
+}));
+
+const bootstrapMocks = vi.hoisted(() => ({
+  ensureFreshAccessToken: vi.fn(),
+  resolveServerUrl: vi.fn(),
+}));
+
+const cliFetchMock = vi.hoisted(() => vi.fn());
+
+const resolveAgentMock = vi.hoisted(() => vi.fn());
+
+const outputMocks = vi.hoisted(() => ({
+  fail: vi.fn((code: string, message: string, exitCode = 1) => {
+    throw Object.assign(new Error(message), { code, exitCode });
+  }),
+  success: vi.fn(),
+}));
+
+const printLineMock = vi.hoisted(() => vi.fn());
+
+const coreMocks = vi.hoisted(() => ({
+  getClientServiceStatus: vi.fn(),
+  installClientService: vi.fn(),
+  isServiceSupported: vi.fn(),
+  isServiceUnitDriftDetected: vi.fn(),
+  removeLocalAgent: vi.fn(),
+  restartClientService: vi.fn(),
+  stopClientService: vi.fn(),
+}));
+
+const clientMocks = vi.hoisted(() => ({
+  SessionRegistry: vi.fn(),
+  cleanWorkspaces: vi.fn(),
+}));
+
+const localAgentMocks = vi.hoisted(() => ({
+  createSdk: vi.fn(),
+  handleSdkError: vi.fn((error: unknown) => {
+    throw error;
+  }),
+}));
+
+vi.mock("@first-tree/shared/config", () => sharedConfigMocks);
+vi.mock("../core/bootstrap.js", () => bootstrapMocks);
+vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
+vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAgentMock }));
+vi.mock("../cli/output.js", () => outputMocks);
+vi.mock("../core/output.js", () => ({
+  print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
+}));
+vi.mock("../core/index.js", () => coreMocks);
+vi.mock("@first-tree/client", () => clientMocks);
+vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
+
+let tempDir = "";
+const originalExit = process.exit;
+const originalStdoutWrite = process.stdout.write;
+
+function jsonResponse(body: unknown, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: vi.fn(async () => body),
+    text: vi.fn(async () => (typeof body === "string" ? body : JSON.stringify(body))),
+  } as unknown as Response;
+}
+
+async function runRegistered(register: (command: Command) => void, args: string[]): Promise<void> {
+  const program = new Command();
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => undefined, writeOut: () => undefined });
+  register(program);
+  await program.parseAsync(["node", "test", ...args]);
+}
+
+async function runAgent(args: string[]): Promise<void> {
+  const { registerAgentCommands } = await import("../commands/agent/index.js");
+  await runRegistered(registerAgentCommands, ["agent", ...args]);
+}
+
+async function runDaemon(args: string[]): Promise<void> {
+  const { registerDaemonCommands } = await import("../commands/daemon/index.js");
+  await runRegistered(registerDaemonCommands, ["daemon", ...args]);
+}
+
+async function runConfig(args: string[]): Promise<void> {
+  const { registerConfigCommands } = await import("../commands/config/index.js");
+  await runRegistered(registerConfigCommands, ["config", ...args]);
+}
+
+async function runChat(args: string[]): Promise<void> {
+  const { registerChatCommands } = await import("../commands/chat/index.js");
+  await runRegistered(registerChatCommands, ["chat", ...args]);
+}
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "ft-cli-matrix-"));
+  vi.clearAllMocks();
+  sharedConfigMocks.defaultConfigDir.mockReturnValue(join(tempDir, "config"));
+  sharedConfigMocks.defaultDataDir.mockReturnValue(join(tempDir, "data"));
+  sharedConfigMocks.defaultHome.mockReturnValue(tempDir);
+  sharedConfigMocks.readConfigFile.mockReturnValue({});
+  sharedConfigMocks.getConfigValue.mockReturnValue(undefined);
+  bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
+  bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
+  resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "kael" });
+  coreMocks.isServiceSupported.mockReturnValue(true);
+  coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd", detail: "pid 123" });
+  coreMocks.stopClientService.mockReturnValue({ ok: true });
+  coreMocks.restartClientService.mockReturnValue({ ok: true });
+  coreMocks.isServiceUnitDriftDetected.mockReturnValue(true);
+  coreMocks.installClientService.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist" });
+  clientMocks.SessionRegistry.mockImplementation(() => ({ load: vi.fn(() => new Map()) }));
+  clientMocks.cleanWorkspaces.mockReturnValue([]);
+  localAgentMocks.createSdk.mockReturnValue({
+    addChatParticipant: vi.fn(async () => [{ agentId: "agent-2" }]),
+    listChats: vi.fn(async () => ({ items: [], nextCursor: null })),
+    listMessages: vi.fn(async () => ({ items: [], nextCursor: null })),
+  });
+  process.exit = vi.fn(((code?: number) => {
+    throw Object.assign(new Error("process.exit"), { code });
+  }) as never);
+});
+
+afterEach(() => {
+  rmSync(tempDir, { force: true, recursive: true });
+  process.exit = originalExit;
+  process.stdout.write = originalStdoutWrite;
+  delete process.env.FIRST_TREE_CHAT_ID;
+});
+
+describe("config commands", () => {
+  it("shows full config, single keys, missing keys, secret masking, and parsed set values", async () => {
+    sharedConfigMocks.readConfigFile.mockReturnValueOnce({
+      server: { url: "https://hub.example", token: "secret" },
+      update: { policy: "manual" },
+    });
+    await runConfig(["show"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.url");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).not.toContain("secret");
+
+    sharedConfigMocks.getConfigValue.mockReturnValueOnce("secret");
+    await runConfig(["show", "server.token"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.token: ***");
+
+    sharedConfigMocks.getConfigValue.mockReturnValueOnce("secret");
+    await runConfig(["get", "server.token", "--show-secrets"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.token: secret");
+
+    sharedConfigMocks.getConfigValue.mockReturnValueOnce(undefined);
+    await runConfig(["get", "server.missing"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.missing: (not set)");
+
+    await runConfig(["set", "update.restart_check_interval_seconds", "15"]);
+    expect(sharedConfigMocks.setConfigValue).toHaveBeenLastCalledWith(
+      join(tempDir, "config", "client.yaml"),
+      "update.restart_check_interval_seconds",
+      15,
+    );
+    await runConfig(["set", "feature.enabled", "true"]);
+    expect(sharedConfigMocks.setConfigValue).toHaveBeenLastCalledWith(
+      join(tempDir, "config", "client.yaml"),
+      "feature.enabled",
+      true,
+    );
+
+    sharedConfigMocks.readConfigFile.mockReturnValueOnce({});
+    await runConfig(["show"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No config found");
+  });
+});
+
+describe("daemon utility commands", () => {
+  it("covers stop, restart, refresh-unit, status, doctor, and home-info paths", async () => {
+    coreMocks.isServiceSupported.mockReturnValueOnce(false);
+    await runDaemon(["stop"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("not supported");
+
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "not-installed", platform: "launchd" });
+    await runDaemon(["stop"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("nothing to stop");
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "launchd" });
+    await runDaemon(["stop"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("already stopped");
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "launchd" });
+    coreMocks.stopClientService.mockReturnValueOnce({ ok: false, reason: "denied" });
+    await expect(runDaemon(["stop"])).rejects.toMatchObject({ code: 1 });
+
+    coreMocks.stopClientService.mockReturnValue({ ok: true });
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "launchd" });
+    await runDaemon(["stop"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Stopped launchd service");
+
+    coreMocks.isServiceSupported.mockReturnValueOnce(false);
+    await runDaemon(["restart"]);
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "not-installed", platform: "systemd" });
+    await expect(runDaemon(["restart"])).rejects.toMatchObject({ code: 1 });
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ state: "active", platform: "systemd" })
+      .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 42" });
+    await runDaemon(["restart"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Restarted systemd service");
+
+    coreMocks.isServiceSupported.mockReturnValueOnce(false);
+    await runDaemon(["refresh-unit"]);
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    await runDaemon(["refresh-unit"]);
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockImplementationOnce(() => {
+      throw new Error("write failed");
+    });
+    await expect(runDaemon(["refresh-unit"])).rejects.toMatchObject({ code: 1 });
+    coreMocks.installClientService.mockReturnValueOnce({ platform: "systemd", unitPath: "/tmp/unit.service" });
+    await runDaemon(["refresh-unit"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("unit rewritten");
+
+    const stdout = vi.fn((_chunk: string | Uint8Array) => true);
+    process.stdout.write = stdout as unknown as typeof process.stdout.write;
+    await runDaemon(["home-info"]);
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+      channel: "dev",
+      home: tempDir,
+      configDir: join(tempDir, "config"),
+      dataDir: join(tempDir, "data"),
+    });
+  });
+});
+
+describe("agent admin and local commands", () => {
+  it("claims, binds, resets, removes, debugs, and controls sessions", async () => {
+    cliFetchMock
+      .mockResolvedValueOnce(jsonResponse({ memberId: "member-1" }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await runAgent(["claim", "kael"]);
+    expect(cliFetchMock).toHaveBeenLastCalledWith(
+      "https://hub.example/api/v1/agents/agent-1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ managerId: "member-1" }) }),
+    );
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 500));
+    await expect(runAgent(["claim", "kael"])).rejects.toMatchObject({ code: "CLAIM_ERROR", exitCode: 1 });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await runAgent(["bind", "client", "kael", "--client-id", "client-1"]);
+    expect(outputMocks.success).toHaveBeenCalledWith({ agentId: "agent-1", clientId: "client-1" });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ error: "already bound" }, false, 409));
+    await expect(runAgent(["bind", "client", "kael", "--client-id", "client-1"])).rejects.toMatchObject({
+      code: "BIND_CLIENT_ERROR",
+      exitCode: 1,
+    });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await runAgent(["reset", "agent-1"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('Agent "agent-1" reset');
+
+    const agentDir = join(tempDir, "config", "agents", "kael");
+    mkdirSync(agentDir, { recursive: true });
+    await runAgent(["remove", "kael"]);
+    expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("kael");
+    await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
+
+    localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
+    await runAgent(["debug", "register", "--agent", "kael"]);
+    expect(outputMocks.success).toHaveBeenCalledWith({ agentId: "agent-1" });
+
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        { chatId: "chat-short", state: "active", runtimeState: null, lastActivityAt: "2026-06-01T00:00:00Z" },
+        {
+          chatId: "chat-with-a-very-long-identifier-that-needs-truncation",
+          state: "suspended",
+          runtimeState: "paused",
+          lastActivityAt: "2026-06-01T01:00:00Z",
+        },
+      ]),
+    );
+    await runAgent(["session", "list", "kael", "--state", "active"]);
+    expect(cliFetchMock).toHaveBeenLastCalledWith(
+      "https://hub.example/api/v1/agents/agent-1/sessions?state=active",
+      expect.any(Object),
+    );
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "chat-with-a-very-long-identifier",
+    );
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse([], true));
+    await runAgent(["session", "list", "kael"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No sessions");
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("bad", false, 503));
+    await expect(runAgent(["session", "list", "kael"])).rejects.toMatchObject({ code: "SESSIONS_ERROR" });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await runAgent(["session", "suspend", "kael", "chat-1"]);
+    expect(cliFetchMock).toHaveBeenLastCalledWith(
+      "https://hub.example/api/v1/agents/agent-1/sessions/chat-1/suspend",
+      expect.objectContaining({ method: "POST" }),
+    );
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("denied", false, 403));
+    await expect(runAgent(["session", "terminate", "kael", "chat-1"])).rejects.toMatchObject({
+      code: "SESSION_CMD_ERROR",
+    });
+  });
+
+  it("cleans workspaces across all agents or one agent", async () => {
+    const workspaces = join(tempDir, "data", "workspaces");
+    mkdirSync(join(workspaces, "kael"), { recursive: true });
+    mkdirSync(join(workspaces, "mira"), { recursive: true });
+    clientMocks.SessionRegistry.mockImplementation(() => ({
+      load: vi.fn(
+        () =>
+          new Map([
+            ["chat-active", { status: "active" }],
+            ["chat-evicted", { status: "evicted" }],
+          ]),
+      ),
+    }));
+    clientMocks.cleanWorkspaces.mockReturnValueOnce(["chat-old"]).mockReturnValueOnce([]);
+
+    await runAgent(["workspace", "clean", "--ttl", "3"]);
+    expect(clientMocks.cleanWorkspaces).toHaveBeenCalledWith(
+      join(workspaces, "kael"),
+      new Set(["chat-active"]),
+      3 * 24 * 60 * 60 * 1000,
+    );
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("1 workspace(s) cleaned");
+
+    await runAgent(["workspace", "clean", "missing"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("0 workspace(s) cleaned");
+
+    rmSync(workspaces, { recursive: true, force: true });
+    await runAgent(["workspace", "clean"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No workspaces found");
+  });
+});
+
+describe("chat lightweight commands", () => {
+  it("lists chats, reads history, invites participants, and handles missing chat context", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["list", "--limit", "5", "--cursor", "next", "--agent", "kael"]);
+    expect(sdk.listChats).toHaveBeenCalledWith({ limit: 5, cursor: "next" });
+
+    await runChat(["history", "chat-1", "--limit", "10", "--cursor", "older"]);
+    expect(sdk.listMessages).toHaveBeenCalledWith("chat-1", { limit: 10, cursor: "older" });
+
+    process.env.FIRST_TREE_CHAT_ID = "chat-1";
+    await runChat(["invite", "mira", "--agent", "kael"]);
+    expect(sdk.addChatParticipant).toHaveBeenCalledWith("chat-1", { agentName: "mira" });
+
+    delete process.env.FIRST_TREE_CHAT_ID;
+    await expect(runChat(["invite", "mira"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
+
+    await expect(runChat(["list", "--limit", "0"])).rejects.toThrow("Limit must be between 1 and 100.");
+  });
+});

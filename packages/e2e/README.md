@@ -20,8 +20,15 @@ the Context Tree.
 | **M1** | doctor + env validation, per-run isolated PG via `docker compose` (tmpfs, random port), spawned `server` + `client --foreground`, smoke against `/healthz` + `/api/v1/health`. | `smoke.e2e.test.ts` |
 | **M2** | `github-mock` (signs + delivers webhooks, stubs outbound `/api/*`), human-agent credentials helper (`framework/credentials.ts`), `ws-listener.ts` for `agent:ws` frames, real `chat-send` over HTTP. | `messaging`, `github-webhook`, `agent-runtime` |
 | **M2.5** | GitHub PR → chat delivery (server self-creates chat + mapping), PG NOTIFY → server WS push → `inbox:deliver` frame on a parallel client. | `github-pr-delivery`, `ws-inbox-push` |
+| **TUI** | `claude-code-tui` runtime coverage: a fake `claude` TUI driven through real tmux (`mocks/fake-claude-tui.mjs`), a tmux-observer driver, a per-agent fixture, and worker-owned worlds for daemon-restart scenarios. Run with `pnpm e2e:tui` (own config, isolated from the SDK suite). One-shot local bring-up: `pnpm e2e:tui:bootstrap`. | `tui-runtime-basic`, `tui-runtime-tool-call`, `tui-askuser-degrade`, `tui-crash-recovery`, `tui-orphan-sweep`, `tui-restart-resume`, `tui-tmux-lifecycle`, `tui-capability-probe` |
 
 Feishu coverage stays in-process per F4 — there is no Feishu e2e mock.
+
+The TUI suite needs a real `tmux` (≥ 3.0) on the runner. The fake binary
+speaks the pane-marker + transcript-JSONL contract the handler observes (not
+the SDK stream-json protocol), so it runs on its own vitest config /
+globalSetup. Design rationale + the scenario↔contract matrix:
+[`experiments/tmux-claude-runtime/FINDINGS.md`](../../experiments/tmux-claude-runtime/FINDINGS.md).
 
 The framework is **deliberately not wired into CI yet** — it needs more
 soak time on real development branches before it can gate PRs. Devs run

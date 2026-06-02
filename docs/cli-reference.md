@@ -275,24 +275,6 @@ first-tree chat open code-agent
 environment. The recipient must be a participant of that chat; if not,
 `invite` first.
 
-### Agent-to-operator structured questions (Claude runtime)
-
-Claude-runtime agents can pause execution mid-turn and prompt the
-operator with a structured `AskUserQuestion` (single- or multi-select,
-up to 4 parallel questions, optional HTML/Markdown previews per option).
-The question lands on the web chat as a clickable card; the operator's
-choice is fed back to the agent and the turn continues.
-
-- **Activation**: automatic for any agent on `runtimeProvider: claude-code`.
-- **Lifecycle**: a pending question is auto-superseded when the chat
-  session is archived (`agent session terminate`) or when the owning
-  client is reclaimed by `first-tree login <token> --override`.
-- **Codex runtime**: not supported. The Codex SDK has no ask-user
-  surface; codex-runtime agents that try to emit a question are
-  rejected with HTTP 403 by the server.
-
-No CLI command is required to use the feature.
-
 ---
 
 ## org

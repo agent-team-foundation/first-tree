@@ -3,12 +3,11 @@ import { useEffect, useState } from "react";
 
 /**
  * Which `data-*-agent` attribute carries each status's timeline anchor.
- * Mirrors the anchors emitted by chat-view (question card / ErrorRow /
- * WorkingTurn) — see `scrollToAgentTimeline`.
+ * Mirrors the anchors emitted by chat-view (ErrorRow / WorkingTurn) — see
+ * `scrollToAgentTimeline`.
  */
 const ANCHOR_ATTR = {
   working: "data-working-agent",
-  needs_you: "data-pending-question-agent",
   failed: "data-error-agent",
 } as const;
 
@@ -46,7 +45,7 @@ function sameKeys(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 
 /**
  * Set of `${main}:${agentId}` for every timeline anchor currently mounted in
- * the DOM (working / needs-you / failed). The status surfaces (compose rail,
+ * the DOM (working / failed). The status surfaces (compose rail,
  * AgentRow) gate the "jump to timeline" affordance on this so a row is only
  * clickable when its target is actually present — no silent no-op.
  *
@@ -59,7 +58,7 @@ function sameKeys(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
  *
  * ⚠️ Why a gate is needed at all: the chat timeline loads only the latest 50
  * messages (no pagination) and only the primary agent's session events, so a
- * non-primary agent's working/error or an old pending question may not be
+ * non-primary agent's working/error anchor may not be
  * mounted. Full jump coverage (older messages / all agents) is a follow-up that
  * depends on message pagination + multi-agent event loading — out of scope here.
  */

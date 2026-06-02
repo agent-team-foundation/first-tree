@@ -21,11 +21,7 @@ import { formatElapsed } from "./working-chip.js";
  * AgentStatusPanel); not the timeline's WorkingTurn (which scrolls away).
  * No box / no fill — it reads as part of the composer, with one faint hairline.
  *
- * Scope: only **working** and **failed** raise the bar. `needs_you` was removed
- * — a Need-Human-Attention now owns the chat bottom via the AttentionCard (which
- * replaces the composer), plus the sidebar AttentionsSection and avatar badges,
- * so echoing "needs reply" here was a duplicate signal (and the old `Reply ↩`
- * jump is gone with it).
+ * Scope: only **working** and **failed** raise the bar.
  *
  * Single line = lead + N:
  *   - lead = the highest-priority active agent (failed > working; within
@@ -50,7 +46,7 @@ const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
 
 /** A failure preempts the working-lead anti-flicker hold (see {@link pickLead}).
- *  `needs_you` no longer reaches the bar, so "alert" is just "failed" now. */
+ *  "alert" is just "failed". */
 function isAlert(s: AgentChatStatus): boolean {
   return s.main === "failed";
 }
@@ -61,9 +57,8 @@ function activityStartedMs(s: AgentChatStatus): number {
 
 /**
  * The agents worth raising the bar for — failed / working — sorted
- * highest-attention first. needs_you / ready / paused / offline are filtered
- * out (needs_you is owned by the AttentionCard, not this rail). Exported for
- * tests.
+ * highest-attention first. ready / paused / offline are filtered out.
+ * Exported for tests.
  */
 export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
   return statuses.filter((s) => ATTENTION.has(s.main)).sort((a, b) => compareMainStatus(a.main, b.main));

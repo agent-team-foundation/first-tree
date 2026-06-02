@@ -138,6 +138,9 @@
   --radius-input: 4px;
   --radius-panel: 6px;
   --radius-dialog: 8px;
+  /* Fully-round — pills, circular discs/dots, avatar rings. The one radius that
+     isn't surface-importance-ascending; it means "capsule/circle", not a size. */
+  --radius-full: 9999px;
 
   /* ---- Font families ------------------------------------------------------- */
   --font-sans: var(--font-sans-stack);
@@ -189,8 +192,8 @@
 
   --color-state-idle: var(--state-idle);
   --color-state-working: var(--state-working);
-  --color-state-needs-you: var(--state-needs-you);
   --color-state-blocked: var(--state-blocked);
+  --color-state-needs-you: var(--state-needs-you);
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
 
@@ -200,8 +203,8 @@
      lib/tones.ts and .context-change-breakdown; raw values defined on :root. */
   --color-state-idle-soft: var(--state-idle-soft);
   --color-state-working-soft: var(--state-working-soft);
-  --color-state-needs-you-soft: var(--state-needs-you-soft);
   --color-state-blocked-soft: var(--state-blocked-soft);
+  --color-state-needs-you-soft: var(--state-needs-you-soft);
   --color-state-error-soft: var(--state-error-soft);
   --color-state-offline-soft: var(--state-offline-soft);
 
@@ -267,17 +270,17 @@
 
   /* Agent-state vocabulary — "green-liveness" model. The system's living
      states are COOL (green = alive+working, blue = present/idle); the states
-     that want your attention are WARM (amber = needs-you, orange = blocked,
-     red = error) so problems pop against the live baseline. Offline is gray
+     that want your attention are WARM (orange = blocked, red = error) so
+     problems pop against the live baseline. Offline is gray
      (absent — falls out of both families). working == brand green at the token
      level; it is told apart from the success ✓ by FORM (pulsing dot + halo for
      working, a static ✓ glyph for done), not by hue. */
   --state-working: oklch(0.72 0.17 150); /* alive + working — brand green, pulses */
   --state-idle: oklch(0.62 0.14 245); /* present, at rest — calm blue */
-  --state-needs-you: oklch(0.82 0.18 75); /* waiting for you — amber */
   --state-blocked: oklch(
     0.74 0.18 58
-  ); /* stuck / blocked + the shared caution/warning hue — a warmer orange than needs-you, still clearly not error-red */
+  ); /* stuck / blocked + the shared caution/warning hue — a warm orange, still clearly not error-red */
+  --state-needs-you: oklch(0.82 0.18 75); /* unsaved/user-action-needed — amber distinct from blocked orange */
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
   /* Unread / attention semantic. Aliased to --state-error today because
@@ -293,10 +296,16 @@
      redefined under .dark). */
   --state-working-soft: color-mix(in oklch, var(--state-working) 14%, transparent);
   --state-idle-soft: color-mix(in oklch, var(--state-idle) 14%, transparent);
-  --state-needs-you-soft: color-mix(in oklch, var(--state-needs-you) 14%, transparent);
   --state-blocked-soft: color-mix(in oklch, var(--state-blocked) 14%, transparent);
+  --state-needs-you-soft: color-mix(in oklch, var(--state-needs-you) 14%, transparent);
   --state-error-soft: color-mix(in oklch, var(--state-error) 14%, transparent);
   --state-offline-soft: color-mix(in oklch, var(--state-offline) 14%, transparent);
+
+  /* Border companions for state-tinted callouts — a slightly stronger 28% mix
+     to pair with the 14% -soft fill, so callout boxes stop hand-rolling
+     color-mix at the call site (same rationale as the -soft family above). */
+  --state-blocked-border: color-mix(in oklch, var(--state-blocked) 28%, transparent);
+  --state-error-border: color-mix(in oklch, var(--state-error) 28%, transparent);
 
   /* Feedback / severity vocabulary (success / warning / error). Aliased to the
      shared base hues so there is ONE value per color — distinct *names* from the
@@ -345,6 +354,12 @@
   --fg-2: oklch(0.36 0 0);
   --fg-3: oklch(0.52 0 0);
   --fg-4: oklch(0.68 0 0);
+  /* Muted neutral tone for inline "Saved" / "Active" confirmations (a Check
+     glyph + label sitting in a form row). Deliberately neutral, not green —
+     understated confirmation. Defined once via var() refs so it resolves per
+     palette; replaces the call-site color-mix duplicated in settings-field
+     + settings/onboarding. */
+  --fg-confirm: color-mix(in oklch, var(--primary) 35%, var(--fg));
 
   --border: oklch(0.9 0 0);
   --border-strong: oklch(0.82 0 0);
@@ -434,8 +449,10 @@
   --sp-12: 3rem; /* 48px */
   --sp-16: 4rem; /* 64px */
   --sp-20: 5rem; /* 80px */
+  --sp-35: 8.75rem; /* 140px */
   --sp-45: 11.25rem; /* 180px */
   --sp-60: 15rem; /* 240px */
+  --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
 
   /* Default color-scheme so native form controls, scrollbars, and the
@@ -804,11 +821,10 @@
 }
 
 /* ── Canonical agent-status pulses (agent-status-ui §9.3) ──────────────
-   working / needs-you breathe the dot body's own opacity — no concentric
-   ring — so every status point keeps an identical footprint and a long
-   roster column stays aligned. opacity-led → GPU-cheap. working breathes a
-   touch faster (reads "alive"); needs-you slower (a calm "waiting for you",
-   not an alarm). reduced-motion falls back to a solid dot. */
+   working breathes the dot body's own opacity — no concentric ring — so
+   every status point keeps an identical footprint and a long roster column
+   stays aligned. opacity-led → GPU-cheap. reduced-motion falls back to a
+   solid dot. */
 @keyframes status-dot-breathe {
   0%,
   100% {
@@ -821,12 +837,8 @@
 .agent-status-pulse--working {
   animation: status-dot-breathe 1.4s ease-in-out infinite;
 }
-.agent-status-pulse--needs-you {
-  animation: status-dot-breathe 1.9s ease-in-out infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .agent-status-pulse--working,
-  .agent-status-pulse--needs-you {
+  .agent-status-pulse--working {
     animation: none;
     opacity: 1;
   }
@@ -1427,22 +1439,6 @@
  */
 .computer-card-stack > * + * {
   border-top: var(--hairline) solid var(--border-faint);
-}
-
-.onboarding-runtime-option {
-  border-radius: var(--radius-input);
-  outline: var(--hairline) solid transparent;
-  outline-offset: var(--sp-0_75);
-}
-
-.onboarding-runtime-option:focus-within {
-  color: color-mix(in oklch, var(--primary) 30%, var(--fg));
-  outline-color: var(--ring);
-}
-
-.onboarding-name-input::placeholder {
-  color: var(--fg-4);
-  opacity: 0.72;
 }
 
 /* Dense table row hover — used by DenseTableRow[data-interactive] */

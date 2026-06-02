@@ -78,17 +78,17 @@ export type SendMessageOptions = {
    * declare `data.purpose === "agent-final-text"`, which marks the send as
    * a silent history-only write (result-sink's final-text turn).
    *
-   * Server-internal callers (adapter inbound, github-delivery, attention
-   * echo) leave this off because their routing decisions are owned by the
-   * caller and validated upstream; they pass `metadata.mentions` or
+   * Server-internal callers (adapter inbound, github-delivery) leave this
+   * off because their routing decisions are owned by the caller and
+   * validated upstream; they pass `metadata.mentions` or
    * `addressedToAgentIds` directly.
    */
   enforceMention?: boolean;
   /**
    * When true and `data.content` is a string, prepend `@<name>` tokens for
    * any participant in `metadata.mentions` whose name is missing from the
-   * content. Used by the agent endpoint and the attention echo so the
-   * rendered message stays in sync with the routing decision (e.g.
+   * content. Used by the agent endpoint so the rendered message stays in
+   * sync with the routing decision (e.g.
    * `result-sink` enrichment puts the trigger sender in
    * `metadata.mentions` but the agent's text rarely includes the @).
    * Web endpoint leaves this off — the composer has the user write the @
@@ -227,8 +227,7 @@ async function sendMessageInner(
 
     // 2. Decide the mention set. Two explicit sources contribute:
     //   - `metadata.mentions: [uuid]` — caller already resolved uuids
-    //     (web composer, agent runtime / result-sink, attention echo,
-    //     adapter inbound).
+    //     (web composer, agent runtime / result-sink, adapter inbound).
     //   - `data.receiverNames: [name]` — caller knows the recipient by name
     //     and wants the server to resolve it against the chat's participant
     //     list (CLI `chat send <name>`). An unknown name is a 400 with a
@@ -347,8 +346,7 @@ async function sendMessageInner(
     // in metadata but didn't write the corresponding `@<name>` in the
     // text, prepend the missing tokens. This keeps the visible message
     // in sync with the routing decision — most importantly when an agent
-    // replies in a group, or when the attention echo re-routes a human's
-    // answer back to the asking agent. Web composer leaves this off
+    // replies in a group. Web composer leaves this off
     // because the human typed the @ themselves and we don't want server
     // to silently mutate human-typed content.
     let outboundContent = effectiveContent;

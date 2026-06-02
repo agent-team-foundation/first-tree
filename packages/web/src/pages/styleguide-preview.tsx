@@ -97,11 +97,10 @@ const BRAND_COLORS: SwatchDef[] = [
 ];
 
 // Green-liveness model: cool = alive (green working / blue idle); warm = wants
-// attention (amber needs-you / orange blocked / red error); gray = offline.
+// attention (orange blocked / red error); gray = offline.
 const STATE_COLORS: SwatchDef[] = [
   { name: "--state-working", token: "var(--state-working)", note: "alive · green (pulses)" },
   { name: "--state-idle", token: "var(--state-idle)", note: "present · blue" },
-  { name: "--state-needs-you", token: "var(--state-needs-you)", note: "waiting for you · amber" },
   { name: "--state-blocked", token: "var(--state-blocked)", note: "stuck · orange" },
   { name: "--state-error", token: "var(--state-error)", note: "error · red" },
   { name: "--state-offline", token: "var(--state-offline)", note: "offline · gray" },
@@ -112,7 +111,6 @@ const STATE_COLORS: SwatchDef[] = [
 const STATE_SOFT_COLORS: SwatchDef[] = [
   { name: "--state-working-soft", token: "var(--state-working-soft)" },
   { name: "--state-idle-soft", token: "var(--state-idle-soft)" },
-  { name: "--state-needs-you-soft", token: "var(--state-needs-you-soft)" },
   { name: "--state-blocked-soft", token: "var(--state-blocked-soft)" },
   { name: "--state-error-soft", token: "var(--state-error-soft)" },
   { name: "--state-offline-soft", token: "var(--state-offline-soft)" },
@@ -614,7 +612,6 @@ export function StyleguidePreviewPage() {
           <Row>
             <AgentStatusChip main="ready" />
             <AgentStatusChip main="working" />
-            <AgentStatusChip main="needs_you" />
             <AgentStatusChip main="paused" />
             <AgentStatusChip main="failed" />
             <AgentStatusChip main="offline" />
@@ -633,12 +630,6 @@ export function StyleguidePreviewPage() {
               <StatusGlyph colorVar="var(--state-offline)" shape="hollow" ariaLabel="hollow" />
               <StatusGlyph colorVar="var(--state-blocked)" shape="pause" ariaLabel="pause" />
               <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" ariaLabel="working pulse" />
-              <StatusGlyph
-                colorVar="var(--state-needs-you)"
-                shape="dot"
-                pulse="needs-you"
-                ariaLabel="needs-you pulse"
-              />
             </span>
           </Row>
           <Subhead>FilterPill</Subhead>

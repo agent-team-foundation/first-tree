@@ -1,4 +1,4 @@
-import { AGENT_SELECTOR_HEADER, type Attention } from "@first-tree/shared";
+import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FirstTreeHubSDK, SdkError } from "../sdk.js";
 
@@ -57,28 +57,6 @@ async function flush<T>(promise: Promise<T>, maxFlushes = 50): Promise<T> {
   if (!settled) throw new Error("flush did not settle within maxFlushes");
   if (error !== undefined) throw error;
   return result as T;
-}
-
-function attention(overrides: Partial<Attention> = {}): Attention {
-  return {
-    id: "att-1",
-    originAgentId: "agent-1",
-    originChatId: "chat-1",
-    targetHumanId: "human-1",
-    subject: "Need review",
-    body: "Please review",
-    requiresResponse: true,
-    state: "open",
-    response: null,
-    respondedBy: null,
-    respondedAt: null,
-    cancelled: false,
-    cancelledReason: null,
-    metadata: {},
-    createdAt: "2026-01-01T00:00:00.000Z",
-    closedAt: null,
-    ...overrides,
-  };
 }
 
 describe("FirstTreeHubSDK public surface", () => {
@@ -222,56 +200,13 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(makeSdk().isHubReachable()).resolves.toBe(false);
   });
 
-  it("covers attention endpoints and query serialization", async () => {
-    const fetchMock = makeFetchMock([
-      jsonResponse(attention()),
-      jsonResponse(attention({ cancelled: true, cancelledReason: "obsolete", state: "closed" })),
-      jsonResponse(attention({ cancelled: true, state: "closed" })),
-      jsonResponse([attention()]),
-      jsonResponse([attention({ id: "att-2" })]),
-      jsonResponse(attention()),
-    ]);
-    const sdk = makeSdk();
-
-    await expect(
-      sdk.attention.raise({
-        target: "human-1",
-        chatId: "chat-1",
-        subject: "Need review",
-        body: "Please review",
-        requiresResponse: true,
-        metadata: {},
-      }),
-    ).resolves.toMatchObject({ id: "att-1" });
-    await expect(sdk.attention.cancel("att/1", "obsolete")).resolves.toMatchObject({ cancelled: true });
-    await expect(sdk.attention.cancel("att-2")).resolves.toMatchObject({ state: "closed" });
-    await expect(sdk.attention.list()).resolves.toHaveLength(1);
-    await expect(
-      sdk.attention.list({ target: "human-1", chat: "chat-1", agent: "agent-1", state: "open", limit: 5 }),
-    ).resolves.toHaveLength(1);
-    await expect(sdk.attention.show("att/1")).resolves.toMatchObject({ id: "att-1" });
-
-    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "https://first-tree.example/api/v1/agent/attention",
-      "https://first-tree.example/api/v1/agent/attention/att%2F1/cancel",
-      "https://first-tree.example/api/v1/agent/attention/att-2/cancel",
-      "https://first-tree.example/api/v1/agent/attention",
-      "https://first-tree.example/api/v1/agent/attention?target=human-1&chat=chat-1&agent=agent-1&state=open&limit=5",
-      "https://first-tree.example/api/v1/agent/attention/att%2F1",
-    ]);
-  });
-
   it("covers private query helpers directly for empty and populated filters", () => {
     const sdk = makeSdk();
-    const attentionQueryString = Reflect.get(sdk, "attentionQueryString");
     const queryString = Reflect.get(sdk, "queryString");
-    if (typeof attentionQueryString !== "function" || typeof queryString !== "function") {
+    if (typeof queryString !== "function") {
       throw new Error("missing query helpers");
     }
 
-    expect(attentionQueryString.call(sdk)).toBe("");
-    expect(attentionQueryString.call(sdk, {})).toBe("");
-    expect(attentionQueryString.call(sdk, { target: "human-1" })).toBe("?target=human-1");
     expect(queryString.call(sdk)).toBe("");
     expect(queryString.call(sdk, { cursor: "next" })).toBe("?cursor=next");
   });

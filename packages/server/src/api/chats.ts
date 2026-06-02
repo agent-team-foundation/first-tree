@@ -132,8 +132,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * Composite per-agent status for this chat's non-human speakers — the
-   * server-authoritative aggregation (reachability + session + live activity
-   * + needs-you) that the right-sidebar AgentRow and the compose status bar
+   * server-authoritative aggregation (reachability + session + live activity)
+   * that the right-sidebar AgentRow and the compose status bar
    * consume. Access is the standard chat-visibility gate; the response set
    * depends only on the chat, not the caller's role.
    */

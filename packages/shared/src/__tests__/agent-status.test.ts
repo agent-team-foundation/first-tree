@@ -13,7 +13,6 @@ import {
 const base: DeriveMainStatusInput = {
   reachable: true,
   errored: false,
-  needsYou: false,
   working: false,
   engagement: "none",
 };
@@ -25,21 +24,14 @@ describe("deriveMainStatus — priority projection", () => {
       deriveMainStatus({
         reachable: false,
         errored: true,
-        needsYou: true,
         working: true,
         engagement: "active",
       }),
     ).toBe("offline");
   });
 
-  it("failed beats needs_you / working / paused", () => {
-    expect(deriveMainStatus({ ...base, errored: true, needsYou: true, working: true, engagement: "suspended" })).toBe(
-      "failed",
-    );
-  });
-
-  it("needs_you beats working / paused", () => {
-    expect(deriveMainStatus({ ...base, needsYou: true, working: true, engagement: "suspended" })).toBe("needs_you");
+  it("failed beats working / paused", () => {
+    expect(deriveMainStatus({ ...base, errored: true, working: true, engagement: "suspended" })).toBe("failed");
   });
 
   it("working beats paused", () => {
@@ -60,17 +52,13 @@ describe("deriveMainStatus — priority projection", () => {
     // by toggling one higher flag at a time on top of a suspended session.
     expect(deriveMainStatus({ ...base, engagement: "suspended" })).toBe("paused");
     expect(deriveMainStatus({ ...base, engagement: "suspended", working: true })).toBe("working");
-    expect(deriveMainStatus({ ...base, engagement: "suspended", working: true, needsYou: true })).toBe("needs_you");
-    expect(deriveMainStatus({ ...base, engagement: "suspended", working: true, needsYou: true, errored: true })).toBe(
-      "failed",
-    );
+    expect(deriveMainStatus({ ...base, engagement: "suspended", working: true, errored: true })).toBe("failed");
     expect(
       deriveMainStatus({
         ...base,
         reachable: false,
         engagement: "suspended",
         working: true,
-        needsYou: true,
         errored: true,
       }),
     ).toBe("offline");
@@ -79,7 +67,7 @@ describe("deriveMainStatus — priority projection", () => {
 
 describe("compareMainStatus", () => {
   it("sorts statuses by attention priority", () => {
-    const shuffled = ["ready", "working", "offline", "needs_you", "paused", "failed"] as const;
+    const shuffled = ["ready", "working", "offline", "paused", "failed"] as const;
     expect([...shuffled].sort(compareMainStatus)).toEqual([...MAIN_STATUS_PRIORITY]);
   });
 
@@ -96,7 +84,6 @@ describe("agentChatStatusSchema", () => {
       reachable: true,
       engagement: "active",
       working: true,
-      needsYou: false,
       errored: false,
       activity: null,
     });
@@ -116,7 +103,6 @@ describe("agentChatStatusSchema", () => {
       reachable: true,
       engagement: "active",
       working: true,
-      needsYou: false,
       errored: false,
       activity: null,
     };
@@ -130,11 +116,10 @@ describe("buildAgentChatStatus", () => {
       agentId: "agent-1",
       reachable: true,
       errored: false,
-      needsYou: true,
       working: true,
       engagement: "active",
     });
-    expect(status.main).toBe("needs_you"); // needs_you outranks working
+    expect(status.main).toBe("working");
     expect(agentChatStatusSchema.safeParse(status).success).toBe(true);
   });
 
@@ -143,7 +128,6 @@ describe("buildAgentChatStatus", () => {
       agentId: "agent-1",
       reachable: false,
       errored: true,
-      needsYou: true,
       working: true,
       engagement: "active",
     });

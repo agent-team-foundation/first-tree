@@ -3,7 +3,6 @@ import { dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
-import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
 import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
@@ -102,7 +101,7 @@ export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions
   upsertLocalTreeGitIgnore(targetRoot);
 
   writeIfMissing(join(targetRoot, "NODE.md"), renderRootNode("Context Tree"));
-  writeIfMissing(join(targetRoot, "AGENTS.md"), renderTreeAgentsInstructions(channelConfig.binName));
+  writeIfMissing(join(targetRoot, "AGENTS.md"), renderTreeAgentsInstructions());
   ensureClaudeSymlink(targetRoot);
   writeIfMissing(join(targetRoot, "members", "NODE.md"), renderMembersDomainNode());
   writeIfMissing(join(targetRoot, "members", "owner", "NODE.md"), renderDefaultMemberNode());

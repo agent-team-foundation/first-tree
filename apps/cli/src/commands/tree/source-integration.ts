@@ -31,12 +31,9 @@ export type SourceIntegrationUpdate = {
 export type SourceIntegrationOptions = {
   bindingMode?: SourceBindingMode;
   /**
-   * Channel-resolved CLI binary name to bake into executable instructions
-   * (e.g. `first-tree-staging attention raise …`). Defaults to `first-tree`
-   * for callers that don't care about channel — primarily tests. Production
-   * callers in `source-integration.ts` / `integrate.ts` pass
-   * `channelConfig.binName` so staging/dev hosts see the binary they
-   * actually have on PATH.
+   * Channel-resolved CLI binary name. Currently unused by the rendered block
+   * (no executable CLI instruction remains), but accepted so callers that
+   * already thread `channelConfig.binName` through don't need to change.
    */
   binName?: string;
   entrypoint?: string;
@@ -58,7 +55,6 @@ const LOCAL_TREE_GITIGNORE_ENTRIES = [`${LOCAL_TREE_TEMP_ROOT}/`, ".agents/skill
 
 export function buildSourceIntegrationBlock(treeRepoName: string, options?: SourceIntegrationOptions): string {
   const details = deriveSourceIntegrationDetails(treeRepoName, options);
-  const binName = options?.binName ?? "first-tree";
 
   return [
     SOURCE_INTEGRATION_BEGIN,
@@ -91,9 +87,9 @@ export function buildSourceIntegrationBlock(treeRepoName: string, options?: Sour
     "",
     "### After every task",
     "",
-    `- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, raise a Need-Human-Attention request (\`${binName} attention raise --requires-response\`) to confirm whether the tree needs updating before opening any code PR — a tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. See \`.claude/skills/attention/SKILL.md\` for body shape and waiting behaviour.`,
-    "- If the attention confirms a tree update is needed (or the change is obviously tree-relevant), open the tree PR first, then the source/workspace code PR.",
-    "- If the task changed only implementation details, skip both the attention and the tree PR — open only the source/workspace code PR.",
+    "- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, confirm whether the tree needs updating before opening any code PR — a tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. Asking a human is [pending redesign, 自行判断].",
+    "- If a tree update is needed (or the change is obviously tree-relevant), open the tree PR first, then the source/workspace code PR.",
+    "- If the task changed only implementation details, skip the tree PR — open only the source/workspace code PR.",
     SOURCE_INTEGRATION_END,
   ].join("\n");
 }
