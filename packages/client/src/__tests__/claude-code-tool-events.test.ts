@@ -303,6 +303,10 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
     return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "context_tree_usage");
   }
 
+  function toolCallEvents(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>) {
+    return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "tool_call");
+  }
+
   it("emits context_tree_usage with the node path when a tree Read succeeds", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding);
@@ -429,6 +433,33 @@ describe("createToolCallProcessor — Context Tree usage signal", () => {
     processor.onMessage(assistantToolUse("r11", "Read", { offset: 0 }));
     processor.onMessage(userToolResult("r11", "x"));
 
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("attaches a write IO candidate when a tree Write succeeds", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, { ...binding, branch: "main" });
+
+    processor.onMessage(assistantToolUse("w1", "Write", { file_path: `${TREE}/members/Gandy2025/NODE.md` }));
+    processor.onMessage(userToolResult("w1", "updated"));
+
+    const toolCalls = toolCallEvents(emit);
+    const final = toolCalls.find((event) => event.payload.toolUseId === "w1" && event.payload.status === "ok");
+    expect(final?.payload.contextTreeIo).toEqual([
+      {
+        action: "write",
+        source: "claude_write_tool",
+        treeRepoUrl: "https://github.com/example/tree",
+        treeBranch: "main",
+        targetKind: "file",
+        targetPath: "members/Gandy2025/NODE.md",
+        metadata: {
+          toolName: "Write",
+          toolUseId: "w1",
+          localPath: `${TREE}/members/Gandy2025/NODE.md`,
+        },
+      },
+    ]);
     expect(usageEvents(emit)).toHaveLength(0);
   });
 });

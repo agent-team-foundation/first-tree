@@ -1,8 +1,8 @@
 import type {
   ContextTreeChangeType,
+  ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
-  ContextTreeUsageEvent,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
@@ -78,6 +78,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
               }}
             />
             <ContextSignal snapshot={snapshot} />
+            <ContextIoByAgent snapshot={snapshot} />
             <ContextUsageFeed snapshot={snapshot} />
           </>
         )
@@ -207,18 +208,20 @@ function ChangeMap({
 }
 
 function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const windowText = snapshot.usage.windowDays === 1 ? "1 day" : `${snapshot.usage.windowDays} days`;
-  const agentText = snapshot.usage.agentCount === 1 ? "1 agent" : `${snapshot.usage.agentCount} agents`;
-  const usageText = snapshot.usage.usageCount === 1 ? "once" : `${snapshot.usage.usageCount} times`;
+  const windowText = snapshot.io.windowDays === 1 ? "1 day" : `${snapshot.io.windowDays} days`;
+  const readAgentText =
+    snapshot.io.summary.read.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.read.agentCount} agents`;
+  const writeAgentText =
+    snapshot.io.summary.write.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.write.agentCount} agents`;
+  const readText =
+    snapshot.io.summary.read.eventCount === 1 ? "1 read" : `${snapshot.io.summary.read.eventCount} reads`;
+  const writeText =
+    snapshot.io.summary.write.eventCount === 1 ? "1 write" : `${snapshot.io.summary.write.eventCount} writes`;
 
-  // Honest copy: each usage event is now a real Read of a Context Tree file
-  // (the agent runtime emits one per tree-file read, with the node path). The
-  // signal knows the tree was read — not why — so it makes no "design
-  // decision" claim. See packages/client/src/handlers/claude-code.ts.
-  if (snapshot.usage.usageCount === 0) {
+  if (snapshot.io.summary.read.eventCount === 0 && snapshot.io.summary.write.eventCount === 0) {
     return (
       <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
-        <span>No agent has read the context tree in the last {windowText}.</span>
+        <span>No explicit Context Tree read/write recorded in the last {windowText}.</span>
       </div>
     );
   }
@@ -226,12 +229,46 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   return (
     <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
       <span>
-        In the last {windowText}, <mark>{agentText}</mark>
+        In the last {windowText}, <mark>{readAgentText}</mark>
       </span>
       <span>
-        read the context tree <mark>{usageText}</mark>.
+        made <mark>{readText}</mark> and <mark>{writeAgentText}</mark> made <mark>{writeText}</mark>.
       </span>
     </div>
+  );
+}
+
+function ContextIoByAgent({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const agents = snapshot.io.agents.slice(0, 8);
+  if (agents.length === 0) return null;
+
+  return (
+    <section className="context-io-agents" aria-label="Context Tree IO by agent">
+      <div className="context-io-agents-header">
+        <span>By agent</span>
+        <span>Explicit IO</span>
+      </div>
+      <ul className="context-io-agents-list">
+        {agents.map((agent) => {
+          const hue = resolveAvatarHue(agent.agentAvatarColorToken, agent.agentId);
+          return (
+            <li key={agent.agentId} className="context-io-agent-row">
+              <span className="context-usage-feed-avatar" aria-hidden="true" style={{ background: hue }}>
+                {agentInitials(agent.agentName)}
+              </span>
+              <span className="context-io-agent-main">
+                <span className="context-usage-feed-agent">{agent.agentName}</span>
+                <span className="context-usage-feed-action">{agent.runtimeProvider}</span>
+              </span>
+              <span className="context-io-agent-counts">
+                <span>{formatNumber(agent.readCount)} read</span>
+                <span>{formatNumber(agent.writeCount)} write</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -253,7 +290,7 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   // Tracks the previous event-id set across renders so we can diff for
   // arrivals on each snapshot refresh without re-flashing on every render.
   const seenIdsRef = useRef<Set<string>>(new Set());
-  const events = snapshot.usage.recentEvents;
+  const events = snapshot.io.recentEvents;
 
   // Tick the displayed `Xm ago` labels every 30s. Cheap — only forces a
   // re-render of this subtree.
@@ -298,11 +335,11 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const remaining = events.length - visible.length;
 
   return (
-    <section className="context-usage-feed" aria-label="Recent agent usage of the Context Tree">
+    <section className="context-usage-feed" aria-label="Recent Context Tree IO">
       <div className="context-usage-feed-header">
         <span className="context-usage-feed-live-dot" aria-hidden="true" />
         <span className="context-usage-feed-live-label">LIVE</span>
-        <span className="context-usage-feed-live-sublabel">· streaming agent activity</span>
+        <span className="context-usage-feed-live-sublabel">· explicit read/write activity</span>
       </div>
       <ul className="context-usage-feed-list">
         {visible.map((event) => {
@@ -320,13 +357,13 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
               </span>
               <span className="context-usage-feed-text">
                 <span className="context-usage-feed-agent">{event.agentName}</span>
-                <span className="context-usage-feed-action"> read </span>
-                {event.nodePath ? (
-                  <span className="context-usage-feed-node" title={event.nodePath}>
-                    {event.nodePath}
+                <span className="context-usage-feed-action">{event.action === "write" ? " wrote " : " read "}</span>
+                {event.targetPath !== "/" ? (
+                  <span className="context-usage-feed-node" title={event.targetPath}>
+                    {event.targetPath}
                   </span>
                 ) : (
-                  <span className="context-usage-feed-action">the context tree</span>
+                  <span className="context-usage-feed-action">the Context Tree</span>
                 )}
                 {chatId ? (
                   <>
@@ -365,7 +402,7 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   );
 }
 
-function chatLabel(event: ContextTreeUsageEvent): string {
+function chatLabel(event: ContextTreeIoEvent): string {
   const trimmed = event.chatTitle?.trim();
   if (trimmed && trimmed.length > 0) return `#${trimmed}`;
   if (event.chatId) return `#${event.chatId.slice(-6)}`;

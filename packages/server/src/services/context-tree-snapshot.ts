@@ -8,6 +8,7 @@ import type {
   ContextTreeChange,
   ContextTreeChangeType,
   ContextTreeEdge,
+  ContextTreeIoSummary,
   ContextTreeNode,
   ContextTreeNodeKind,
   ContextTreeSnapshot,
@@ -185,6 +186,7 @@ export async function getContextTreeSnapshot(
       contextStatus: contextStatus(statusWarning),
       summary,
       usage: emptyUsageSummary(window),
+      io: emptyIoSummary(window),
       updates,
       nodes: nodesWithGhosts,
       edges: tree.edges,
@@ -485,6 +487,19 @@ function emptyUsageSummary(window: ContextTreeSnapshotWindow): ContextTreeUsageS
   return { windowDays: WINDOW_DAYS[window], agentCount: 0, usageCount: 0, recentEvents: [] };
 }
 
+function emptyIoSummary(window: ContextTreeSnapshotWindow): ContextTreeIoSummary {
+  const emptyBucket = { agentCount: 0, eventCount: 0, targetCount: 0 };
+  return {
+    windowDays: WINDOW_DAYS[window],
+    summary: {
+      read: emptyBucket,
+      write: emptyBucket,
+    },
+    agents: [],
+    recentEvents: [],
+  };
+}
+
 function isSafeBranchName(branch: string): boolean {
   if (branch.startsWith("-")) return false;
   if (branch.includes("..") || branch.includes("@{") || branch.includes("\\")) return false;
@@ -517,6 +532,7 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
     },
     summary: { addedCount: 0, editedCount: 0, removedCount: 0, changedNodeCount: 0 },
     usage: emptyUsageSummary(CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS),
+    io: emptyIoSummary(CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS),
     updates: [],
     nodes: [],
     edges: [],

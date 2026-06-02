@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
+import { summarizeContextTreeIo } from "../services/context-tree-io.js";
 import {
   type ContextTreeBinding,
   contextTreeSnapshotWindowDays,
@@ -54,7 +55,10 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       const usage = orgId
         ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
         : snapshot.usage;
-      return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
+      const io = orgId
+        ? await summarizeContextTreeIo(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
+        : snapshot.io;
+      return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
     },
   );
 }

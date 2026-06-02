@@ -1,11 +1,15 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
+import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
+import { putOrgSetting } from "../services/org-settings.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import * as sessionEventService from "../services/session-event.js";
 import { uuidv7 } from "../uuid.js";
@@ -100,7 +104,7 @@ describe("Agent WS — session event protocol (S10)", () => {
     });
 
     const token = await signMemberJwt(userId, memberId, orgId, role);
-    return { agent, token, clientId, organizationId: orgId, memberId };
+    return { agent, token, clientId, organizationId: orgId, memberId, userId };
   }
 
   function waitForFrame(ws: WebSocket, match: (m: unknown) => boolean, timeoutMs = 5000): Promise<unknown> {
@@ -216,6 +220,70 @@ describe("Agent WS — session event protocol (S10)", () => {
       expect(payload.name).toBe("Bash");
       expect(payload.status).toBe("ok");
       expect(payload.durationMs).toBe(15);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("persists Context Tree IO derived from a `session:event` frame", async () => {
+    const seed = await seedBoundAgent("context-io");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const treeRepoUrl = "https://github.com/acme/first-tree-context.git";
+
+    try {
+      await putOrgSetting(
+        app.db,
+        seed.organizationId,
+        "context_tree",
+        { repo: treeRepoUrl, branch: "main" },
+        { updatedBy: seed.userId },
+      );
+      await app.db.insert(chats).values({ id: chatId, organizationId: seed.organizationId });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: seed.agent.uuid,
+          chatId,
+          event: {
+            kind: "tool_call",
+            payload: {
+              toolUseId: "tu-context-write",
+              name: "Write",
+              args: {},
+              status: "ok",
+              contextTreeIo: [
+                {
+                  action: "write",
+                  source: "claude_write_tool",
+                  treeRepoUrl,
+                  treeBranch: "main",
+                  targetKind: "file",
+                  targetPath: "domains/runtime/NODE.md",
+                },
+              ],
+            },
+          },
+        }),
+      );
+
+      const ioRows = await waitForCondition(async () => {
+        const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, chatId));
+        return rows.length > 0 ? rows : null;
+      });
+      const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+
+      expect(items).toHaveLength(1);
+      expect(ioRows).toHaveLength(1);
+      expect(ioRows[0]).toMatchObject({
+        agentId: seed.agent.uuid,
+        chatId,
+        action: "write",
+        source: "claude_write_tool",
+        targetPath: "domains/runtime/NODE.md",
+      });
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

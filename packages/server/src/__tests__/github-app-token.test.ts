@@ -188,6 +188,15 @@ function unavailableSnapshot(detail: string): ContextTreeSnapshot {
     contextStatus: { label: "Team context unavailable", detail, severity: "error" },
     summary: { addedCount: 0, editedCount: 0, removedCount: 0, changedNodeCount: 0 },
     usage: { windowDays: 7, agentCount: 0, usageCount: 0, recentEvents: [] },
+    io: {
+      windowDays: 7,
+      summary: {
+        read: { agentCount: 0, eventCount: 0, targetCount: 0 },
+        write: { agentCount: 0, eventCount: 0, targetCount: 0 },
+      },
+      agents: [],
+      recentEvents: [],
+    },
     updates: [],
     nodes: [],
     edges: [],

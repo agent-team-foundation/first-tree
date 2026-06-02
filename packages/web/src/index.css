@@ -1104,6 +1104,65 @@
   gap: var(--sp-2);
 }
 
+.context-io-agents {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.context-io-agents-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  color: var(--fg-3);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.context-io-agents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.context-io-agent-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1_5);
+  padding: var(--sp-1_5) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.context-io-agent-main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  overflow: hidden;
+}
+
+.context-io-agent-main > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-io-agent-counts {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .context-usage-feed-header {
   display: flex;
   align-items: center;

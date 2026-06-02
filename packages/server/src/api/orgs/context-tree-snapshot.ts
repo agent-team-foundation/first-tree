@@ -2,6 +2,7 @@ import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";
+import { summarizeContextTreeIo } from "../../services/context-tree-io.js";
 import {
   type ContextTreeBinding,
   contextTreeSnapshotWindowDays,
@@ -55,7 +56,11 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
         contextTreeSnapshotWindowDays(window),
         { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
       );
-      return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
+      const io = await summarizeContextTreeIo(app.db, scope.organizationId, contextTreeSnapshotWindowDays(window), {
+        humanAgentId: scope.humanAgentId,
+        memberId: scope.memberId,
+      });
+      return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
     },
   );
 }

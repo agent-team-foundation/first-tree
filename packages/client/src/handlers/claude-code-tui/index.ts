@@ -81,6 +81,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
   // Identifies this client process; scopes tmux session ownership so the orphan
   // sweep and session names never collide with another live client / QA slot
@@ -308,7 +309,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     if (!turnProcessor) {
       turnProcessor = createToolCallProcessor(
         (event) => sessionCtx.emitEvent(event),
-        contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl } : undefined,
+        contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl, branch: contextTreeBranch } : undefined,
       );
     }
     return turnProcessor;

@@ -169,6 +169,79 @@ export const contextTreeUsageSummarySchema = z.object({
 });
 export type ContextTreeUsageSummary = z.infer<typeof contextTreeUsageSummarySchema>;
 
+export const contextTreeIoActionSchema = z.enum(["read", "write"]);
+export type ContextTreeIoAction = z.infer<typeof contextTreeIoActionSchema>;
+
+export const contextTreeIoTargetKindSchema = z.enum(["file", "directory", "repo"]);
+export type ContextTreeIoTargetKind = z.infer<typeof contextTreeIoTargetKindSchema>;
+
+export const contextTreeIoSourceSchema = z.enum([
+  "legacy_context_tree_usage",
+  "claude_read_tool",
+  "claude_write_tool",
+  "codex_file_change",
+  "shell_command",
+]);
+export type ContextTreeIoSource = z.infer<typeof contextTreeIoSourceSchema>;
+
+export const contextTreeIoCandidateSchema = z.object({
+  action: contextTreeIoActionSchema,
+  source: contextTreeIoSourceSchema,
+  treeRepoUrl: z.string().min(1),
+  treeBranch: z.string().min(1).optional(),
+  targetKind: contextTreeIoTargetKindSchema,
+  targetPath: z.string().min(1),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+export type ContextTreeIoCandidate = z.infer<typeof contextTreeIoCandidateSchema>;
+
+export const contextTreeIoBucketSchema = z.object({
+  agentCount: z.number().int().nonnegative(),
+  eventCount: z.number().int().nonnegative(),
+  targetCount: z.number().int().nonnegative(),
+});
+export type ContextTreeIoBucket = z.infer<typeof contextTreeIoBucketSchema>;
+
+export const contextTreeIoAgentSummarySchema = z.object({
+  agentId: z.string(),
+  agentName: z.string(),
+  agentAvatarColorToken: z.string().nullable(),
+  runtimeProvider: z.string(),
+  readCount: z.number().int().nonnegative(),
+  writeCount: z.number().int().nonnegative(),
+  lastReadAt: z.string().nullable(),
+  lastWriteAt: z.string().nullable(),
+});
+export type ContextTreeIoAgentSummary = z.infer<typeof contextTreeIoAgentSummarySchema>;
+
+export const contextTreeIoEventSchema = z.object({
+  id: z.string(),
+  agentId: z.string(),
+  agentName: z.string(),
+  agentAvatarColorToken: z.string().nullable(),
+  runtimeProvider: z.string(),
+  action: contextTreeIoActionSchema,
+  source: contextTreeIoSourceSchema,
+  targetKind: contextTreeIoTargetKindSchema,
+  targetPath: z.string(),
+  chatId: z.string().nullable(),
+  chatTitle: z.string().nullable(),
+  viewerCanAccess: z.boolean(),
+  createdAt: z.string(),
+});
+export type ContextTreeIoEvent = z.infer<typeof contextTreeIoEventSchema>;
+
+export const contextTreeIoSummarySchema = z.object({
+  windowDays: z.number().int().positive(),
+  summary: z.object({
+    read: contextTreeIoBucketSchema,
+    write: contextTreeIoBucketSchema,
+  }),
+  agents: z.array(contextTreeIoAgentSummarySchema),
+  recentEvents: z.array(contextTreeIoEventSchema),
+});
+export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
+
 export const contextTreeSnapshotSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable(),
@@ -178,6 +251,7 @@ export const contextTreeSnapshotSchema = z.object({
   contextStatus: contextTreeStatusSchema,
   summary: contextTreeSummarySchema,
   usage: contextTreeUsageSummarySchema,
+  io: contextTreeIoSummarySchema,
   updates: z.array(contextTreeUpdateSchema),
   nodes: z.array(contextTreeNodeSchema),
   edges: z.array(contextTreeEdgeSchema),

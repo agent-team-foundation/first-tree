@@ -11,7 +11,12 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
+import type {
+  AgentRuntimeConfigPayload,
+  ContextTreeIoCandidate,
+  SessionEvent,
+  SupportedImageMime,
+} from "@first-tree/shared";
 import {
   isImageBatchRefContent,
   isImageRefContent,
@@ -312,6 +317,7 @@ function extractToolResultText(content: unknown): string {
  * (Grep/Glob) are excluded — they scan, they don't read a specific node.
  */
 const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
+const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
 
 /** Extract a string `file_path` argument from a tool_use input, if present. */
 function readFilePathArg(input: unknown): string | null {
@@ -351,7 +357,33 @@ function treeReadNodePath(toolName: string, input: unknown, contextTreePath: str
 }
 
 /** Context Tree binding the tool-call processor needs to emit usage signals. */
-export type ContextTreeBinding = { path: string | null; repoUrl: string | null };
+export type ContextTreeBinding = { path: string | null; repoUrl: string | null; branch?: string | null };
+
+function treeWriteCandidate(
+  toolName: string,
+  toolUseId: string,
+  input: unknown,
+  contextTree: ContextTreeBinding,
+): ContextTreeIoCandidate | null {
+  if (!TREE_WRITE_TOOL_NAMES.has(toolName) || !contextTree.path || !contextTree.repoUrl) return null;
+  const filePath = readFilePathArg(input);
+  if (filePath === null) return null;
+  const targetPath = treeNodePathOf(filePath, contextTree.path);
+  if (targetPath === null) return null;
+  return {
+    action: "write",
+    source: "claude_write_tool",
+    treeRepoUrl: contextTree.repoUrl,
+    ...(contextTree.branch ? { treeBranch: contextTree.branch } : {}),
+    targetKind: "file",
+    targetPath,
+    metadata: {
+      toolName,
+      toolUseId,
+      localPath: filePath,
+    },
+  };
+}
 
 /**
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
@@ -382,6 +414,13 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    const contextTreeIo =
+      status === "ok" && contextTree
+        ? [treeWriteCandidate(entry.name, entry.toolUseId, entry.args, contextTree)].filter(
+            (candidate): candidate is ContextTreeIoCandidate => candidate !== null,
+          )
+        : [];
+
     emit({
       kind: "tool_call",
       payload: {
@@ -391,6 +430,7 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(contextTreeIo.length > 0 ? { contextTreeIo } : {}),
       },
     });
 
@@ -1019,6 +1059,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event), {
       path: contextTreePath,
       repoUrl: contextTreeRepoUrl,
+      branch: contextTreeBranch,
     });
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted
@@ -1317,6 +1358,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
   // `agents.<name>` key). Used as `--workspace-id` for first-tree integrate
   // so a single agent's multi-chat workspaces all bind to the same skill

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { contextTreeIoCandidateSchema } from "./context-tree.js";
 
 export const sessionEventKind = z.enum([
   "tool_call",
@@ -18,6 +19,7 @@ export const toolCallEventPayload = z.object({
   status: z.enum(["pending", "ok", "error"]),
   durationMs: z.number().int().nonnegative().optional(),
   resultPreview: z.string().max(400).optional(),
+  contextTreeIo: z.array(contextTreeIoCandidateSchema).optional(),
 });
 export type ToolCallEventPayload = z.infer<typeof toolCallEventPayload>;
 
