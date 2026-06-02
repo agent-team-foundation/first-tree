@@ -1,6 +1,6 @@
 ---
 name: first-tree-sync
-version: 0.5.0
+version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; on a freshly onboarded tree; or when a GitHub notification was routed `route=sync`. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
@@ -74,10 +74,17 @@ Definitions, signals, and worked examples in
 
 The CLI surface this skill uses today:
 
-- `first-tree tree inspect --json` — confirm the binding
-- `first-tree tree verify` — surface broken `soft_links` and structure issues
-- `git log <ref>..HEAD -- <path>` — recent-change sweep
-- `gh pr create` — open the auto-fix tree PR
+- `first-tree tree status --json` — confirm the workspace binding and
+  resolve the tree path + bound source list from
+  `<workspaceRoot>/.first-tree/workspace.json`. Read
+  `manifest.tree` to locate the tree subdir and iterate
+  `manifest.sources` (or `boundSources[].name`) for the code side of
+  the audit.
+- `first-tree tree verify` — run from inside the tree subdir to
+  surface broken `soft_links` and structure issues.
+- `git log <ref>..HEAD -- <path>` — recent-change sweep over each
+  bound source repo.
+- `gh pr create` — open the auto-fix tree PR.
 
 There is no `first-tree tree audit` command yet. The audit phase reads code
 and tree manually; the fix phase opens PRs via `gh`.
