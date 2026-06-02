@@ -56,11 +56,11 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skills
 
-- `skills/first-tree/SKILL.md` — top-level dispatcher (routing + mandatory pre-task hygiene checklist). Always start here.
+- `skills/first-tree/SKILL.md` — top-level dispatcher (routing + mandatory pre-task hygiene checklist) **and** canonical home for the Communication Principles, three-principal model, Your-Hosting-Daemon mental model, and CLI Namespace Map. Always start here. The `chat send` / `chat invite` long-form CLI mechanics live in `skills/first-tree/references/agent-communication.md`.
 - `skills/first-tree-context/SKILL.md` — Context Tree concepts + sub-entry for `first-tree-onboarding` / `first-tree-sync` / `first-tree-write` / `first-tree-github-scan`. Carries the methodology references.
-- `skills/first-tree-cloud/SKILL.md` — collaboration flows (login, daemon, agent, chat, org, config).
 - `skills/first-tree-github-scan/` — GitHub Scan daemon work.
-- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step needed. Other repo-local skills (`first-tree`, `first-tree-context`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) follow the same convention.
+- All repo-local skills (`first-tree`, `first-tree-context`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`, `github-scan`) are mirrored at `.agents/skills/<name>/` and `.claude/skills/<name>/` as symlinks to `skills/<name>/`. No sync step needed.
+- Operator-only material (`login`, `daemon install / uninstall`, `agent create / claim / bind`, etc.) is **not** in any skill — it lives in `docs/cli-reference.md` and `docs/onboarding-guide.md`. The dedicated `first-tree-cloud` skill it used to live in was retired because nearly all of its content was for human operators, not for agents at runtime.
 
 ## Monorepo Structure
 
@@ -71,7 +71,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 - `packages/github-scan/` — `@first-tree/github-scan` — GitHub notification daemon + inbox runtime
 - `apps/cli/` — `first-tree` — Unified CLI (**published**, the consumer-facing tarball; binaries `first-tree` and `ft`)
 - `docs/` — [quickstart.md](docs/quickstart.md), [onboarding-guide.md](docs/onboarding-guide.md), [cli-reference.md](docs/cli-reference.md), [observability.md](docs/observability.md), [migration/](docs/migration/), [development/](docs/development/), [troubleshooting/](docs/troubleshooting/)
-- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-cloud`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`)
+- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-context`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`, `github-scan`)
 
 ## Architecture Rules
 

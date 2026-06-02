@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree"
-  short_description: "Top-level First Tree routing + pre-task hygiene"
-  default_prompt: "Use $first-tree to give me the top-level First Tree map (workspace collaboration vs. Context management), run the mandatory pre-task hygiene checks (binding / tree HEAD freshness / role), and route me to the right sub-skill."
+  short_description: "Top-level First Tree skill — routing, Communication Principles, daemon mental model, CLI map, pre-task hygiene"
+  default_prompt: "Use $first-tree to give me the top-level First Tree map, the canonical Communication Principles (final-text contract / decision guide / fallback / channel-binary substitution), the hosting-daemon mental model, the CLI Namespace Map, and the mandatory pre-task hygiene (binding / tree HEAD freshness / role)."
