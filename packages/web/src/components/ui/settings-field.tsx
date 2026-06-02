@@ -108,7 +108,7 @@ function SavedIndicator() {
       className="text-label inline-flex items-center fade-in"
       style={{
         gap: "var(--sp-1)",
-        color: "color-mix(in oklch, var(--primary) 35%, var(--fg))",
+        color: "var(--fg-confirm)",
       }}
     >
       <Check className="h-3 w-3" />

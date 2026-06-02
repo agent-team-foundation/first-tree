@@ -355,7 +355,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 background: "var(--bg-raised)",
                 border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-panel)",
-                padding: 24,
+                padding: "var(--sp-6)",
                 boxShadow: "var(--shadow-md)",
               }}
             >
@@ -370,10 +370,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               </p>
               {getClientAgents(confirmRetire.id).length > 0 && (
                 <div
-                  className="mb-3 p-2 rounded"
+                  className="mb-3 p-2 rounded-[var(--radius-input)]"
                   style={{
                     background: "var(--state-blocked-soft)",
-                    border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
+                    border: "var(--hairline) solid var(--state-blocked-border)",
                   }}
                 >
                   <div className="text-label mb-1">Agents currently bound to this computer (delete them first):</div>
@@ -388,10 +388,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               )}
               {retireError && (
                 <div
-                  className="mb-3 p-2 rounded text-body"
+                  className="mb-3 p-2 rounded-[var(--radius-input)] text-body"
                   style={{
                     background: "var(--state-error-soft)",
-                    border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+                    border: "var(--hairline) solid var(--state-error-border)",
                     color: "var(--state-error)",
                   }}
                 >
@@ -430,7 +430,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 background: "var(--bg-raised)",
                 border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-panel)",
-                padding: 24,
+                padding: "var(--sp-6)",
                 boxShadow: "var(--shadow-md)",
               }}
             >
@@ -733,7 +733,7 @@ function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabiliti
   const empty = Object.keys(capabilities).length === 0;
   return (
     <>
-      <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>Runtimes</UppercaseLabel>
+      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Runtimes</UppercaseLabel>
       {empty ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Capabilities not yet reported. Reconnect this computer to refresh.
@@ -762,7 +762,7 @@ function ProviderRow({
   if (!entry) {
     return (
       <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-        <span className="font-medium" style={{ minWidth: 140 }}>
+        <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
           {label}
         </span>
         <span className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -775,7 +775,7 @@ function ProviderRow({
     case "ok":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
+          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--success)" }}>
@@ -786,7 +786,7 @@ function ProviderRow({
     case "unauthenticated":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
+          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
@@ -798,7 +798,7 @@ function ProviderRow({
     case "missing":
       return (
         <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-          <span className="font-medium" style={{ minWidth: 140 }}>
+          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -809,7 +809,7 @@ function ProviderRow({
     case "error":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
+          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-error)" }}>
@@ -835,7 +835,7 @@ function TeamLoadErrorBanner() {
         padding: "var(--sp-2_5) var(--sp-3)",
         borderRadius: "var(--radius-panel)",
         background: "var(--state-error-soft)",
-        border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+        border: "var(--hairline) solid var(--state-error-border)",
         color: "var(--state-error)",
       }}
     >
@@ -900,7 +900,7 @@ function ClientRow({
   return (
     <>
       <DenseTableRow interactive={!restricted} selected={effectiveExpanded} onClick={restricted ? undefined : onToggle}>
-        <DenseTableCell style={{ width: 16 }}>
+        <DenseTableCell style={{ width: "var(--sp-4)" }}>
           {restricted ? null : (
             <span style={{ color: "var(--fg-4)", display: "inline-flex" }}>
               {effectiveExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -937,7 +937,7 @@ function ClientRow({
             get no menu — the underlying ops are owner-checked server-side
             (DELETE /clients/:id 403s on non-owners), so surfacing them here
             would just produce errors. */}
-        <DenseTableCell style={{ width: 1, whiteSpace: "nowrap" }}>
+        <DenseTableCell style={{ width: "var(--hairline)", whiteSpace: "nowrap" }}>
           {restricted ? null : (
             <div className="flex items-center justify-end">
               <RowActionsMenu
@@ -959,13 +959,13 @@ function ClientRow({
             <CapabilityMatrix capabilities={client.capabilities} os={client.os} />
             {boundAgents.length > 0 && (
               <>
-                <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>
+                <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: "var(--sp-1_5)" }}>
                   Bound agents · {boundAgents.length}
                 </UppercaseLabel>
                 <div className="flex flex-col gap-1">
                   {boundAgents.map((a) => (
                     <div key={a.agentId} className="flex items-center gap-2.5 text-body">
-                      <span className="font-medium" style={{ minWidth: 140 }}>
+                      <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
                         {agentName(a.agentId)}
                       </span>
                       <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
