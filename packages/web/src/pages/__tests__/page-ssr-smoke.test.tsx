@@ -580,7 +580,10 @@ function createClient(): QueryClient {
     ],
     nextCursor: null,
   });
-  queryClient.setQueryData(["me", "chats", "unread", "active", true, "manual", "agent-1"], {
+  // The triad is single-select: rendering with both `unread` + `watching`
+  // canonicalizes to Unread, so the component requests watchingParam=false
+  // (the 5th key slot) even though the smoke render passes both.
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], {
     rows: [chatRow()],
     nextCursor: null,
   });
@@ -1041,9 +1044,8 @@ describe("page SSR smoke coverage", () => {
           engagement="active"
           onEngagementChange={noop}
           unread
-          onUnreadChange={noop}
           watching
-          onWatchingChange={noop}
+          onRailFilterChange={noop}
           origin={["manual"]}
           onOriginChange={noop}
           participants={["agent-1"]}

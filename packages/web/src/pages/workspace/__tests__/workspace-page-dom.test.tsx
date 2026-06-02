@@ -44,9 +44,8 @@ vi.mock("../conversations/index.js", () => ({
     engagement,
     onEngagementChange,
     unread,
-    onUnreadChange,
     watching,
-    onWatchingChange,
+    onRailFilterChange,
     origin,
     onOriginChange,
     participants,
@@ -62,9 +61,8 @@ vi.mock("../conversations/index.js", () => ({
     engagement: string;
     onEngagementChange: (view: "active" | "archived" | "all") => void;
     unread: boolean;
-    onUnreadChange: (value: boolean) => void;
     watching: boolean;
-    onWatchingChange: (value: boolean) => void;
+    onRailFilterChange: (value: "all" | "unread" | "watching") => void;
     origin: string[];
     onOriginChange: (value: string[]) => void;
     participants: string[];
@@ -89,10 +87,10 @@ vi.mock("../conversations/index.js", () => ({
       <button type="button" onClick={() => onEngagementChange("archived")}>
         Archived
       </button>
-      <button type="button" onClick={() => onUnreadChange(!unread)}>
+      <button type="button" onClick={() => onRailFilterChange(unread ? "all" : "unread")}>
         Toggle unread
       </button>
-      <button type="button" onClick={() => onWatchingChange(!watching)}>
+      <button type="button" onClick={() => onRailFilterChange(watching ? "all" : "watching")}>
         Toggle watching
       </button>
       <button type="button" onClick={() => onOriginChange(["manual", "github"])}>
@@ -266,22 +264,21 @@ describe("WorkspacePage DOM behavior", () => {
     );
 
     await click(buttonByText(container, "Toggle unread"));
+    expect(locationParams(container).get("unread")).toBe("1");
     await click(buttonByText(container, "Toggle watching"));
     await click(buttonByText(container, "Set origin"));
     await click(buttonByText(container, "Set participants"));
     await click(buttonByText(container, "Set group"));
     const filtered = locationParams(container);
     expect(filtered.get("engagement")).toBe("archived");
-    expect(filtered.get("unread")).toBe("1");
+    expect(filtered.get("unread")).toBeNull();
     expect(filtered.get("watching")).toBe("1");
     expect(filtered.get("origin")).toBe("manual,github");
     expect(filtered.get("with")).toBe("agent-2");
     expect(filtered.get("group")).toBe("recency");
 
     await click(buttonByText(container, "Clear filters"));
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
-      "/?engagement=archived&group=recency",
-    );
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?group=recency");
 
     await act(async () => root.unmount());
   });

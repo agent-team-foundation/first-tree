@@ -121,7 +121,7 @@ function createClient(rows = BASE_ROWS, nextCursor: string | null = "cursor-1"):
     },
   });
   queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], { rows, nextCursor });
-  queryClient.setQueryData(["me", "chats", "unread", "active", true, "manual,github", "agent-1"], {
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual,github", "agent-1"], {
     rows: [],
     nextCursor: null,
   });
@@ -200,9 +200,11 @@ function StatefulList({
       engagement={engagement}
       onEngagementChange={setEngagement}
       unread={unread}
-      onUnreadChange={setUnread}
       watching={watching}
-      onWatchingChange={setWatching}
+      onRailFilterChange={(next) => {
+        setUnread(next === "unread");
+        setWatching(next === "watching");
+      }}
       origin={origin}
       onOriginChange={(next) => setOrigin([...next])}
       participants={participants}
@@ -265,9 +267,9 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("Needs attention");
     expect(container.textContent).toContain("Broken deploy");
     expect(container.textContent).toContain("Waiting approval");
-    expect(container.textContent).toContain("MANUAL");
+    expect(container.textContent).toContain("Manual");
     expect(container.textContent).toContain("GITHUB");
-    expect(container.textContent).toContain("Watching · Needs another pass");
+    expect(container.querySelector('[aria-label="watching"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="failed, 3 unread"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="1 unread"]')).toBeTruthy();
 
@@ -298,37 +300,46 @@ describe("ConversationList", () => {
     );
     expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith("chat-failed", "archived");
 
-    await click(buttonByText(container, "Filter"));
+    await click(container.querySelector('button[aria-label="Filter"]'));
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Manual")) ?? null,
     );
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("GitHub")) ?? null,
     );
-    await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Watching only")) ??
-        null,
-    );
     expect(container.textContent).toContain("Filters");
-    expect(container.textContent).toContain("Watching");
+    expect(container.textContent).toContain("Manual");
+    expect(container.textContent).toContain("GitHub");
 
-    await click(container.querySelector('button[title="Filter to unread only"]'));
-    expect(container.textContent).toContain("Unread");
+    await click(buttonByText(container, "Unread"));
     await flush();
-    expect(container.textContent).not.toContain("Unread 3");
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
+      filter: "unread",
+      engagement: "active",
+      watching: undefined,
+      origin: ["manual", "github"],
+      with: undefined,
+    });
 
     await click(
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
     );
     expect(container.textContent).not.toContain("Filters");
+    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
     await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Recency") ?? null,
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "By time") ?? null,
     );
     expect(container.textContent).toContain("Older");
 
-    await click(buttonByText(container, "Archived"));
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    await click(
+      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Archived")) ?? null,
+    );
+    await click(
+      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Active")) ?? null,
+    );
     await flush();
     expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
       filter: "all",

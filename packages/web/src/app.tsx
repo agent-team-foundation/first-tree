@@ -45,6 +45,14 @@ const ChatRowAvatarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const ConversationListPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/conversation-list-preview.js").then((module) => ({
+        default: module.ConversationListPreviewPage,
+      })),
+    )
+  : null;
+
 const ComposeStatusBarPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/compose-status-bar-preview.js").then((module) => ({
@@ -97,6 +105,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatRowAvatarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ConversationListPreviewPage ? (
+                <Route
+                  path="/preview/conversation-list"
+                  element={
+                    <Suspense fallback={null}>
+                      <ConversationListPreviewPage />
                     </Suspense>
                   }
                 />

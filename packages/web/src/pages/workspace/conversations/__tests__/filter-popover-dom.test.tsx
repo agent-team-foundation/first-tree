@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatSource } from "@first-tree/shared";
+import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,15 +47,15 @@ function checkboxByLabel(label: string): HTMLInputElement {
 
 function StatefulFilter({
   onOriginChange,
-  onWatchingChange,
+  onEngagementChange,
   onResetAll,
 }: {
   onOriginChange: (origin: ReadonlyArray<ChatSource>) => void;
-  onWatchingChange: (watching: boolean) => void;
+  onEngagementChange: (engagement: ChatEngagementView) => void;
   onResetAll: () => void;
 }) {
   const [origin, setOrigin] = useState<ChatSource[]>(["github"]);
-  const [watching, setWatching] = useState(true);
+  const [engagement, setEngagement] = useState<ChatEngagementView>("archived");
   return (
     <FilterPopover
       origin={origin}
@@ -63,17 +63,17 @@ function StatefulFilter({
         setOrigin([...next]);
         onOriginChange(next);
       }}
-      watching={watching}
-      onWatchingChange={(next) => {
-        setWatching(next);
-        onWatchingChange(next);
+      engagement={engagement}
+      onEngagementChange={(next) => {
+        setEngagement(next);
+        onEngagementChange(next);
       }}
       onResetAll={() => {
         setOrigin([]);
-        setWatching(false);
+        setEngagement("active");
         onResetAll();
       }}
-      activeCount={origin.length + (watching ? 1 : 0)}
+      activeCount={origin.length + (engagement !== "active" ? 1 : 0)}
     />
   );
 }
@@ -96,22 +96,28 @@ describe("FilterPopover", () => {
     expect(originLabel("future" as ChatSource)).toBe("future");
   });
 
-  it("toggles origin, watching, reset, reset-all, and done states", async () => {
+  it("toggles status, source, reset, reset-all, and done states", async () => {
     const onOriginChange = vi.fn();
-    const onWatchingChange = vi.fn();
+    const onEngagementChange = vi.fn();
     const onResetAll = vi.fn();
     const container = await renderDom(
-      <StatefulFilter onOriginChange={onOriginChange} onWatchingChange={onWatchingChange} onResetAll={onResetAll} />,
+      <StatefulFilter
+        onOriginChange={onOriginChange}
+        onEngagementChange={onEngagementChange}
+        onResetAll={onResetAll}
+      />,
     );
 
-    const trigger = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Filter"));
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Filter"]');
     expect(trigger?.textContent).toContain("2");
     await click(trigger ?? null);
 
-    expect(document.body.textContent).toContain("Origin");
+    expect(document.body.textContent).toContain("Status");
+    expect(document.body.textContent).toContain("Source");
+    expect(checkboxByLabel("Active").checked).toBe(false);
+    expect(checkboxByLabel("Archived").checked).toBe(true);
     expect(checkboxByLabel("GitHub").checked).toBe(true);
     expect(checkboxByLabel("Manual").checked).toBe(false);
-    expect(checkboxByLabel("Watching only").checked).toBe(true);
 
     await click(checkboxByLabel("Manual"));
     expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github"]);
@@ -125,8 +131,8 @@ describe("FilterPopover", () => {
     expect(onOriginChange).toHaveBeenLastCalledWith([]);
     expect(checkboxByLabel("Manual").checked).toBe(false);
 
-    await click(checkboxByLabel("Watching only"));
-    expect(onWatchingChange).toHaveBeenLastCalledWith(false);
+    await click(checkboxByLabel("Active"));
+    expect(onEngagementChange).toHaveBeenLastCalledWith("all");
 
     await click(
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
@@ -134,6 +140,6 @@ describe("FilterPopover", () => {
     expect(onResetAll).toHaveBeenCalledTimes(1);
 
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    expect(document.body.textContent).not.toContain("Origin");
+    expect(document.body.textContent).not.toContain("Source");
   });
 });
