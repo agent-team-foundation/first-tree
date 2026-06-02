@@ -101,7 +101,7 @@ in `src/` (except `index.css`):
 | 5 | Inline `fontSize`/`fontWeight`/`fontFamily`/`lineHeight`/`letterSpacing` | `text-*` tier + `font-*` class |
 | 6 | Tailwind default text sizes (`text-sm`, `text-xl`, …) | the 6-tier semantic scale |
 | 7 | `var(--x)` referencing a token **not defined** in `index.css` (ghost tokens) | define it in `index.css`, or fix the name |
-| 8 | Tailwind default radius classes (`rounded-sm/md/lg/xl`) | `rounded-[var(--radius-chip\|input\|panel\|dialog)]` |
+| 8 | Tailwind default radius classes (`rounded-sm/md/lg/xl`) | `rounded-[var(--radius-chip\|input\|panel\|dialog\|full)]` |
 | 9 | Tailwind shadows above the 2-tier scale (`shadow-lg/xl/2xl`) | `shadow-[var(--shadow-sm\|md)]` |
 | 10 | The retired `--accent` family (`--accent`, `--accent-dim/-bg/-ring`) | `--primary` for actions/active, `--brand` for signature green |
 
@@ -211,16 +211,19 @@ strings that can't be classes, use the `--sp-*` ladder (mirror of Tailwind:
 `--sp-75` (300px). Hairlines: `--hairline` (1px) / `--hairline-bold` (2px) —
 never write `"1px"`.
 
-**Radius** — semantic, ascending with surface importance:
+**Radius** — semantic, ascending with surface importance, plus one fully-round token:
 | Token | Value | Use |
 |-------|-------|-----|
 | `--radius-chip` | 3px | chips, pills, xs buttons |
 | `--radius-input` | 4px | inputs, default buttons |
 | `--radius-panel` | 6px | cards, panels |
 | `--radius-dialog` | 8px | dialogs, overlays |
+| `--radius-full` | 9999px | fully-round — circular discs/dots, avatar rings, capsule pills |
 
-These four are the only radius tokens — reference them directly
-(`rounded-[var(--radius-panel)]`) or via the matching utilities.
+The first four ascend with surface importance; `--radius-full` is the odd one out —
+it means "circle/capsule", not a size. These five are the only radius tokens —
+reference them directly (`rounded-[var(--radius-panel)]`) or via the matching utilities.
+Never hardcode a radius (`borderRadius: 999` / `"50%"`) — use `--radius-full`.
 
 ---
 

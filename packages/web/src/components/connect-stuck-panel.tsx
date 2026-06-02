@@ -1,3 +1,4 @@
+import { ArrowRight } from "lucide-react";
 import { COPY } from "../pages/onboarding/copy.js";
 
 /**
@@ -44,10 +45,11 @@ export function ConnectStuckPanel() {
         href={COPY.connectComputer.nodeUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-label font-medium self-start"
-        style={{ color: "var(--primary)" }}
+        className="inline-flex items-center text-label font-medium self-start"
+        style={{ gap: "var(--sp-1)", color: "var(--primary)" }}
       >
-        {COPY.connectComputer.nodeLinkLabel} →
+        {COPY.connectComputer.nodeLinkLabel}
+        <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
       </a>
     </div>
   );

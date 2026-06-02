@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { COPY } from "./copy.js";
 
@@ -39,7 +39,7 @@ function GuideSteps({ steps }: { steps: readonly string[] }) {
               width: "var(--sp-4)",
               height: "var(--sp-4)",
               flexShrink: 0,
-              borderRadius: 999,
+              borderRadius: "var(--radius-full)",
               background: "color-mix(in oklch, var(--primary) 14%, transparent)",
               color: "var(--primary)",
             }}
@@ -63,7 +63,7 @@ function WindowDots() {
           style={{
             width: "var(--sp-1_5)",
             height: "var(--sp-1_5)",
-            borderRadius: 999,
+            borderRadius: "var(--radius-full)",
             background: "var(--fg-4)",
             opacity: 0.5,
           }}
@@ -122,8 +122,12 @@ export function TerminalGuide() {
               }}
             />
           </div>
-          <div style={{ color: "color-mix(in oklch, var(--primary) 30%, var(--fg))", marginTop: "var(--sp-1)" }}>
-            ✓ macbook-pro connected
+          <div
+            className="inline-flex items-center"
+            style={{ gap: "var(--sp-1)", color: "var(--success)", marginTop: "var(--sp-1)" }}
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            macbook-pro connected
           </div>
         </div>
       </div>

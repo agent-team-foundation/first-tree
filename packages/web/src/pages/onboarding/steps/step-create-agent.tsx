@@ -1,6 +1,7 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
+import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
 import { COPY } from "../copy.js";
 import { FlowNote, WorkingState } from "../flow-ui.js";
@@ -87,28 +88,12 @@ export function StepCreateAgent() {
         <label htmlFor="onboarding-agent-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
           {COPY.createAgent.nameLabel}
         </label>
-        <input
+        <Input
           id="onboarding-agent-name"
           value={agentDisplayName}
           onChange={(e) => setAgentDisplayName(e.target.value)}
           placeholder="e.g. Buddy, Helper"
           maxLength={200}
-          className="text-body"
-          style={{
-            padding: "var(--sp-2) var(--sp-3)",
-            background: "var(--bg)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg)",
-            outline: "none",
-            caretColor: "var(--primary)",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = "var(--primary)";
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = "var(--border)";
-          }}
         />
       </div>
 

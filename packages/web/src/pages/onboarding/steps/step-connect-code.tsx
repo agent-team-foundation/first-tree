@@ -136,20 +136,9 @@ export function StepConnectCode() {
                 {COPY.connectCode.cta}
               </Button>
               {!showSkipConfirm && (
-                <button
-                  type="button"
-                  onClick={handleSkipClick}
-                  className="text-label"
-                  style={{
-                    background: "transparent",
-                    border: 0,
-                    padding: 0,
-                    cursor: "pointer",
-                    color: "var(--fg-4)",
-                  }}
-                >
+                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkipClick}>
                   {COPY.skipForNow}
-                </button>
+                </Button>
               )}
             </div>
 
@@ -170,20 +159,14 @@ export function StepConnectCode() {
                     <Button type="button" variant="outline" onClick={handleSkipConfirmed}>
                       {COPY.connectCode.skipAnyway}
                     </Button>
-                    <button
+                    <Button
                       type="button"
+                      variant="link"
+                      className="h-auto p-0 text-label"
                       onClick={() => setShowSkipConfirm(false)}
-                      className="text-label"
-                      style={{
-                        background: "transparent",
-                        border: 0,
-                        padding: 0,
-                        cursor: "pointer",
-                        color: "var(--fg-4)",
-                      }}
                     >
                       {COPY.cancel}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </FlowNote>
