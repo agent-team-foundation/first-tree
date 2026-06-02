@@ -339,7 +339,7 @@ export function AgentDetailPage() {
           <BreadcrumbSep />
           <BreadcrumbCurrent>Unable to load</BreadcrumbCurrent>
         </Breadcrumb>
-        <div style={{ maxWidth: 480 }}>
+        <div style={{ maxWidth: "var(--agent-detail-error-rail)" }}>
           <p className="text-body font-semibold" style={{ color: "var(--state-error)", marginBottom: "var(--sp-1_5)" }}>
             {headline}
           </p>
@@ -478,7 +478,7 @@ export function AgentDetailPage() {
             className="inline-flex items-center bg-transparent border-0 cursor-pointer transition-colors hover:text-[var(--fg)] text-caption"
             style={{
               color: "var(--fg-3)",
-              minHeight: 28,
+              minHeight: "var(--sp-7)",
               padding: "0 var(--sp-1_5)",
               marginBottom: "var(--sp-2)",
               marginLeft: "calc(var(--sp-1_5) * -1)",
@@ -570,9 +570,12 @@ export function AgentDetailPage() {
           padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)",
           display: "flex",
           flexDirection: "column",
-          gap: 20,
+          gap: "var(--sp-5)",
           width: "100%",
-          maxWidth: currentTabKey === "resources" || currentTabKey === "usage" ? "70rem" : "52rem",
+          maxWidth:
+            currentTabKey === "resources" || currentTabKey === "usage"
+              ? "var(--agent-detail-wide-rail)"
+              : "var(--agent-detail-rail)",
         }}
       >
         {(testMutation.data || testMutation.error) && (
@@ -695,7 +698,7 @@ function TabsNav({
 }) {
   const navigate = useNavigate();
   return (
-    // The full tab set (up to 6) overflows a phone-width row, so the bar
+    // The full tab set can overflow a phone-width row, so the bar
     // scrolls horizontally instead of wrapping; `shrink-0 whitespace-nowrap`
     // on each Tab keeps labels at natural width and swipeable.
     <TabBar role="tablist" aria-label="Agent configuration sections" style={{ overflowX: "auto" }}>
