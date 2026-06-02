@@ -6,7 +6,7 @@ import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
+import { FlowHint, FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
 import { InstallGuide, ShowMeHow } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
@@ -116,12 +116,12 @@ export function StepConnectCode() {
 
         {installError === "not_configured" ? (
           <>
-            <FlowNote tone="info">{COPY.connectCode.notConfigured}</FlowNote>
+            <FlowHint>{COPY.connectCode.notConfigured}</FlowHint>
             <ContinueWithout onClick={goNext} />
           </>
         ) : installError === "not_admin" ? (
           <>
-            <FlowNote tone="info">{COPY.connectCode.notAdmin}</FlowNote>
+            <FlowHint>{COPY.connectCode.notAdmin}</FlowHint>
             <ContinueWithout onClick={goNext} />
           </>
         ) : (
@@ -172,18 +172,17 @@ export function StepConnectCode() {
               </FlowNote>
             )}
 
-            {installError === "generic" && <FlowNote>{COPY.errors.generic}</FlowNote>}
+            {installError === "generic" && (
+              <FlowHint tone="error" role="alert">
+                {COPY.errors.generic}
+              </FlowHint>
+            )}
             <StatusRow state="waiting" label={COPY.connectCode.waiting} />
 
             {postAttemptStuck && (
-              <FlowNote tone="info">
-                <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-                  <p className="font-medium" style={{ margin: 0, color: "var(--fg)" }}>
-                    {COPY.connectCode.postAttemptStuckTitle}
-                  </p>
-                  <p style={{ margin: 0, color: "var(--fg-3)" }}>{COPY.connectCode.postAttemptStuckBody}</p>
-                </div>
-              </FlowNote>
+              <FlowHint>
+                {COPY.connectCode.postAttemptStuckTitle} {COPY.connectCode.postAttemptStuckBody}
+              </FlowHint>
             )}
 
             {/* Non-owner hint. We can't hand the user a shareable install
@@ -235,7 +234,7 @@ export function StepConnectCode() {
             Loading your projects…
           </p>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
-          <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
+          <FlowHint>{COPY.connectCode.noRepos}</FlowHint>
         ) : (
           <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
         )}

@@ -1,10 +1,10 @@
 import type { AgentVisibility } from "@first-tree/shared";
-import { ArrowRight, CircleAlert } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
 import { COPY } from "../copy.js";
-import { WorkingState } from "../flow-ui.js";
+import { FlowHint, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 // Copy mirrors the New Agent dialog's Visibility block so the two
@@ -125,21 +125,10 @@ export function StepCreateAgent() {
       </fieldset>
 
       {agentError && (
-        // Light inline error (consistent with connect-computer): a quiet line +
-        // icon, not a saturated callout. The Create button is still right
-        // below to retry.
-        <p
-          className="inline-flex items-start text-label"
-          role="alert"
-          style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
-        >
-          <CircleAlert
-            className="h-3.5 w-3.5"
-            style={{ flexShrink: 0, marginTop: "var(--sp-0_5)", color: "var(--fg-4)" }}
-            aria-hidden="true"
-          />
-          <span>{COPY.errors.agentFailed}</span>
-        </p>
+        // Light inline error; the Create button right below is the retry.
+        <FlowHint tone="error" role="alert">
+          {COPY.errors.agentFailed}
+        </FlowHint>
       )}
 
       <div className="flex">

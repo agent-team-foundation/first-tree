@@ -1,9 +1,9 @@
-import { ArrowRight, CircleAlert, Info } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { STUCK_AFTER_MS } from "../../../components/connect-stuck-panel.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { CommandBox, StatusRow } from "../flow-ui.js";
+import { CommandBox, FlowHint, StatusRow } from "../flow-ui.js";
 import { ConnectTroubleshooting, ShowMeHow, TerminalGuide } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
@@ -49,22 +49,12 @@ export function StepConnectComputer() {
         <>
           <CommandBox command={cliCommand} />
           {tokenError ? (
-            // Light, neutral treatment — not a saturated callout box. The state
-            // is recoverable + usually transient, so a quiet line + a real
-            // action button is calmer and clearer than a loud colored panel.
+            // Light treatment — recoverable + usually transient, so a quiet
+            // line + a real action button, not a loud colored panel.
             <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-              <p
-                className="inline-flex items-start text-label"
-                role="alert"
-                style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
-              >
-                <CircleAlert
-                  className="h-3.5 w-3.5"
-                  style={{ flexShrink: 0, marginTop: "var(--sp-0_5)", color: "var(--fg-4)" }}
-                  aria-hidden="true"
-                />
-                <span>{COPY.connectComputer.tokenErrorTitle}</span>
-              </p>
+              <FlowHint tone="error" role="alert">
+                {COPY.connectComputer.tokenErrorTitle}
+              </FlowHint>
               <Button type="button" variant="outline" onClick={retry} className="self-start">
                 {COPY.connectComputer.retry}
               </Button>
@@ -97,20 +87,9 @@ export function StepConnectComputer() {
               {COPY.connectComputer.detecting}
             </p>
           ) : noRuntime ? (
-            // Light treatment, consistent with the token-error state — a quiet
-            // line + icon, not a saturated callout box. The disabled Continue
+            // Light treatment, consistent with the rest — the disabled Continue
             // already signals "one more thing before you can move on".
-            <p
-              className="inline-flex items-start text-label"
-              style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
-            >
-              <Info
-                className="h-3.5 w-3.5"
-                style={{ flexShrink: 0, marginTop: "var(--sp-0_5)", color: "var(--fg-4)" }}
-                aria-hidden="true"
-              />
-              <span>{COPY.connectComputer.noRuntime}</span>
-            </p>
+            <FlowHint>{COPY.connectComputer.noRuntime}</FlowHint>
           ) : null}
         </>
       )}
