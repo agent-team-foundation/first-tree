@@ -229,7 +229,7 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("JSON.stringify");
   });
 
-  it("tools.md pins the final-text contract, Decision guide + Fallback, and points the long-form CLI usage at first-tree-cloud (proposal P3)", () => {
+  it("tools.md pins the final-text contract, Decision guide + Fallback, and points the long-form CLI usage at the first-tree skill", () => {
     const workspace = join(tmpBase, "ws-tools-rules");
     mkdirSync(workspace, { recursive: true });
 
@@ -245,26 +245,27 @@ describe("bootstrapWorkspace", () => {
     // result-sink + agent↔agent echo-loop prevention; see v1 §四 改造 4).
     expect(content).toContain("human observers");
     expect(content).toContain("does NOT wake other agents");
-    // P3 v2 (after yuezengwu's Blocker 1 callout): the Decision guide table
-    // and the Fallback paragraph stay inline because `first-tree-cloud` is
-    // not in CORE_SKILL_NAMES — a tree-less agent (contextTreePath: null)
-    // would otherwise lose them entirely. Only the long-form CLI mechanics
-    // (chat invite / markdown / stdin / mention resolution) sink into the
-    // skill.
+    // The Decision guide table and the Fallback paragraph stay inline
+    // because `first-tree` is in TREE_SKILL_NAMES, not CORE_SKILL_NAMES —
+    // a tree-less agent (contextTreePath: null) would otherwise lose them
+    // entirely. Only the long-form CLI mechanics (chat invite / markdown /
+    // stdin / mention resolution) sink into the skill.
     expect(content).toContain("## Communication Rules");
     expect(content).toContain("Decision guide");
     expect(content).toMatch(/Target is a \*\*human\*\* in this chat/);
     expect(content).toMatch(/Target is an \*\*agent\*\* in this chat/);
     expect(content).toContain("**Fallback**");
     expect(content).toContain("conservative mode");
-    // tools.md still carries the pointer at first-tree-cloud for the
+    // tools.md still carries the pointer at the first-tree skill for the
     // long-form CLI usage (and explicitly notes the tree-less case).
-    expect(content).toContain("## Hub Collaboration");
-    expect(content).toContain("first-tree-cloud");
+    expect(content).toContain("## Workspace Collaboration");
+    expect(content).toContain("`first-tree` skill");
     // Old contract text must stay gone — these are the lines the v1.5 spec
     // requires 改造 4 to overwrite.
     expect(content).not.toContain("Your final text response is automatically delivered");
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+    // Stale pointer at the retired first-tree-cloud skill must stay gone.
+    expect(content).not.toContain("first-tree-cloud");
   });
 
   it("tools.md is generated from the shared tools doc helper", () => {
@@ -286,14 +287,14 @@ describe("bootstrapWorkspace", () => {
     // Regression for the multi-env follow-up: the agent-facing tools.md used
     // to hardcode `first-tree chat send`, which on staging hosts asks the
     // agent to call a binary that doesn't exist (only `first-tree-staging`
-    // is installed). After proposal P3 sank the long-form CLI usage into the
-    // `first-tree-cloud` skill, tools.md no longer carries `chat invite` /
-    // `agent list` examples — but the load-bearing `chat send <name>`
+    // is installed). After the long-form CLI usage was sunk into the
+    // top-level `first-tree` skill, tools.md no longer carries `chat invite`
+    // / `agent list` examples — but the load-bearing `chat send <name>`
     // directive (and the pointer's binary substitution note) still go
     // through `${bin}`, so the channel binding must thread through.
     // The full chat-send/invite/agent-list usage now lives in
-    // `skills/first-tree-cloud/references/agent-communication.md`; that
-    // file's channel-correctness is covered by the skill-content tests in
+    // `skills/first-tree/references/agent-communication.md`; that file's
+    // channel-correctness is covered by the skill-content tests in
     // `apps/cli/src/__tests__/skill-artifacts.test.ts`.
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     const workspace = join(tmpBase, "ws-tools-staging");

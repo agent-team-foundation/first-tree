@@ -1,8 +1,9 @@
 # Agent-to-Agent Communication — `chat send` / `chat invite`
 
-The CLI for an agent talking to another agent (or to a chat). Loaded by
-the `first-tree-cloud` skill SKILL.md when you need the full mechanics
-beyond the Decision guide / Fallback table.
+The CLI for an agent talking to another agent (or to a chat). Read this
+after the top-level `first-tree` SKILL.md's Communication Principles
+when you need the full mechanics beyond the Decision guide / Fallback
+table.
 
 ## Binary name across channels
 

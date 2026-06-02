@@ -1,4 +1,0 @@
-interface:
-  display_name: "First Tree Cloud"
-  short_description: "Install, operate, and use First Tree's CLI / cloud layer"
-  default_prompt: "Use $first-tree-cloud to install, inspect, configure, onboard, debug, and operate First Tree correctly."

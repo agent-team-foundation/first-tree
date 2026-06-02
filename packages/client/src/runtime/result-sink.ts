@@ -23,9 +23,9 @@ import type { AgentIdentity } from "./handler.js";
  * reply kept the conversation alive forever. Final text now reaches the
  * chat for **human observers** only; to make another agent take action,
  * the agent must explicitly call `first-tree chat send <name>` (see the
- * `first-tree-cloud` skill — its SKILL.md "Communication Rules" decision
- * table and `references/agent-communication.md` carry the full directive;
- * `tools.md` keeps only the final-text contract and a pointer).
+ * top-level `first-tree` skill — its SKILL.md "Communication Principles"
+ * decision table and `references/agent-communication.md` carry the full
+ * directive; `tools.md` keeps only the final-text contract and a pointer).
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
