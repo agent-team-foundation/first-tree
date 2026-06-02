@@ -103,12 +103,17 @@ async function main() {
   log(`fake-tui log:  ${tui.logPath}`);
   log(`tmux sessions: tmux ls   (look for ftth-<tag>-… prefix)`);
   log("");
-  log("Send a user message:");
+  log("Send a user message (mention the agent so it actually wakes — the");
+  log("group-chat policy rejects a send with no explicit recipient):");
   log(
     `  curl -X POST '${handle.serverBaseUrl}/api/v1/chats/${tui.chatId}/messages' \\\n` +
       `       -H 'Content-Type: application/json' \\\n` +
       `       -H 'Authorization: Bearer ${handle.credentials?.accessToken}' \\\n` +
-      `       -d '{"format":"text","content":"ping from dev-bootstrap"}'`,
+      `       -d '${JSON.stringify({
+        format: "text",
+        content: "ping from dev-bootstrap",
+        metadata: { mentions: [tui.agentId] },
+      })}'`,
   );
   log("");
   log("Tail what the fake-tui process saw:");
