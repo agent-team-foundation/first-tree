@@ -299,7 +299,7 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // blocks unix sockets outside the workspace (notably ~/.docker/run/docker.sock)
   // and any out-of-tree write the agent legitimately needs. We run with
   // `danger-full-access` and rely on the agent to gate irreversible actions
-  // via Need-Human-Attention (NHA) instead of a sandbox-level wall.
+  // itself instead of a sandbox-level wall.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
@@ -1126,12 +1126,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
     });
-    // Core skills (`attention`) ship with every agent, with or without a
-    // Context Tree. Slow path runs on first start or CLI-version drift —
-    // both moments when the on-disk skill payload could be missing or
-    // stale, so refresh unconditionally here. Tree-bound agents also
-    // receive `attention` via `ensureFirstTreeBinding` below; the
-    // duplicate copy is idempotent and the two paths stay independent.
+    // Core skills ship with every agent, with or without a Context Tree.
+    // The core skill set is currently empty, so this is effectively a no-op;
+    // the wiring stays so re-introducing one needs no handler change.
     installCoreSkills({
       workspacePath: workspace,
       log: (msg) => sessionCtx.log(msg),

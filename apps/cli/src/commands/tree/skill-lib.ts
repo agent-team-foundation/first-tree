@@ -16,12 +16,9 @@ import { fileURLToPath } from "node:url";
  * Skills that every agent needs regardless of Context Tree binding. These
  * are deployed by `bootstrapWorkspace` (packages/client) on every session
  * start, so the on-disk `SKILL.md` is reachable even for agents that never
- * run `tree integrate`. Currently just `attention` — the NHA primitive is
- * a universal agent concern, not a tree concern, and the slimmed-down
- * `tools.md` injected at bootstrap points at `attention/SKILL.md` for the
- * full playbook.
+ * run `tree integrate`. Currently empty.
  */
-export const CORE_SKILL_NAMES = ["attention"] as const;
+export const CORE_SKILL_NAMES = [] as const;
 
 /**
  * Skills that ship with a Context Tree binding. These are deployed by the

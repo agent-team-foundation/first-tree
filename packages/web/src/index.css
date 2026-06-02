@@ -189,7 +189,6 @@
 
   --color-state-idle: var(--state-idle);
   --color-state-working: var(--state-working);
-  --color-state-needs-you: var(--state-needs-you);
   --color-state-blocked: var(--state-blocked);
   --color-state-error: var(--state-error);
   --color-state-offline: var(--state-offline);
@@ -200,7 +199,6 @@
      lib/tones.ts and .context-change-breakdown; raw values defined on :root. */
   --color-state-idle-soft: var(--state-idle-soft);
   --color-state-working-soft: var(--state-working-soft);
-  --color-state-needs-you-soft: var(--state-needs-you-soft);
   --color-state-blocked-soft: var(--state-blocked-soft);
   --color-state-error-soft: var(--state-error-soft);
   --color-state-offline-soft: var(--state-offline-soft);
@@ -261,17 +259,16 @@
 
   /* Agent-state vocabulary — "green-liveness" model. The system's living
      states are COOL (green = alive+working, blue = present/idle); the states
-     that want your attention are WARM (amber = needs-you, orange = blocked,
-     red = error) so problems pop against the live baseline. Offline is gray
+     that want your attention are WARM (orange = blocked, red = error) so
+     problems pop against the live baseline. Offline is gray
      (absent — falls out of both families). working == brand green at the token
      level; it is told apart from the success ✓ by FORM (pulsing dot + halo for
      working, a static ✓ glyph for done), not by hue. */
   --state-working: oklch(0.72 0.17 150); /* alive + working — brand green, pulses */
   --state-idle: oklch(0.62 0.14 245); /* present, at rest — calm blue */
-  --state-needs-you: oklch(0.82 0.18 75); /* waiting for you — amber */
   --state-blocked: oklch(
     0.74 0.18 58
-  ); /* stuck / blocked + the shared caution/warning hue — a warmer orange than needs-you, still clearly not error-red */
+  ); /* stuck / blocked + the shared caution/warning hue — a warm orange, still clearly not error-red */
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
   /* Unread / attention semantic. Aliased to --state-error today because
@@ -287,7 +284,6 @@
      redefined under .dark). */
   --state-working-soft: color-mix(in oklch, var(--state-working) 14%, transparent);
   --state-idle-soft: color-mix(in oklch, var(--state-idle) 14%, transparent);
-  --state-needs-you-soft: color-mix(in oklch, var(--state-needs-you) 14%, transparent);
   --state-blocked-soft: color-mix(in oklch, var(--state-blocked) 14%, transparent);
   --state-error-soft: color-mix(in oklch, var(--state-error) 14%, transparent);
   --state-offline-soft: color-mix(in oklch, var(--state-offline) 14%, transparent);
@@ -795,11 +791,10 @@
 }
 
 /* ── Canonical agent-status pulses (agent-status-ui §9.3) ──────────────
-   working / needs-you breathe the dot body's own opacity — no concentric
-   ring — so every status point keeps an identical footprint and a long
-   roster column stays aligned. opacity-led → GPU-cheap. working breathes a
-   touch faster (reads "alive"); needs-you slower (a calm "waiting for you",
-   not an alarm). reduced-motion falls back to a solid dot. */
+   working breathes the dot body's own opacity — no concentric ring — so
+   every status point keeps an identical footprint and a long roster column
+   stays aligned. opacity-led → GPU-cheap. reduced-motion falls back to a
+   solid dot. */
 @keyframes status-dot-breathe {
   0%,
   100% {
@@ -812,12 +807,8 @@
 .agent-status-pulse--working {
   animation: status-dot-breathe 1.4s ease-in-out infinite;
 }
-.agent-status-pulse--needs-you {
-  animation: status-dot-breathe 1.9s ease-in-out infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .agent-status-pulse--working,
-  .agent-status-pulse--needs-you {
+  .agent-status-pulse--working {
     animation: none;
     opacity: 1;
   }

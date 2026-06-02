@@ -12,13 +12,11 @@
  *     Archive (for every mapped human) once *all* bound entities are
  *     terminal (`entity_state` in `('closed','merged')`) AND the chat has
  *     been silent for `mappedIdleSeconds` (default 1h). Additionally:
- *     skip the whole chat if it has any `pending` ask-user question, and
  *     skip individual users whose `unread_mention_count > 0`.
  *
  *   Route B — chats with no GitHub mapping. Archive only the (chat, user)
  *     pairs where the user has no unread mentions AND the chat has been
- *     silent for `unmappedIdleSeconds` (default 12h). Same chat-level
- *     pending-question skip as Route A.
+ *     silent for `unmappedIdleSeconds` (default 12h).
  *
  * Per-user safety: writes use the same UPSERT + setWhere guard as the
  * removed `archiveChatsForMergedPr` — only implicit-active or
@@ -68,16 +66,11 @@ export async function sweepChatArchive(
  * Route A: chats whose every GitHub-mapped entity is terminal AND have been
  * silent for at least `idleSeconds`. Archives every (chat, human) pair from
  * the mapping table — matches the legacy `archiveChatsForMergedPr` reach,
- * minus the per-user unread / chat-level pending-question carve-outs added
- * here.
+ * minus the per-user unread carve-out added here.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
  *  - The inner CTE picks chats whose `BOOL_AND(entity_state IN
- *    ('closed','merged'))` and idle timestamp both hold, and that have no
- *    `pending` ask-user question outstanding. The pending-question carve-out
- *    is chat-scoped (a single pending row defers the whole chat) because the
- *    askee is always some human member of the chat, so per-user dispatch
- *    would not buy anything and the chat-level skip is cheaper.
+ *    ('closed','merged'))` and idle timestamp both hold.
  *  - The outer SELECT joins back to the mapping table for the (chat,
  *    human) pairs. A second per-user guard excludes humans whose
  *    `unread_mention_count > 0` — the schema column is semantically
@@ -100,25 +93,6 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
        WHERE c.parent_chat_id IS NULL
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
-         -- NHA archive policy: don't auto-archive a chat that still has
-         -- an open ask. The unanswered attention is by definition still
-         -- "needs attention" — archiving would hide it from the chat list
-         -- until the human un-archives. Closed attentions are fine to
-         -- archive past (they stay as an audit trail on the row).
-         AND NOT EXISTS (
-           SELECT 1 FROM attentions a
-            WHERE a.origin_chat_id = m.chat_id
-              AND a.state = 'open'
-              AND a.requires_response = true
-         )
-         -- Retained for backward compat with pre-M0 historical rows;
-         -- post-M0 nothing writes to pending_questions so this is a
-         -- no-op. Kept as the legacy half of an OR-style guard while
-         -- the table is around (planned removal in a follow-up).
-         AND NOT EXISTS (
-           SELECT 1 FROM pending_questions pq
-            WHERE pq.chat_id = m.chat_id AND pq.status = 'pending'
-         )
        GROUP BY m.chat_id
       HAVING bool_and(m.entity_state IN ('closed', 'merged'))
        LIMIT ${batchSize}
@@ -150,9 +124,7 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
  *     chat in their Archived tab without ever having seen it,
  *   - the user has no unread mentions,
  *   - the user's engagement is currently `active` (either an explicit
- *     row or the implicit default via missing row),
- *   - the chat has no `pending` ask-user question outstanding (chat-level
- *     skip, same rationale as Route A: askee is always a human member).
+ *     row or the implicit default via missing row).
  *
  * The `last_read_at IS NOT NULL` condition implies `cus` is materialised,
  * so the `COALESCE(cus.engagement_status, 'active') = 'active'` clause
@@ -184,18 +156,6 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
        AND cus.last_read_at IS NOT NULL
        AND cus.unread_mention_count = 0
        AND cus.engagement_status = 'active'
-       -- See sweepMapped: same NHA archive policy. An open ask in the
-       -- chat keeps it out of the auto-archive sweep.
-       AND NOT EXISTS (
-         SELECT 1 FROM attentions a
-          WHERE a.origin_chat_id = cm.chat_id
-            AND a.state = 'open'
-            AND a.requires_response = true
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM pending_questions pq
-          WHERE pq.chat_id = cm.chat_id AND pq.status = 'pending'
-       )
      LIMIT ${batchSize}
         ON CONFLICT (chat_id, agent_id) DO UPDATE
            SET engagement_status = 'archived'

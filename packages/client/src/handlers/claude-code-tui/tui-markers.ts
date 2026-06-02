@@ -11,9 +11,6 @@
 /** Pane shows this while a turn is in flight. Disappearance signals turn-end candidacy. */
 export const WORKING_MARKER = "esc to interrupt";
 
-/** Pane shows this while the AskUserQuestion selection menu is open. */
-export const ASKUSER_MENU_FOOTER = "Enter to select";
-
 /** Pane shows this after a successful `claude --dangerously-skip-permissions` start. */
 export const READY_MARKER = "bypass permissions on";
 
@@ -31,9 +28,6 @@ export const TOOL_BOX_HEADER_RE = /^⏺[\s ]+[A-Za-z][A-Za-z0-9_-]*\([^)]*\)\s*$
 
 /** Continuation line inside a tool-call box, e.g. `  ⎿ Result text`. */
 export const TOOL_BOX_CONT_RE = /^\s+⎿\s/;
-
-/** Tool name claude renders for the AskUser tool. */
-export const ASKUSER_TOOL_NAME = "AskUserQuestion";
 
 /** All tmux sessions we own start with this prefix; orphan sweep filters by it. */
 export const TMUX_SESSION_PREFIX = "ftth-";

@@ -12,7 +12,6 @@ import { prepareSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
-import { formatQuestionsAsText } from "./ask-user-degrader.js";
 import {
   capturePane,
   deriveSessionName,
@@ -26,7 +25,7 @@ import {
   waitForReady,
 } from "./tmux-session.js";
 import { type RawTranscriptEntry, TranscriptTailer, transcriptPathFor } from "./transcript-tail.js";
-import { ASKUSER_MENU_FOOTER, ASKUSER_TOOL_NAME, WORKING_MARKER } from "./tui-markers.js";
+import { WORKING_MARKER } from "./tui-markers.js";
 import { resolveTurnDisposition } from "./turn-disposition.js";
 
 const TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -71,8 +70,7 @@ async function orphanSweep(clientId: string): Promise<void> {
  * Replaces the SDK-based `claude-code` handler with a tmux-driven equivalent
  * for the post-SDK-sunset world. Input is injected via `paste-buffer`;
  * events stream from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`
- * (claude's per-session transcript). AskUserQuestion is gracefully degraded
- * to a plain-text round-trip via Escape-cancel — the tool stays enabled.
+ * (claude's per-session transcript).
  *
  * See `experiments/tmux-claude-runtime/FINDINGS.md` for the design rationale
  * and PoC verification matrix.
@@ -180,6 +178,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const args: string[] = [
       shellQuote(claudeBin),
       "--dangerously-skip-permissions",
+      // AskUserQuestion is not supported in First Tree. `--dangerously-skip-permissions`
+      // bypasses the permission layer, so disabling it via permissions is impossible here;
+      // `--disallowed-tools` removes the tool from the model's context entirely instead.
+      "--disallowed-tools",
+      "AskUserQuestion",
       "--session-id",
       shellQuote(sessionId),
     ];
@@ -275,14 +278,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   /**
    * Process raw transcript entries: feed them to the shared tool-call
    * processor (which emits assistant_text / thinking / tool_call events),
-   * and pull out two side channels we need locally:
-   *   - assistant text → accumulated for `forwardResult`
-   *   - AskUserQuestion tool_use → degraded to plain text
+   * and pull out the assistant text → accumulated for `forwardResult`.
    */
   type TurnState = {
     finalTexts: string[];
-    askUserTexts: string[];
-    seenToolUseIds: Set<string>;
   };
 
   function consumeEntry(entry: RawTranscriptEntry, sessionCtx: SessionContext, state: TurnState): void {
@@ -298,10 +297,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       if (blk.type === "text" && typeof blk.text === "string") {
         const text = blk.text.trim();
         if (text.length > 0) state.finalTexts.push(blk.text);
-      } else if (blk.type === "tool_use" && typeof blk.id === "string" && blk.name === ASKUSER_TOOL_NAME) {
-        if (state.seenToolUseIds.has(blk.id)) continue;
-        state.seenToolUseIds.add(blk.id);
-        state.askUserTexts.push(formatQuestionsAsText(blk.input));
       }
     }
   }
@@ -337,11 +332,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     sessionCtx.setRuntimeState("working");
     turnAborted = false;
 
-    const state: TurnState = { finalTexts: [], askUserTexts: [], seenToolUseIds: new Set() };
+    const state: TurnState = { finalTexts: [] };
     let turnFailed = false;
     let timedOut = false;
     let everSawWorking = false;
-    let askUserEscapeArmed = false;
     let brokeOnIdle = false;
 
     try {
@@ -365,25 +359,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // A turn that finishes between two polls may never paint the working
         // marker; treat any produced output as evidence the turn ran so a fast
         // reply doesn't block until TURN_TIMEOUT.
-        const producedOutput = state.finalTexts.length > 0 || state.askUserTexts.length > 0;
+        const producedOutput = state.finalTexts.length > 0;
         const sawActivity = everSawWorking || producedOutput;
-
-        if (pane.includes(ASKUSER_MENU_FOOTER)) {
-          // Cancel the TUI selection menu once per appearance. The footer stays
-          // painted for several polls after Escape, so re-sending it every tick
-          // would land stray Escapes after the menu closes — where Escape
-          // interrupts the very turn that was meant to continue.
-          if (!askUserEscapeArmed) {
-            askUserEscapeArmed = true;
-            try {
-              await sendKey(tmuxSessionName, "Escape");
-            } catch (err) {
-              sessionCtx.log(`tui Escape failed: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-        } else {
-          askUserEscapeArmed = false;
-        }
 
         if (sawActivity && !working) {
           // Final flush grace period — claude writes the closing
@@ -435,15 +412,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       });
     }
 
-    // Compose the final user-facing text. AskUserQuestion text takes priority
-    // — when claude tried to ask a structured question, that question (not
-    // any preceding assistant text) is the meaningful payload for the user.
-    let finalText = "";
-    if (state.askUserTexts.length > 0) {
-      finalText = state.askUserTexts.join("\n\n");
-    } else {
-      finalText = state.finalTexts.join("\n\n").trim();
-    }
+    // Compose the final user-facing text from the accumulated assistant text.
+    const finalText = state.finalTexts.join("\n\n").trim();
 
     // Decide delivery + ack/state from how the turn ended. The `forward` /
     // `ack` flags are independent of forwardResult's own success, so compute

@@ -191,9 +191,10 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   });
   generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
 
-  // Core skills (`attention`) ship with every agent, tree or not — the slimmed
-  // tools.md only carries a pointer, so the payload must exist before the first
-  // turn. Degrade gracefully when the CLI is unavailable.
+  // Core skills ship with every agent, tree or not. The core skill set is
+  // currently empty so this is effectively a no-op, but the wiring stays so
+  // re-introducing one needs no bootstrap change. Degrade gracefully when the
+  // CLI is unavailable.
   installCoreSkills({
     workspacePath: workspace,
     log: (msg) => sessionCtx.log(msg),

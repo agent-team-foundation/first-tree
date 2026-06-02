@@ -80,24 +80,24 @@ describe("tree skill library", () => {
   });
 
   it("collects installed status with version and compatibility metadata", () => {
-    installSkill("attention", { cliCompat: ">=0.0.0 <999.0.0" });
-    linkClaudeSkill("attention");
+    installSkill("first-tree-github-scan", { cliCompat: ">=0.0.0 <999.0.0" });
+    linkClaudeSkill("first-tree-github-scan");
 
     const rows = collectSkillStatus(root);
-    const attention = rows.find((row) => row.name === "attention");
+    const ghScan = rows.find((row) => row.name === "first-tree-github-scan");
     const firstTree = rows.find((row) => row.name === "first-tree");
 
     expect(rows).toHaveLength(SKILL_NAMES.length);
-    expect(attention).toMatchObject({
+    expect(ghScan).toMatchObject({
       agentsKind: "directory",
       claudeKind: "symlink",
       cliCompat: ">=0.0.0 <999.0.0",
       compatible: true,
       installed: true,
-      name: "attention",
+      name: "first-tree-github-scan",
       version: "1.2.3",
     });
-    expect(attention?.claudeTarget).toBe("../../.agents/skills/attention");
+    expect(ghScan?.claudeTarget).toBe("../../.agents/skills/first-tree-github-scan");
     expect(firstTree).toMatchObject({
       installed: false,
       compatible: null,
@@ -106,8 +106,8 @@ describe("tree skill library", () => {
   });
 
   it("diagnoses missing files, bad frontmatter, bad symlinks, and incompatible CLI ranges", () => {
-    installSkill("attention", { includeOpenAiConfig: false });
-    linkClaudeSkill("attention", "wrong-target");
+    installSkill("first-tree-github-scan", { includeOpenAiConfig: false });
+    linkClaudeSkill("first-tree-github-scan", "wrong-target");
 
     installSkill("github-scan", { includeFrontmatter: false });
     linkClaudeSkill("github-scan");
@@ -124,10 +124,10 @@ describe("tree skill library", () => {
     const rows = collectSkillDiagnosis(root);
     const byName = new Map(rows.map((row) => [row.name, row]));
 
-    expect(byName.get("attention")?.problems).toEqual(
+    expect(byName.get("first-tree-github-scan")?.problems).toEqual(
       expect.arrayContaining([
-        ".agents/skills/attention/agents/openai.yaml does not exist",
-        ".claude/skills/attention -> wrong-target, expected ../../.agents/skills/attention",
+        ".agents/skills/first-tree-github-scan/agents/openai.yaml does not exist",
+        ".claude/skills/first-tree-github-scan -> wrong-target, expected ../../.agents/skills/first-tree-github-scan",
       ]),
     );
     expect(byName.get("github-scan")?.problems).toEqual(
@@ -169,9 +169,9 @@ describe("tree skill library", () => {
   });
 
   it("repairs Claude skill links for installed agent skills and skips missing installs", () => {
-    installSkill("attention");
+    installSkill("first-tree-github-scan");
     installSkill("github-scan");
-    mkdirSync(join(root, ".claude", "skills", "attention"), { recursive: true });
+    mkdirSync(join(root, ".claude", "skills", "first-tree-github-scan"), { recursive: true });
 
     const result = repairClaudeSkillLinks(root);
 
@@ -179,17 +179,19 @@ describe("tree skill library", () => {
     expect(result.skipped).toBe(SKILL_NAMES.length - 2);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        "linked .claude/skills/attention -> ../../.agents/skills/attention",
+        "linked .claude/skills/first-tree-github-scan -> ../../.agents/skills/first-tree-github-scan",
         "linked .claude/skills/github-scan -> ../../.agents/skills/github-scan",
       ]),
     );
-    expect(readlinkSync(join(root, ".claude", "skills", "attention"))).toBe("../../.agents/skills/attention");
+    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-github-scan"))).toBe(
+      "../../.agents/skills/first-tree-github-scan",
+    );
     expect(readlinkSync(join(root, ".claude", "skills", "github-scan"))).toBe("../../.agents/skills/github-scan");
   });
 
   it("leaves already-correct Claude skill links unchanged", () => {
-    installSkill("attention");
-    linkClaudeSkill("attention");
+    installSkill("first-tree-github-scan");
+    linkClaudeSkill("first-tree-github-scan");
 
     expect(repairClaudeSkillLinks(root)).toEqual({ linked: 0, skipped: SKILL_NAMES.length - 1, messages: [] });
   });

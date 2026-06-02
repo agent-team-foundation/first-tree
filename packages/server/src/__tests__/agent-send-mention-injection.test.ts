@@ -28,9 +28,8 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  *
  *   `normalizeMentionsInContent` — when content is a string, prepend
  *     any `@<name>` tokens that `metadata.mentions` declares but the
- *     text omits. Agent endpoint and attention echo opt-in; web does
- *     not (the composer writes the @ directly; we don't mutate
- *     human-typed content).
+ *     text omits. Agent endpoint opts in; web does not (the composer
+ *     writes the @ directly; we don't mutate human-typed content).
  *
  * If you tweak the enforce / normalise semantics, expect to update this file.
  */

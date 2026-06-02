@@ -5,7 +5,6 @@ import {
   parseGroupMode,
   rowAttentionReason,
   rowIsFailed,
-  rowNeedsYou,
   splitAttentionRows,
 } from "../conversations/group-rows.js";
 
@@ -33,10 +32,8 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,
-    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
-    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
@@ -243,21 +240,6 @@ describe("splitAttentionRows — Phase 1 predicate", () => {
     ];
     const { attention } = splitAttentionRows(rows);
     expect(attention[0] && rowAttentionReason(attention[0])).toBe("failed");
-  });
-
-  it("rowNeedsYou stays dark — no R3 in Phase 1", () => {
-    // Phase 1 reserves the `needs_you` tier in ATTENTION_PRIORITY for a
-    // future open-Attention-targeting-me rule (R3, NHA-backed). No
-    // predicate branch emits it yet, and rowNeedsYou returns false for
-    // every input.
-    const rows = [
-      row({ id: "f", lastMessageAt: null, failedAgentIds: ["a"] }),
-      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true }),
-      row({ id: "q", lastMessageAt: null }),
-    ];
-    for (const r of rows) {
-      expect(rowNeedsYou(r)).toBe(false);
-    }
   });
 
   it("stable sort within tier preserves input order", () => {

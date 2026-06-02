@@ -41,9 +41,8 @@ Strategy A (F): green is no longer "signature + success **only**" — it now als
 Shipped in **#672** (branch `refactor/web-green-liveness-main`).
 
 - **Status palette re-coloured.** `--state-working` cyan → **green** (alive, pulses);
-  `--state-idle` neutral-cool → **blue** (present/idle); added `--state-needs-you` =
-  **amber**; `--state-blocked` → **orange** (warmer than needs-you, and the shared
-  caution/warning hue). error=red, offline=gray unchanged. Cool (green/blue) = healthy;
+  `--state-idle` neutral-cool → **blue** (present/idle); `--state-blocked` → **orange**
+  (the shared caution/warning hue). error=red, offline=gray unchanged. Cool (green/blue) = healthy;
   warm (amber/orange/red) = wants your attention, so problems pop against the live baseline.
 - **working == success at the token level**, told apart by **form** (pulsing dot + glow vs
   a static ✓ glyph), not hue.
@@ -84,8 +83,7 @@ Owner picked the optimization direction. These are now committed targets (implem
 
 Verified after each stage with `pnpm --filter @first-tree/web typecheck` (tsc + `lint:tokens`):
 
-- ✅ **P0** — all 7 ghost-token references fixed; the new guardrail then surfaced + fixed an 8th
-  (`var(--shadow-lg)` in `attentions-section.tsx`).
+- ✅ **P0** — all 6 ghost-token references fixed.
 - ✅ **P0.5** — undefined-token check added to `check-design-tokens.sh` (rule 7). Collects defined
   tokens from `index.css` + inline `"--foo"` definitions, diffs against every literal `var(--x)`
   (dynamic `var(--x-${…})` and `__tests__` excluded). Multi-line inline-style detection deferred.
@@ -111,21 +109,19 @@ purge (authed surfaces — needs a local-stack by-eye pass).
 
 Each of these resolves to an invalid/empty value at runtime. Fix = point at the real token.
 
-**RESOLVED (#656/#662)** — all 8 fixed (the 7 below + the stray `--shadow-lg`); `lint:tokens`
+**RESOLVED (#656/#662)** — all 6 fixed (the 6 below); `lint:tokens`
 rule 7 (undefined-token) now stays green, so these can't silently regress.
 
 | # | File:line | Written | Effect | Fix |
 |---|-----------|---------|--------|-----|
 | [x] 1 | `components/ui/toast.tsx:114` | `var(--surface-1)` | Toast background transparent | `--bg-raised` |
-| [x] 2 | `pages/workspace/right-sidebar/attentions-section.tsx:89,167` | `var(--sp-0_25)` | Vertical padding collapses to 0 | `--sp-px` (1px) or `--sp-0_5` |
-| [x] 3 | `pages/source-repos-settings-panel.tsx:161` | `var(--surface-2)` | Hover background no-op | `--bg-hover` |
-| [x] 4 | `components/history-gap-banner.tsx:23` | `var(--fg-muted)` | Text color falls back to inherit | `--fg-3` |
-| [x] 5 | `pages/workspace/conversations/new-chat-draft.tsx:451` | `var(--bg-base)` | Background transparent | `--bg` |
-| [x] 6 | `pages/invite-accept.tsx:132` | `var(--destructive)` | Urgent color not applied | `--state-error` (or `text-destructive` util) |
-| [x] 7 | `pages/agent-detail.tsx:692` | `fontSize: "var(--text-body-size)"` | Font size not applied **+** illegal inline `fontSize` | Use `text-body` class; drop inline `fontSize` |
+| [x] 2 | `pages/source-repos-settings-panel.tsx:161` | `var(--surface-2)` | Hover background no-op | `--bg-hover` |
+| [x] 3 | `components/history-gap-banner.tsx:23` | `var(--fg-muted)` | Text color falls back to inherit | `--fg-3` |
+| [x] 4 | `pages/workspace/conversations/new-chat-draft.tsx:451` | `var(--bg-base)` | Background transparent | `--bg` |
+| [x] 5 | `pages/invite-accept.tsx:132` | `var(--destructive)` | Urgent color not applied | `--state-error` (or `text-destructive` util) |
+| [x] 6 | `pages/agent-detail.tsx:692` | `fontSize: "var(--text-body-size)"` | Font size not applied **+** illegal inline `fontSize` | Use `text-body` class; drop inline `fontSize` |
 
-**Done** — the stray `var(--shadow-lg)` (in `attentions-section.tsx`) was repointed to `--shadow-md`;
-rule 9 now bans `shadow-(lg|xl|2xl)` so the 2-tier `--shadow-sm/md` scale stays enforced.
+**Done** — `rule 9` now bans `shadow-(lg|xl|2xl)` so the 2-tier `--shadow-sm/md` scale stays enforced.
 
 ## P0.5 — Close the guardrail hole (highest leverage)
 
@@ -169,7 +165,7 @@ of P0 bug. Two additions catch the entire P0 list automatically and stop recurre
 ## P2 — Omissions
 
 - [x] **No `--state-*-soft` companions.** **DONE:** added
-  `--state-{working,idle,needs-you,blocked,error,offline}-soft` (one canonical 14% translucent mix; raw
+  `--state-{working,idle,blocked,error,offline}-soft` (one canonical 14% translucent mix; raw
   on `:root`, `--color-state-*-soft` aliases in `@theme`). **`lib/tones.ts` + the ad-hoc call-site
   background fills (connect/disconnect chips, clients retire/load banners, agent-detail changed-chips)
   migrated onto them** — normalizing those fills to the canonical 14% (the only deltas: `tones.ts` warn
@@ -266,7 +262,7 @@ fold into the phases below.
 - [x] Guardrail **rule 10** bans the retired `--accent` family to force completeness.
 - [x] Updated `/preview/styleguide` swatches (split into Primary / Brand groups); verified light + dark.
 - [x] (cleanup) status palette set — *(superseded by #672 green-liveness: now working=**green**,
-  idle=**blue**, needs-you=**amber**, blocked=**orange**, error=red, offline=gray.)*
+  idle=**blue**, blocked=**orange**, error=red, offline=gray.)*
 
 **Phase 1 — primitives (`components/ui/`) — DONE (#662):**
 - [x] `Button`: default variant neutral-primary (via Phase 0 tokens); flat (removed the
@@ -295,7 +291,7 @@ fold into the phases below.
 - [ ] `ConversationList`: add a Search box; tabs-as-underline; rounded-square avatars. *(#672 already
   shipped the green-rail selected conversation + the new-message divider/pill.)*
 - [ ] `ChatView`: neutral "you" bubble; neutral send button; **green** working chip (glow) — per #672.
-- [ ] Right **Session sidebar**: agent card + Runtime/Model KV + Live-context tree nodes (green) + Needs-you.
+- [ ] Right **Session sidebar**: agent card + Runtime/Model KV + Live-context tree nodes (green).
 
 **Phase 3 — rollout + folded cleanup:**
 - [ ] Apply across remaining pages (Team roster, Settings, onboarding, …).

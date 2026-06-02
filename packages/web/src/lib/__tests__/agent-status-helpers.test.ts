@@ -8,7 +8,6 @@ function status(over: Partial<AgentChatStatus> & { agentId: string }): AgentChat
     reachable: true,
     engagement: "active",
     working: false,
-    needsYou: false,
     errored: false,
     activity: null,
     ...over,

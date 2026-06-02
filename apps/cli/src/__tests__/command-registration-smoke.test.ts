@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { registerAgentCommands } from "../commands/agent/index.js";
-import { registerAttentionCommands } from "../commands/attention/index.js";
 import { registerChatCommands } from "../commands/chat/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
@@ -36,7 +35,6 @@ describe("CLI command registration", () => {
     registerDoctorCommand(root);
     registerUpgradeCommand(root);
     registerAgentCommands(root);
-    registerAttentionCommands(root);
     registerChatCommands(root);
     registerOrgCommands(root);
     registerDaemonCommands(root);
@@ -46,7 +44,6 @@ describe("CLI command registration", () => {
 
     expect(root.commands.map((entry) => entry.name()).sort()).toEqual([
       "agent",
-      "attention",
       "chat",
       "config",
       "daemon",
@@ -61,10 +58,9 @@ describe("CLI command registration", () => {
     ]);
   });
 
-  it("registers agent, chat, attention, daemon, config, and org subcommands", () => {
+  it("registers agent, chat, daemon, config, and org subcommands", () => {
     const root = new Command();
     registerAgentCommands(root);
-    registerAttentionCommands(root);
     registerChatCommands(root);
     registerDaemonCommands(root);
     registerConfigCommands(root);
@@ -85,7 +81,6 @@ describe("CLI command registration", () => {
       "status",
       "workspace",
     ]);
-    expect(subcommands(root, "attention")).toEqual(["cancel", "list", "raise", "respond", "show"]);
     expect(subcommands(root, "chat")).toEqual(["history", "invite", "list", "open", "send", "set-topic"]);
     expect(subcommands(root, "daemon")).toEqual([
       "doctor",

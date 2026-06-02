@@ -43,7 +43,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
-import { setCliBinding } from "../runtime/cli-binding.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -135,109 +134,25 @@ describe("claude-code handler — SDK options", () => {
     await handler.shutdown();
   });
 
-  it("denies AskUserQuestion via canUseTool (NHA M0: bridge removed, agent redirected)", async () => {
+  it("disables AskUserQuestion via the SDK disallowedTools list", async () => {
     capturedCalls.length = 0;
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
     const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    const ctx = buildSessionCtx("chat-askuser");
+    const ctx = buildSessionCtx("chat-disallow");
     await handler.start(
-      { id: "msg-3", chatId: "chat-askuser", senderId: "user", format: "text", content: "hi", metadata: null },
+      { id: "msg-3", chatId: "chat-disallow", senderId: "user", format: "text", content: "hi", metadata: null },
       ctx,
     );
 
     const options = capturedCalls[0]?.options;
-    // canUseTool MUST still be a function — it gates AskUserQuestion behind
-    // a deny+redirect message pointing at NHA. Other tools auto-allow.
-    const canUseTool = options?.canUseTool;
-    expect(typeof canUseTool).toBe("function");
-    if (typeof canUseTool !== "function") throw new Error("canUseTool not a function");
-
-    // Minimal options shape: signal + toolUseID are not consulted on this deny path.
-    const denyResult = (await canUseTool(
-      "AskUserQuestion",
-      { questions: [] },
-      {
-        signal: new AbortController().signal,
-        suggestions: [],
-        toolUseID: "tu_test",
-      },
-    )) as { behavior: string; message?: string };
-    expect(denyResult.behavior).toBe("deny");
-    if (denyResult.behavior === "deny") {
-      expect(denyResult.message).toMatch(/no longer supported/i);
-      // The redirect must use the channel-resolved binary name — the
-      // setupFiles default is prod, so this asserts the prod-shaped command.
-      // The staging-channel variant is covered by the test below.
-      expect(denyResult.message).toMatch(/`first-tree attention raise`/);
-    }
-
-    const allowResult = (await canUseTool(
-      "Bash",
-      { command: "ls" },
-      {
-        signal: new AbortController().signal,
-        suggestions: [],
-        toolUseID: "tu_bash",
-      },
-    )) as { behavior: string };
-    expect(allowResult.behavior).toBe("allow");
+    // AskUserQuestion is not supported in First Tree — it is disabled at the
+    // SDK level via disallowedTools rather than bridged through canUseTool.
+    expect(options?.disallowedTools).toContain("AskUserQuestion");
+    expect(options?.canUseTool).toBeUndefined();
 
     await handler.shutdown();
-  });
-
-  it("uses the channel-resolved binary in the AskUserQuestion deny redirect (staging)", async () => {
-    // Regression for the multi-env follow-up: the deny redirect used to
-    // hardcode `first-tree attention raise`. On staging hosts that binary
-    // doesn't exist (only `first-tree-staging` does), so agents pointed at
-    // the NHA surface would call into nothing. Pair with
-    // bootstrap.test.ts's tools.md staging case — both injection points
-    // must thread the binding through.
-    capturedCalls.length = 0;
-    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-    try {
-      const cache = buildCache();
-      await cache.refresh(AGENT_ID);
-
-      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-      const ctx = buildSessionCtx("chat-askuser-staging");
-      await handler.start(
-        {
-          id: "msg-3s",
-          chatId: "chat-askuser-staging",
-          senderId: "user",
-          format: "text",
-          content: "hi",
-          metadata: null,
-        },
-        ctx,
-      );
-
-      const canUseTool = capturedCalls[0]?.options?.canUseTool;
-      if (typeof canUseTool !== "function") throw new Error("canUseTool not a function");
-
-      const denyResult = (await canUseTool(
-        "AskUserQuestion",
-        { questions: [] },
-        {
-          signal: new AbortController().signal,
-          suggestions: [],
-          toolUseID: "tu_test_staging",
-        },
-      )) as { behavior: string; message?: string };
-      expect(denyResult.behavior).toBe("deny");
-      if (denyResult.behavior === "deny") {
-        expect(denyResult.message).toMatch(/`first-tree-staging attention raise`/);
-        // Prod literal must not leak through — that's the bug this regression test guards.
-        expect(denyResult.message).not.toMatch(/`first-tree attention raise`/);
-      }
-
-      await handler.shutdown();
-    } finally {
-      // Restore the setupFiles default so a later test isn't poisoned.
-      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
-    }
   });
 });

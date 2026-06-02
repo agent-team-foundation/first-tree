@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { agentChatStatusSchema, type LiveActivity, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { attentions } from "../db/schema/attentions.js";
 import {
   computeErrored,
   computeWorking,
@@ -72,32 +71,15 @@ describe("agent-chat-status", () => {
   }
 
   describe("getChatAgentStatuses (the /agent-status projection)", () => {
-    it("folds reachability + active session + pending question into needs_you, and excludes humans", async () => {
+    it("folds reachability + active session, and excludes humans", async () => {
       const { app, admin, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
       await setSession(peer.agent.uuid, chatId, "active");
-      // Seed an open ask-NHA from `peer` so the `needsYou` axis lights up
-      // (post-M1 the projection reads from `attentions`, not the legacy
-      // `pending_questions` table).
-      await app.db.insert(attentions).values({
-        id: randomUUID(),
-        originAgentId: peer.agent.uuid,
-        originChatId: chatId,
-        targetHumanId: randomUUID(),
-        subject: "test ask",
-        body: "",
-        requiresResponse: true,
-        state: "open",
-        metadata: {},
-        createdAt: new Date(),
-      });
 
       const statuses = await getChatAgentStatuses(app.db, chatId);
       const s = statuses.find((x) => x.agentId === peer.agent.uuid);
       expect(s?.reachable).toBe(true);
       expect(s?.engagement).toBe("active");
-      expect(s?.needsYou).toBe(true);
-      expect(s?.main).toBe("needs_you"); // outranks working / ready
       // The human speaker is not a runtime agent — excluded.
       expect(statuses.some((x) => x.agentId === admin.humanAgentUuid)).toBe(false);
     });
@@ -301,35 +283,6 @@ describe("agent-chat-status", () => {
   describe("resolveAgentChatStatuses — the one producer", () => {
     it("empty input → empty map", async () => {
       expect((await resolveAgentChatStatuses(getApp().db, [])).size).toBe(0);
-    });
-
-    it("union includes a non-speaker agent that has a pending question (not just speakers)", async () => {
-      const { app, peer, chatId } = await newChatWithAgent();
-      await bindPresence(peer.agent.uuid, peer.clientId);
-      // An agent that is NOT a speaker of this chat but has a pending question
-      // in it (e.g. it left while a question was outstanding).
-      const ghost = await createTestAgent(app, { name: `ghost-${randomUUID().slice(0, 6)}` });
-      // Same as the other ask-NHA seed: post-M1 the `needsYou` axis is fed
-      // from `attentions`, not `pending_questions`.
-      await app.db.insert(attentions).values({
-        id: randomUUID(),
-        originAgentId: ghost.agent.uuid,
-        originChatId: chatId,
-        targetHumanId: randomUUID(),
-        subject: "ghost ask",
-        body: "",
-        requiresResponse: true,
-        state: "open",
-        metadata: {},
-        createdAt: new Date(),
-      });
-
-      const all = (await resolveAgentChatStatuses(app.db, [chatId])).get(chatId) ?? [];
-      const ghostStatus = all.find((s) => s.agentId === ghost.agent.uuid);
-      expect(ghostStatus?.needsYou).toBe(true);
-      // …but the /agent-status surface (speakers only) omits it.
-      const speakerView = await getChatAgentStatuses(app.db, chatId);
-      expect(speakerView.some((s) => s.agentId === ghost.agent.uuid)).toBe(false);
     });
 
     it("excludes humans from the union (a human speaker never appears)", async () => {
