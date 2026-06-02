@@ -325,9 +325,9 @@ export async function isParticipant(db: Database, chatId: string, agentId: strin
  * given agent has a legitimate reason to be in the chat. The legitimate
  * caller today is:
  *
- *   1. `api/chats.ts` HTTP message + question-answer routes — the `scope`
- *      middleware has already gated the request through `requireChatAccess`
- *      before reaching the handler that calls this.
+ *   1. `api/chats.ts` HTTP message routes — the `scope` middleware has
+ *      already gated the request through `requireChatAccess` before reaching
+ *      the handler that calls this.
  *
  * Do NOT call this from new code paths to "lightly join" an agent — for
  * speaker-invokes-invite use `inviteParticipantsToChat`; for manager

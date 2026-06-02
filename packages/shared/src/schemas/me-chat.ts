@@ -253,24 +253,15 @@ export const meChatRowSchema = z.object({
    */
   liveActivity: liveActivitySchema.nullable(),
   /**
-   * Speakers in this chat with a PENDING AskUserQuestion waiting on a human
-   * (`pending_questions.status === 'pending'`). Drives the chat-list
-   * "needs-you" attention signal without opening the chat. Per-(agent,chat),
-   * derived at query time from the existing `pending_questions` table (no
-   * schema migration). `.default([])` for version skew: an older server
-   * build that predates this field would otherwise blank the row on a
-   * web-ahead deploy.
-   */
-  pendingQuestionAgentIds: z.array(z.string()).default([]),
-  /**
    * Speakers in this chat whose composite status is `failed` — i.e. reachable
    * and either their per-(agent,chat) session is `errored` OR their global
    * runtime is in `error` (the same `errored` input `getChatAgentStatuses`
    * folds into `failed`; an unreachable agent is `offline`, not `failed`, so
    * those are excluded). Drives the chat-list "failed" attention signal
-   * (red `!` badge, pinned above needs-you) without opening the chat.
-   * Per-chat, derived at query time (no schema migration). `.default([])`
-   * for version skew, same rationale as `pendingQuestionAgentIds`.
+   * (red `!` badge) without opening the chat. Per-chat, derived at query
+   * time (no schema migration). `.default([])` for version skew: an older
+   * server build that predates this field would otherwise blank the row on a
+   * web-ahead deploy.
    */
   failedAgentIds: z.array(z.string()).default([]),
   /**
@@ -283,7 +274,7 @@ export const meChatRowSchema = z.object({
    * is the authority for "is anyone working". Derived at query time from
    * `agent_chat_sessions.runtime_state` (per-chat). `.default([])` for
    * version skew (web bundle older than server), same rationale as
-   * `pendingQuestionAgentIds`.
+   * `failedAgentIds`.
    *
    * NAMING: deliberately NOT `workingAgentIds` — that name was a retired
    * agent-global misnomer behind the #366 cross-chat false-positive. The
@@ -291,25 +282,6 @@ export const meChatRowSchema = z.object({
    * poisoned identifier.
    */
   busyAgentIds: z.array(z.string()).default([]),
-  /**
-   * True iff this chat has at least one non-human agent with a pending
-   * `AskUserQuestion` (`pending_questions.status === 'pending'`), regardless
-   * of whether that agent is managed by the caller. Drives the chat-list
-   * "Needs attention" speaker-fallback rule (R3) on the front-end: a chat
-   * with an open question pins for callers who are HUMAN speakers in it,
-   * even when the asking agent belongs to a peer manager. Keeps
-   * `pendingQuestionAgentIds` cleanly narrowed to caller-managed so the
-   * row's needs-you indicator stays specific to "agents I manage".
-   *
-   * Derived at query time (no schema migration). `.default(false)` for
-   * version skew: an older server build that predates this field would
-   * otherwise produce `undefined`, which silently disables R3 on the new
-   * web — exactly the conservative degradation we want during a
-   * web-ahead-of-server rollout (R1/R2/R4 continue to fire correctly).
-   *
-   * See docs/development/needs-attention-scoping.20260526.md §4 / §5.
-   */
-  chatHasOpenQuestion: z.boolean().default(false),
   /**
    * True iff there exists at least one unread message in this chat whose
    * `messages.metadata.mentions` array explicitly contains the caller's
@@ -333,8 +305,6 @@ export const meChatRowSchema = z.object({
    * combined with the strict `=== true` check in the front-end predicate
    * (`group-rows.ts`) — silently disables the explicit-mention rule on the
    * new web during a web-ahead-of-server rollout. R1 (failed) keeps firing.
-   *
-   * See docs/development/needs-attention-scoping.20260526.md.
    */
   chatHasExplicitMentionToMe: z.boolean().default(false),
 });

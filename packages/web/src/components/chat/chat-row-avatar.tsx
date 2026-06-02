@@ -8,17 +8,16 @@
  *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
  *   2. Attention. A single corner badge encodes the highest-priority
  *      "do I need to look here" signal: failed (an agent errored, red `!`)
- *      outranks needs-you (a pending AskUserQuestion, amber `?`) outranks an
- *      unread-mention count (red N, numeric up to 99 then "99+"). Omitted when
- *      none apply. The activity axis ("an agent is producing output now")
- *      lives in the row's time slot (the scrolling `•••`), not here.
+ *      outranks an unread-mention count (red N, numeric up to 99 then "99+").
+ *      Omitted when none apply. The activity axis ("an agent is producing
+ *      output now") lives in the row's time slot (the scrolling `•••`), not here.
  *
  * The avatar no longer carries the engaged breathe ring — "engaged but
  * idle" was low-value at list-scan distance and is expressed per-agent
  * in the right sidebar instead.
  *
  * A11y: this span's `aria-label` carries the dynamic *state* only
- * (`"needs you"`, `"3 unread"`). The enclosing chat-row button already
+ * (`"failed"`, `"3 unread"`). The enclosing chat-row button already
  * renders the chat title as visible text — repeating it here would
  * make screen readers announce the title twice. When the avatar has
  * no state to surface, it goes fully `aria-hidden` so the row's
@@ -121,10 +120,9 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; unread: number }): string | null {
   const parts: string[] = [];
   if (opts.failed) parts.push("failed");
-  if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -135,7 +133,6 @@ export function ChatRowAvatar({
   participants,
   selfAgentId,
   unreadCount,
-  needsYou = false,
   failed = false,
   size = 36,
   muted = false,
@@ -152,10 +149,8 @@ export function ChatRowAvatar({
   selfAgentId: string;
   /** `chat_user_state.unread_mention_count`. */
   unreadCount: number;
-  /** Any speaker in this chat has a pending AskUserQuestion (needs-you). */
-  needsYou?: boolean;
   /** Any speaker in this chat is in the composite `failed` state. Outranks
-   *  needs-you and unread for the corner badge. */
+   *  unread for the corner badge. */
   failed?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
@@ -163,18 +158,16 @@ export function ChatRowAvatar({
    *  dense rail of avatars stays near-monochrome (identity by hue family,
    *  not saturation). Defaults to the vivid hues everywhere else. */
   muted?: boolean;
-  /** Render the corner attention badge (`!` / `?` / unread count). The
+  /** Render the corner attention badge (`!` / unread count). The
    *  conversation list disables it (`badge={false}`) because attention and
-   *  unread are carried by the row's left border + state chip + red dot
-   *  instead; the avatar stays a clean identity disc. The state still feeds
+   *  unread are carried by the avatar status dot instead; the avatar stays a
+   *  clean identity disc. The state still feeds
    *  the avatar's `aria-label` regardless, so screen readers are unaffected. */
   badge?: boolean;
   /** Mainstream-IM status marker: a plain coloured dot on the avatar's
-   *  TOP-right corner (no glyph / no count). Colour follows the highest
-   *  state by priority — failed (red) > needs-you (amber) > unread (red);
-   *  nothing renders when none apply. Used by the conversation list (with
-   *  `badge={false}`) so the avatar carries the WeChat / iMessage / Telegram
-   *  corner dot. */
+   *  TOP-right corner (no count). Failed uses a red `!`; unread uses a red
+   *  dot. Used by the conversation list (with `badge={false}`) so the avatar
+   *  carries the WeChat / iMessage / Telegram corner mark. */
   statusDot?: boolean;
 }) {
   const isDirect = type === "direct";
@@ -185,7 +178,7 @@ export function ChatRowAvatar({
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
   const peer = peers[0];
 
-  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -212,33 +205,26 @@ export function ChatRowAvatar({
       ) : (
         <CompositeAvatar size={size} peers={peers} muted={muted} />
       )}
-      {badge && <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />}
-      {statusDot && <ListCornerMark failed={failed} needsYou={needsYou} unread={unreadCount > 0} />}
+      {badge && <AttentionBadge failed={failed} unread={unreadCount} />}
+      {statusDot && <ListCornerMark failed={failed} unread={unreadCount > 0} />}
     </span>
   );
 }
 
 /** Avatar top-right corner marker geometry (no design token covers a one-off
  *  badge; named here for self-documentation, matching `CORNER_BADGE_SIZE`).
- *  `DOT` = plain unread dot; `MARK` = the slightly larger glyph badge. */
+ *  `DOT` = plain unread dot; `MARK` = the slightly larger failed glyph badge. */
 const CORNER_DOT_SIZE = 11;
 const CORNER_MARK_SIZE = 15;
 const CORNER_OFFSET = -3;
 
 /**
  * Conversation-list corner marker (mainstream-IM placement: avatar top-right).
- * Encodes the attention TYPE by a semantic glyph — `!` failed, `?` needs-you
- * — NOT by hue, so the three "needs attention" reasons are told apart by form
- * (recognition, a11y, scalable), per DESIGN.md's "tell apart by form, not hue"
- * principle. Plain unread (no failed/needs-you) is a dot. Priority
- * failed > needs-you > unread; renders nothing otherwise.
+ * Failed uses a semantic `!` glyph; plain unread (no failed state) is a dot.
+ * Priority: failed > unread; renders nothing otherwise.
  */
-function ListCornerMark({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: boolean }) {
+function ListCornerMark({ failed, unread }: { failed: boolean; unread: boolean }) {
   if (failed) return <CornerMark background="var(--state-error)" fg="var(--fg-on-vivid)" glyph="!" />;
-  // Dark glyph on the light amber fill — white-on-amber is too low-contrast,
-  // and this fixed dark tone (does not invert) stays readable in dark mode
-  // where the amber fill is unchanged.
-  if (needsYou) return <CornerMark background="var(--state-needs-you)" fg="oklch(0.28 0.07 75)" glyph="?" />;
   if (unread) return <CornerMark background="var(--state-unread)" />;
   return null;
 }
@@ -529,25 +515,17 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
 /**
  * Attention badge on the whole avatar unit (single or group composite) —
  * one small corner circle encoding the highest-priority "do I need to look
- * here" signal. failed (an agent errored, red `!`) outranks needs-you (a
- * pending AskUserQuestion, amber `?`) outranks an unread-mention count (red N).
- * Renders nothing when none apply. All three share one circle; only the colour
- * and glyph differ — failed's `!` and unread's number are both red but never
- * co-occur (failed wins), and the glyph keeps them legible.
+ * here" signal. failed (an agent errored, red `!`) outranks an unread-mention
+ * count (red N). Renders nothing when none apply. Both share one circle; only
+ * the colour and glyph differ — failed's `!` and unread's number are both red
+ * but never co-occur (failed wins), and the glyph keeps them legible.
  *
  * A tight circle (not a horizontal pill) so it reads as an avatar badge, not a
  * standalone tag stealing the title's attention. Only the rare ≥3-char unread
  * ("99+") flexes to a small capsule; `!` / `?` / 1–2 digits stay circular.
  */
-function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
+function AttentionBadge({ failed, unread }: { failed: boolean; unread: number }) {
   if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
-  // Dark glyph on the light amber fill — white-on-amber (L≈0.82) is too low-contrast.
-  if (needsYou)
-    return (
-      <CornerBadge background="var(--state-needs-you)" fg="oklch(0.28 0.07 75)">
-        ?
-      </CornerBadge>
-    );
   const label = formatUnreadLabel(unread);
   if (label === null) return null;
   return (

@@ -2,6 +2,8 @@ import { Check, CircleAlert, Copy, ExternalLink, Info, Lock } from "lucide-react
 import type { ReactNode } from "react";
 import { useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
+import { Button } from "../../components/ui/button.js";
+import { cn } from "../../lib/utils.js";
 
 /**
  * Step heading (title + optional one-line "why"). Used when a step renders its
@@ -24,27 +26,22 @@ export function StepHeading({ title, why }: { title: string; why?: string | null
   );
 }
 
-/** Error / warning note. Tone "error" (red) or "info" (neutral ink). */
+/**
+ * Inline notice. Tone "error" (red) or "info" (blue). Both render through the
+ * design-system callout token pairs (DESIGN.md §3) — a soft background plus a
+ * strong text/border tone — the same `border-{tone} bg-{tone}-soft text-{tone}`
+ * grammar as the rest of the app's notices, rather than hand-mixing colors.
+ */
 export function FlowNote({ children, tone = "error" }: { children: ReactNode; tone?: "error" | "info" }) {
-  const color = tone === "error" ? "var(--state-error)" : "var(--fg-2)";
-  const bg = tone === "error" ? "var(--state-error-soft)" : "color-mix(in oklch, var(--primary) 8%, transparent)";
-  const border =
-    tone === "error"
-      ? "color-mix(in oklch, var(--state-error) 28%, transparent)"
-      : "color-mix(in oklch, var(--primary) 22%, transparent)";
   const Icon = tone === "error" ? CircleAlert : Info;
   return (
     <div
-      className="flex items-start text-label"
+      className={cn(
+        "flex items-start text-label rounded-[var(--radius-input)] border",
+        tone === "error" ? "border-error bg-error-soft text-error" : "border-info bg-info-soft text-info",
+      )}
       role={tone === "error" ? "alert" : undefined}
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-2_5) var(--sp-3)",
-        background: bg,
-        border: `var(--hairline) solid ${border}`,
-        borderRadius: "var(--radius-input)",
-        color,
-      }}
+      style={{ gap: "var(--sp-2)", padding: "var(--sp-2_5) var(--sp-3)" }}
     >
       <Icon className="h-3.5 w-3.5" style={{ flexShrink: 0, marginTop: "var(--sp-0_5)" }} aria-hidden="true" />
       <span style={{ minWidth: 0 }}>{children}</span>
@@ -69,7 +66,7 @@ export function WorkingState({ label, hint }: { label: string; hint?: string }) 
             style={{
               width: "var(--sp-2)",
               height: "var(--sp-2)",
-              borderRadius: "50%",
+              borderRadius: "var(--radius-full)",
               background: "var(--state-working)",
               animationDelay: `${delay}ms`,
             }}
@@ -103,13 +100,23 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
       {state === "ok" ? (
         <Check className="h-3.5 w-3.5" />
       ) : (
-        <span aria-hidden="true" style={{ position: "relative", display: "inline-block", width: 8, height: 8 }}>
-          <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "var(--state-working)" }} />
+        <span
+          aria-hidden="true"
+          style={{ position: "relative", display: "inline-block", width: "var(--sp-2)", height: "var(--sp-2)" }}
+        >
           <span
             style={{
               position: "absolute",
-              inset: -3,
-              borderRadius: "50%",
+              inset: 0,
+              borderRadius: "var(--radius-full)",
+              background: "var(--state-working)",
+            }}
+          />
+          <span
+            style={{
+              position: "absolute",
+              inset: "calc(-1 * var(--sp-0_75))",
+              borderRadius: "var(--radius-full)",
               border: "var(--hairline) solid var(--state-working)",
               animation: "ring-pulse 1.8s infinite",
               opacity: 0.55,
@@ -137,7 +144,14 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
  * from the visible box while Copy still worked. The current pass-through
  * trusts the server: render the lines it gave us, in order.
  */
-export function CommandBox({ command }: { command: string | null }) {
+export function CommandBox({
+  command,
+  placeholder = "Generating command…",
+}: {
+  command: string | null;
+  /** Shown when `command` is null (e.g. "Generating command…" or "…"). */
+  placeholder?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const lines = command ? command.split("\n").filter((l) => l.trim().length > 0) : [];
 
@@ -155,7 +169,7 @@ export function CommandBox({ command }: { command: string | null }) {
         title={command ?? undefined}
         style={{
           flex: 1,
-          minHeight: 38,
+          minHeight: "var(--sp-10)",
           margin: 0,
           padding: "var(--sp-2_5) var(--sp-3)",
           background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
@@ -163,7 +177,6 @@ export function CommandBox({ command }: { command: string | null }) {
           borderRadius: "var(--radius-input)",
           color: "var(--fg-2)",
           minWidth: 0,
-          lineHeight: 1.65,
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
@@ -181,30 +194,66 @@ export function CommandBox({ command }: { command: string | null }) {
             </span>
           ))
         ) : (
-          <span>Generating command…</span>
+          <span>{placeholder}</span>
         )}
       </div>
-      <button
-        type="button"
-        onClick={handleCopy}
-        disabled={!command}
-        className="inline-flex items-center justify-center text-label font-medium"
-        style={{
-          gap: "var(--sp-1_5)",
-          padding: "0 var(--sp-3)",
-          minHeight: 38,
-          background: "color-mix(in oklch, var(--bg-raised) 48%, transparent)",
-          border: "var(--hairline) solid color-mix(in oklch, var(--border) 58%, transparent)",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg-2)",
-          cursor: command ? "pointer" : "not-allowed",
-          opacity: command ? 1 : 0.6,
-        }}
-      >
+      <Button type="button" variant="outline" onClick={handleCopy} disabled={!command} className="h-auto">
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         {copied ? "Copied" : "Copy"}
-      </button>
+      </Button>
     </div>
+  );
+}
+
+/**
+ * One selectable checkbox row, shared by the repo picker and the invitee's
+ * project-confirm list so both read identically. The real `<input>` is
+ * `sr-only` (focus ring comes from `.onboarding-choice:focus-within` in
+ * index.css, per DESIGN.md §13); selection is signalled the OptionCard way —
+ * a filled neutral box plus a very light `--fg` tint (~5%), no colored row
+ * border. `position: relative` makes the row the containing block for the
+ * absolutely-positioned sr-only input, so it can't escape the picker's clip.
+ */
+export function SelectableRow({
+  checked,
+  onToggle,
+  children,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <label
+      className="onboarding-choice flex items-center text-body"
+      style={{
+        position: "relative",
+        gap: "var(--sp-2_5)",
+        padding: "var(--sp-2) var(--sp-2_5)",
+        borderRadius: "var(--radius-input)",
+        cursor: "pointer",
+        background: checked ? "color-mix(in oklch, var(--fg) 5%, transparent)" : "transparent",
+        color: checked ? "var(--fg)" : "var(--fg-2)",
+      }}
+    >
+      <input type="checkbox" checked={checked} onChange={onToggle} className="sr-only" />
+      <span
+        aria-hidden="true"
+        className="inline-flex items-center justify-center"
+        style={{
+          width: "var(--sp-4)",
+          height: "var(--sp-4)",
+          flexShrink: 0,
+          borderRadius: "var(--radius-input)",
+          border: checked ? "var(--hairline) solid var(--primary)" : "var(--hairline) solid var(--border-strong)",
+          background: checked ? "var(--primary)" : "transparent",
+          color: "var(--primary-on)",
+        }}
+      >
+        {checked && <Check className="h-3 w-3" />}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -258,41 +307,7 @@ export function RepoPicker({
         const repoOwner = slash >= 0 ? repo.fullName.slice(0, slash + 1) : "";
         const repoName = slash >= 0 ? repo.fullName.slice(slash + 1) : repo.fullName;
         return (
-          <label
-            key={repo.cloneUrl}
-            className="onboarding-choice flex items-center text-body"
-            style={{
-              // position:relative makes this row the containing block for the
-              // sr-only checkbox below. Without it, the absolutely-positioned
-              // checkbox is laid out against the nearest *transformed* ancestor
-              // (the fade-in step wrapper), escaping the picker's overflow clip —
-              // all the rows' checkboxes stack far past the viewport and force
-              // the whole page to scroll.
-              position: "relative",
-              gap: "var(--sp-2_5)",
-              padding: "var(--sp-2) var(--sp-2_5)",
-              borderRadius: "var(--radius-input)",
-              cursor: "pointer",
-              background: active ? "color-mix(in oklch, var(--primary) 8%, transparent)" : "transparent",
-              color: active ? "var(--fg)" : "var(--fg-2)",
-            }}
-          >
-            <input type="checkbox" checked={active} onChange={() => onToggle(repo.cloneUrl)} className="sr-only" />
-            <span
-              aria-hidden="true"
-              className="inline-flex items-center justify-center"
-              style={{
-                width: "var(--sp-4)",
-                height: "var(--sp-4)",
-                flexShrink: 0,
-                borderRadius: "var(--radius-input)",
-                border: active ? "var(--hairline) solid var(--primary)" : "var(--hairline) solid var(--border-strong)",
-                background: active ? "var(--primary)" : "transparent",
-                color: "var(--primary-on)",
-              }}
-            >
-              {active && <Check className="h-3 w-3" />}
-            </span>
+          <SelectableRow key={repo.cloneUrl} checked={active} onToggle={() => onToggle(repo.cloneUrl)}>
             <span
               className="font-medium"
               style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
@@ -312,7 +327,7 @@ export function RepoPicker({
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
-          </label>
+          </SelectableRow>
         );
       })}
     </div>

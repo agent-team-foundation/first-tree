@@ -39,10 +39,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,
-    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
-    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
@@ -56,7 +54,7 @@ const DESIGN = p("design-critique", "agent-design");
 const MARKET = p("marketing-writer", "agent-market");
 const RESEARCH = p("research", "agent-res");
 
-// Attention rows (failed + needs-you) — pinned into the "Needs attention"
+// Attention rows (failed + explicit mention) — pinned into the "Needs attention"
 // bucket at the top by the list.
 const ATTENTION_ROWS: MeChatRow[] = [
   row({
@@ -68,12 +66,13 @@ const ATTENTION_ROWS: MeChatRow[] = [
     lastMessagePreview: "build step exited 1",
   }),
   row({
-    chatId: "c-needs",
+    chatId: "c-mention",
     title: "Release checklist",
     participants: [KAEL],
-    chatHasOpenQuestion: true,
+    unreadMentionCount: 1,
+    chatHasExplicitMentionToMe: true,
     lastMessageAt: minutesAgo(6),
-    lastMessagePreview: "Should I cut the tag now?",
+    lastMessagePreview: "baixiaohang: please review the tag plan.",
   }),
 ];
 

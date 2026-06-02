@@ -20,7 +20,7 @@ import { WorkingChip } from "./working-chip.js";
  *
  * Each row reads its main status through the shared `viewOf` vocabulary:
  * a status-point (StatusGlyph) on the avatar + a second line for every state
- * (working → the live activity, needs-you / failed → a tinted attention pill,
+ * (working → the live activity, failed → a tinted attention pill,
  * idle / paused / offline → the state word in its own colour), so all rows
  * stay uniform / equal-height. The dot carries the shape + colour distinction.
  */
@@ -80,7 +80,7 @@ export function AgentStatusPanel({
  * Pause is offered only when the agent is BOTH actively producing output
  * (`main === "working"`) and on a live session (`engagement === "active"`).
  * That's the only state with a meaningful Pause — and the only transition the
- * server accepts (anything else 409s). ready / needs-you / failed / offline,
+ * server accepts (anything else 409s). ready / failed / offline,
  * or a working-but-already-suspended row, get no Pause. Exported for tests.
  */
 export function canPauseStatus(status: AgentChatStatus | null): boolean {
@@ -162,7 +162,6 @@ function AgentStatusRow({
  * timer) is mono. The two *attention* states get a subtle tinted pill so they
  * jump out; the quiet states stay dot + plain coloured text:
  *   working            → "Working" (sans, blue) · "Bash · 0s" (mono, live)
- *   needs-you          → "Needs reply" pill (amber)
  *   failed             → "Failed" pill (red)
  *   idle/paused/offline → the state word in its own colour (sans)
  */
@@ -193,21 +192,6 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
       </TimelineJumpButton>
     );
   }
-  if (status.main === "needs_you") {
-    // Pill is clickable → jumps to this agent's question card.
-    return (
-      <div className="flex">
-        <TimelineJumpButton
-          agentId={status.agentId}
-          main="needs_you"
-          anchored={isJumpable(mounted, "needs_you", status.agentId)}
-          ariaLabel="Jump to this agent's question in the timeline"
-        >
-          <StatePill tone="needs-you" label="Needs reply" />
-        </TimelineJumpButton>
-      </div>
-    );
-  }
   if (status.main === "failed") {
     // Pill is clickable → jumps to this agent's error in the timeline.
     return (
@@ -235,12 +219,12 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
 }
 
 /**
- * A subtle tinted pill for the attention states (needs-you / failed) — the
- * states that *should* jump out. Quiet states stay dot + plain coloured text.
+ * A subtle tinted pill for the failed state — the state that *should* jump out.
+ * Quiet states stay dot + plain coloured text.
  * sans (not mono): the status word is natural language. Geometry mirrors
  * DenseBadge; tone colours come from the shared `tones` map.
  */
-function StatePill({ tone, label }: { tone: "blocked" | "error" | "needs-you"; label: string }) {
+function StatePill({ tone, label }: { tone: "blocked" | "error"; label: string }) {
   const t = toneOf(tone);
   return (
     <span

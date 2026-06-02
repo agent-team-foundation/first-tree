@@ -84,7 +84,13 @@ describe("buildTeamData", () => {
     });
     const row = humans[0];
     if (!row) throw new Error("expected a human row");
-    expect(row.delegate).toEqual({ uuid: "assistant-1", name: "ada-helper", displayName: "Ada Assistant" });
+    expect(row.delegate).toEqual({
+      uuid: "assistant-1",
+      name: "ada-helper",
+      displayName: "Ada Assistant",
+      colorToken: null,
+      avatarImageUrl: null,
+    });
     // Only the user themselves can edit their own delegate (admins cannot).
     expect(row.canEditDelegate).toBe(true);
   });

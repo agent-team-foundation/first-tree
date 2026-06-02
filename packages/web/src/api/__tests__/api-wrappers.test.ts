@@ -20,6 +20,24 @@ vi.mock("../client.js", async (importOriginal) => {
   };
 });
 
+function createStorage(): Storage {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => data.clear(),
+    getItem: (key: string) => data.get(key) ?? null,
+    key: (index: number) => [...data.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   apiMock.get.mockResolvedValue({});
@@ -82,11 +100,10 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
   });
 
-  it("formats agent, attention, chat, member, and session requests", async () => {
+  it("formats agent, chat, member, and session requests", async () => {
     const agentConfig = await import("../agent-config.js");
     const agentStatus = await import("../agent-status.js");
     const agents = await import("../agents.js");
-    const attention = await import("../attention.js");
     const chats = await import("../chats.js");
     const meChats = await import("../me-chats.js");
     const meDocs = await import("../me-docs.js");
@@ -113,12 +130,6 @@ describe("api wrapper paths", () => {
     await agents.suspendAgent("agent/id");
     await agents.reactivateAgent("agent/id");
     await agents.testAgentConnection("agent/id");
-
-    expect(attention.attentionsInChatQueryKey("chat-1")).toEqual(["attentions", "chat", "chat-1"]);
-    expect(attention.respondAttentionMutationKey("att-1")).toEqual(["attentions", "respond", "att-1"]);
-    await attention.respondAttention("att/id", { text: "yes" });
-    await attention.listAttentionsInChat("chat/id");
-    await attention.listMyAttentions();
 
     await chats.listChats({ limit: 3, cursor: "next" });
     await chats.getChat("chat/id");
@@ -200,9 +211,6 @@ describe("api wrapper paths", () => {
       clientId: "client-2",
       runtimeProvider: "claude-code",
     });
-    expect(apiMock.post).toHaveBeenCalledWith("/attention/att%2Fid/respond", { text: "yes" });
-    expect(apiMock.get).toHaveBeenCalledWith("/attention?chat=chat%2Fid&state=all");
-    expect(apiMock.get).toHaveBeenCalledWith("/attention?state=open&limit=200");
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",
@@ -302,5 +310,47 @@ describe("api wrapper paths", () => {
     ).resolves.toBeUndefined();
     apiMock.post.mockRejectedValueOnce(new Error("offline"));
     await expect(onboarding.markOnboardingCompleted()).resolves.toBeUndefined();
+  });
+
+  it("uploads agent avatars with optional auth and maps avatar upload errors", async () => {
+    const agents = await import("../agents.js");
+    const client = await import("../client.js");
+    const fetchMock = vi.fn();
+    const storage = createStorage();
+    Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    vi.stubGlobal("fetch", fetchMock);
+
+    localStorage.setItem("first-tree:tokens", JSON.stringify({ accessToken: "access-1", refreshToken: "refresh-1" }));
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ avatarImageUrl: "/avatar.webp" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"], { type: "image/webp" }))).resolves.toEqual({
+      avatarImageUrl: "/avatar.webp",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/agents/agent%2Fid/avatar",
+      expect.objectContaining({
+        method: "PUT",
+        headers: { "Content-Type": "image/webp", Authorization: "Bearer access-1" },
+      }),
+    );
+
+    client.clearStoredTokens();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "too large" }), { status: 413 }));
+    await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"]))).rejects.toMatchObject({
+      status: 413,
+      message: "too large",
+    });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ headers: { "Content-Type": "application/octet-stream" } });
+
+    fetchMock.mockResolvedValueOnce(new Response("plain avatar failure", { status: 500 }));
+    await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"]))).rejects.toMatchObject({
+      status: 500,
+      message: "plain avatar failure",
+    });
   });
 });

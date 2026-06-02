@@ -103,12 +103,13 @@ if [ -n "$undef" ]; then
   report "Reference to undefined CSS variable(s) — define in index.css or fix the name:" "$undef"
 fi
 
-# 8. Tailwind default radius classes — radius is the semantic --radius-* four only.
+# 8. Tailwind default radius classes — radius is the semantic --radius-* set only
+#    (chip/input/panel/dialog + the fully-round --radius-full).
 hits=$(grep -rnE '\brounded-(sm|md|lg|xl)\b' \
   --include="*.tsx" \
   "$SRC" || true)
 if [ -n "$hits" ]; then
-  report "Tailwind default radius class found (use rounded-[var(--radius-chip|input|panel|dialog)]):" "$hits"
+  report "Tailwind default radius class found (use rounded-[var(--radius-chip|input|panel|dialog|full)]):" "$hits"
 fi
 
 # 9. Tailwind shadow classes above the 2-tier scale — shadow is --shadow-sm/md only.

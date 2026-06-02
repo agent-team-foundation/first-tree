@@ -275,8 +275,14 @@ export function TeamPage() {
     <>
       <PageHeader
         title="Team"
+        subtitle="Agents and humans on your team."
         right={
+          // Page-level controls live on the title row: full-page search (it
+          // filters BOTH sections) sits left of the create actions. The
+          // agent-only All/Mine scope is NOT here — it lives in the Agent
+          // teammates header (it doesn't affect Human teammates).
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+            <SearchBar query={query} onQuery={setQuery} />
             {/* Brand-green cta is reserved for the one creation/hero action. */}
             <Button size="sm" variant="cta" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3.5 w-3.5" />
@@ -300,8 +306,6 @@ export function TeamPage() {
           gap: "var(--sp-1)",
         }}
       >
-        <SearchBar query={query} onQuery={setQuery} />
-
         {agentsQuery.isLoading || membersQuery.isLoading ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
@@ -317,8 +321,6 @@ export function TeamPage() {
             humans={humans}
             isAdmin={isAdmin}
             dimPrivateOwner={!isAdmin}
-            agentFilter={agentFilter}
-            onAgentFilter={setAgentFilter}
             agentCount={agentCount}
             clientHostMap={clientHostMap}
             usageByAgentId={usageByAgentId}
@@ -335,6 +337,8 @@ export function TeamPage() {
               setDelegateMut.mutate({ humanAgentId, delegateMention: delegateUuid })
             }
             searchActive={search.length > 0}
+            agentFilter={agentFilter}
+            onAgentFilter={setAgentFilter}
           />
         )}
       </div>
@@ -412,8 +416,11 @@ function formatError(err: unknown): string {
 }
 
 function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+  // Lives on the page title row next to the create buttons; fixed 180-wide
+  // (--sp-45) and h-8 so it sits at the same height as the adjacent `sm`
+  // buttons without crowding them.
   return (
-    <div className="relative" style={{ width: "var(--sp-60)", maxWidth: "100%", marginBottom: "var(--sp-2)" }}>
+    <div className="relative" style={{ width: "var(--sp-45)", maxWidth: "100%" }}>
       <Search
         aria-hidden
         className="h-3.5 w-3.5"
@@ -430,8 +437,8 @@ function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => 
         onChange={(e) => onQuery(e.target.value)}
         placeholder="Search name or @handle"
         aria-label="Search team"
-        className="h-7 text-caption"
-        style={{ paddingLeft: "var(--sp-5)", borderRadius: 3 }}
+        className="h-8 text-caption"
+        style={{ paddingLeft: "var(--sp-5)" }}
       />
     </div>
   );
@@ -488,7 +495,13 @@ export function buildTeamData(args: {
     if (!human?.delegateMention) return null;
     const d = agentByUuid.get(human.delegateMention);
     if (!d) return null;
-    return { uuid: d.uuid, name: d.name, displayName: d.displayName };
+    return {
+      uuid: d.uuid,
+      name: d.name,
+      displayName: d.displayName,
+      colorToken: d.avatarColorToken,
+      avatarImageUrl: d.avatarImageUrl,
+    };
   };
 
   const humans: HumanRow[] = members

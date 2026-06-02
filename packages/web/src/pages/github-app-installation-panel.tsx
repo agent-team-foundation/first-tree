@@ -235,9 +235,9 @@ function SuspendedBanner() {
       style={{
         gap: "var(--sp-2)",
         padding: "var(--sp-2) var(--sp-2_5)",
-        background: "var(--bg-sunken)",
+        background: "var(--color-warn-soft)",
         borderRadius: "var(--radius-input)",
-        color: "var(--state-warning, var(--fg-3))",
+        color: "var(--color-warn)",
       }}
     >
       <PauseCircle className="h-4 w-4 shrink-0" style={{ marginTop: "var(--sp-0_5)" }} />

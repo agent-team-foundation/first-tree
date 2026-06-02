@@ -10,7 +10,7 @@ import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows, rowIsFailed, rowNeedsYou, splitAttentionRows } from "./group-rows.js";
+import { type GroupMode, groupRows, rowIsFailed, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -23,7 +23,7 @@ import { RowEngagementMenu } from "./row-engagement-menu.js";
  *
  * Redesign (content-first / near-monochrome): the header is a single
  * row — New chat + the primary `All / Unread / Watching` triad + a `⚙`
- * popover that holds the lower-frequency Scope / Origin / Group controls.
+ * popover that holds the lower-frequency Status / Source controls.
  * Rows carry exactly one signal per line: the title row + time, and a
  * second line that is *either* an attention state *or* the last-message
  * preview *or* (when there's neither) nothing at all. Colour appears only
@@ -234,10 +234,20 @@ export function ConversationList({
     return [...baseRows, ...expanded];
   }, [baseRows, extraPages, dataUpdatedAt]);
 
-  // Hoist attention chats (failed + needs-you) into a pinned section at the
-  // top WITHOUT touching cursor pagination or reordering the main list:
-  // partition them out, group the rest as usual, then prepend a synthetic
-  // "Needs attention" bucket. A chat appears in exactly one place.
+  // Buckets are recomputed whenever the rows or group mode change.
+  // Day-rollover (a chat that was "Today" at 23:59 should drift into
+  // "Yesterday" after midnight) is handled implicitly by the 15 s
+  // `useQuery` refetch on the parent query — the refetched response
+  // changes `data.rows`' identity, which invalidates this memo. A
+  // user who leaves the rail open past midnight without a refetch
+  // (e.g. an inactive tab the browser throttles) won't see the bucket
+  // shift until the next refetch lands; that's an acceptable degree
+  // of staleness for a presentational concern.
+  // Hoist attention chats (failed + mention) into a pinned section at the top
+  // WITHOUT touching cursor pagination or reordering the main list: partition
+  // them out, group the rest as usual, then prepend a synthetic "Needs
+  // attention" bucket (failed pinned above mention). A chat appears in
+  // exactly one place (pinned OR its normal group), never both.
   const buckets = useMemo(() => {
     const { attention, rest } = splitAttentionRows(allRows);
     if (attention.length === 0) return groupRows(allRows, group);
@@ -511,15 +521,10 @@ export function ConversationList({
                   const isSelected = selectedChatId === row.chatId;
                   const hasUnread = row.unreadMentionCount > 0;
                   const failed = rowIsFailed(row);
-                  const needsYou = rowNeedsYou(row);
                   const isWatching = row.membershipKind === "watching";
-                  // Density "C": single-line rows. Attention TYPE is carried by a
-                  // semantic glyph badge on the avatar corner (⚠ failed / ?
-                  // needs-you), NOT by colour — distinguishing types by hue is
-                  // recall-based, fails a11y, and contradicts DESIGN.md's "tell
-                  // apart by form, not hue" principle. No state row-tint: only
-                  // the selected row gets a background (green) + its left bar.
-                  const rowBackground = isSelected ? "var(--brand-bg)" : "transparent";
+                  // Density "C": single-line rows. Attention is carried by the
+                  // avatar corner mark, while the left bar remains the selected
+                  // affordance only.
                   return (
                     <div key={row.chatId} className="group relative">
                       <button
@@ -535,12 +540,10 @@ export function ConversationList({
                           // a dense wall — still well under the old two-line row.
                           padding: "var(--sp-2_5) var(--sp-3)",
                           gap: "var(--sp-2_5)",
-                          background: rowBackground,
+                          background: isSelected ? "var(--brand-bg)" : "transparent",
                           // Left bar is the SELECTED affordance only (DESIGN.md:
-                          // selected = green left-rail + tint). Attention no
-                          // longer doubles up here — it reads from the soft row
-                          // tint + the avatar's top-right status dot, so failed/
-                          // needs-you aren't triple-signalled.
+                          // selected = green left-rail + tint). Attention no longer
+                          // doubles up here; it reads from the avatar corner mark.
                           borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--brand)" : "transparent"}`,
                         }}
                       >
@@ -550,7 +553,6 @@ export function ConversationList({
                           participants={row.participants}
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
-                          needsYou={needsYou}
                           failed={failed}
                           size={28}
                           muted

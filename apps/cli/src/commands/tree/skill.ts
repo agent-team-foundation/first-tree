@@ -159,7 +159,7 @@ export const skillSubcommands: SubcommandModule[] = [
     alias: "",
     summary: "",
     description:
-      "Install only the core first-tree skills (currently `attention`). Used by the client's per-session workspace bootstrap so on-disk skill payloads exist even for agents without a Context Tree binding.",
+      "Install only the core first-tree skills (currently none). Used by the client's per-session workspace bootstrap so on-disk skill payloads exist even for agents without a Context Tree binding.",
     action: runInstallCoreSkillCommand,
     configure: configureRootOption,
   },

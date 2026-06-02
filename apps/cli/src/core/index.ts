@@ -1,16 +1,6 @@
 // Local agent alias hygiene (stale alias detection + deletion)
 export type { PinnedAgent, StaleAlias, StaleAliasReason } from "./agent-prune.js";
 export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-prune.js";
-// Need-Human-Attention (NHA) primitive — agent + member operations
-export type { CancelArgs, ListArgs, RaiseArgs, RespondArgs } from "./attention/index.js";
-export {
-  AttentionRespondError,
-  cancelAttention,
-  listAttentions,
-  raiseAttention,
-  respondAttention,
-  showAttention,
-} from "./attention/index.js";
 // Bootstrap / credentials
 export {
   AuthRefreshFailedError,

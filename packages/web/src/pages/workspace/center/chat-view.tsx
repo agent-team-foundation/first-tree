@@ -37,7 +37,6 @@ import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
 import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
-import { attentionsInChatQueryKey, listAttentionsInChat } from "../../../api/attention.js";
 import {
   type FileMessageContent,
   getChat,
@@ -65,7 +64,6 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
-import { AttentionCard } from "../../../components/chat/attention-card.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -977,29 +975,6 @@ export function ChatView({
    *  Shared single React Query cache, one HTTP fetch per refetch tick.
    *  See issue 495. */
   const { data: orgAgentsPage } = useOrgAgents();
-
-  /**
-   * NHA: when the chat has an open Attention with `targetHumanId === me`,
-   * the chat-bottom composer is swapped for an `AttentionCard`. Strict
-   * filter — only asks routed to THIS user surface here; ones targeting
-   * other humans (even in the same group chat) stay invisible. Disabled
-   * in read-only mode (watchers can't respond anyway).
-   */
-  const { data: openAttentions } = useQuery({
-    queryKey: attentionsInChatQueryKey(chatId),
-    queryFn: () => listAttentionsInChat(chatId),
-    enabled: !!chatId && !readOnly,
-  });
-  const activeAttention = useMemo(() => {
-    if (!openAttentions || openAttentions.length === 0 || !myAgentId) return null;
-    const respondable = openAttentions.filter(
-      (a) => a.state === "open" && a.requiresResponse && a.targetHumanId === myAgentId,
-    );
-    if (respondable.length === 0) return null;
-    return respondable.reduce((oldest, curr) =>
-      new Date(curr.createdAt).getTime() < new Date(oldest.createdAt).getTime() ? curr : oldest,
-    );
-  }, [openAttentions, myAgentId]);
 
   /**
    * Optimistic-update helpers for the messages cache. Wrap setQueryData so
@@ -2745,16 +2720,7 @@ export function ChatView({
           (Slack / ChatGPT / Linear DM all do this). On phones, the
           bottom padding extends past `env(safe-area-inset-bottom)` so
           the home-indicator doesn't overlap the send button. */}
-          {/* NHA chat-bottom: when an open Ask targets THIS user, the
-              AttentionCard takes the composer slot. Read-only / watcher
-              mode stays in the normal composer branch (the card itself
-              is gated on `!readOnly` via the `useQuery` enabled flag, so
-              activeAttention is always null in that branch). */}
-          {activeAttention && !readOnly ? (
-            <div className="shrink-0">
-              <AttentionCard attention={activeAttention} />
-            </div>
-          ) : (
+          {
             <div
               className="shrink-0"
               style={{
@@ -3164,7 +3130,7 @@ export function ChatView({
                 )}
               </div>
             </div>
-          )}
+          }
         </div>
         {showSidebar ? (
           narrow ? (

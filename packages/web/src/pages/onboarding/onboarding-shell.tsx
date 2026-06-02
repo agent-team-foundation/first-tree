@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
+import { Button } from "../../components/ui/button.js";
 import { useToast } from "../../components/ui/toast.js";
 import { COPY, STEP_COPY } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
@@ -41,8 +42,10 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
               workspace is empty, so leaving is a dead end. Sign out is always
               available so a user who can't finish right now isn't locked out. */}
           {hasAgent && (
-            <button
+            <Button
               type="button"
+              variant="link"
+              className="h-auto p-0 text-label"
               onClick={() => {
                 // Tell the user where setup lives before dropping them into the
                 // still-incomplete workspace — otherwise "finish later" reads as
@@ -54,20 +57,13 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
                 });
                 void finishLater();
               }}
-              className="text-label"
-              style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-4)" }}
             >
               {COPY.finishLater}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            onClick={logout}
-            className="text-label"
-            style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
+          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
             Sign out
-          </button>
+          </Button>
         </div>
       </header>
 

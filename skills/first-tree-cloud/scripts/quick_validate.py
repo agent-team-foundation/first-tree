@@ -25,14 +25,19 @@ def extract_frontmatter(text: str) -> tuple[bool, str]:
 
 
 def parse_simple_frontmatter(frontmatter: str) -> dict[str, str]:
+    """Parse top-level YAML keys only. Nested keys (indented lines) are
+    rolled up under their parent and ignored — we only care about
+    presence + values of top-level fields like `name` / `description` /
+    `version` / `cliCompat`."""
     data: dict[str, str] = {}
     for line in frontmatter.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if ":" not in stripped:
+        if line.startswith((" ", "\t")):
             continue
-        key, value = stripped.split(":", 1)
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
         key = key.strip()
         value = value.strip()
         if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
@@ -54,7 +59,7 @@ def validate_skill(skill_path: str) -> tuple[bool, str]:
 
     frontmatter = parse_simple_frontmatter(frontmatter_or_error)
 
-    unexpected = set(frontmatter.keys()) - {"name", "description"}
+    unexpected = set(frontmatter.keys()) - {"name", "description", "version", "cliCompat"}
     if unexpected:
         return False, f"Unexpected key(s) in frontmatter: {', '.join(sorted(unexpected))}"
 

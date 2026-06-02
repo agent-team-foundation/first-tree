@@ -13,7 +13,6 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPlug
 import postgres from "postgres";
 import { ZodError } from "zod";
 import { adapterRoutes } from "./api/adapters.js";
-import { agentAttentionRoutes } from "./api/agent/attention.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
@@ -26,7 +25,6 @@ import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
 import { attachmentRoutes } from "./api/attachments.js";
-import { attentionRoutes } from "./api/attention.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
@@ -499,17 +497,6 @@ export async function buildApp(config: Config) {
         { prefix: "" },
       );
 
-      // NHA M1 末 user-JWT surface — list / show / respond. Raise + cancel
-      // live on the agent token route (`/agent/attention`); this scope
-      // never authors those operations. Mounted at /attention so the
-      // path matches the wire spec in the shared schema.
-      await api.register(
-        userScope("attentionRoutesScope", async (scope) => {
-          await scope.register(attentionRoutes);
-        }),
-        { prefix: "/attention" },
-      );
-
       // Object-storage primitive — download surface (user-JWT). Generic
       // binary blob download; not bound to any business surface. Auth is a
       // capability model: valid JWT + knowledge of the unguessable id. Upload
@@ -568,7 +555,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentChatRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
-          await scope.register(agentAttentionRoutes, { prefix: "/attention" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
         }),

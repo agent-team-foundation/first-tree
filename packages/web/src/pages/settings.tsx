@@ -143,13 +143,12 @@ function SidebarLink({ to, label }: { to: string; label: string }) {
     >
       {({ isActive }) => (
         <span
-          className="block"
+          className={cn("block", isActive && "font-medium")}
           style={{
             padding: "var(--sp-2) var(--sp-3)",
             borderRadius: "var(--radius-input)",
             color: isActive ? "var(--fg)" : "var(--fg-3)",
             background: isActive ? "var(--bg-hover)" : "transparent",
-            fontWeight: isActive ? 500 : 400,
           }}
         >
           {label}
@@ -170,13 +169,12 @@ function PillLink({ to, label }: { to: string; label: string }) {
     >
       {({ isActive }) => (
         <span
-          className="inline-block whitespace-nowrap"
+          className={cn("inline-block whitespace-nowrap", isActive && "font-medium")}
           style={{
             padding: "var(--sp-1_5) var(--sp-3)",
             borderRadius: "var(--radius-input)",
             color: isActive ? "var(--fg)" : "var(--fg-3)",
             background: isActive ? "var(--bg-hover)" : "transparent",
-            fontWeight: isActive ? 500 : 400,
           }}
         >
           {label}

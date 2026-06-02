@@ -37,10 +37,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,
-    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
-    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
@@ -275,7 +273,6 @@ function PreviewCard({ name, row }: { name: string; row: MeChatRow }) {
           participants={row.participants}
           selfAgentId={SELF_ID}
           unreadCount={row.unreadMentionCount}
-          needsYou={row.pendingQuestionAgentIds.length > 0}
           failed={row.failedAgentIds.length > 0}
         />
         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>

@@ -7,32 +7,25 @@ const mk = (agentId: string, over: Partial<AgentChatStatusInput>) =>
     agentId,
     reachable: true,
     errored: false,
-    needsYou: false,
     working: false,
     engagement: "none",
     ...over,
   });
 
 describe("selectAttention — the bar surfaces only actionable/active states, most urgent first", () => {
-  it("keeps working / failed and drops needs_you / ready / paused / offline", () => {
+  it("keeps working / failed and drops ready / paused / offline", () => {
     const statuses = [
       mk("ready", {}),
       mk("working", { working: true }),
       mk("offline", { reachable: false }),
-      mk("needs", { needsYou: true }),
       mk("failed", { errored: true }),
       mk("paused", { engagement: "suspended" }),
     ];
-    // needs_you is owned by the AttentionCard, not this rail — it must not surface here.
     expect(selectAttention(statuses).map((s) => s.main)).toEqual(["failed", "working"]);
   });
 
   it("returns empty when every agent is quiet (ready / offline)", () => {
     expect(selectAttention([mk("r", {}), mk("o", { reachable: false })])).toEqual([]);
-  });
-
-  it("drops a needs_you agent even when it's the only attention", () => {
-    expect(selectAttention([mk("n", { needsYou: true })])).toEqual([]);
   });
 
   it("sorts by MAIN_STATUS_PRIORITY (most urgent first)", () => {

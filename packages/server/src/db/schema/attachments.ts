@@ -16,7 +16,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
  *
  * Independent blob — intentionally NO `chat_id` / `message_id` columns.
  * Upstream consumers (the `imageId` field inside `messages.content` jsonb,
- * future `attentions` / bookmark metadata, agent avatar references) hold the
+ * future bookmark metadata, agent avatar references) hold the
  * `attachments.id` reference. One byte sequence, many consumers.
  *
  * Auth happens at the route layer as a capability model: download requires

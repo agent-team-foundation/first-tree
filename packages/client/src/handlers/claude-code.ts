@@ -4,11 +4,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  CanUseTool,
   EffortLevel,
   McpServerConfig,
   PermissionMode,
-  PermissionResult,
   Query,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -23,7 +21,6 @@ import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/a
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { getCliBinding } from "../runtime/cli-binding.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -800,35 +797,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Build the SDK `canUseTool` callback. Auto-allows every tool except
-   * `AskUserQuestion`, which is no longer bridged: NHA M0 strips the
-   * question mechanism end-to-end. The replacement deny redirects the
-   * agent at the Need-Human-Attention CLI / SDK so it can request human
-   * attention through the new surface.
-   */
-  function buildAskUserCanUseTool(sessionCtx: SessionContext): CanUseTool {
-    return async (toolName, input, _options) => {
-      if (toolName === "AskUserQuestion") {
-        sessionCtx.log("AskUserQuestion is no longer bridged; redirecting agent to NHA");
-        // Channel-aware redirect: in staging / dev the binary on PATH is
-        // `first-tree-staging` / `first-tree-dev`, so the deny message has
-        // to thread `binName` through — same reason as bootstrap.ts's
-        // `generateToolsDoc`. Resolved lazily per turn so vitest workers
-        // that flip the binding mid-suite see the up-to-date value.
-        const bin = getCliBinding().binName;
-        return {
-          behavior: "deny",
-          message:
-            "AskUserQuestion is no longer supported in First Tree. " +
-            `To request human attention, use the \`${bin} attention raise\` CLI (or your runtime's NHA SDK). ` +
-            "See the `attention` skill for usage.",
-        } satisfies PermissionResult;
-      }
-      return { behavior: "allow", updatedInput: input };
-    };
-  }
-
-  /**
    * Single helper for "turn closed → ack the in-flight inbox entry AND
    * drop the replay stash". The two operations are paired everywhere a
    * turn finishes (success / sniff-permanent / forward-error / no-result /
@@ -986,9 +954,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         //     explicit SDK options below, which layer on top of settings.
         settingSources: ["user", "project"],
         env: buildEnv(sessionCtx),
-        // NHA M0: AskUserQuestion is denied with a redirect message; all
-        // other tools auto-allow. See buildAskUserCanUseTool.
-        canUseTool: buildAskUserCanUseTool(sessionCtx),
+        // AskUserQuestion is not supported in First Tree — agents resolve
+        // ask-a-human inline. Disable the tool at the SDK level so it never
+        // surfaces in a session.
+        disallowedTools: ["AskUserQuestion"],
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
         // model / systemPrompt / mcpServers / effort — the config-derived slice.
         // `effort: ""` (inherit) is omitted so the SDK uses the local effortLevel.

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { Button } from "../../../components/ui/button.js";
+import { Input } from "../../../components/ui/input.js";
 import { COPY } from "../copy.js";
 import { FlowNote } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
@@ -80,7 +81,7 @@ export function StepTeam() {
       {/* No visible <label> — the step title ("Name your team") and the
           field's `aria-label` already name the input. Repeating "Team name"
           here was visual noise on a single-input page. */}
-      <input
+      <Input
         ref={inputRef}
         id="onboarding-team-name"
         aria-label="Team name"
@@ -88,22 +89,6 @@ export function StepTeam() {
         onChange={(e) => setName(e.target.value)}
         maxLength={200}
         disabled={saving}
-        className="text-body"
-        style={{
-          padding: "var(--sp-2) var(--sp-3)",
-          background: "var(--bg)",
-          border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg)",
-          outline: "none",
-          caretColor: "var(--primary)",
-        }}
-        onFocus={(e) => {
-          e.currentTarget.style.borderColor = "var(--primary)";
-        }}
-        onBlur={(e) => {
-          e.currentTarget.style.borderColor = "var(--border)";
-        }}
       />
 
       {(saveError || loadError) && (

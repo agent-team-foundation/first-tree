@@ -1,6 +1,9 @@
 ---
 name: first-tree-cloud
-description: Install, operate, and modify First Tree's cloud / collaboration layer with emphasis on the unified `first-tree` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions connecting a machine to the First Tree SaaS, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+version: 0.5.0
+cliCompat:
+  first-tree: ">=0.5.0 <0.6.0"
+description: Install, operate, and use the `first-tree` CLI against First Tree Cloud — the unified `login` / `daemon` / `agent` / `chat` / `config` workflows, the JWT credential model, background-service operation, and day-to-day messaging. Use whenever the user mentions connecting a machine to First Tree, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or sending / debugging chat messages.
 ---
 
 # First Tree CLI — Cloud Layer
@@ -25,8 +28,7 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - Make a computer stay online permanently → the **Background daemon** section below
    - Map a natural-language request to an end-to-end CLI flow → `references/scenario-playbooks.md`
    - Walk an external agent prompt through onboarding → `references/onboarding-operator.md`
-   - Explain product or architecture concepts → `references/core-concepts.md`
-   - Modify CLI or adjacent package behavior → `references/developer-map.md`
+   - Need product / architecture context (decisions, ownership, design) → read the Context Tree's `first-tree-cloud/` domain (start at `NODE.md`).
 2. **Prefer the supported CLI path over hand-rolled API calls or YAML edits.** The CLI already wires up auth, refresh, config layering, and retries for you.
    - `login <token>` for first-time auth on a new machine (auto-installs the background daemon on macOS/Linux)
    - `agent config ...` to change a running agent's model / prompt / MCP / env / repos
@@ -40,7 +42,6 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - Install: `npm install -g first-tree`
    - Verify: `first-tree --version`
    - For agent creation via GitHub identity, also: `gh auth status`
-5. **The skill lives inside the repo.** `.agents/skills/` and `.claude/skills/` are symlinks to `skills/` — when you edit `skills/first-tree-cloud/`, every runtime sees the change immediately. No sync step.
 
 ## The Credential Model (read this once)
 
@@ -146,33 +147,21 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 
 - Always run `first-tree status` after each verb to verify state before proceeding.
 
-### Modify Code Safely
+## Gotchas
 
-- For new or changed CLI behavior, inspect:
-  - `apps/cli/src/commands/*.ts` — command registration and argument shape.
-  - `apps/cli/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, etc.).
-  - `packages/shared/src/config/*.ts` — if flags, env vars, or schema change.
-  - `docs/cli-reference.md` and `docs/onboarding-guide.md` — whenever user-facing behavior changes.
-- Keep command modules thin. Reusable business logic belongs in `apps/cli/src/core/`. Re-export new reusable functions from `apps/cli/src/core/index.ts` and `apps/cli/src/index.ts` when external callers should be able to import them.
-- See `references/developer-map.md` for the full source layout.
+Common misreads that cost time:
 
-## Validation
-
-- Skill-only edits: `pnpm validate:skill` from the repo root, and inspect `agents/openai.yaml`.
-- CLI or behavior changes:
-
-  ```bash
-  pnpm check
-  pnpm typecheck
-  pnpm --filter first-tree test
-  ```
-
-- Add targeted package tests when you change runtime behavior.
+- `agent add` does **not** create an agent on the server. It only writes a local alias (`agents/<name>/agent.yaml`) mapping a friendly name to an existing `agentId`. Use `agent create` to create a server-side row.
+- `daemon start` does **not** start the server. It only runs configured agent clients against a server that must already be running.
+- Context Tree does **not** own agent identity. First Tree Cloud does. Context Tree is an optional organizational knowledge source.
+- The inbox contract is **at-least-once with client-side deduplication**, not exactly-once delivery.
+- `FIRST_TREE_AGENT_TOKEN` and `FIRST_TREE_AGENT` are gone. Neither env var is read by the CLI anymore; all auth flows through `credentials.json` (written by `login <token>`).
+- Do not conflate `agent config ...` (server-side runtime configuration, mutates the database via the admin API) with `config ...` (local YAML editing of `client.yaml`). Both are legitimate; they operate on different state.
 
 ## References
 
 - `references/command-surface.md` — exhaustive command catalog, including the credential model, scopes, env vars, and admin API endpoints the CLI calls.
 - `references/scenario-playbooks.md` — request-to-command playbooks (install, connect, onboard, debug, deploy).
 - `references/onboarding-operator.md` — automation-friendly onboarding instructions that start from a prompt, not a local checkout.
-- `references/core-concepts.md` — product boundaries, architecture invariants, runtime mental models.
-- `references/developer-map.md` — package ownership, source-file entry points, change workflows.
+
+For product / architecture concepts (what First Tree Cloud is, who owns what, why decisions were made), read the Context Tree's `first-tree-cloud/` domain — `NODE.md` for the map, then `cli.md` / `claim-agent.md` / `client-runtime.md` / `messaging.md` for the specific subsystem.
