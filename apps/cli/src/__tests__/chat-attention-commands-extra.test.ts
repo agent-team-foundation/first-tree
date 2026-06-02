@@ -1,9 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
-import type { Attention } from "@first-tree/shared";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,20 +27,6 @@ const ioMocks = vi.hoisted(() => ({
   readStdin: vi.fn(),
 }));
 
-const attentionMocks = vi.hoisted(() => ({
-  AttentionRespondError: class AttentionRespondError extends Error {
-    constructor(
-      public readonly statusCode: number,
-      message: string,
-    ) {
-      super(message);
-      this.name = "AttentionRespondError";
-    }
-  },
-  raiseAttention: vi.fn(),
-  respondAttention: vi.fn(),
-}));
-
 const outputMocks = vi.hoisted(() => ({
   fail: vi.fn((code: string, message: string, exitCode = 1) => {
     throw Object.assign(new Error(message), { code, exitCode });
@@ -64,39 +46,16 @@ vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAg
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 vi.mock("../core/doc-capture.js", () => docCaptureMock);
 vi.mock("../commands/chat/_shared/io.js", () => ioMocks);
-vi.mock("../core/attention/index.js", () => attentionMocks);
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
 }));
 vi.mock("node:readline", () => readlineMocks);
 
-let tempDir = "";
 const originalChatId = process.env.FIRST_TREE_CHAT_ID;
 const originalExit = process.exit;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
-
-function attention(overrides: Partial<Attention> = {}): Attention {
-  return {
-    id: overrides.id ?? "attention-1",
-    originAgentId: overrides.originAgentId ?? "agent-1",
-    originChatId: overrides.originChatId ?? "chat-1",
-    targetHumanId: overrides.targetHumanId ?? "human-1",
-    subject: overrides.subject ?? "Approve deploy",
-    body: overrides.body ?? "Can I ship?",
-    requiresResponse: overrides.requiresResponse ?? true,
-    state: overrides.state ?? "open",
-    response: overrides.response ?? null,
-    respondedBy: overrides.respondedBy ?? null,
-    respondedAt: overrides.respondedAt ?? null,
-    cancelled: overrides.cancelled ?? false,
-    cancelledReason: overrides.cancelledReason ?? null,
-    metadata: overrides.metadata ?? {},
-    createdAt: overrides.createdAt ?? "2026-06-01T00:00:00.000Z",
-    closedAt: overrides.closedAt ?? null,
-  };
-}
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -116,17 +75,7 @@ async function runChat(args: string[]): Promise<void> {
   await program.parseAsync(["node", "test", "chat", ...args]);
 }
 
-async function runAttention(args: string[]): Promise<void> {
-  const { registerAttentionCommands } = await import("../commands/attention/index.js");
-  const program = new Command();
-  program.exitOverride();
-  program.configureOutput({ writeErr: () => undefined, writeOut: () => undefined });
-  registerAttentionCommands(program);
-  await program.parseAsync(["node", "test", "attention", ...args]);
-}
-
 beforeEach(() => {
-  tempDir = mkdtempSync(join(tmpdir(), "ft-cli-chat-attention-"));
   vi.clearAllMocks();
   process.env.FIRST_TREE_CHAT_ID = "chat-env";
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
@@ -143,15 +92,12 @@ beforeEach(() => {
       return { id: "chat-1", ...patchObject };
     }),
   });
-  attentionMocks.raiseAttention.mockResolvedValue(attention());
-  attentionMocks.respondAttention.mockResolvedValue(attention({ response: "done", state: "closed" }));
   process.exit = vi.fn(((code?: number) => {
     throw Object.assign(new Error("process.exit"), { code });
   }) as never);
 });
 
 afterEach(() => {
-  rmSync(tempDir, { force: true, recursive: true });
   if (originalChatId === undefined) {
     delete process.env.FIRST_TREE_CHAT_ID;
   } else {
@@ -253,105 +199,5 @@ describe("chat command behavior", () => {
     emitter.emit("line", "   ");
     expect(() => emitter.emit("close")).toThrow("process.exit");
     expect(globalThis.clearInterval).toHaveBeenCalledWith(42);
-  });
-});
-
-describe("attention command behavior", () => {
-  it("raises attention from literal, file, stdin, flat metadata, and JSON metadata", async () => {
-    const bodyFile = join(tempDir, "body.md");
-    const metaFile = join(tempDir, "meta.json");
-    writeFileSync(bodyFile, "file body");
-    writeFileSync(metaFile, JSON.stringify({ choices: [{ label: "Ship", value: "ship" }] }));
-
-    await runAttention([
-      "raise",
-      "--chat",
-      "chat-1",
-      "--target",
-      "human-1",
-      "--subject",
-      "Approve",
-      "--body",
-      `@${bodyFile}`,
-      "--requires-response",
-      "--meta",
-      "priority=2",
-      "--meta-json",
-      `@${metaFile}`,
-      "--agent",
-      "kael",
-    ]);
-
-    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("kael");
-    expect(attentionMocks.raiseAttention).toHaveBeenCalledWith(localAgentMocks.createSdk(), {
-      chatId: "chat-1",
-      target: "human-1",
-      subject: "Approve",
-      body: "file body",
-      requiresResponse: true,
-      metadata: {
-        priority: 2,
-        choices: [{ label: "Ship", value: "ship" }],
-      },
-    });
-    expect(outputMocks.success).toHaveBeenCalledWith(expect.objectContaining({ id: "attention-1" }));
-
-    await runAttention(["raise", "--chat", "chat-1", "--target", "human-1", "--subject", "Literal", "--body", "plain"]);
-    expect(attentionMocks.raiseAttention).toHaveBeenLastCalledWith(
-      localAgentMocks.createSdk(),
-      expect.objectContaining({ body: "plain", requiresResponse: false }),
-    );
-
-    ioMocks.readStdin.mockResolvedValueOnce("piped body");
-    await runAttention(["raise", "--chat", "chat-1", "--target", "human-1", "--subject", "Pipe", "--body", "@-"]);
-    expect(attentionMocks.raiseAttention).toHaveBeenLastCalledWith(
-      localAgentMocks.createSdk(),
-      expect.objectContaining({ body: "piped body" }),
-    );
-
-    ioMocks.readStdin.mockResolvedValueOnce(null);
-    await expect(
-      runAttention(["raise", "--chat", "chat-1", "--target", "human-1", "--subject", "Pipe", "--body", "@-"]),
-    ).rejects.toMatchObject({ code: "BODY_READ_FAILED", exitCode: 2 });
-  });
-
-  it("responds with text or structured answers and maps validation and HTTP errors", async () => {
-    await runAttention(["respond", "attention-1", "--text", "approved"]);
-    expect(attentionMocks.respondAttention).toHaveBeenCalledWith({
-      id: "attention-1",
-      text: "approved",
-      answers: undefined,
-    });
-
-    await runAttention(["respond", "attention-1", "--answer", "choice=ship", "--answer", "risk=low"]);
-    expect(attentionMocks.respondAttention).toHaveBeenLastCalledWith({
-      id: "attention-1",
-      text: undefined,
-      answers: { choice: "ship", risk: "low" },
-    });
-
-    await runAttention(["respond", "attention-1", "--text", "approved", "--answer", "ignored=yes"]);
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--text wins");
-
-    await expect(runAttention(["respond", "attention-1"])).rejects.toMatchObject({
-      code: "UNKNOWN_ERROR",
-      exitCode: 1,
-    });
-    await expect(runAttention(["respond", "attention-1", "--answer", "bad"])).rejects.toMatchObject({
-      code: "UNKNOWN_ERROR",
-      exitCode: 1,
-    });
-
-    attentionMocks.respondAttention.mockRejectedValueOnce(new attentionMocks.AttentionRespondError(401, "expired"));
-    await expect(runAttention(["respond", "attention-1", "--text", "approved"])).rejects.toMatchObject({
-      code: "HTTP_401",
-      exitCode: 3,
-    });
-
-    attentionMocks.respondAttention.mockRejectedValueOnce(new Error("boom"));
-    await expect(runAttention(["respond", "attention-1", "--text", "approved"])).rejects.toMatchObject({
-      code: "UNKNOWN_ERROR",
-      exitCode: 1,
-    });
   });
 });

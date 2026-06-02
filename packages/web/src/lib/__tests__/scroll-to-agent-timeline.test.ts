@@ -25,21 +25,16 @@ describe("scrollToAgentTimeline", () => {
     expect(latestScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
   });
 
-  it("handles pending questions, errors, inert states, and missing anchors", () => {
-    const question = document.createElement("div");
+  it("handles errors, inert states, and missing anchors", () => {
     const error = document.createElement("div");
-    question.setAttribute("data-pending-question-agent", "agent-1");
     error.setAttribute("data-error-agent", "agent-1");
-    document.body.append(question, error);
-    question.scrollIntoView = vi.fn();
+    document.body.append(error);
     error.scrollIntoView = vi.fn();
 
-    scrollToAgentTimeline("agent-1", "needs_you");
     scrollToAgentTimeline("agent-1", "failed");
     scrollToAgentTimeline("agent-1", "ready");
     scrollToAgentTimeline("missing", "working");
 
-    expect(question.scrollIntoView).toHaveBeenCalledTimes(1);
     expect(error.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 });

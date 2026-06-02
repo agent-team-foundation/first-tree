@@ -193,10 +193,9 @@ describe("onboarding shell, rail, and team step", () => {
     if (!input) throw new Error("Expected team input");
 
     expect(input.value).toBe("Acme");
-    input.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
-    expect(input.style.borderColor).toBe("var(--primary)");
-    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    expect(input.style.borderColor).toBe("var(--border)");
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(input.value.length);
+    expect(input.selectionEnd).toBe(input.value.length);
 
     await submit(container.querySelector("form"));
     expect(apiMock.patch).not.toHaveBeenCalled();

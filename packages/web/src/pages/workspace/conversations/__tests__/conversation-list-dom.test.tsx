@@ -68,10 +68,8 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,
-    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
-    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
@@ -87,7 +85,8 @@ const BASE_ROWS: MeChatRow[] = [
   row({
     chatId: "chat-needs",
     title: "Waiting approval",
-    chatHasOpenQuestion: true,
+    unreadMentionCount: 1,
+    chatHasExplicitMentionToMe: true,
     lastMessageAt: null,
     lastMessagePreview: null,
   }),
@@ -270,7 +269,7 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("GITHUB");
     expect(container.textContent).toContain("Watching · Needs another pass");
     expect(container.querySelector('[aria-label="failed, 3 unread"]')).toBeTruthy();
-    expect(container.querySelector('[aria-label="needs you"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="1 unread"]')).toBeTruthy();
 
     await click(rowButton(container, "Manual planning"));
     expect(onSelectChat).toHaveBeenCalledWith("chat-manual");

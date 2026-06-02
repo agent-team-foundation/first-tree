@@ -243,29 +243,29 @@ describe("tree skill library", () => {
       "Could not locate bundled `skills/` payloads",
     );
 
-    const staleClaudeDir = join(root, ".claude", "skills", "attention");
+    const staleClaudeDir = join(root, ".claude", "skills", "github-scan");
     mkdirSync(staleClaudeDir, { recursive: true });
     writeFileSync(join(staleClaudeDir, "stale.txt"), "old\n");
 
     copyCoreSkills(root);
 
-    expect(existsSync(join(root, ".agents", "skills", "attention", "SKILL.md"))).toBe(true);
-    expect(readlinkSync(join(root, ".claude", "skills", "attention"))).toBe("../../.agents/skills/attention");
+    expect(existsSync(join(root, ".agents", "skills", "github-scan", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(root, ".claude", "skills", "github-scan", "stale.txt"))).toBe(true);
     expect(existsSync(join(root, ".agents", "skills", "first-tree"))).toBe(false);
   });
 
   it("handles unreadable metadata and missing CLI package versions", () => {
     const isolated = mkdtempSync(join(tmpdir(), "ft-tree-skill-no-package-"));
     try {
-      installSkill("attention", { version: "" });
-      linkClaudeSkill("attention");
+      installSkill("github-scan", { version: "" });
+      linkClaudeSkill("github-scan");
       const skillRoot = join(root, ".agents", "skills", "first-tree-onboarding");
       mkdirSync(skillRoot, { recursive: true });
       writeFileSync(join(skillRoot, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: "=not-semver"\n---\n');
       writeFileSync(join(skillRoot, "VERSION"), "\n");
       linkClaudeSkill("first-tree-onboarding");
 
-      expect(collectSkillStatus(root).find((row) => row.name === "attention")).toMatchObject({
+      expect(collectSkillStatus(root).find((row) => row.name === "github-scan")).toMatchObject({
         compatible: true,
         version: null,
       });
@@ -274,14 +274,17 @@ describe("tree skill library", () => {
       );
 
       writeFileSync(join(isolated, "package.json"), "{ invalid json");
-      const localSkill = join(isolated, ".agents", "skills", "attention");
+      const localSkill = join(isolated, ".agents", "skills", "github-scan");
       mkdirSync(join(localSkill, "agents"), { recursive: true });
       writeFileSync(join(localSkill, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: ">0.0.0"\n---\n');
       writeFileSync(join(localSkill, "VERSION"), "1.0.0\n");
       writeFileSync(join(localSkill, "agents", "openai.yaml"), "name: test\n");
       mkdirSync(join(isolated, ".claude", "skills"), { recursive: true });
-      symlinkSync(join("..", "..", ".agents", "skills", "attention"), join(isolated, ".claude", "skills", "attention"));
-      expect(collectSkillStatus(isolated).find((row) => row.name === "attention")?.cliVersion).toBeTypeOf("string");
+      symlinkSync(
+        join("..", "..", ".agents", "skills", "github-scan"),
+        join(isolated, ".claude", "skills", "github-scan"),
+      );
+      expect(collectSkillStatus(isolated).find((row) => row.name === "github-scan")?.cliVersion).toBeTypeOf("string");
     } finally {
       rmSync(isolated, { recursive: true, force: true });
     }

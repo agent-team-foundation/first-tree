@@ -582,8 +582,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
   /**
    * Translate one terminal `item.completed` payload into the runtime's event
-   * stream and, when the item is the assistant's final message, return the
-   * raw text so `runTurn` can stitch the per-turn reply together.
+   * stream and, when the item is assistant text, return the raw text so
+   * `runTurn` can track the SDK-style final response.
    */
   function processItem(item: ThreadItem, sessionCtx: SessionContext): string {
     switch (item.type) {
@@ -719,7 +719,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // assistant_text / tool_call to the chat, re-running the turn would
     // double-render those items, so we stop retrying even if the SDK
     // surfaces a transient `turn.failed`.
-    const assistantTexts: string[] = [];
+    let finalResponse = "";
     let turnFailed = false;
     let userVisibleEmitted = false;
     // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
@@ -729,9 +729,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
     const turnStartedAt = Date.now();
     const promise = (async () => {
       for (let attempt = 0; attempt <= MAX_TURN_RETRIES; attempt++) {
-        // Reset per-attempt; assistantTexts intentionally persists across
+        // Reset per-attempt; finalResponse intentionally persists across
         // attempts only because we abort retries the moment any user-visible
-        // item is emitted, so the array is empty whenever a retry runs.
+        // item is emitted, so it is empty whenever a retry runs.
         turnFailed = false;
         let retryRequested = false;
         let retryDelay = 0;
@@ -762,7 +762,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 // No-op — runtime state already "working".
               } else if (event.type === "item.completed") {
                 const text = processItem(event.item, sessionCtx);
-                if (text) assistantTexts.push(text);
+                if (text) finalResponse = text;
                 if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
               } else if (event.type === "item.started" || event.type === "item.updated") {
                 // Stream-only intermediate states — claude-code likewise emits
@@ -792,6 +792,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   payload: { source: "sdk", message },
                 });
               } else if (event.type === "error") {
+                if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(event.message)) {
+                  retryRequested = true;
+                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+                  retryReason = `stream error (transient): ${event.message}`;
+                  break;
+                }
+                turnFailed = true;
                 const message = isCodexAuthError(event.message)
                   ? formatAuthHint("codex", event.message)
                   : event.message;
@@ -856,12 +863,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       return;
     }
 
-    // `\n\n` between assistant messages so multi-message turns aren't fused
-    // into one blob (Codex can emit several `agent_message` items in a turn).
-    const accumulated = assistantTexts.join("\n\n");
+    // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
+    // emits several non-empty agent_message items, finalResponse is the latest
+    // one. Earlier agent_message items remain live assistant_text progress
+    // events only. If the turn failed, do not forward partial text as a final
+    // chat message.
+    const accumulated = finalResponse;
 
     let forwardFailed = false;
-    if (accumulated.trim()) {
+    if (!turnFailed && accumulated.trim()) {
       try {
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
