@@ -229,7 +229,7 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("JSON.stringify");
   });
 
-  it("tools.md pins the final-text contract and points the long-form rules at first-tree-cloud (proposal P3)", () => {
+  it("tools.md pins the final-text contract, Decision guide + Fallback, and points the long-form CLI usage at first-tree-cloud (proposal P3)", () => {
     const workspace = join(tmpBase, "ws-tools-rules");
     mkdirSync(workspace, { recursive: true });
 
@@ -245,10 +245,20 @@ describe("bootstrapWorkspace", () => {
     // result-sink + agent↔agent echo-loop prevention; see v1 §四 改造 4).
     expect(content).toContain("human observers");
     expect(content).toContain("does NOT wake other agents");
-    // The full Communication Rules / Sending Messages / Decision guide /
-    // Fallback content has been sunk into the first-tree-cloud skill
-    // (SKILL.md + references/agent-communication.md). tools.md must
-    // carry a pointer at it.
+    // P3 v2 (after yuezengwu's Blocker 1 callout): the Decision guide table
+    // and the Fallback paragraph stay inline because `first-tree-cloud` is
+    // not in CORE_SKILL_NAMES — a tree-less agent (contextTreePath: null)
+    // would otherwise lose them entirely. Only the long-form CLI mechanics
+    // (chat invite / markdown / stdin / mention resolution) sink into the
+    // skill.
+    expect(content).toContain("## Communication Rules");
+    expect(content).toContain("Decision guide");
+    expect(content).toMatch(/Target is a \*\*human\*\* in this chat/);
+    expect(content).toMatch(/Target is an \*\*agent\*\* in this chat/);
+    expect(content).toContain("**Fallback**");
+    expect(content).toContain("conservative mode");
+    // tools.md still carries the pointer at first-tree-cloud for the
+    // long-form CLI usage (and explicitly notes the tree-less case).
     expect(content).toContain("## Hub Collaboration");
     expect(content).toContain("first-tree-cloud");
     // Old contract text must stay gone — these are the lines the v1.5 spec

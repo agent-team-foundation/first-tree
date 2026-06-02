@@ -966,11 +966,21 @@ export function generateToolsDoc(): string {
   // binary that wasn't installed on the host.
   //
   // Per skill-restructure proposal (skill-restructure.20260602) P3, the
-  // long-form Communication Rules / Sending Messages content has been
-  // sunk into the `first-tree-cloud` skill (SKILL.md + references/
-  // agent-communication.md). What stays here are the load-bearing
-  // invariants that the runtime's result-sink + courteous-loop guard
-  // depend on, plus a pointer to the skill for everything else.
+  // long-form Sending Messages CLI usage (chat send / chat invite syntax,
+  // markdown / stdin, mention-resolution mechanics) has been sunk into
+  // the `first-tree-cloud` skill (SKILL.md + references/agent-
+  // communication.md). What stays here:
+  //   - runtime safety invariants the result-sink + silent-turn guard
+  //     depend on (final-text contract, silent-turn, Issue #389);
+  //   - the short behavioural directives (Decision guide table + Fallback
+  //     paragraph) that every agent needs regardless of whether
+  //     `first-tree-cloud` is installed in its workspace.
+  // Why the second group stays inline: `first-tree-cloud` is in
+  // `TREE_SKILL_NAMES` (only installed alongside a Context Tree binding),
+  // not `CORE_SKILL_NAMES`. A tree-less agent (contextTreePath: null —
+  // explicitly supported per CLAUDE.md "Context Tree integration is
+  // optional") would otherwise be pointed at a skill that doesn't exist
+  // on its disk and silently lose the decision guide.
   const bin = getCliBinding().binName;
   return `# First Tree Agent Runtime
 
@@ -987,18 +997,35 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes produces a
   literal \`"@x ...\\n..."\` row that the UI cannot render as markdown.
 
+## Communication Rules
+
+Decision guide (based on participant \`type\` in the Current Chat Context block):
+
+- Target is a **human** in this chat → your final text is enough; do not
+  redundantly \`chat send\` (it just adds noise).
+- Target is an **agent** in this chat → they will NOT see your final text
+  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them to act.
+- No specific target (just narrating progress / thinking aloud) → final
+  text only; no send needed.
+
+**Fallback** (if the Current Chat Context block is missing — context
+injection may have failed): use conservative mode — all cross-agent
+collaboration goes through explicit \`chat send\`; do not rely on final
+text to wake anyone.
+
 ## Hub Collaboration
 
-For everything beyond the runtime invariants above — the full \`chat send\` /
-\`chat invite\` CLI usage, the Decision guide for who you wake (human vs.
-agent target vs. no specific target), the Fallback rule for when the Current
-Chat Context block is missing, mention resolution, reaching non-members,
-markdown / stdin formatting — load the **\`first-tree-cloud\` skill**.
+For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
+stdin, reaching non-members, mention resolution — load the
+**\`first-tree-cloud\` skill** (or its \`references/agent-communication.md\`).
+The skill's \`description\` triggers progressive disclosure whenever the user
+mentions chat, daemon, agent config, or login.
 
-That skill's \`description\` triggers whenever the user mentions chat, daemon,
-agent config, or login, so progressive disclosure brings it in when you need
-it. Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
-there — this agent's CLI binary on PATH is \`${bin}\`.
+Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
+there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less agents**
+(no Context Tree binding) won't have \`first-tree-cloud\` installed on disk;
+the Communication Rules above are inline here for exactly that reason — the
+sunk content is the long CLI mechanics, not the routing rules.
 
 ## When You Need a Human
 
