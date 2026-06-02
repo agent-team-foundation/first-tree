@@ -879,32 +879,31 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
-                  await app.db.transaction(async (tx) => {
-                    // Drizzle transaction objects are structurally compatible
-                    // with the query surface used by these services, but the
-                    // repo's Database alias includes the connection `end()`
-                    // helper that transactions do not expose.
-                    const txDb = tx as unknown as typeof app.db;
-                    const persistedEvent = await sessionEventService.appendEvent(
-                      txDb,
-                      agentId,
-                      payload.chatId,
-                      payload.event,
-                      {
-                        deferSideEffects: true,
-                      },
-                    );
-                    if (boundInfo) {
-                      await contextTreeIoService.recordFromSessionEvent(txDb, {
+                  const persistedEvent = await sessionEventService.appendEvent(
+                    app.db,
+                    agentId,
+                    payload.chatId,
+                    payload.event,
+                    {
+                      deferSideEffects: true,
+                    },
+                  );
+                  if (boundInfo) {
+                    contextTreeIoService
+                      .recordFromSessionEvent(app.db, {
                         organizationId: boundInfo.organizationId,
                         agentId,
                         chatId: payload.chatId,
                         runtimeProvider: boundInfo.runtimeProvider,
                         sessionEvent: persistedEvent,
+                      })
+                      .catch((err) => {
+                        app.log.warn(
+                          { err, agentId, chatId: payload.chatId },
+                          "context-tree IO record failed (non-fatal)",
+                        );
                       });
-                    }
-                    return persistedEvent;
-                  });
+                  }
                   sessionEventService.emitAppendEventSideEffects(app.db, agentId, payload.chatId, payload.event);
                   if (boundInfo) {
                     // Best-effort cross-instance kick so admin WS sockets in

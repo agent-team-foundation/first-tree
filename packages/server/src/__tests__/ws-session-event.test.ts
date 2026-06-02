@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
@@ -9,6 +9,7 @@ import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
+import * as contextTreeIoService from "../services/context-tree-io.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import * as sessionEventService from "../services/session-event.js";
@@ -284,6 +285,74 @@ describe("Agent WS — session event protocol (S10)", () => {
         targetPath: "domains/runtime/NODE.md",
       });
     } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("keeps the session event when Context Tree IO recording fails", async () => {
+    const seed = await seedBoundAgent("context-io-fail");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const treeRepoUrl = "https://github.com/acme/first-tree-context.git";
+    const errorFrames: unknown[] = [];
+    const ioSpy = vi
+      .spyOn(contextTreeIoService, "recordFromSessionEvent")
+      .mockRejectedValueOnce(new Error("context io failed"));
+
+    ws.on("message", (raw) => {
+      const parsed = JSON.parse(raw.toString()) as { type?: string };
+      if (parsed.type === "error") errorFrames.push(parsed);
+    });
+
+    try {
+      await putOrgSetting(
+        app.db,
+        seed.organizationId,
+        "context_tree",
+        { repo: treeRepoUrl, branch: "main" },
+        { updatedBy: seed.userId },
+      );
+      await app.db.insert(chats).values({ id: chatId, organizationId: seed.organizationId });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: seed.agent.uuid,
+          chatId,
+          event: {
+            kind: "tool_call",
+            payload: {
+              toolUseId: "tu-context-write-fail",
+              name: "Write",
+              args: {},
+              status: "ok",
+              toolFileRefs: [
+                {
+                  origin: "tool_arg",
+                  repoUrl: treeRepoUrl,
+                  repoBranch: "main",
+                  repoRelativePath: "domains/runtime/NODE.md",
+                  pathKind: "file",
+                },
+              ],
+            },
+          },
+        }),
+      );
+
+      const { items } = await waitForCondition(async () => {
+        const listed = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+        return listed.items.length > 0 ? listed : null;
+      });
+      await waitForCondition(async () => (ioSpy.mock.calls.length > 0 ? true : null));
+
+      const ioRows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, chatId));
+      expect(items).toHaveLength(1);
+      expect(errorFrames).toHaveLength(0);
+      expect(ioRows).toHaveLength(0);
+    } finally {
+      ioSpy.mockRestore();
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
     }
