@@ -325,7 +325,7 @@ describe("AgentDetailPage", () => {
       );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "System prompt append");
+    await waitForText(container, "Additional instructions");
     expect(container.textContent).toContain("Kael");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
@@ -338,7 +338,7 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
 
-    await click(exactButtonByText(container, "Edit"));
+    await click(exactButtonByText(container, "Edit prompt"));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Prompt textarea missing");
     await setValue(textarea, "New prompt");
@@ -352,7 +352,7 @@ describe("AgentDetailPage", () => {
     await click(buttonByText(container, "Discard mine, load latest"));
     expect(agentConfigMocks.getAgentConfig).toHaveBeenCalledTimes(2);
 
-    await click(exactButtonByText(container, "Edit"));
+    await click(exactButtonByText(container, "Edit prompt"));
     const latestTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!latestTextarea) throw new Error("Prompt textarea missing after reload");
     await setValue(latestTextarea, "Throw this away");
@@ -369,7 +369,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "System prompt append");
+    await waitForText(container, "Additional instructions");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");
