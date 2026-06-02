@@ -7,16 +7,25 @@ export function ProfileTab() {
   const ctx = useAgentDetailContext();
   return (
     <>
-      <IdentitySection agent={ctx.agent} canEdit={ctx.canManageAgent} onSave={ctx.saveIdentity} />
-      <AppearanceSection
+      <IdentitySection
         agent={ctx.agent}
         canEdit={ctx.canManageAgent}
         onSave={ctx.saveIdentity}
-        onRefresh={ctx.refreshAgent}
+        title="Identity"
+        description={null}
+        aside={
+          <AppearanceSection
+            agent={ctx.agent}
+            canEdit={ctx.canManageAgent}
+            onSave={ctx.saveIdentity}
+            onRefresh={ctx.refreshAgent}
+            variant="inline"
+          />
+        }
       />
-      {/* Danger zone lives at the bottom of Profile — agent lifecycle
+      {/* Agent lifecycle lives at the bottom of Profile — availability/delete
           (suspend / delete) is identity-level, not runtime-level. Industry
-          pattern: GitHub / Linear / Stripe all put danger zone at the end
+          pattern: GitHub / Linear / Stripe all put lifecycle/destructive controls at the end
           of the identity/settings page, not mixed with config. */}
       {ctx.canManageAgent && (
         <DangerZone

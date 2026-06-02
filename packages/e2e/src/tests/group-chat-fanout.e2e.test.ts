@@ -128,7 +128,7 @@ describe("group chat fan-out — one chat-send delivers to every non-sender", ()
       creds.accessToken,
       "POST",
       `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
-      { format: "text", content: text },
+      { format: "text", content: text, metadata: { mentions: [agentAId, agentBId] } },
       201,
     );
 
@@ -171,7 +171,7 @@ describe("group chat fan-out — one chat-send delivers to every non-sender", ()
       creds.accessToken,
       "POST",
       `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
-      { format: "text", content: text },
+      { format: "text", content: text, metadata: { mentions: [agentAId, agentBId] } },
       201,
     );
 

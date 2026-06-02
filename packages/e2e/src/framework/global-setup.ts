@@ -33,16 +33,14 @@ export default async function setup(): Promise<() => Promise<void>> {
     // mint via dev-callback. Always on for the e2e run — the route 404s
     // unless this env is explicitly set, so it's still off in prod.
     //
-    // TUI mode also raises the global request rate limit: eight TUI scenarios
-    // each create an agent + drive several polled message/list round-trips,
-    // and the daemon's own session bootstrap (fetchChatContext, capability
-    // re-report) adds traffic — the default 100/min trips mid-suite and the
-    // 429s cascade into session-start retry backoff. A high ceiling keeps the
-    // limiter installed (so its wiring is still exercised) without throttling
-    // the test driver.
+    // Full e2e runs enough HTTP traffic from one loopback client to exceed the
+    // product default 100/minute global cap. A high ceiling keeps the limiter
+    // installed (so its wiring is still exercised) without throttling the test
+    // driver; production defaults remain untouched.
     serverExtraEnv: {
       FIRST_TREE_DEV_CALLBACK_ENABLED: "1",
-      ...(tuiMode ? { FIRST_TREE_RATE_LIMIT_MAX: "100000", FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX: "100000" } : {}),
+      FIRST_TREE_RATE_LIMIT_MAX: "100000",
+      FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX: "100000",
     },
     clientClaudeCodeExecutable: tuiMode ? FAKE_TUI_BIN : undefined,
     clientExtraEnv: tuiMode ? { ANTHROPIC_API_KEY: "fake-tui-e2e-key" } : undefined,

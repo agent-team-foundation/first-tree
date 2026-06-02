@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Detail Lifecycle A2</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --panel: #ffffff;
+        --fg: #171717;
+        --fg-2: #404040;
+        --fg-3: #6b6b6b;
+        --fg-4: #949494;
+        --line: #d9d9d6;
+        --line-faint: #ececea;
+        --orange: #dd7a32;
+        --red: #ef5454;
+        --green: #58ad60;
+        --purple: #8066d9;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        --label-col: 8.25rem;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .topbar {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 14px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand,
+      .nav,
+      .right {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+      }
+
+      .brand {
+        gap: 8px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .tree {
+        width: 12px;
+        height: 16px;
+        background: var(--fg);
+        clip-path: polygon(50% 0, 84% 34%, 66% 34%, 95% 68%, 64% 68%, 64% 100%, 36% 100%, 36% 68%, 5% 68%, 34% 34%, 16% 34%);
+      }
+
+      .nav {
+        color: var(--fg-2);
+        font-size: 13px;
+      }
+
+      .search {
+        width: 235px;
+        height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--fg-3);
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+        gap: 8px;
+        background: #fbfbfa;
+      }
+
+      .profile-dot {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #4fbe66;
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .shell {
+        width: 940px;
+        margin: 36px auto 88px;
+      }
+
+      .crumbs {
+        color: var(--fg-3);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .crumbs strong {
+        color: var(--fg);
+      }
+
+      .agent-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+
+      .agent-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--orange);
+        color: #fff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 750;
+        flex: 0 0 auto;
+      }
+
+      .avatar.large {
+        width: 56px;
+        height: 56px;
+        font-size: 22px;
+      }
+
+      .avatar.small {
+        width: 16px;
+        height: 16px;
+        font-size: 10px;
+        background: var(--purple);
+      }
+
+      .agent-main {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .agent-name {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .mono {
+        font-family: var(--mono);
+        color: var(--fg-4);
+      }
+
+      .agent-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: var(--fg-2);
+      }
+
+      .status {
+        font-family: var(--mono);
+        color: var(--fg-3);
+      }
+
+      .status::before {
+        content: "";
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: #777;
+        margin-right: 6px;
+        vertical-align: 1px;
+      }
+
+      .icon-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+      }
+
+      .tabs {
+        height: 38px;
+        display: flex;
+        align-items: flex-end;
+        gap: 28px;
+        padding: 0 22px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .tab {
+        padding: 0 0 10px;
+        color: var(--fg-3);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .tab.active {
+        color: var(--fg);
+        border-bottom: 2px solid var(--fg);
+      }
+
+      .content {
+        padding: 28px 22px 0;
+      }
+
+      .section {
+        margin-top: 0;
+      }
+
+      .section + .section {
+        margin-top: 48px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 12px;
+      }
+
+      .section h2 {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.35;
+        font-weight: 700;
+      }
+
+      .section p {
+        margin: 3px 0 0;
+        color: var(--fg-3);
+      }
+
+      .button {
+        height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--panel);
+        color: var(--fg);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 10px;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .button.sm {
+        height: 32px;
+        min-width: 88px;
+        padding: 0 12px;
+        font-size: 12px;
+      }
+
+      .button.disabled {
+        color: var(--fg-4);
+        background: #fafafa;
+      }
+
+      .button.danger {
+        border-color: var(--red);
+        background: var(--red);
+        color: #fff;
+      }
+
+      .rule {
+        border-top: 1px solid var(--line);
+      }
+
+      .identity-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 32px;
+        padding: 12px 0 16px;
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      .identity-fields {
+        min-width: 0;
+      }
+
+      .field-row,
+      .action-row {
+        display: grid;
+        grid-template-columns: var(--label-col) minmax(0, 1fr);
+        min-height: 36px;
+        align-items: center;
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      .field-row:last-child {
+        border-bottom: 0;
+      }
+
+      .field-label,
+      .action-label {
+        color: var(--fg-3);
+      }
+
+      .field-value {
+        color: var(--fg);
+        font-weight: 600;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        height: 22px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 0 8px;
+        background: #fbfbfa;
+        color: var(--fg-3);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      .member {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .appearance {
+        border-left: 1px solid var(--line-faint);
+        padding-left: 32px;
+        display: flex;
+        align-items: center;
+      }
+
+      .avatar-edit {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        margin-right: 14px;
+      }
+
+      .edit-dot {
+        position: absolute;
+        right: -2px;
+        bottom: -2px;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--fg-2);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .appearance-title {
+        font-weight: 650;
+        margin-bottom: 2px;
+      }
+
+      .appearance-meta {
+        color: var(--fg-4);
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+
+      .lifecycle {
+        border-top: 1px solid var(--line);
+      }
+
+      .action-row {
+        grid-template-columns: var(--label-col) minmax(0, 1fr) auto;
+        min-height: 48px;
+        gap: 18px;
+      }
+
+      .action-row:last-child {
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      .action-copy {
+        color: var(--fg-4);
+        font-size: 11px;
+        letter-spacing: 0.02em;
+      }
+
+      .float-help {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 56px;
+        height: 56px;
+        border-radius: 999px;
+        background: #4fbe66;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        box-shadow: 0 12px 35px rgba(20, 70, 30, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="brand"><span class="tree"></span><span>First Tree</span></div>
+      <div class="nav"><span>Workspace</span><span>Context</span><span>Team</span><span>Settings</span></div>
+      <div class="right">
+        <div class="search">⌕ <span>Jump to...</span></div>
+        <span>◐</span>
+        <span class="profile-dot">D</span>
+      </div>
+    </div>
+
+    <main class="shell">
+      <div class="crumbs"><span>Team</span><span>/</span><span>Agents</span><span>/</span><strong>gandy-test</strong></div>
+      <div class="agent-bar">
+        <div class="agent-title">
+          <span class="avatar">G</span>
+          <div class="agent-main">
+            <span class="agent-name">gandy-test</span>
+            <span class="mono">@gandy-test</span>
+          </div>
+        </div>
+        <div class="agent-actions">
+          <span class="status">Offline</span>
+          <span class="icon-action">▱ Chat</span>
+          <span class="icon-action" style="color: var(--fg-4)">▷ Test</span>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active">Profile</div>
+        <div class="tab">Runtime</div>
+        <div class="tab">Prompt</div>
+        <div class="tab">Resources</div>
+        <div class="tab">Usage</div>
+      </div>
+
+      <div class="content">
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Identity</h2>
+            </div>
+            <button class="button" type="button">✎ Edit identity</button>
+          </div>
+          <div class="rule">
+            <div class="identity-grid">
+              <div class="identity-fields">
+                <div class="field-row">
+                  <div class="field-label">Display name</div>
+                  <div class="field-value">gandy-test</div>
+                </div>
+                <div class="field-row">
+                  <div class="field-label">Agent name</div>
+                  <div class="field-value mono" style="color: var(--fg)">@gandy-test</div>
+                </div>
+                <div class="field-row">
+                  <div class="field-label">Visibility</div>
+                  <div class="field-value"><span class="badge">Private to you</span></div>
+                </div>
+                <div class="field-row">
+                  <div class="field-label">Owner</div>
+                  <div class="field-value"><span class="member"><span class="avatar small">D</span> Dev User</span></div>
+                </div>
+              </div>
+              <div class="appearance">
+                <button class="avatar-edit" title="Edit avatar" type="button">
+                  <span class="avatar large">G</span>
+                  <span class="edit-dot">✎</span>
+                </button>
+                <div>
+                  <div class="appearance-title">Generated avatar</div>
+                  <div class="appearance-meta">No custom image · color hue-4</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Agent lifecycle</h2>
+              <p>Control whether this agent can run, receive messages, or be removed.</p>
+            </div>
+          </div>
+          <div class="lifecycle">
+            <div class="action-row">
+              <div class="action-label">Availability</div>
+              <div class="action-copy">Active agents can bind to a runtime and receive routed messages.</div>
+              <button class="button sm" type="button">Suspend</button>
+            </div>
+            <div class="action-row">
+              <div class="action-label">Deletion</div>
+              <div class="action-copy">Available after the agent is suspended.</div>
+              <button class="button sm disabled" type="button">Delete</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <div class="float-help">▱</div>
+  </body>
+</html>

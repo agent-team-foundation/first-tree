@@ -225,7 +225,7 @@ describe("AppearanceSection", () => {
     const first = await renderDom(
       <AppearanceSection agent={agent({ avatarColorToken: "hue-1" })} onSave={onSave} onRefresh={onRefresh} />,
     );
-    expect(first.container.textContent).toContain("color hue-1");
+    expect(first.container.textContent).toContain("Color hue-1");
 
     await click(buttonByText(first.container, "Edit"));
     expect(document.body.textContent).toContain("Edit Appearance");
@@ -242,7 +242,7 @@ describe("AppearanceSection", () => {
         onRefresh={onRefresh}
       />,
     );
-    expect(second.container.textContent).toContain("custom image");
+    expect(second.container.textContent).toContain("Custom image");
     expect(second.container.querySelector('img[alt="Kael"]')).toBeTruthy();
 
     await click(buttonByText(second.container, "Edit"));
@@ -318,7 +318,7 @@ describe("IdentitySection", () => {
     expect(onSave).not.toHaveBeenCalled();
 
     await setInputValue(displayInput, "Bestony Renamed");
-    await chooseSelectOption(visibilitySelect, "Organization");
+    await chooseSelectOption(visibilitySelect, "Visible to your team");
     await chooseSelectOption(delegateSelect, "Second Helper");
     await click(buttonByText(document.body, "Save"));
     expect(onSave).toHaveBeenCalledWith({
@@ -330,7 +330,7 @@ describe("IdentitySection", () => {
     await act(async () => root.unmount());
   });
 
-  it("disables visibility for non-managers and surfaces save errors", async () => {
+  it("disables visibility for non-owners and surfaces save errors", async () => {
     const { IdentitySection } = await import("../identity-section.js");
     authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };
     const onSave = vi.fn().mockRejectedValueOnce(new Error("Identity update failed"));
@@ -344,7 +344,7 @@ describe("IdentitySection", () => {
     await click(buttonByText(container, "Edit"));
     const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#id-visibility");
     expect(visibilitySelect?.disabled).toBe(true);
-    expect(document.body.textContent).toContain("Only the manager or an admin can change this agent's visibility.");
+    expect(document.body.textContent).toContain("Only the owner or an admin can change this agent's visibility.");
 
     const displayInput = document.body.querySelector<HTMLInputElement>("#id-display");
     if (!displayInput) throw new Error("Expected display field");

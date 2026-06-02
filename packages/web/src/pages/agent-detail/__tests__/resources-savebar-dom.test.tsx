@@ -289,7 +289,8 @@ describe("ResourcesTab and SaveBar", () => {
       />,
     );
 
-    expect(container.textContent).toContain("2 sections with unsaved changes");
+    expect(container.textContent).toContain("Configuration changes in Prompt, Env");
+    expect(container.textContent).not.toContain("sections with unsaved changes");
     expect(container.textContent).toContain("local draft");
     expect(container.textContent).toContain("remote changed");
     expect(container.textContent).toContain("save failed");

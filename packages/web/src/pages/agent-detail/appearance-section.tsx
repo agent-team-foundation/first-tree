@@ -4,10 +4,16 @@ import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "r
 import { deleteAgentAvatar, uploadAgentAvatar } from "../../api/agents.js";
 import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
-import { ConfigRow } from "./flat-section.js";
 
 /**
  * Appearance — manager-configurable avatar color + image.
@@ -30,6 +36,7 @@ export type AppearanceSectionProps = {
   onSave: (patch: UpdateAgent) => Promise<void>;
   /** Re-fetch the agent after a mutation that bypasses the standard PATCH. */
   onRefresh?: () => Promise<void> | void;
+  variant?: "section" | "inline";
 };
 
 function initial(s: string): string {
@@ -74,37 +81,96 @@ function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
   );
 }
 
-export function AppearanceSection({ agent, canEdit = true, onSave, onRefresh }: AppearanceSectionProps) {
+export function AppearanceSection({
+  agent,
+  canEdit = true,
+  onSave,
+  onRefresh,
+  variant = "section",
+}: AppearanceSectionProps) {
   const [open, setOpen] = useState(false);
   const colorLabel =
     typeof agent.avatarColorToken === "string" && agent.avatarColorToken.length > 0 ? agent.avatarColorToken : "auto";
 
-  const action =
-    canEdit && agent.status === "active" ? (
-      <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-        <Pencil className="h-3 w-3" /> Edit
-      </Button>
-    ) : null;
+  const canOpenEditor = canEdit && agent.status === "active";
+  const action = canOpenEditor ? (
+    <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+      <Pencil className="h-3 w-3" /> Edit
+    </Button>
+  ) : null;
 
-  return (
-    <Section title="Appearance" action={action}>
-      <ConfigRow
-        label="Avatar"
-        value={
-          <span className="inline-flex items-center gap-3">
-            <AvatarPreview agent={agent} size={40} />
-            <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-              {agent.avatarImageUrl ? "custom image" : `color ${colorLabel}`}
-            </span>
-          </span>
-        }
-      />
-      <ConfigRow label="Image" value={agent.avatarImageUrl ? "custom" : "none"} />
-      <ConfigRow label="Color" value={<span className="font-mono">{colorLabel}</span>} />
+  const avatar = canOpenEditor ? (
+    <button
+      type="button"
+      aria-label="Edit avatar"
+      title="Edit avatar"
+      onClick={() => setOpen(true)}
+      className="relative inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0"
+      style={{ width: 56, height: 56, borderRadius: "50%" }}
+    >
+      <AvatarPreview agent={agent} size={56} />
+      <span
+        className="absolute inline-flex items-center justify-center"
+        aria-hidden="true"
+        style={{
+          right: -2,
+          bottom: -2,
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          background: "var(--bg-raised)",
+          border: "var(--hairline) solid var(--border)",
+          color: "var(--fg-2)",
+        }}
+      >
+        <Pencil className="h-3 w-3" />
+      </span>
+    </button>
+  ) : (
+    <AvatarPreview agent={agent} size={56} />
+  );
 
+  const content = (
+    <>
+      <div
+        className="flex min-w-0 items-center gap-3"
+        style={{
+          padding: "var(--sp-3) 0",
+          borderBottom: variant === "inline" ? undefined : "var(--hairline) solid var(--border-faint)",
+        }}
+      >
+        {avatar}
+        <div className="min-w-0">
+          <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
+            {agent.avatarImageUrl ? "Custom image" : "Generated avatar"}
+          </div>
+          <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-0_5)" }}>
+            {agent.avatarImageUrl ? "Image uploaded" : "No custom image uploaded"} · Color {colorLabel}
+          </div>
+          {variant === "section" && (
+            <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
+              Updates appear immediately in chats, lists, and mentions.
+            </div>
+          )}
+        </div>
+      </div>
       {canEdit && (
         <AppearanceEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} onRefresh={onRefresh} />
       )}
+    </>
+  );
+
+  if (variant === "inline") {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Section
+      title="Appearance"
+      description="Controls how this agent is recognized in chats, lists, and mentions."
+      action={action}
+    >
+      {content}
     </Section>
   );
 }
@@ -219,12 +285,18 @@ function AppearanceEditDialog({ agent, open, onOpenChange, onSave, onRefresh }: 
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit Appearance</DialogTitle>
+          <DialogDescription>
+            Update the avatar image and fallback color used in chats, lists, and mentions.
+          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center gap-4">
-            <AvatarPreview agent={previewAgent} size={64} />
-            <AvatarPreview agent={previewAgent} size={32} />
-            <span className="text-caption text-muted-foreground">Preview at 64 / 32 px</span>
+        <form onSubmit={submit} className="space-y-5">
+          <div className="space-y-2">
+            <Label>Preview</Label>
+            <div className="flex items-center gap-3">
+              <AvatarPreview agent={previewAgent} size={64} />
+              <AvatarPreview agent={previewAgent} size={32} />
+              <span className="text-caption text-muted-foreground">Large and compact surfaces</span>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -253,8 +325,7 @@ function AppearanceEditDialog({ agent, open, onOpenChange, onSave, onRefresh }: 
               )}
             </div>
             <p className="text-caption text-muted-foreground">
-              PNG / JPEG / WEBP. The browser crops to a square and resizes to 256 × 256 WEBP before upload. An image
-              takes precedence over the color below.
+              PNG / JPEG / WEBP. Square images work best. An image takes precedence over the color below.
             </p>
           </div>
 
@@ -279,8 +350,7 @@ function AppearanceEditDialog({ agent, open, onOpenChange, onSave, onRefresh }: 
               ))}
             </div>
             <p className="text-caption text-muted-foreground">
-              "Auto" falls back to a hash of the agent's id, matching the legacy default. The color is used as the
-              background under the initial when no image is set.
+              Auto chooses a stable color for this agent. The color is used only when no image is set.
             </p>
           </div>
 

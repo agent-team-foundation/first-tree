@@ -1,6 +1,6 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MessageSquare, Play } from "lucide-react";
+import { ArrowLeft, MessageSquare, Monitor, Play } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
@@ -27,12 +27,18 @@ import { Avatar } from "./../components/avatar.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
 import { Tab, TabBar } from "./../components/ui/tab-bar.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
-import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
-import { cn, formatDate } from "./../lib/utils.js";
+import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
@@ -45,9 +51,9 @@ import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redire
 
 const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   prompt: "prompt",
-  model: "setup",
-  effort: "setup",
-  mcp: "tools",
+  model: "runtime",
+  effort: "runtime",
+  mcp: "profile",
   env: "resources",
   git: "resources",
 };
@@ -56,19 +62,18 @@ type TabDef = { key: string; label: string; path: string };
 
 function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
   const tabs: TabDef[] = [{ key: "profile", label: "Profile", path: "profile" }];
-  // Usage tab is visible to any org member for any non-human agent — token
-  // usage is the team's social currency, deliberately public within the org.
+  if (canEditConfig) {
+    tabs.push(
+      { key: "runtime", label: "Runtime", path: "runtime" },
+      { key: "prompt", label: "Prompt", path: "prompt" },
+      { key: "resources", label: "Resources", path: "resources" },
+    );
+  }
+  // Usage is an observation surface, not part of the edit flow. Keep it at
+  // the end so configuration tabs read left-to-right as the setup workflow.
   // Human-type agents have no token usage to show.
   if (!isHuman) {
     tabs.push({ key: "usage", label: "Usage", path: "usage" });
-  }
-  if (canEditConfig) {
-    tabs.push(
-      { key: "setup", label: "Setup", path: "setup" },
-      { key: "prompt", label: "Prompt", path: "prompt" },
-      { key: "tools", label: "Tools", path: "tools" },
-      { key: "resources", label: "Resources", path: "resources" },
-    );
   }
   return tabs;
 }
@@ -330,6 +335,8 @@ export function AgentDetailPage() {
         <Breadcrumb style={{ marginBottom: "var(--sp-3)" }}>
           <BreadcrumbLink onClick={() => navigate("/team")}>Team</BreadcrumbLink>
           <BreadcrumbSep />
+          <BreadcrumbLink onClick={() => navigate("/team")}>Agents</BreadcrumbLink>
+          <BreadcrumbSep />
           <BreadcrumbCurrent>Unable to load</BreadcrumbCurrent>
         </Breadcrumb>
         <div style={{ maxWidth: 480 }}>
@@ -341,7 +348,7 @@ export function AgentDetailPage() {
           </p>
           <div className="flex gap-2" style={{ marginTop: "var(--sp-3)" }}>
             <Button variant="outline" size="sm" onClick={() => navigate("/team")}>
-              Back to Team
+              Back to Agents
             </Button>
             {isServerErr && (
               <Button size="sm" onClick={() => agentQuery.refetch()}>
@@ -463,20 +470,33 @@ export function AgentDetailPage() {
   return (
     <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-3)" }}>
-        <button
-          type="button"
-          onClick={() => navigate("/team")}
-          className="inline-flex items-center bg-transparent border-0 cursor-pointer transition-colors hover:text-[var(--fg)] text-caption"
-          style={{
-            color: "var(--fg-3)",
-            padding: 0,
-            marginBottom: "var(--sp-2)",
-            gap: "var(--sp-1)",
-          }}
-        >
-          <ArrowLeft className="h-3 w-3" />
-          Team
-        </button>
+        {isNarrow ? (
+          <button
+            type="button"
+            onClick={() => navigate("/team")}
+            aria-label="Back to agents"
+            className="inline-flex items-center bg-transparent border-0 cursor-pointer transition-colors hover:text-[var(--fg)] text-caption"
+            style={{
+              color: "var(--fg-3)",
+              minHeight: 28,
+              padding: "0 var(--sp-1_5)",
+              marginBottom: "var(--sp-2)",
+              marginLeft: "calc(var(--sp-1_5) * -1)",
+              gap: "var(--sp-1)",
+            }}
+          >
+            <ArrowLeft className="h-3 w-3" />
+            Agents
+          </button>
+        ) : (
+          <Breadcrumb style={{ marginBottom: "var(--sp-2)" }}>
+            <BreadcrumbLink onClick={() => navigate("/team")}>Team</BreadcrumbLink>
+            <BreadcrumbSep />
+            <BreadcrumbLink onClick={() => navigate("/team")}>Agents</BreadcrumbLink>
+            <BreadcrumbSep />
+            <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
+          </Breadcrumb>
+        )}
         <div className="flex w-full items-center gap-2">
           <Avatar
             src={agent.avatarImageUrl}
@@ -489,17 +509,9 @@ export function AgentDetailPage() {
             <h1 className="m-0 text-subtitle truncate" style={{ color: "var(--fg)" }} title={`agt_${shortId}`}>
               {agent.displayName}
             </h1>
-            <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-              @{agent.name ?? shortId}
-            </span>
             {!isNarrow && (
-              <span className="text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                · {humanizeAgentType(agent.type)} · {humanizeVisibility(agent.visibility)}
-              </span>
-            )}
-            {!isNarrow && clientStatus?.offlineSince && (
-              <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                offline since {formatDate(clientStatus.offlineSince)}
+              <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                @{agent.name ?? shortId}
               </span>
             )}
           </div>
@@ -513,12 +525,16 @@ export function AgentDetailPage() {
             <Button
               variant="ghost"
               size="xs"
-              onClick={() => navigate(`/agents/${encodeURIComponent(agent.uuid)}/profile`)}
-              title="Open profile"
-              aria-label="Open profile"
+              onClick={() => {
+                const search = new URLSearchParams({ c: "draft", with: agent.uuid });
+                navigate(`/?${search.toString()}`);
+              }}
+              title="Start a chat with this agent"
+              aria-label="Start chat"
               style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
             >
               <MessageSquare className="h-4 w-4" />
+              Chat
             </Button>
             {!isHuman && canManageAgent && agent.status === "active" && (
               <Button
@@ -534,6 +550,7 @@ export function AgentDetailPage() {
                 style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
               >
                 <Play className="h-4 w-4" />
+                Test
               </Button>
             )}
           </div>
@@ -554,6 +571,8 @@ export function AgentDetailPage() {
           display: "flex",
           flexDirection: "column",
           gap: 20,
+          width: "100%",
+          maxWidth: currentTabKey === "resources" || currentTabKey === "usage" ? "70rem" : "52rem",
         }}
       >
         {(testMutation.data || testMutation.error) && (
@@ -590,7 +609,7 @@ export function AgentDetailPage() {
         open={discardDialogOpen}
         onOpenChange={setDiscardDialogOpen}
         title="Discard unsaved changes?"
-        description="Your edits to Prompt / Model / Tools / Resources will be reverted to the last saved baseline."
+        description="Your edits to Prompt / Runtime / Resources will be reverted to the last saved baseline."
         confirmLabel="Discard changes"
         destructive
         onConfirm={() => {
@@ -615,12 +634,11 @@ export function AgentDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Bind computer</DialogTitle>
+            <DialogDescription>
+              Pin this agent to a connected computer. The bind applies immediately and is not part of draft save.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-body" style={{ color: "var(--fg-3)" }}>
-              Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent requires
-              deleting and re-creating it on the target computer.
-            </p>
             {clientsQuery.isLoading ? (
               <div className="text-body" style={{ color: "var(--fg-3)" }}>
                 Loading computers…
@@ -751,21 +769,45 @@ function BindClientList({
   selected: string;
   onSelect: (id: string) => void;
 }) {
+  const navigate = useNavigate();
   const bindable = clients.filter(isBindableClient);
   if (bindable.length === 0) {
     return (
       <div
-        className="text-body"
+        className="flex items-start gap-3"
         style={{
-          background: "var(--bg-sunken)",
-          border: "var(--hairline) solid var(--border-faint)",
-          borderRadius: "var(--radius-input)",
-          padding: "var(--sp-2_5) var(--sp-3)",
-          color: "var(--fg-3)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-panel)",
+          padding: "var(--sp-3)",
         }}
       >
-        No connected computers available. Use the <strong>Connect computer</strong> button on the Computers page to set
-        one up, then reopen this dialog.
+        <div
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-input)]"
+          style={{ background: "var(--bg-sunken)", color: "var(--fg-3)" }}
+          aria-hidden
+        >
+          <Monitor className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <p className="m-0 text-body font-medium" style={{ color: "var(--fg)" }}>
+              No connected computers
+            </p>
+            <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+              Connect a computer first, then return here to bind this agent.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              navigate("/settings/computers");
+            }}
+          >
+            Open Computers
+          </Button>
+        </div>
       </div>
     );
   }

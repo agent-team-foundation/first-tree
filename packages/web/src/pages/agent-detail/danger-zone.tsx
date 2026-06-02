@@ -1,21 +1,19 @@
 import type { Agent } from "@first-tree/shared";
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   AgentDeleteConfirmDialog,
   AgentSuspendConfirmDialog,
 } from "../../components/agent-lifecycle-confirm-dialog.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
-import { ConfigRow } from "./flat-section.js";
 
 /**
- * Danger Zone — destructive lifecycle controls (suspend / reactivate / delete).
+ * Agent lifecycle — operational controls for availability and deletion.
  *
- * Visual: shares the flat Section / ConfigRow rhythm with the rest of
- * Setup tab. The danger framing comes from the red section title and the
- * destructive Delete button, not from a coloured panel — the older red-tinted
- * card stood out so hard it looked detached from the rest of the page.
+ * The section uses the same left label column as Identity so the page reads as
+ * one settings surface. Red is reserved for the enabled destructive Delete
+ * action; suspend/reactivate are reversible lifecycle actions and stay neutral.
  *
  * Confirmation uses real Dialogs (no native window.confirm) so both Suspend
  * and Delete can render typed-name confirmation copy and a labelled button.
@@ -41,48 +39,64 @@ export function DangerZone(props: DangerZoneProps) {
   const canDelete = agent.status === "suspended";
 
   return (
-    <section id="ad-danger">
-      <Section title={<span style={{ color: "var(--state-error)" }}>Danger zone</span>}>
+    <section id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
+      <Section
+        title="Agent lifecycle"
+        description="Control whether this agent can run, receive messages, or be removed."
+      >
         {agent.status === "active" ? (
-          <ConfigRow
-            label="Suspend agent"
-            description="Stop the connected runtime and prevent new messages from waking this agent until it is reactivated."
+          <DangerActionRow
+            label="Availability"
+            description="Active agents can bind to a runtime and receive routed messages."
             action={
-              <Button variant="outline" size="xs" onClick={() => setSuspendOpen(true)} disabled={props.suspendPending}>
+              <Button
+                variant="outline"
+                size="sm"
+                style={{ minWidth: "var(--sp-20)" }}
+                onClick={() => setSuspendOpen(true)}
+                disabled={props.suspendPending}
+              >
                 {props.suspendPending ? "Suspending…" : "Suspend"}
               </Button>
             }
           />
         ) : (
-          <ConfigRow
-            label="Reactivate agent"
-            description="Allow this agent to bind again and receive new routed messages."
+          <DangerActionRow
+            label="Availability"
+            description="Suspended agents cannot bind or receive routed messages."
             action={
-              <Button variant="outline" size="xs" onClick={props.onReactivate} disabled={props.reactivatePending}>
+              <Button
+                variant="outline"
+                size="sm"
+                style={{ minWidth: "var(--sp-20)" }}
+                onClick={props.onReactivate}
+                disabled={props.reactivatePending}
+              >
                 {props.reactivatePending ? "Reactivating…" : "Reactivate"}
               </Button>
             }
           />
         )}
-        <ConfigRow
-          label="Delete agent"
+        <DangerActionRow
+          label="Deletion"
           description={
             canDelete
-              ? "Permanent. Configuration, bindings, tokens, and session history are all dropped."
-              : "Suspend this agent before deleting it."
+              ? "Permanently remove configuration, bindings, tokens, and sessions."
+              : "Available after the agent is suspended."
           }
           action={
             <Button
-              variant="destructive"
-              size="xs"
+              variant={canDelete ? "destructive" : "outline"}
+              size="sm"
+              style={{ minWidth: "var(--sp-20)" }}
               onClick={() => {
                 if (canDelete) setDeleteOpen(true);
               }}
               disabled={props.deletePending || !canDelete}
               title={canDelete ? undefined : "Suspend this agent before deleting it"}
             >
-              <Trash2 className="h-3 w-3" />
-              Delete
+              {canDelete && <Trash2 className="h-3 w-3" />}
+              {props.deletePending ? "Deleting…" : "Delete"}
             </Button>
           }
         />
@@ -114,5 +128,23 @@ export function DangerZone(props: DangerZoneProps) {
         deleting={props.deletePending}
       />
     </section>
+  );
+}
+
+function DangerActionRow({ label, description, action }: { label: string; description: ReactNode; action: ReactNode }) {
+  return (
+    <div
+      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[8.25rem_minmax(0,1fr)_auto] md:items-center md:gap-4"
+      style={{
+        padding: "var(--sp-3) 0",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
+      }}
+    >
+      <div style={{ color: "var(--fg-3)" }}>{label}</div>
+      <div className="text-caption" style={{ color: "var(--fg-4)" }}>
+        {description}
+      </div>
+      <div className="md:justify-self-end">{action}</div>
+    </div>
   );
 }

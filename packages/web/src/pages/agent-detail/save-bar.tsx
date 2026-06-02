@@ -38,8 +38,8 @@ const SECTION_LABELS: Record<DraftSectionName, string> = {
 export function SaveBar(props: SaveBarProps) {
   if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage && !props.justSaved) return null;
 
-  const dirtyCount = props.summary.dirtySections.length;
   const showDraftActions = props.summary.anyDirty || props.saving;
+  const dirtyListLabel = props.summary.dirtySections.map((s) => SECTION_LABELS[s]).join(", ");
 
   return (
     <div
@@ -54,20 +54,18 @@ export function SaveBar(props: SaveBarProps) {
         <div className="flex flex-col gap-1 text-body min-w-0">
           {props.summary.anyDirty && (
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Unsaved-changes dot — needs-you amber, same hue as the tab dot and the "changed" chip. */}
+              {/* Pending-configuration dot. Keep it neutral so it does not read as blocked or error. */}
               <span
                 aria-hidden
                 style={{
                   width: "var(--sp-2)",
                   height: "var(--sp-2)",
                   borderRadius: "50%",
-                  background: "var(--state-needs-you)",
+                  background: "var(--fg-4)",
                   flexShrink: 0,
                 }}
               />
-              <span className="font-medium">
-                {dirtyCount} section{dirtyCount === 1 ? "" : "s"} with unsaved changes
-              </span>
+              <span className="font-medium">Configuration changes in {dirtyListLabel}</span>
               <span style={{ color: "var(--fg-4)" }} aria-hidden>
                 ·
               </span>
