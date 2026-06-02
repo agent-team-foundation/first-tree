@@ -453,6 +453,7 @@ function seedDefaultMocks(): void {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  window.localStorage.clear();
   installBrowserStubs();
   vi.clearAllMocks();
   routerMocks.navigate.mockClear();
@@ -588,6 +589,25 @@ describe("TeamPage", () => {
     await click(container.querySelector('button[aria-label="Actions for Ops Helper"]'));
     await waitForText(container, "Chat");
     expect(exactButton(container, "Suspend")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("remembers the agent filter preference", async () => {
+    window.localStorage.setItem("first-tree:team-agent-filter:v1", "mine");
+    const { TeamPage } = await import("../index.js");
+    const { container, root } = await renderDom(<TeamPage />);
+
+    await waitForText(container, "Kael");
+    expect(exactButton(container, "Mine")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).not.toContain("Ops Helper");
+
+    await click(exactButton(container, "All"));
+    expect(window.localStorage.getItem("first-tree:team-agent-filter:v1")).toBe("all");
+    expect(exactButton(container, "All")?.getAttribute("aria-pressed")).toBe("true");
+
+    await click(exactButton(container, "Mine"));
+    expect(window.localStorage.getItem("first-tree:team-agent-filter:v1")).toBe("mine");
 
     await act(async () => root.unmount());
   });
