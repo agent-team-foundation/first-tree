@@ -92,8 +92,8 @@ export async function deliverNormalizedEvent(
       // a bound chat that has been expanded to ≥3 speakers still wakes the
       // agent — without this, card-format messages produce no mentionSet
       // and the multi-speaker fan-out collapses to notify=false for
-      // everyone. Same pattern as `question_answer` (see SendMessageOptions
-      // `addressedToAgentIds`).
+      // everyone. Same pattern as any system-routed delivery (see
+      // SendMessageOptions `addressedToAgentIds`).
       const { message, recipients } = await sendMessage(
         app.db,
         resolved.chatId,
