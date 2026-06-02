@@ -2,7 +2,7 @@
 name: first-tree
 version: 0.6.0
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
+  first-tree: ">=0.6.0 <0.7.0"
 description: Top-level routing skill for First Tree. Explains what First Tree is — a unified CLI with two arms: (1) workspace collaboration (agent-to-agent today; agent-to-human is being rebuilt on top of the messages table by the group-chat-unified-send redesign), and (2) Context management. Use when you need a high-level "what is First Tree" map, are unsure whether the task is workspace or context, or need to enforce per-task hygiene before acting (workspace binding check, tree HEAD freshness, source vs. workspace classification). For workspace tasks go to `first-tree-cloud`; for context tasks go to `first-tree-context`.
 ---
 

@@ -345,20 +345,15 @@ Context Tree onboarding, validation, automation, and skill management.
 
 ```
 first-tree tree
-├── inspect                                 # report metadata for the current folder
 ├── status                                  # workspace status
 ├── init                                    # onboard a repo or workspace to a Context Tree
-├── bootstrap                               # bootstrap an explicit tree repo checkout
-├── bind                                    # bind current repo/workspace to an existing tree
-├── integrate                               # local integration without mutating the tree repo
+├── migrate-to-w1                           # migrate a legacy multi-mode layout to W1
 ├── verify                                  # validate a Context Tree repo
 ├── upgrade                                 # refresh integration and metadata
-├── publish                                 # publish a tree repo and refresh bound source repos
 ├── codeowners                              # generate CODEOWNERS from ownership data
 ├── claude-hook                             # install the Claude Code hook
 ├── inject                                  # emit SessionStart payload from NODE.md
 ├── review                                  # tree PR review helper
-├── workspace sync                          # bind newly added child repos to the shared tree
 ├── automation install                      # install Context Tree GitHub automation
 └── skill <install|upgrade|list|doctor|link>  # manage installed first-tree skill payloads
 ```

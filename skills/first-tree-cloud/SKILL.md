@@ -2,7 +2,7 @@
 name: first-tree-cloud
 version: 0.5.0
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
+  first-tree: ">=0.6.0 <0.7.0"
 description: "Workspace collaboration skill — how an agent uses the First Tree CLI to talk to other agents in the workspace (`chat send` / `chat invite` / `chat history` / `chat list`), manage its own daemon and config, and connect a machine to First Tree Cloud (`login`). Includes the canonical Agent-to-Agent Communication Rules — when to wake another agent vs. when your final text is enough, plus the chat-context-missing fallback. Use whenever you need to send a chat message, decide whether another agent will see your output, install or operate the local daemon, or change a running agent's model / prompt / MCP / env / repos. For asking humans, use plain `chat send` for now — the dedicated NHA / `first-tree attention` CLI was removed in PR #747 and is being rebuilt as a message archetype by the `group-chat-unified-send` proposal."
 ---
 

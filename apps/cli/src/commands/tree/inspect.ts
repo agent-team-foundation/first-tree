@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import type { CommandContext, SubcommandModule } from "../types.js";
+import type { CommandContext } from "../types.js";
 import { findUpwardsManagedSourceBinding, parseGitHubRepoReference } from "./binding-contract.js";
 import { findUpwardsManagedTreeIdentity } from "./tree-identity.js";
 
@@ -254,6 +254,52 @@ function deriveRole(
   return "unknown";
 }
 
+export function inspectCurrentWorkingTree(cwd = process.cwd()): InspectResult {
+  const managedBinding = findUpwardsManagedSourceBinding(cwd);
+  const managedTreeIdentity = findUpwardsManagedTreeIdentity(cwd);
+  const sourceStatePath = findUpwards(cwd, ".first-tree/source.json");
+  const treeStatePath = findUpwards(cwd, ".first-tree/tree.json");
+  const gitMarkerPath = findUpwards(cwd, ".git");
+  const rootPath = resolveInspectRootPath(
+    cwd,
+    managedBinding ? dirname(managedBinding.path) : managedTreeIdentity ? dirname(managedTreeIdentity.path) : undefined,
+    sourceStatePath,
+    treeStatePath,
+    gitMarkerPath,
+  );
+  const binding =
+    summarizeManagedBinding(managedBinding) ??
+    summarizeManagedTreeIdentity(managedTreeIdentity) ??
+    readLegacyBindingSummary(sourceStatePath);
+  const hasNode = existsSync(join(rootPath, "NODE.md"));
+  const hasMembersNode = existsSync(join(rootPath, "members", "NODE.md"));
+  const treeRepoName = readTreeRepoName(treeStatePath);
+  const workspaceLikeRoot = looksLikeWorkspaceRoot(rootPath);
+
+  const classification = deriveClassification(
+    managedTreeIdentity?.path ?? treeStatePath,
+    hasNode,
+    hasMembersNode,
+    binding,
+    managedBinding !== undefined || sourceStatePath !== undefined,
+    gitMarkerPath,
+  );
+  const role = deriveRole(classification, workspaceLikeRoot, gitMarkerPath);
+
+  return {
+    binding: binding ?? (treeRepoName !== undefined ? { treeRepoName } : undefined),
+    classification,
+    cwd: resolve(cwd),
+    hasMembersNode,
+    hasNode,
+    role,
+    rootKind: gitMarkerPath !== undefined ? "git-repo" : "folder",
+    rootPath,
+    sourceStatePath,
+    treeStatePath,
+  };
+}
+
 function formatInspectResult(result: InspectResult): string {
   const lines = [
     "first-tree tree inspect",
@@ -309,52 +355,6 @@ function formatInspectResult(result: InspectResult): string {
   return lines.join("\n");
 }
 
-export function inspectCurrentWorkingTree(cwd = process.cwd()): InspectResult {
-  const managedBinding = findUpwardsManagedSourceBinding(cwd);
-  const managedTreeIdentity = findUpwardsManagedTreeIdentity(cwd);
-  const sourceStatePath = findUpwards(cwd, ".first-tree/source.json");
-  const treeStatePath = findUpwards(cwd, ".first-tree/tree.json");
-  const gitMarkerPath = findUpwards(cwd, ".git");
-  const rootPath = resolveInspectRootPath(
-    cwd,
-    managedBinding ? dirname(managedBinding.path) : managedTreeIdentity ? dirname(managedTreeIdentity.path) : undefined,
-    sourceStatePath,
-    treeStatePath,
-    gitMarkerPath,
-  );
-  const binding =
-    summarizeManagedBinding(managedBinding) ??
-    summarizeManagedTreeIdentity(managedTreeIdentity) ??
-    readLegacyBindingSummary(sourceStatePath);
-  const hasNode = existsSync(join(rootPath, "NODE.md"));
-  const hasMembersNode = existsSync(join(rootPath, "members", "NODE.md"));
-  const treeRepoName = readTreeRepoName(treeStatePath);
-  const workspaceLikeRoot = looksLikeWorkspaceRoot(rootPath);
-
-  const classification = deriveClassification(
-    managedTreeIdentity?.path ?? treeStatePath,
-    hasNode,
-    hasMembersNode,
-    binding,
-    managedBinding !== undefined || sourceStatePath !== undefined,
-    gitMarkerPath,
-  );
-  const role = deriveRole(classification, workspaceLikeRoot, gitMarkerPath);
-
-  return {
-    binding: binding ?? (treeRepoName !== undefined ? { treeRepoName } : undefined),
-    classification,
-    cwd: resolve(cwd),
-    hasMembersNode,
-    hasNode,
-    role,
-    rootKind: gitMarkerPath !== undefined ? "git-repo" : "folder",
-    rootPath,
-    sourceStatePath,
-    treeStatePath,
-  };
-}
-
 export function runInspectCommand(context: CommandContext): void {
   const result = inspectCurrentWorkingTree();
 
@@ -365,11 +365,3 @@ export function runInspectCommand(context: CommandContext): void {
 
   console.log(formatInspectResult(result));
 }
-
-export const inspectCommand: SubcommandModule = {
-  name: "inspect",
-  alias: "",
-  summary: "",
-  description: "Inspect the current folder and report first-tree metadata.",
-  action: runInspectCommand,
-};

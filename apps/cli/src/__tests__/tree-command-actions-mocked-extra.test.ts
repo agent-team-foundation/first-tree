@@ -121,27 +121,4 @@ describe("tree command actions with mocked shell runner", () => {
     const payload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as { stage: string };
     expect(payload.stage).toBe("configured");
   });
-
-  it("prints publish human and JSON summaries through the command action", async () => {
-    runCommandMock.mockImplementation((command: string, args: string[]) => {
-      if (command === "git" && args.join(" ") === "remote get-url origin") {
-        return "https://github.com/acme/context-tree.git";
-      }
-      return "";
-    });
-    const { publishCommand } = await import("../commands/tree/publish.js");
-
-    publishCommand.action(context(commandWithOptions({}), false));
-    const human = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(human).toContain("Context Tree Publish");
-    expect(human).toContain("No local source roots were refreshed");
-
-    vi.mocked(console.log).mockClear();
-    publishCommand.action(context(commandWithOptions({ treePath: root }), true));
-    const payload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as { publishedTreeUrl: string };
-    expect(payload.publishedTreeUrl).toBe("https://github.com/acme/context-tree.git");
-  });
 });

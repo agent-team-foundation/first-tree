@@ -387,7 +387,7 @@ describe("github scan binding helpers", () => {
     const result = resolveGitHubScanBinding(["poll"]);
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("AGENTS.md");
+    expect(result.error).toContain("workspace.json");
   });
 
   it("returns an actionable error when no binding metadata exists", () => {
@@ -398,6 +398,6 @@ describe("github scan binding helpers", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("first-tree github scan requires a bound tree repo");
-    expect(result.error).toContain("first-tree tree bind");
+    expect(result.error).toContain("first-tree tree init --scope workspace");
   });
 });

@@ -2,7 +2,7 @@
 name: github-scan
 version: 0.5.0
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
+  first-tree: ">=0.6.0 <0.7.0"
 description: Operate the `first-tree github scan` CLI — the GitHub notification daemon and inbox runtime. Use whenever you need to run, start, stop, inspect, poll, or debug github-scan; view or respond to GitHub-triggered work from the terminal; or wire up the github-scan statusline hook.
 ---
 
