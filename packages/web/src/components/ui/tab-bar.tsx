@@ -43,7 +43,9 @@ export function Tab({ active, onClick, children, dirty, className, ...rest }: Ta
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 bg-transparent text-body font-medium rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        // No border-radius: the active state is a straight bottom border, and a
+        // corner radius would bow its ends upward into little hooks.
+        "inline-flex items-center gap-1.5 bg-transparent text-body font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         className,
       )}
       style={{

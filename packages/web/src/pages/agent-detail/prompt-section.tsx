@@ -86,7 +86,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
               >
                 Revert
               </Button>
-              <Button size="xs" onClick={() => setEditing(false)}>
+              <Button size="xs" variant="outline" onClick={() => setEditing(false)}>
                 Done
               </Button>
             </div>
