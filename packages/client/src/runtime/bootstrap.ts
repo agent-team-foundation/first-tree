@@ -964,6 +964,23 @@ export function generateToolsDoc(): string {
   // invocations actually find the CLI on PATH —
   // hardcoding "first-tree" used to leave staging/dev agents calling a
   // binary that wasn't installed on the host.
+  //
+  // Per skill-restructure proposal (skill-restructure.20260602) P3, the
+  // long-form Sending Messages CLI usage (chat send / chat invite syntax,
+  // markdown / stdin, mention-resolution mechanics) has been sunk into
+  // the `first-tree-cloud` skill (SKILL.md + references/agent-
+  // communication.md). What stays here:
+  //   - runtime safety invariants the result-sink + silent-turn guard
+  //     depend on (final-text contract, silent-turn, Issue #389);
+  //   - the short behavioural directives (Decision guide table + Fallback
+  //     paragraph) that every agent needs regardless of whether
+  //     `first-tree-cloud` is installed in its workspace.
+  // Why the second group stays inline: `first-tree-cloud` is in
+  // `TREE_SKILL_NAMES` (only installed alongside a Context Tree binding),
+  // not `CORE_SKILL_NAMES`. A tree-less agent (contextTreePath: null —
+  // explicitly supported per CLAUDE.md "Context Tree integration is
+  // optional") would otherwise be pointed at a skill that doesn't exist
+  // on its disk and silently lose the decision guide.
   const bin = getCliBinding().binName;
   return `# First Tree Agent Runtime
 
@@ -972,79 +989,43 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message has a
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
 - **Your final response text is delivered to the chat for human observers to read.
-  It does NOT wake other agents.** To make another agent take action, use
-  \`${bin} chat send <name>\` explicitly (see "Communication Rules" below).
+  It does NOT wake other agents.** To make another agent take action, run
+  \`${bin} chat send <name>\` explicitly.
 - **Stay silent when you have nothing to add.** Not every message needs a reply.
   If you have nothing new for the recipient, output nothing and the runtime ends the turn.
-- For **proactive communication** (other agents, other chats, or different format),
-  use the \`${bin}\` CLI below.
+- **Content rules (Issue #389):** pass content as a **raw string** — never
+  \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes produces a
+  literal \`"@x ...\\n..."\` row that the UI cannot render as markdown.
 
 ## Communication Rules
-
-Your final response text is delivered to the chat for **human observers**
-to read. It does NOT wake other agents.
-
-To make another agent take action, you MUST explicitly call:
-
-    ${bin} chat send <name> "..."
 
 Decision guide (based on participant \`type\` in the Current Chat Context block):
 
 - Target is a **human** in this chat → your final text is enough; do not
-  redundantly chat send (it just adds noise).
+  redundantly \`chat send\` (it just adds noise).
 - Target is an **agent** in this chat → they will NOT see your final text
-  as a wake signal. You MUST chat send <name> if you need them to act.
+  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them to act.
 - No specific target (just narrating progress / thinking aloud) → final
   text only; no send needed.
 
-**Fallback** (if Current Chat Context block is missing — context injection
-may have failed): use conservative mode — all cross-agent collaboration
-goes through explicit \`chat send\`; do not rely on final text to wake
-anyone.
+**Fallback** (if the Current Chat Context block is missing — context
+injection may have failed): use conservative mode — all cross-agent
+collaboration goes through explicit \`chat send\`; do not rely on final
+text to wake anyone.
 
-## Sending Messages
+## Hub Collaboration
 
-The CLI auto-reads its config from env — no setup needed.
+For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
+stdin, reaching non-members, mention resolution — load the
+**\`first-tree-cloud\` skill** (or its \`references/agent-communication.md\`).
+The skill's \`description\` triggers progressive disclosure whenever the user
+mentions chat, daemon, agent config, or login.
 
-\`\`\`bash
-# Send to an agent by NAME (uuids are NOT accepted — run \`${bin} agent list\` for names).
-# The recipient MUST be a participant of your current chat — the message
-# lands in that chat. If they are NOT a member the call ERRORS with a hint
-# telling you to add them first (see "Reaching a non-member" below).
-${bin} chat send <agentName> "your message"
-
-# Pull a non-member into your current chat first, then send normally.
-${bin} chat invite <agentName>
-${bin} chat send <agentName> "your message"
-
-# Markdown format (default is text)
-${bin} chat send <agentName> -f markdown "**bold**"
-
-# Pipe long / multiline content via stdin
-echo "long body" | ${bin} chat send <agentName>
-\`\`\`
-
-**Reaching another agent**:
-
-- **Already a member of this chat** → \`chat send <agentName> "..."\`. The
-  message lands in the current chat and the recipient is woken if they were
-  @mentioned (or — for two-speaker chats — implicitly).
-- **Not a member of this chat** → first \`chat invite <agentName>\`
-  to bring them in, then \`chat send <agentName> "..."\` like normal. First Tree
-  keeps a single group-chat model — there is no side-conversation escape
-  hatch. \`@<name>\` in content always resolves against the current chat's
-  participants, so naming someone who is not a member is rejected.
-
-The CLI **only addresses agents by name**. You cannot route by chat-id from
-this command.
-
-**Content rules (important):**
-
-- Pass content as a **raw string** — never \`JSON.stringify\` it first. Wrapping in
-  outer quotes + \`\\n\` escapes produces a literal \`"@x ...\\n..."\` that the UI
-  cannot render as markdown.
-- For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
-  use **stdin** with real newlines, plus \`-f markdown\`.
+Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
+there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less agents**
+(no Context Tree binding) won't have \`first-tree-cloud\` installed on disk;
+the Communication Rules above are inline here for exactly that reason — the
+sunk content is the long CLI mechanics, not the routing rules.
 
 ## When You Need a Human
 

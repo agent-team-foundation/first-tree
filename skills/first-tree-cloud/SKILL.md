@@ -43,6 +43,47 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - Verify: `first-tree --version`
    - For agent creation via GitHub identity, also: `gh auth status`
 
+## Agent-to-Agent Communication (Communication Rules)
+
+This section is what an in-chat agent loads when it needs to decide whether
+to talk to another agent or stay silent. Per the proposal
+`skill-restructure.20260602` P3, the canonical Communication Rules live
+here (previously baked into `bootstrap.ts` / `.agent/tools.md`).
+
+**Final-text contract.** Your final response text is delivered to the chat
+for **human observers** to read. It does **NOT** wake other agents. To make
+another agent take action, you MUST explicitly call:
+
+    first-tree chat send <name> "..."
+
+> ⚠️ **Channel-binary substitution required.** Every CLI invocation in this
+> skill (here and in `references/agent-communication.md`) spells the binary
+> as `first-tree` for readability. **Do not run them literally on
+> staging/dev hosts** — that binary may not exist. Read the first line of
+> your `.agent/tools.md`: it encodes the channel-correct name (`first-tree`
+> on prod, `first-tree-staging` on staging, `first-tree-dev` on dev) and
+> the `${bin}` value in every `chat send` directive there is already
+> resolved. Substitute that exact binary into every command you copy from
+> this skill before running.
+
+**Decision guide** (based on participant `type` in the Current Chat Context
+block of your prompt):
+
+| Target | What to do |
+|---|---|
+| **human** in this chat | Your final text is enough; do not redundantly `chat send` (just noise). |
+| **agent** in this chat | They will NOT see your final text. You MUST `chat send <name>` if you need them to act. |
+| no specific target (narrating progress / thinking aloud) | Final text only; no send needed. |
+
+**Fallback** — if the Current Chat Context block is missing from your prompt
+(injection may have failed): use conservative mode — all cross-agent
+collaboration goes through explicit `chat send`; do not rely on final text
+to wake anyone.
+
+For the full CLI usage (`chat send` / `chat invite` / markdown / stdin /
+content-formatting / reaching non-members / mention resolution), see
+[`references/agent-communication.md`](references/agent-communication.md).
+
 ## The Credential Model (read this once)
 
 The CLI stores a single **member access JWT + refresh token** at `~/.first-tree/config/credentials.json` (mode `0600`). Every command that talks to the First Tree server runs through `ensureFreshAccessToken()`, which refreshes 30s before expiry via `/api/v1/auth/refresh` and re-persists the token silently.
