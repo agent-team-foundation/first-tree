@@ -31,6 +31,31 @@ export type StartRunOptions = {
    * the mock instead of api.github.com.
    */
   serverExtraEnv?: ServerSpawnOptions["extraEnv"];
+  /**
+   * Absolute path of a fake/stub `claude` binary the daemon should use
+   * instead of the real one. Exported into the client process as
+   * `CLAUDE_CODE_EXECUTABLE`; both the `claude-code` (SDK) and
+   * `claude-code-tui` (tmux) handlers honor it. Required for the TUI e2e
+   * suite — the real `claude` would try to dial Anthropic mid-test.
+   */
+  clientClaudeCodeExecutable?: string;
+  /**
+   * Extra env injected into the spawned client (daemon) process. Used by
+   * the TUI fixture to set `ANTHROPIC_API_KEY=fake-tui-e2e` so the shared
+   * Claude auth probe (`detectClaudeAuth`) reports authenticated against
+   * the fake binary instead of looking at `~/.claude.json`.
+   */
+  clientExtraEnv?: NodeJS.ProcessEnv;
+  /**
+   * Skip the start-of-boot `bestEffortCleanupStaleContainers` sweep, which
+   * `docker rm -f`s EVERY `*_pg` container matching the e2e naming pattern.
+   * The sweep is correct at the start of a run (reclaim leftovers from a
+   * crashed prior run) but catastrophic for a SECOND world booted while a
+   * first is still live — it would reap the running world's pg. The TUI
+   * restart scenarios boot their own world alongside the shared globalSetup
+   * world and set this to keep the shared pg alive.
+   */
+  skipStaleContainerCleanup?: boolean;
 };
 
 export type RunWorld = {
@@ -51,6 +76,16 @@ export type RunWorld = {
 
 let activeWorld: RunWorld | null = null;
 let teardownHooksRegistered = false;
+// Snapshot of the options used to spawn the active client. Required so
+// `respawnActiveClient()` can produce a fresh daemon with the same identity,
+// fake binary, and env without callers having to remember them.
+let activeClientSpawnOpts: {
+  identity: RunIdentity;
+  serverBaseUrl: string;
+  logger: ComponentLogger;
+  claudeCodeExecutable?: string;
+  extraEnv?: NodeJS.ProcessEnv;
+} | null = null;
 
 /**
  * Extra teardown hooks invoked **before** `stopRunWorld()` when the process
@@ -84,7 +119,9 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
   const composeBin = env.E2E_DOCKER_COMPOSE_BIN ?? doctor.dockerComposeBin;
   if (!composeBin) throw new Error("E2E doctor passed but no docker compose binary resolved — internal bug");
 
-  bestEffortCleanupStaleContainers(composeBin);
+  if (!opts.skipStaleContainerCleanup) {
+    bestEffortCleanupStaleContainers(composeBin);
+  }
 
   const identity = makeRunIdentity(PACKAGE_E2E_ROOT, env.E2E_RUN_ID);
   const loggers: ComponentLogger[] = [];
@@ -137,11 +174,15 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
 
       const clientLogger = createComponentLogger(identity.runDir, "client");
       loggers.push(clientLogger);
-      client = await spawnClient({
+      const clientSpawnOpts = {
         identity,
         serverBaseUrl: server.baseUrl,
         logger: clientLogger,
-      });
+        claudeCodeExecutable: opts.clientClaudeCodeExecutable,
+        extraEnv: opts.clientExtraEnv,
+      };
+      client = await spawnClient(clientSpawnOpts);
+      activeClientSpawnOpts = clientSpawnOpts;
     }
 
     activeWorld = {
@@ -170,6 +211,7 @@ export async function stopRunWorld(): Promise<void> {
   if (!activeWorld) return;
   const { pg, server, client, loggers, identity } = activeWorld;
   activeWorld = null;
+  activeClientSpawnOpts = null;
   const errors: unknown[] = [];
   const stoppers: Array<readonly [string, { stop: () => Promise<void> } | null]> = [
     ["client", client],
@@ -197,6 +239,38 @@ export async function stopRunWorld(): Promise<void> {
 export function getActiveWorld(): RunWorld {
   if (!activeWorld) throw new Error("E2E world is not active — was globalSetup wired up?");
   return activeWorld;
+}
+
+/**
+ * Stop just the daemon process; leaves pg + server up. Used by TUI scenarios
+ * that need to simulate a daemon crash / restart against the same home
+ * directory (e.g. orphan sweep on respawn, in-flight turn resumes).
+ *
+ * No-op when the world has no client. After this call `respawnActiveClient()`
+ * can bring a fresh daemon up with the same identity + env.
+ */
+export async function stopActiveClient(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
+  if (!activeWorld || !activeWorld.client) return;
+  await activeWorld.client.stop(signal);
+  activeWorld.client = null;
+}
+
+/**
+ * Spawn a fresh daemon process using the same identity + env as the original.
+ * The world must have been started with `withClient: true` (so the spawn opts
+ * were captured); calling on a server-only world throws.
+ */
+export async function respawnActiveClient(): Promise<ClientProcess> {
+  if (!activeWorld) throw new Error("respawnActiveClient: no active world");
+  if (!activeClientSpawnOpts) {
+    throw new Error("respawnActiveClient: original world was not started with withClient: true");
+  }
+  if (activeWorld.client) {
+    throw new Error("respawnActiveClient: active client still running — call stopActiveClient first");
+  }
+  const fresh = await spawnClient(activeClientSpawnOpts);
+  activeWorld.client = fresh;
+  return fresh;
 }
 
 async function safeStop(component: { stop: () => Promise<void> } | undefined, name: string): Promise<void> {

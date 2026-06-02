@@ -9,6 +9,8 @@
     "e2e:doctor": "tsx src/scripts/doctor.ts",
     "e2e:smoke": "vitest run --config vitest.config.ts src/tests/smoke.e2e.test.ts",
     "e2e:full": "vitest run --config vitest.config.ts",
+    "e2e:tui": "E2E_TUI=1 E2E_WITH_CLIENT=1 vitest run --config vitest.tui.config.ts",
+    "e2e:tui:bootstrap": "tsx scripts/dev-bootstrap.mjs",
     "e2e:up": "tsx src/scripts/up.ts",
     "e2e:clean": "tsx src/scripts/clean.ts",
     "typecheck": "tsc --noEmit"
