@@ -1626,6 +1626,50 @@ tr[data-interactive]:hover {
    by check-design-tokens.sh). The cell size is a deliberate visual choice for
    a 90-day GitHub-style grid — it does not map cleanly to the --sp-* ramp. */
 
+.usage-placeholder {
+  color: var(--fg-4);
+  padding: var(--sp-3) 0;
+  margin: 0;
+}
+
+.usage-placeholder[data-tone="error"] {
+  color: var(--state-error);
+}
+
+.usage-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--hairline);
+  padding-top: var(--sp-3);
+  background: var(--border-faint);
+  border-bottom: var(--hairline) solid var(--border-faint);
+}
+
+.usage-overview-tile {
+  min-width: 0;
+  background: var(--bg);
+  padding: var(--sp-3) var(--sp-3_5) var(--sp-3_5);
+}
+
+.usage-overview-label {
+  color: var(--fg-4);
+  text-transform: uppercase;
+}
+
+.usage-overview-value {
+  color: var(--fg);
+  margin-top: var(--sp-1_25);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 720px) {
+  .usage-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .usage-activity-row {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1776,17 +1820,22 @@ tr[data-interactive]:hover {
 /* Recent turns table — model chip + per-row volume bar. */
 .usage-turn-volbar {
   height: 4px;
-  width: 64px;
+  width: 100%;
   background: var(--bg-sunken);
   border-radius: 2px;
   overflow: hidden;
-  margin-top: var(--sp-1_25);
+  margin-top: var(--sp-1);
 }
 
 .usage-turn-volbar > span {
   display: block;
   height: 100%;
   background: var(--fg-4);
+}
+
+.usage-turn-total-cell {
+  color: var(--fg-2);
+  min-width: var(--sp-20);
 }
 
 .usage-model-chip {
