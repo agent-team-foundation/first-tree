@@ -212,8 +212,8 @@ async function syncContextTreeRepo(
         log("Context Tree cloned via SSH fallback");
         // Report the SSH URL as ground truth — `git remote get-url origin`
         // on this checkout will be the SSH form, and downstream consumers
-        // (`first-tree tree integrate --tree-url`, telemetry) should match
-        // the actual remote rather than the configured-but-unusable HTTPS.
+        // (telemetry, future tree wiring) should match the actual remote
+        // rather than the configured-but-unusable HTTPS.
         return { path: cloneDir, repoUrl: sshRepo, branch };
       } catch (sshErr) {
         const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);

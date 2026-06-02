@@ -125,10 +125,10 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
 /**
  * Run the agent-home bootstrap that every Claude-driven handler shares: stable
  * `.agent/` layout + CLAUDE.md briefing, core-skill install, and (for
- * Context-Tree-bound agents) `first-tree tree integrate`. Gated by the stage-2
- * sentinel + Context-Tree-HEAD / CLI-version drift detection so a changed tree
- * or a `first-tree upgrade` forces a refresh, while the steady-state path is a
- * cheap identity check.
+ * Context-Tree-bound agents) `first-tree tree skill install`. Gated by the
+ * stage-2 sentinel + Context-Tree-HEAD / CLI-version drift detection so a
+ * changed tree or a `first-tree upgrade` forces a refresh, while the
+ * steady-state path is a cheap identity check.
  *
  * Extracted from the claude-code SDK handler so the claude-code-tui handler
  * gets the identical briefing/skill/drift contract instead of a partial copy.

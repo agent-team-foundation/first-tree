@@ -7,8 +7,9 @@ import { channelConfig } from "../../core/channel.js";
 import { pickImmediateWorkspaceSources, writeWorkspaceManifest } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
-import { parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot } from "./shared.js";
+import { isGitRepoRoot, parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot, runCommand } from "./shared.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { upsertLocalTreeGitIgnore, upsertSourceIntegrationFiles } from "./source-integration.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 import { upsertTreeCodeRepoRegistry } from "./tree-repo-registry.js";
@@ -66,11 +67,15 @@ function configureInitCommand(command: Command): void {
 }
 
 function readScopeOption(value: unknown): "repo" | "workspace" | undefined {
-  return value === "repo" || value === "workspace" ? value : undefined;
+  if (value === undefined) return undefined;
+  if (value === "repo" || value === "workspace") return value;
+  throw new Error(`Unsupported value for --scope: ${String(value)} (expected "workspace")`);
 }
 
 function readTreeModeOption(value: unknown): "dedicated" | "shared" | undefined {
-  return value === "dedicated" || value === "shared" ? value : undefined;
+  if (value === undefined) return undefined;
+  if (value === "dedicated" || value === "shared") return value;
+  throw new Error(`Unsupported value for --tree-mode: ${String(value)} (expected "dedicated" or "shared")`);
 }
 
 function readStringOption(value: unknown): string | undefined {
@@ -93,17 +98,37 @@ function resolveTreeMode(options: InitOptions): "dedicated" | "shared" {
   return options.treeMode ?? "shared";
 }
 
-function resolveTreeRoot(workspaceRoot: string, options: InitOptions): string | undefined {
+function resolveTreeRoot(workspaceRoot: string, options: InitOptions): string {
   if (options.treePath) {
     return resolve(workspaceRoot, options.treePath);
   }
 
   if (options.treeUrl) {
-    return undefined;
+    const parsed = parseGitHubRemoteUrl(options.treeUrl);
+    const defaultName = options.treeName ?? parsed?.repo ?? basename(options.treeUrl).replace(/\.git$/u, "");
+    return join(workspaceRoot, defaultName);
   }
 
   const defaultName = options.treeName ?? `${repoNameForRoot(workspaceRoot)}-tree`;
   return join(workspaceRoot, defaultName);
+}
+
+function ensureTreeCheckout(treeRoot: string, options: { treeUrl?: string; treeMode: "dedicated" | "shared" }): void {
+  if (existsSync(treeRoot)) {
+    if (!isGitRepoRoot(treeRoot)) {
+      throw new Error(
+        `Tree path exists but is not a git repository: ${treeRoot}. Point --tree-path at an existing tree checkout, or remove the directory and let init scaffold it.`,
+      );
+    }
+    return;
+  }
+
+  if (options.treeUrl) {
+    runCommand("git", ["clone", options.treeUrl, treeRoot], dirname(treeRoot));
+    return;
+  }
+
+  bootstrapTreeRoot(treeRoot, { treeMode: options.treeMode });
 }
 
 function resolveWorkspaceId(workspaceRoot: string, options: InitOptions): string {
@@ -118,10 +143,6 @@ export function initializeWorkspaceRoot(workspaceRoot: string, options: InitOpti
   const treeMode = resolveTreeMode(options);
   const treeRoot = resolveTreeRoot(workspaceRoot, options);
 
-  if (treeRoot === undefined) {
-    throw new Error("Pass --tree-path to scaffold a new tree, or --tree-path with --tree-url to bind a remote tree.");
-  }
-
   if (resolve(treeRoot) === resolve(workspaceRoot)) {
     throw new Error("The workspace root and tree repo resolved to the same path.");
   }
@@ -131,6 +152,11 @@ export function initializeWorkspaceRoot(workspaceRoot: string, options: InitOpti
       `Tree must live as an immediate subdirectory of the workspace root. Got tree=${treeRoot}, workspace=${workspaceRoot}.`,
     );
   }
+
+  ensureTreeCheckout(treeRoot, {
+    ...(options.treeUrl ? { treeUrl: options.treeUrl } : {}),
+    treeMode,
+  });
 
   if (readTreeIdentityContract(treeRoot) === undefined) {
     bootstrapTreeRoot(treeRoot, { treeMode });
@@ -162,6 +188,7 @@ export function initializeWorkspaceRoot(workspaceRoot: string, options: InitOpti
   if (workspaceRemoteUrl && parseGitHubRemoteUrl(workspaceRemoteUrl) !== null) {
     upsertTreeCodeRepoRegistry(treeRoot, workspaceRemoteUrl);
   }
+  syncTreeSourceRepoIndex(treeRoot);
 
   const manifest = writeWorkspaceManifestFromState(workspaceRoot, treeRoot);
 
