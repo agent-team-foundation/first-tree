@@ -33,38 +33,16 @@ afterEach(() => {
   }
 });
 
-describe("buildSourceIntegrationBlock — binName threading", () => {
-  it("defaults to `first-tree` when no binName is provided (back-compat for callers and tests)", () => {
+describe("buildSourceIntegrationBlock", () => {
+  it("notes the ask-a-human flow is pending redesign and carries no retired NHA CLI text", () => {
     const block = buildSourceIntegrationBlock("context-tree", {
       bindingMode: "shared-source",
       entrypoint: "/repos/x",
       treeMode: "shared",
       treeRepoName: "context-tree",
     });
-    expect(block).toContain("`first-tree attention raise --requires-response`");
-    expect(block).not.toContain("first-tree-staging");
-    expect(block).not.toContain("first-tree-dev");
-  });
-
-  it("uses the supplied binName so staging / dev hosts render the binary that is actually on PATH", () => {
-    const staging = buildSourceIntegrationBlock("context-tree", {
-      binName: "first-tree-staging",
-      bindingMode: "shared-source",
-      entrypoint: "/repos/x",
-      treeMode: "shared",
-      treeRepoName: "context-tree",
-    });
-    expect(staging).toContain("`first-tree-staging attention raise --requires-response`");
-    expect(staging).not.toMatch(/`first-tree attention raise/);
-
-    const dev = buildSourceIntegrationBlock("context-tree", {
-      binName: "first-tree-dev",
-      bindingMode: "shared-source",
-      entrypoint: "/repos/x",
-      treeMode: "shared",
-      treeRepoName: "context-tree",
-    });
-    expect(dev).toContain("`first-tree-dev attention raise --requires-response`");
+    expect(block).toContain("[pending redesign, 自行判断]");
+    expect(block).not.toMatch(/attention raise/);
   });
 });
 

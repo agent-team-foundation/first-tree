@@ -44,7 +44,7 @@ export type RawTranscriptEntry = {
   [key: string]: unknown;
 };
 
-/** Mapped event used by tests and for the askuser/text-accumulation paths in the handler. */
+/** Mapped event used by tests and for the text-accumulation paths in the handler. */
 export type TranscriptEvent =
   | { kind: "user_text"; text: string; ts?: string }
   | { kind: "assistant_text"; text: string; ts?: string }
@@ -67,7 +67,7 @@ type AnthropicBlock = {
 /**
  * Convert one transcript entry into zero or more TranscriptEvents. Mostly
  * used in tests; the live handler also uses it to pick out assistant text
- * (for forwardResult) and AskUser tool_use blocks (for the text-degrade path).
+ * (for forwardResult) and tool_use blocks (for the shared tool-call processor).
  */
 export function transcriptEntryToEvents(entry: RawTranscriptEntry): TranscriptEvent[] {
   if (entry?.type === "user") {

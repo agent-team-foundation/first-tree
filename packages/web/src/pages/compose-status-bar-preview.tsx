@@ -23,9 +23,8 @@ import { ComposeStatusBar } from "../components/chat/compose-status-bar.js";
  *
  * Covers the spec acceptance: goal-first working line, live-action means with a
  * per-kind icon, markdown stripped, long goal truncates while means + ticker
- * survive, no-prose fallback (means leads), path-arg basename, failed, the
- * multi-agent +N fold, and — the cleanup — that a `needs_you` agent never
- * surfaces here.
+ * survive, no-prose fallback (means leads), path-arg basename, failed, and the
+ * multi-agent +N fold.
  */
 
 /** ISO timestamp `secondsAgo` in the past — drives the live elapsed ticker so a
@@ -58,7 +57,6 @@ function build(over: Partial<AgentChatStatusInput> & { agentId: string }): Agent
   return buildAgentChatStatus({
     reachable: true,
     errored: false,
-    needsYou: false,
     working: false,
     engagement: "active",
     ...over,
@@ -197,22 +195,6 @@ const VARIANTS: Variant[] = [
         startedAt: ago(9),
       }),
       working("agent-kael", { kind: "thinking", label: "Thinking", turnText: "Drafting the plan", startedAt: ago(5) }),
-    ],
-  },
-  {
-    name: "needs_you present → NOT shown (cleanup)",
-    subtitle: "a needs_you agent is filtered out; only the working agent surfaces",
-    chatId: "v-needs-you",
-    agents: [DEV, KAEL],
-    statuses: [
-      build({ agentId: "agent-kael", needsYou: true }),
-      working("agent-dev", {
-        kind: "tool_call",
-        label: "Grep",
-        detail: "compose-status-bar",
-        turnText: "Confirming needs_you no longer reaches the rail",
-        startedAt: ago(6),
-      }),
     ],
   },
 ];

@@ -132,33 +132,6 @@ export {
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
 export {
-  ATTENTION_STATES,
-  type Attention,
-  type AttentionCancelledFrame,
-  type AttentionMetadata,
-  type AttentionOpenedFrame,
-  type AttentionOptionGroup,
-  type AttentionOptionItem,
-  type AttentionQuestion,
-  type AttentionState,
-  attentionCancelledFrameSchema,
-  attentionMetadataSchema,
-  attentionOpenedFrameSchema,
-  attentionOptionGroupSchema,
-  attentionOptionItemSchema,
-  attentionQuestionSchema,
-  attentionRecordSchema,
-  attentionStateSchema,
-  type CancelAttentionInput,
-  cancelAttentionInputSchema,
-  type ListAttentionsQuery,
-  listAttentionsQuerySchema,
-  type RaiseAttentionInput,
-  type RespondAttentionInput,
-  raiseAttentionInputSchema,
-  respondAttentionInputSchema,
-} from "./schemas/attention.js";
-export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
   connectTokenExchangeSchema,
@@ -580,7 +553,6 @@ export {
   pulseBucketSchema,
   pulseTickSchema,
 } from "./schemas/pulse.js";
-export { QUESTION_STATUSES, type QuestionStatus, questionStatusSchema } from "./schemas/question.js";
 export {
   DEFAULT_RUNTIME_PROVIDER,
   RUNTIME_PROVIDERS,

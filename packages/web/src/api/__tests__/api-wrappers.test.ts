@@ -82,11 +82,10 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
   });
 
-  it("formats agent, attention, chat, member, and session requests", async () => {
+  it("formats agent, chat, member, and session requests", async () => {
     const agentConfig = await import("../agent-config.js");
     const agentStatus = await import("../agent-status.js");
     const agents = await import("../agents.js");
-    const attention = await import("../attention.js");
     const chats = await import("../chats.js");
     const meChats = await import("../me-chats.js");
     const meDocs = await import("../me-docs.js");
@@ -113,12 +112,6 @@ describe("api wrapper paths", () => {
     await agents.suspendAgent("agent/id");
     await agents.reactivateAgent("agent/id");
     await agents.testAgentConnection("agent/id");
-
-    expect(attention.attentionsInChatQueryKey("chat-1")).toEqual(["attentions", "chat", "chat-1"]);
-    expect(attention.respondAttentionMutationKey("att-1")).toEqual(["attentions", "respond", "att-1"]);
-    await attention.respondAttention("att/id", { text: "yes" });
-    await attention.listAttentionsInChat("chat/id");
-    await attention.listMyAttentions();
 
     await chats.listChats({ limit: 3, cursor: "next" });
     await chats.getChat("chat/id");
@@ -200,9 +193,6 @@ describe("api wrapper paths", () => {
       clientId: "client-2",
       runtimeProvider: "claude-code",
     });
-    expect(apiMock.post).toHaveBeenCalledWith("/attention/att%2Fid/respond", { text: "yes" });
-    expect(apiMock.get).toHaveBeenCalledWith("/attention?chat=chat%2Fid&state=all");
-    expect(apiMock.get).toHaveBeenCalledWith("/attention?state=open&limit=200");
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",

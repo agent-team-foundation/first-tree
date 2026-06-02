@@ -54,7 +54,7 @@ export function sessionStateToMain(state: SessionState | "none" | null | undefin
 export type AgentStatusShape = "dot" | "pause" | "hollow";
 
 /** Pulse kind for the indicator; null = static. */
-export type AgentStatusPulse = "working" | "needs-you" | null;
+export type AgentStatusPulse = "working" | null;
 
 export type AgentStatusView = {
   /** CSS custom-property reference for the indicator color. */
@@ -75,7 +75,7 @@ export type AgentStatusView = {
  * Pure and side-effect-free.
  *
  * Colors are the shared `--state-*` tokens (working = green/alive, idle = blue,
- * needs-you = amber, blocked = orange, etc.) so this composite vocabulary and
+ * blocked = orange, etc.) so this composite vocabulary and
  * the runtime-A StateDot render with one palette; shapes follow StateDot's
  * shape+color double-encoding. This is the
  * *composite* mapping — it does NOT replace StateChip/StateDot, which keep
@@ -90,16 +90,6 @@ export function viewOf(main: AgentMainStatus): AgentStatusView {
         pulse: "working",
         animationClass: "agent-status-pulse--working",
         label: "Working",
-      };
-    case "needs_you":
-      return {
-        colorVar: "var(--state-needs-you)",
-        shape: "dot",
-        pulse: "needs-you",
-        animationClass: "agent-status-pulse--needs-you",
-        // Matches the visible "Needs reply" pill (screen-reader = eyes); this
-        // label is the status-point aria-label, not shown as visible text.
-        label: "Needs reply",
       };
     case "failed":
       // A red solid dot (not a triangle): the corner triangle read sharp /

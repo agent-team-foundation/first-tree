@@ -59,11 +59,11 @@ async function runSkillCommand(argv: string[]): Promise<void> {
 
 describe("tree skill command actions", () => {
   it("prints list output in table and JSON modes", async () => {
-    installSkill("attention");
+    installSkill("first-tree-github-scan");
 
     await runSkillCommand(["list", "--root", root]);
     expect(stdout).toContain("NAME");
-    expect(stdout).toContain("attention");
+    expect(stdout).toContain("first-tree-github-scan");
     expect(stdout).toContain("installed");
     expect(stdout).toContain("first-tree");
     expect(stdout).toContain("missing");
@@ -71,18 +71,18 @@ describe("tree skill command actions", () => {
     stdout = "";
     await runSkillCommand(["list", "--root", root, "--json"]);
     const rows = JSON.parse(stdout) as Array<{ name: string; installed: boolean }>;
-    expect(rows.find((row) => row.name === "attention")).toMatchObject({ installed: true });
+    expect(rows.find((row) => row.name === "first-tree-github-scan")).toMatchObject({ installed: true });
   });
 
   it("reports doctor failures, incompatible ranges, and repair hints", async () => {
-    installSkill("attention", { cliCompat: ">999.0.0" });
+    installSkill("first-tree-github-scan", { cliCompat: ">999.0.0" });
     installSkill("github-scan", { link: false });
 
     await runSkillCommand(["doctor", "--root", root]);
 
     expect(process.exitCode).toBe(1);
     expect(stdout).toContain("=== first-tree tree skill doctor ===");
-    expect(stdout).toContain("FAIL attention");
+    expect(stdout).toContain("FAIL first-tree-github-scan");
     expect(stdout).toContain("requires first-tree >999.0.0");
     expect(stdout).toContain("Repair shipped skill payloads with:");
     expect(stdout).toContain("first-tree tree skill link");
@@ -97,19 +97,21 @@ describe("tree skill command actions", () => {
   });
 
   it("links missing Claude aliases", async () => {
-    installSkill("attention", { link: false });
+    installSkill("first-tree-github-scan", { link: false });
     await runSkillCommand(["link", "--root", root]);
 
-    expect(stdout).toContain("linked .claude/skills/attention -> ../../.agents/skills/attention");
+    expect(stdout).toContain(
+      "linked .claude/skills/first-tree-github-scan -> ../../.agents/skills/first-tree-github-scan",
+    );
     expect(stdout).toContain("Linked 1 symlink(s)");
   });
 
   it("installs and upgrades shipped skills", async () => {
     await runSkillCommand(["install", "--root", root]);
-    expect(stdout).toContain("Installed 8 shipped first-tree skills");
+    expect(stdout).toContain("Installed 7 shipped first-tree skills");
 
     stdout = "";
     await runSkillCommand(["upgrade", "--root", root]);
-    expect(stdout).toContain("Upgraded 8 shipped first-tree skills");
+    expect(stdout).toContain("Upgraded 7 shipped first-tree skills");
   });
 });

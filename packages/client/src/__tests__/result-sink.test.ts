@@ -83,10 +83,10 @@ describe("createResultSink — forwardResult enrichment", () => {
   });
 
   it('every forward carries `purpose: "agent-final-text"` — server uses it to bypass group-chat mention enforcement', async () => {
-    // Pin the bypass tag on the wire so AskUserQuestion + result-sink both
-    // continue to land in group chats without 400s after改造 4 removed the
-    // client-side mention auto-injection. Server匹配此 field 跳过
-    // enforceGroupMention + 强制全员 notify=false.
+    // Pin the bypass tag on the wire so result-sink forwards continue to
+    // land in group chats without 400s after改造 4 removed the client-side
+    // mention auto-injection. Server匹配此 field 跳过 enforceGroupMention +
+    // 强制全员 notify=false.
     const { sink, sendMessage } = buildSink({ trigger: null });
 
     await sink("turn ended");

@@ -12,7 +12,7 @@ import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows, rowIsFailed, rowNeedsYou, splitAttentionRows } from "./group-rows.js";
+import { type GroupMode, groupRows, rowIsFailed, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -261,10 +261,10 @@ export function ConversationList({
   // (e.g. an inactive tab the browser throttles) won't see the bucket
   // shift until the next refetch lands; that's an acceptable degree
   // of staleness for a presentational concern.
-  // Hoist attention chats (failed + needs-you) into a pinned section at the top
+  // Hoist attention chats (failed + mention) into a pinned section at the top
   // WITHOUT touching cursor pagination or reordering the main list: partition
   // them out, group the rest as usual, then prepend a synthetic "Needs
-  // attention" bucket (failed pinned above needs-you). A chat appears in
+  // attention" bucket (failed pinned above mention). A chat appears in
   // exactly one place (pinned OR its normal group), never both.
   const buckets = useMemo(() => {
     const { attention, rest } = splitAttentionRows(allRows);
@@ -629,7 +629,6 @@ export function ConversationList({
                   const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
                   const hasUnread = row.unreadMentionCount > 0;
                   const failed = rowIsFailed(row);
-                  const needsYou = rowNeedsYou(row);
                   return (
                     <div
                       key={row.chatId}
@@ -648,13 +647,7 @@ export function ConversationList({
                           gap: "var(--sp-2_5)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
                           borderLeft: `var(--hairline-bold) solid ${
-                            isSelected
-                              ? "var(--brand)"
-                              : failed
-                                ? "var(--state-error)"
-                                : needsYou
-                                  ? "var(--state-needs-you)"
-                                  : "transparent"
+                            isSelected ? "var(--brand)" : failed ? "var(--state-error)" : "transparent"
                           }`,
                         }}
                       >
@@ -664,7 +657,6 @@ export function ConversationList({
                           participants={row.participants}
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
-                          needsYou={needsYou}
                           failed={failed}
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>

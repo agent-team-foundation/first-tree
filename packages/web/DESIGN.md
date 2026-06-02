@@ -34,7 +34,7 @@
    arrivals — the new-message pill + divider — are green). Working-green is told
    apart from success-green by **form** (pulsing dot + glow vs a static ✓
    glyph), not hue. The states that want your attention are **warm** so they pop
-   against the green/blue live baseline: needs-you = amber, blocked = orange,
+   against the green/blue live baseline: blocked = orange,
    error = red. Present-but-idle = blue; offline = gray.
 4. **Mature collaboration craft, not borrowed color.** Borrow the *discipline*
    — a neutral gray token ramp, hairline borders, soft low-opacity elevation,
@@ -58,7 +58,6 @@
 | live arrival (new-message pill + divider) | green |
 | selected conversation (liveness) | green (left-rail + tint — distinct from a selected *tab*, which stays neutral) |
 | idle / present | blue (`--state-idle`) |
-| needs-you | amber (`--state-needs-you`) |
 | blocked / stuck | orange (`--state-blocked`) |
 | error / failed | red (`--state-error`) |
 | offline | dim gray (`--state-offline`) |
@@ -146,7 +145,6 @@ for text sitting on a saturated colored surface (badges, avatars) and does
 |-------|-----|---------|
 | `--state-working` | green `150` | alive / working — pulses (+ glow on the chat chip); told apart from success by form, not hue |
 | `--state-idle` | blue `245` | present / idle (at rest) |
-| `--state-needs-you` | amber `75` | waiting for you |
 | `--state-blocked` | orange `58` | blocked / stuck — also the shared caution / warning hue |
 | `--state-error` | red `25` | error / failed |
 | `--state-offline` | dim gray | offline |
@@ -159,7 +157,7 @@ hand-rolling `color-mix(... var(--state-*) ..., transparent)` at the call site.
 
 ### Feedback / severity
 A named set, aliased to shared base hues (one value per color):
-`--success` (green, = brand hue) · `--warning` (orange, = `--state-blocked`; the caution/blocked hue, distinct from needs-you amber) · `--danger` (red).
+`--success` (green, = brand hue) · `--warning` (orange, = `--state-blocked`; the caution/blocked hue) · `--danger` (red).
 
 ### Inline callouts (notices)
 Each state ships a **soft** background + a **strong** text/border tone, so you
@@ -296,8 +294,7 @@ Keyframes live in `index.css` (not inline) so `prefers-reduced-motion` can
 override them — **every animation has a reduced-motion fallback**. Vocabulary:
 
 - **Status pulses** — opacity-led dot breathing (no concentric rings, so a
-  roster column stays pixel-aligned): `--working` 1.4s (faster, "alive"),
-  `--needs-you` 1.9s (calmer, "waiting for you").
+  roster column stays pixel-aligned): `--working` 1.4s ("alive").
 - **Arrival** — `.fade-in` (180ms rise), `toast-slide-in`, feed slide+flash on
   fresh rows.
 - **Live/ambient** — halo breathe, ring pulse, typing-dot wave for "producing

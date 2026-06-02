@@ -9,23 +9,12 @@ export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "@fir
 // public use case (URL derivation) already has a dedicated export.
 export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/_shared/connect-token.js";
 // Core types
-export type {
-  CancelArgs,
-  CheckResult,
-  ListArgs,
-  RaiseArgs,
-  RespondArgs,
-  ServiceInfo,
-  ServiceOpResult,
-  ServiceState,
-} from "./core/index.js";
+export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState } from "./core/index.js";
 export {
-  AttentionRespondError,
   AuthRefreshFailedError,
   AuthRefreshRateLimitedError,
   blank,
   ClientRuntime,
-  cancelAttention,
   checkAgentConfigs,
   checkClientConfig,
   checkNodeVersion,
@@ -39,20 +28,16 @@ export {
   installClientService,
   isInteractive,
   isServiceSupported,
-  listAttentions,
   onboardCheck,
   onboardCreate,
   printResults,
   promptAddAgent,
   promptMissingFields,
-  raiseAttention,
   resolveAccessToken,
   resolveCliInvocation,
   resolveServerUrl,
-  respondAttention,
   restartClientService,
   rotateClientIdWithBackup,
-  showAttention,
   startClientService,
   status,
   stopClientService,

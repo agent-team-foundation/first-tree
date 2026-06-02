@@ -44,8 +44,7 @@ describe("buildCodexThreadOptions", () => {
     expect(opts.skipGitRepoCheck).toBe(true);
     // Codex runs with `danger-full-access` because the agent's local-execution
     // surface (docker, cross-directory writes) routes through it; irreversible
-    // actions are gated by Need-Human-Attention at the agent layer instead of
-    // by the codex sandbox.
+    // actions are gated by the agent itself instead of by the codex sandbox.
     expect(opts.sandboxMode).toBe("danger-full-access");
     expect(opts.approvalPolicy).toBe("never");
     // Default reasoning effort for codex agents is "high" (footgun F3: minimal

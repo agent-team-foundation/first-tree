@@ -12,9 +12,8 @@ import { z } from "zod";
  *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
  *                 / etc.).
  *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
- *                 in-process tool integrations, AskUserQuestion publish);
- *                 the catch-all for client runtime-initiated writes that
- *                 aren't typed via the CLI.
+ *                 in-process tool integrations); the catch-all for client
+ *                 runtime-initiated writes that aren't typed via the CLI.
  *   - "github"  — Inbound message bridged from a GitHub webhook.
  *
  * NOT a behaviour discriminator — use `purpose` for that (e.g. distinguishing
