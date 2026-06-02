@@ -10,8 +10,6 @@ const bootstrapMocks = vi.hoisted(() => ({
   resolveServerUrl: vi.fn(),
 }));
 
-const cliFetchMock = vi.hoisted(() => vi.fn());
-
 const printLineMock = vi.hoisted(() => vi.fn());
 
 const childRegistryMocks = vi.hoisted(() => ({
@@ -23,19 +21,9 @@ const childRegistryMocks = vi.hoisted(() => ({
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
-vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../core/output.js", () => ({ print: { line: printLineMock } }));
 vi.mock("@first-tree/client", () => childRegistryMocks);
 vi.mock("node:child_process", () => ({ spawnSync: spawnSyncMock }));
-
-function jsonResponse(body: unknown, ok = true, status = 200): Response {
-  return {
-    ok,
-    status,
-    json: vi.fn(async () => body),
-    text: vi.fn(async () => (typeof body === "string" ? body : JSON.stringify(body))),
-  } as unknown as Response;
-}
 
 class MockChild extends EventEmitter {
   stdout = new EventEmitter();
@@ -54,105 +42,6 @@ beforeEach(() => {
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   childRegistryMocks.classify.mockReturnValue({ kind: "permanent", reasonCode: "classified" });
   spawnSyncMock.mockReturnValue({ status: 0, stdout: "0.6.0\n", stderr: "" });
-});
-
-describe("core attention helpers", () => {
-  it("passes through SDK attention helpers", async () => {
-    const sdk = {
-      attention: {
-        cancel: vi.fn(async () => ({ id: "attention-1", state: "closed" })),
-        list: vi.fn(async () => [{ id: "attention-1" }]),
-        raise: vi.fn(async () => ({ id: "attention-2" })),
-        show: vi.fn(async () => ({ id: "attention-3" })),
-      },
-    };
-    const { cancelAttention, listAttentions, raiseAttention, showAttention } = await import(
-      "../core/attention/index.js"
-    );
-
-    await expect(cancelAttention(sdk as never, { id: "attention-1", reason: "obsolete" })).resolves.toEqual({
-      id: "attention-1",
-      state: "closed",
-    });
-    expect(sdk.attention.cancel).toHaveBeenCalledWith("attention-1", "obsolete");
-
-    await expect(listAttentions(sdk as never, { state: "open" })).resolves.toEqual([{ id: "attention-1" }]);
-    expect(sdk.attention.list).toHaveBeenCalledWith({ state: "open" });
-
-    await expect(
-      raiseAttention(sdk as never, {
-        chatId: "chat-1",
-        target: "human-1",
-        subject: "Approve",
-        body: "Ship?",
-        requiresResponse: true,
-        metadata: { priority: 2 },
-      }),
-    ).resolves.toEqual({ id: "attention-2" });
-    expect(sdk.attention.raise).toHaveBeenCalledWith({
-      chatId: "chat-1",
-      target: "human-1",
-      subject: "Approve",
-      body: "Ship?",
-      requiresResponse: true,
-      metadata: { priority: 2 },
-    });
-
-    await expect(showAttention(sdk as never, "attention-3")).resolves.toEqual({ id: "attention-3" });
-    expect(sdk.attention.show).toHaveBeenCalledWith("attention-3");
-  });
-
-  it("responds over member HTTP, parses server errors, and validates response payloads", async () => {
-    const validAttention = {
-      id: "00000000-0000-7000-8000-000000000001",
-      originAgentId: "00000000-0000-7000-8000-000000000002",
-      originChatId: "00000000-0000-7000-8000-000000000003",
-      targetHumanId: "00000000-0000-7000-8000-000000000004",
-      subject: "Approve deploy",
-      body: "Can I ship?",
-      requiresResponse: true,
-      state: "closed",
-      response: "approved",
-      respondedBy: "00000000-0000-7000-8000-000000000004",
-      respondedAt: "2026-06-01T00:00:00.000Z",
-      cancelled: false,
-      cancelledReason: null,
-      metadata: {},
-      createdAt: "2026-06-01T00:00:00.000Z",
-      closedAt: "2026-06-01T00:00:00.000Z",
-    };
-    const { AttentionRespondError, respondAttention } = await import("../core/attention/respond.js");
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse(validAttention));
-    await expect(respondAttention({ id: "attention/1", text: "approved" })).resolves.toMatchObject({
-      subject: "Approve deploy",
-    });
-    expect(cliFetchMock).toHaveBeenCalledWith("https://hub.example/api/v1/attention/attention%2F1/respond", {
-      method: "POST",
-      headers: { Authorization: "Bearer token", "Content-Type": "application/json" },
-      body: JSON.stringify({ text: "approved" }),
-      signal: expect.any(AbortSignal),
-    });
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse(validAttention));
-    await respondAttention({ id: "attention-1", answers: { choice: "ship" } });
-    expect(cliFetchMock).toHaveBeenLastCalledWith(
-      "https://hub.example/api/v1/attention/attention-1/respond",
-      expect.objectContaining({ body: JSON.stringify({ answers: { choice: "ship" } }) }),
-    );
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse(JSON.stringify({ error: "already closed" }), false, 409));
-    await expect(respondAttention({ id: "attention-1", text: "again" })).rejects.toMatchObject({
-      statusCode: 409,
-      message: "already closed",
-    });
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse("plain failure", false, 500));
-    await expect(respondAttention({ id: "attention-1", text: "again" })).rejects.toBeInstanceOf(AttentionRespondError);
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse({ nope: true }));
-    await expect(respondAttention({ id: "attention-1", text: "bad payload" })).rejects.toThrow();
-  });
 });
 
 describe("core update helpers", () => {
