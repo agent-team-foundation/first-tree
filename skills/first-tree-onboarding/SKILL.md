@@ -3,7 +3,7 @@ name: first-tree-onboarding
 version: 0.5.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "tree bound, real content drafted, daemon running, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the daemon. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, and the final doctor checks.
+description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "tree bound, real content drafted, GitHub automation checked, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the setup. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, and the final doctor checks.
 ---
 
 # First Tree Onboarding (one-shot command)
@@ -18,9 +18,8 @@ Read first: [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md) a
 2. The bound tree exists on disk, and `first-tree tree verify --tree-path <tree_root>` exits 0.
 3. The tree's `NODE.md`, `members/owner/NODE.md`, and `.first-tree/org.yaml` contain real content (no remaining placeholder strings — see [`references/content-drafting.md`](references/content-drafting.md) §Detection).
 4. `first-tree tree skill doctor --root <source_root>` exits 0.
-5. If the user opted in to the daemon: `first-tree github scan doctor` exits 0.
-6. The agent has confirmed that Tier 0's `validate.yml` exists, explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <tree_root>` and recorded the returned stage.
-7. The user has explicitly confirmed which agent templates to keep in `.first-tree/agent-templates/`.
+5. The agent has confirmed that Tier 0's `validate.yml` exists, explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <tree_root>` and recorded the returned stage.
+6. The user has explicitly confirmed which agent templates to keep in `.first-tree/agent-templates/`.
 
 If any of these fails, stop and report — never silently mark onboarding complete.
 
@@ -63,7 +62,7 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 | `unbound-workspace-root`                     | Phase B (workspace).                                                                                  |
 | `unknown`                                    | Ask: "Not a recognized git repo or workspace. Run `git init` here, or did you mean a different path?" |
 
-**Exit gate:** role classified; `source_root` known; daemon-eligible flag set (gh ok).
+**Exit gate:** role classified; `source_root` known; GitHub CLI auth status recorded for optional PR/automation work.
 
 ### Phase B — Bind (auto unless ambiguous)
 
@@ -115,23 +114,9 @@ If none match → skip Phase C. The combined check is reliable because all three
 6. `git -C <tree_root> commit` → `git -C <tree_root> push -u origin chore/initial-content-draft` → `gh pr create --repo <slug> --title "..." --body "..."` (or, if user prefers, push to `main` directly — ask).
    **Exit gate:** all three placeholder strings from the entry signal are gone in the on-disk tree. If the user chose the PR flow and the PR is still open (not merged), treat Phase C as **deferred** — print the deferred summary in Phase F and exit; the user re-runs `/first-tree-onboarding` after merging to finish the remaining phases.
 
-### Phase D — GitHub Scan daemon (auto if gh ok; otherwise stop here)
+### Phase D — GitHub automation rule layer (always)
 
-**Entry signal:** Phase C exit gate passed.
-
-**Action:**
-
-1. If gh auth failed in Phase A: stop. Tell user `gh auth login`, do not attempt install. Skip to Phase E only when the user explicitly says "skip the daemon".
-2. Ask once: "Install the GitHub Scan daemon for `<owner/repo>`? It polls notifications and dispatches PR-driven tree updates. (yes/skip)". Default = yes.
-3. Decide `--allow-repo`: start with the bound source repo only — `<owner>/<repo>`. Wider globs are a follow-up the user opts into later.
-4. `first-tree github scan install --allow-repo <owner/repo>`.
-5. `first-tree github scan doctor`.
-
-**Exit gate:** `doctor` exits 0, OR user explicitly opted out (record this in the wrap-up summary).
-
-### Phase D.5 — GitHub automation rule layer (always)
-
-**Entry signal:** Phase D done or skipped.
+**Entry signal:** Phase C exit gate passed or skipped.
 
 **Action:**
 
@@ -174,8 +159,8 @@ If none match → skip Phase C. The combined check is reliable because all three
 **Action:**
 
 1. `first-tree tree skill doctor --root <source_root>` → must exit 0.
-2. `first-tree github scan doctor` if Phase D ran → must exit 0.
-3. `first-tree tree inspect --json` → confirm `role` is `*-bound`.
+2. `first-tree tree inspect --json` → confirm `role` is `*-bound`.
+3. `first-tree tree verify --tree-path <tree_root>` → must exit 0.
 4. Print the summary. Format:
 
    ```
@@ -184,7 +169,6 @@ If none match → skip Phase C. The combined check is reliable because all three
    Source repo: <source_root>
    Tree repo:   <tree_root> (<bindingMode>, <treeMode>)
    Tree URL:    <treeRemoteUrl or "not published">
-   Daemon:      <running for <owner/repo> | skipped>
    GitHub Actions: validate.yml installed (Tier 0, rule-based)
    AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
    Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
@@ -192,7 +176,6 @@ If none match → skip Phase C. The combined check is reliable because all three
 
    Next:
    - Edit <tree_root>/.first-tree/org.yaml to fill in stage/industry if marked unverified.
-   - Open a PR in the source repo to see github scan dispatch the developer agent.
    - Run /first-tree-sync any time you suspect tree drift.
    ```
 
@@ -216,7 +199,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 - **Never edit the managed First Tree blocks** (`<!-- BEGIN FIRST-TREE-* -->`) by hand. Re-run the relevant CLI (`tree init`, `tree publish`, `tree workspace sync`).
 - **Never push to the tree's main branch without an explicit "yes"** from the user. Default for Phase C content is a PR.
-- **Never start an agent runtime in Phase E.** Templates only. The daemon spawns agents.
+- **Never start an agent runtime in Phase E.** Templates only.
 - **Never claim onboarding done if any Phase F doctor exits non-zero.**
 - **Never run onboarding inside a tree repo** (`role: tree-repo`). Stop and explain.
 - **Never invent content in Phase C.** If a fact isn't in the source signals listed in `content-drafting.md`, leave the field empty with a `# unverified` marker.

@@ -32,9 +32,7 @@ export const TREE_SKILL_NAMES = [
   "first-tree-onboarding",
   "first-tree-sync",
   "first-tree-write",
-  "first-tree-github-scan",
   "first-tree-cloud",
-  "github-scan",
 ] as const;
 
 /**

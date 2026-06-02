@@ -23,8 +23,6 @@ PR / doc / note and asks "what should the tree say about this?"
 | Fresh tree just onboarded; user wants initial alignment pass                            | sync                                               |
 | User says "PR #123 changed how auth works — reflect it in the tree"                     | write                                              |
 | User pastes a meeting note about an architecture decision                               | write                                              |
-| GitHub Scan agent classifies a notification as `route=write`                            | write                                              |
-| GitHub Scan agent classifies a notification as `route=sync`                             | sync                                               |
 | Sync finds a `code-not-synced/structural` gap (new dir / repo / dep / member)           | sync auto-fixes (skeleton edit)                    |
 | Sync finds a `code-not-synced/substantive` gap (new RFC / AGENTS.md section / decision) | hand off to write (always, not optional)           |
 | Write notices the same domain has other drift the user did not mention                  | finish the write task; suggest sync as a follow-up |

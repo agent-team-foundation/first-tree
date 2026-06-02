@@ -26,8 +26,7 @@ relevant. The output is a tree-repo PR linked to the source.
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
 | User pastes a PR link and says "reflect this in the tree"    | User asks "is the tree up to date?" → `first-tree-sync`                       |
 | User pastes a meeting note about a decision                  | Repo is unbound → `first-tree-onboarding` first                               |
-| User pastes raw text and asks for the tree implication       | A GitHub notification needs only a label / comment → `first-tree-github-scan` |
-| GitHub Scan agent classifies a notification as `route=write` | Audit drift since a release → `first-tree-sync`                               |
+| User pastes raw text and asks for the tree implication       | Audit drift since a release → `first-tree-sync`                               |
 
 ## The Default Stance
 

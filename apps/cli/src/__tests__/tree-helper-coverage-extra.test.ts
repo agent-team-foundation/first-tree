@@ -259,12 +259,12 @@ describe("tree helper coverage", () => {
 
   it("diagnoses Claude skill directories as non-symlink installs", () => {
     const root = makeTempDir("ft-tree-skill-diagnosis-extra-");
-    installSkill(root, "github-scan");
-    mkdirSync(join(root, ".claude", "skills", "github-scan"), { recursive: true });
+    installSkill(root, "first-tree-write");
+    mkdirSync(join(root, ".claude", "skills", "first-tree-write"), { recursive: true });
 
-    const githubScan = collectSkillDiagnosis(root).find((row) => row.name === "github-scan");
-    expect(githubScan?.problems).toContain(
-      ".claude/skills/github-scan should be a symlink to ../../.agents/skills/github-scan",
+    const writeSkill = collectSkillDiagnosis(root).find((row) => row.name === "first-tree-write");
+    expect(writeSkill?.problems).toContain(
+      ".claude/skills/first-tree-write should be a symlink to ../../.agents/skills/first-tree-write",
     );
     expect(collectSkillDiagnosis(root)).toHaveLength(SKILL_NAMES.length);
   });

@@ -45,8 +45,7 @@ first-tree
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
-├── tree ...                 Context Tree onboarding, validation, automation
-└── github scan ...          GitHub Scan daemon and inbox runtime
+└── tree ...                 Context Tree onboarding, validation, automation
 ```
 
 ---
@@ -365,32 +364,6 @@ first-tree tree
 
 Run `first-tree tree help` for the in-CLI topic index, or
 `first-tree tree <verb> --help` for each subcommand's options.
-
----
-
-## github scan
-
-The GitHub notification daemon. Polls allowed repositories, keeps a
-local inbox under `~/.first-tree/github-scan/`, and dispatches work to
-per-task agent runners.
-
-```
-first-tree github scan
-├── install                  # first-run setup; requires a tree binding and --allow-repo
-├── start                    # launch the daemon in the background
-├── stop                     # stop the daemon and remove its lock
-├── status                   # daemon lock + runtime status
-├── doctor                   # diagnose the local install
-├── watch                    # live TUI (status board + activity feed)
-├── poll                     # poll GitHub notifications once (no daemon needed)
-├── run | daemon             # foreground broker loop (humans use `start` instead)
-├── run-once                 # one poll cycle, wait for drain, exit
-└── cleanup                  # remove stale workspaces + expired claims (run only if doctor suggests)
-```
-
-Run `first-tree github scan help <command>` for command details.
-
----
 
 ## Environment variables
 

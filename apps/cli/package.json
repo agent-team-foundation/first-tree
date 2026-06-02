@@ -2,7 +2,7 @@
   "name": "first-tree-dev",
   "version": "0.5.3",
   "type": "module",
-  "description": "First Tree — unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and team messaging. (Source-tree dev build; CI rewrites `name` and `bin` for prod / staging publishes — see docs/local-dev-isolation.md.)",
+  "description": "First Tree — unified CLI for Context Tree onboarding, agent management, and team messaging. (Source-tree dev build; CI rewrites `name` and `bin` for prod / staging publishes — see docs/local-dev-isolation.md.)",
   "keywords": [
     "agents",
     "cli",
@@ -35,7 +35,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ./scripts/copy-github-scan-assets.mjs",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests"
@@ -63,7 +63,6 @@
   },
   "devDependencies": {
     "@first-tree/client": "workspace:*",
-    "@first-tree/github-scan": "workspace:*",
     "@first-tree/server": "workspace:*",
     "@first-tree/shared": "workspace:*",
     "@first-tree/web": "workspace:*",

@@ -29,9 +29,7 @@ const TREE_ONBOARDING_GUIDE = `first-tree tree help onboarding
 2. Decide whether you need a new dedicated tree repo or an existing shared tree.
 3. Use \`first-tree tree init\` for the high-level onboarding flow.
 4. If this root is a workspace, follow with \`first-tree tree workspace sync\`.
-5. Before starting \`first-tree github scan\`, make sure a binding exists in
-   the managed First Tree integration block in \`AGENTS.md\` or \`CLAUDE.md\`,
-   or pass \`--tree-repo <owner/repo>\`.
+5. Run \`first-tree tree verify\` to validate the resulting tree files.
 `;
 
 const treeSubcommands: SubcommandModule[] = [

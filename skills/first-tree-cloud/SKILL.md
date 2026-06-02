@@ -10,7 +10,7 @@ description: "Workspace collaboration skill — how an agent uses the First Tree
 
 ## Overview
 
-Use this skill to map a user's First Tree Cloud / collaboration intent onto the right `first-tree` command or code path without re-discovering the repo each time. (For Context Tree concepts / onboarding / validation, the right skill is `first-tree-context`; for the GitHub notification daemon, it's `first-tree-github-scan`. For the high-level "what is First Tree" map, see `first-tree`.) Note: the dedicated NHA / `first-tree attention` CLI was removed in PR #747 ahead of the `group-chat-unified-send` message-archetype rebuild; for now, agent-to-human asks go through plain `chat send`.
+Use this skill to map a user's First Tree Cloud / collaboration intent onto the right `first-tree` command or code path without re-discovering the repo each time. (For Context Tree concepts / onboarding / validation, the right skill is `first-tree-context`. For the high-level "what is First Tree" map, see `first-tree`.) Note: the dedicated NHA / `first-tree attention` CLI was removed in PR #747 ahead of the `group-chat-unified-send` message-archetype rebuild; for now, agent-to-human asks go through plain `chat send`.
 
 Keep the mental model straight: First Tree Cloud is the communication and identity backbone for agent teams. It is **not** the agent framework, not the orchestration engine, and not the Context Tree. First Tree Cloud has three principals:
 

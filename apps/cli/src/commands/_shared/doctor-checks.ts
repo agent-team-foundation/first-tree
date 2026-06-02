@@ -17,7 +17,7 @@ import {
 /**
  * Daemon-side readiness checks. Shared by `daemon doctor` (which renders
  * exactly this list) and the top-level `doctor` (which will append cross-
- * subsystem checks once Phase 3 wires `tree` / `github` through). Keeping
+ * subsystem checks once more package-specific checks are wired through). Keeping
  * the check list in one place means a regression / new check only gets
  * authored once.
  *

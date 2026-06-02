@@ -20,7 +20,6 @@ const registrationMocks = vi.hoisted(() => ({
   registerConfigCommands: vi.fn(),
   registerDaemonCommands: vi.fn(),
   registerDoctorCommand: vi.fn(),
-  registerGithubCommands: vi.fn(),
   registerLoginCommand: vi.fn(),
   registerLogoutCommand: vi.fn(),
   registerOrgCommands: vi.fn(),
@@ -39,7 +38,6 @@ vi.mock("../commands/chat/index.js", () => ({ registerChatCommands: registration
 vi.mock("../commands/config/index.js", () => ({ registerConfigCommands: registrationMocks.registerConfigCommands }));
 vi.mock("../commands/daemon/index.js", () => ({ registerDaemonCommands: registrationMocks.registerDaemonCommands }));
 vi.mock("../commands/doctor.js", () => ({ registerDoctorCommand: registrationMocks.registerDoctorCommand }));
-vi.mock("../commands/github/index.js", () => ({ registerGithubCommands: registrationMocks.registerGithubCommands }));
 vi.mock("../commands/login.js", () => ({ registerLoginCommand: registrationMocks.registerLoginCommand }));
 vi.mock("../commands/logout.js", () => ({ registerLogoutCommand: registrationMocks.registerLogoutCommand }));
 vi.mock("../commands/org/index.js", () => ({ registerOrgCommands: registrationMocks.registerOrgCommands }));
@@ -130,7 +128,6 @@ describe("CLI entry and public exports", () => {
         registrationMocks.registerDaemonCommands,
         registrationMocks.registerConfigCommands,
         registrationMocks.registerTreeCommands,
-        registrationMocks.registerGithubCommands,
       ].every((mock) => mock.mock.calls.length === 1),
     ).toBe(true);
 

@@ -15,7 +15,6 @@ import { registerChatCommands } from "../commands/chat/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { registerDoctorCommand } from "../commands/doctor.js";
-import { registerGithubCommands } from "../commands/github/index.js";
 import { registerLoginCommand } from "../commands/login.js";
 import { registerLogoutCommand } from "../commands/logout.js";
 import { registerOrgCommands } from "../commands/org/index.js";
@@ -30,7 +29,7 @@ const program = new Command();
 
 program
   .name(channelConfig.binName)
-  .description("First Tree — Context Tree, GitHub Scan, and agent collaboration in one CLI")
+  .description("First Tree — Context Tree and agent collaboration in one CLI")
   .version(COMMAND_VERSION)
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")
@@ -76,6 +75,5 @@ registerDaemonCommands(program);
 registerConfigCommands(program);
 
 registerTreeCommands(program);
-registerGithubCommands(program);
 
 program.parse();

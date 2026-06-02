@@ -107,8 +107,7 @@ first-tree
 ├── org ...                 Organization-level operations
 ├── daemon ...              Background daemon lifecycle
 ├── config ...              View / modify this machine's client.yaml
-├── tree ...                Context Tree onboarding, validation, automation
-└── github scan ...         GitHub Scan daemon and inbox runtime
+└── tree ...                Context Tree onboarding, validation, automation
 ```
 
 Run `first-tree <namespace> --help` for the full list under any namespace.
@@ -120,7 +119,6 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/server/` — Fastify API server (`@first-tree/server`)
 - `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
 - `packages/web/` — React web workspace (`@first-tree/web`)
-- `packages/github-scan/` — GitHub Scan daemon (`@first-tree/github-scan`)
 - `packages/e2e/` — black-box e2e harness (`@first-tree/e2e`)
 - `skills/` — repo-local skill payloads for First Tree agents
 

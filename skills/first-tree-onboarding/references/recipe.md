@@ -134,30 +134,7 @@ grep -E '^\s*industry:\s*""' <tree_root>/.first-tree/org.yaml
 
 Do not check `<tree_root>/.first-tree/progress.md` — that file is the CLI's bootstrap checklist; `tree verify` fails when any line in it is unchecked, so it must remain fully ticked.
 
-## Phase D — Daemon
-
-```bash
-gh auth status                                        # must succeed
-first-tree github scan install --allow-repo <owner>/<repo>
-first-tree github scan doctor
-```
-
-`install` performs first-run setup AND starts the daemon (launchd on macOS, systemd unit on Linux). `start` is only used to relaunch after `stop`.
-
-If `gh auth status` fails:
-
-```text
-Stop here. Tell user:
-  "GitHub Scan needs `gh` authenticated. Run:
-     gh auth login
-   Then re-run /first-tree-onboarding to resume."
-```
-
-Do not store credentials, do not bypass with PATs typed in chat.
-
-`--allow-repo` accepts comma-separated values and glob patterns (`owner/*`). Start narrow — onboarding's job is to bind one repo, not configure org-wide policy.
-
-## Phase D.5 — GitHub automation rule layer
+## Phase D — GitHub automation rule layer
 
 ```bash
 test -f <tree_root>/.github/workflows/validate.yml || \
@@ -195,8 +172,8 @@ This phase is mostly a confirmation step. The only reason to write/edit YAML her
 
 ```bash
 first-tree tree skill doctor --root <source_root>
-first-tree github scan doctor   # only if Phase D ran
 first-tree tree inspect --json   # final confirmation
+first-tree tree verify --tree-path <tree_root>
 ```
 
 If any doctor exits non-zero, **do not** print the success summary. Print the failures and stop.
@@ -214,7 +191,6 @@ Owners gate:   <skipped | pending via `first-tree tree automation install --tier
 ## What this skill never runs
 
 - `first-tree tree publish` — release flow, not onboarding. Tree publish is a separate user-driven action when they're ready to share.
-- `first-tree github scan run` / `daemon` / `run-once` — foreground/debug loops. Use `install` (which starts the launchd service) and `doctor` instead.
 - The `gh api` commands printed by `first-tree tree automation install --tier 2` — those are user-run only.
 - Direct edits to managed First Tree blocks. Re-run the relevant CLI.
 - `gh repo delete` or any destructive remote ops.

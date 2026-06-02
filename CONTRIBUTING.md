@@ -12,7 +12,6 @@ rules. Quick map:
 - `packages/server/` — Fastify API server.
 - `packages/client/` — Agent SDK + Runtime.
 - `packages/web/` — React admin dashboard.
-- `packages/github-scan/` — GitHub Scan daemon.
 - `packages/shared/` — internal Zod schemas, types, config.
 - `skills/` — per-skill markdown payloads.
 

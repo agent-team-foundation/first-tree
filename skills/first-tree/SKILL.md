@@ -20,7 +20,7 @@ arms — pick the right one before acting:
 | Arm | What it does | Sub-skills |
 |---|---|---|
 | **Workspace collaboration** | How agents talk to each other inside a shared workspace (chat send / invite, daemon, agent config). Asking humans was previously NHA / `first-tree attention`; that primitive was removed in PR #747 and is being rebuilt on top of the messages table by `group-chat-unified-send` (see proposal); for now, do agent-to-human via plain `chat send`. | `first-tree-cloud` (agent ↔ agent + machine ops) |
-| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (concepts) · `first-tree-onboarding` · `first-tree-sync` · `first-tree-write` · `first-tree-github-scan` |
+| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (concepts) · `first-tree-onboarding` · `first-tree-sync` · `first-tree-write` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
 another agent or the human in chat), then the context ops.
@@ -90,7 +90,6 @@ Once hygiene checks pass, drop into the right sub-skill:
 - Bind an unbound repo to a tree → **`first-tree-onboarding`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
 - "Reflect this PR / doc / note into the tree" (specific source given) → **`first-tree-write`**
-- Daemon spawned an agent for a GitHub notification → **`first-tree-github-scan`**
 
 Do not invent new top-level CLI groups when acting on the current repo. If a
 workflow needs more automation than the CLI already offers, keep the

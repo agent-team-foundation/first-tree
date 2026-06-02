@@ -5,13 +5,7 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../skills/**",
-        "../../packages/github-scan/assets/**",
-        "../../packages/github-scan/README.md",
-        "../../packages/github-scan/VERSION"
-      ]
+      "inputs": ["$TURBO_DEFAULT$", "../../skills/**"]
     }
   }
 }

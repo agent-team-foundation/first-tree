@@ -63,20 +63,7 @@ first-tree tree verify --tree-path <path>     # run from the source repo
 `verify` exits 0 only if the tree's structure is intact. Onboarding must not
 proceed past step 3 without a clean verify.
 
-## Phase D — GitHub Scan Daemon
-
-```bash
-first-tree github scan install --allow-repo <owner/repo>[,...]
-first-tree github scan start --allow-repo <owner/repo>[,...]
-first-tree github scan status
-first-tree github scan doctor
-first-tree github scan stop
-```
-
-`install` does both first-run setup and daemon start. `start` is for
-re-launching after `stop`. `doctor` is the read-only health check.
-
-## Phase D.5 — GitHub automation rule layer
+## Phase D — GitHub automation rule layer
 
 ```bash
 first-tree tree upgrade --tree-path <tree_root>         # only if validate.yml is missing
@@ -94,9 +81,6 @@ Phase C is agent-driven, not CLI-driven. The only commands invoked are `git -C <
 ## What Onboarding Should NEVER Run
 
 - `first-tree tree publish` — that is a release flow, not onboarding.
-- `first-tree github scan run` / `daemon` / `run-once` — those are foreground
-  loops for debugging, not the user-facing daemon path. Use `start` /
-  `install` instead.
 - The `gh api` commands printed by `first-tree tree automation install --tier 2`
   — those stay manual.
 - Any direct edit of the managed First Tree blocks in `AGENTS.md` /

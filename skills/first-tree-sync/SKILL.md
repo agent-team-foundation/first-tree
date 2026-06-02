@@ -3,7 +3,7 @@ name: first-tree-sync
 version: 0.5.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; on a freshly onboarded tree; or when a GitHub notification was routed `route=sync`. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
+description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
 ---
 
 # First Tree Sync
@@ -43,7 +43,6 @@ Each phase has a dedicated reference; follow them in order.
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-write`           |
 | Audit drift since a release                          | Repo is unbound → `first-tree-onboarding` first                                      |
-| GitHub Scan agent routed a notification `route=sync` | Notification needs a label / comment only → `first-tree-github-scan` keeps ownership |
 
 ## The Six Drift Types
 

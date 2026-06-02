@@ -79,8 +79,7 @@ break markdown rendering downstream.
 not a member is rejected — invite them first via `chat invite`. The same
 participant set applies to both the positional `<agentName>` argument of
 `chat send` and every `@<name>` token in the message body — there is no
-`--target`, `--direct`, or other side-channel flag; non-members must be
-added with `chat invite` first.
+side-channel flag; non-members must be added with `chat invite` first.
 
 ## When to use chat send vs. final text vs. nothing
 
