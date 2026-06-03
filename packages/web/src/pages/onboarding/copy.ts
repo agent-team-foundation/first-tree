@@ -133,16 +133,19 @@ export const COPY = {
      */
     troubleshootTitle: "If GitHub didn't add First Tree:",
     troubleshootBody: "Click Install again — it'll ask an org owner to approve if you're not one.",
-    /** Skip-for-now confirm: primary action keeps the user on the connect path. */
-    keepConnecting: "Keep connecting",
-    /** Skip-for-now warning. */
-    skipWarningTitle: "Skip connecting code?",
-    skipWarningBullets: [
-      "Your teammates' agents won't be able to read code (they'll hit errors)",
-      "Your first agent will start with just an intro chat",
-      "You can connect code later from Settings",
-    ],
-    skipAnyway: "Skip anyway",
+    /**
+     * Calm, always-visible reassurance shown beside the skip affordance so
+     * the choice is *informed before* clicking. Replaces the old confirm
+     * panel (a "Skip connecting code?" title + consequence bullets +
+     * Keep-connecting / Skip-anyway), which confirmshamed a legitimate,
+     * fully-recoverable choice — re-asking the question, leading with a
+     * teammates-will-hit-errors scare, and under-weighting the real exit.
+     * The "agent starts with just an intro" consequence is already stated
+     * honestly on the kickoff no-project screen, so one recovery line is
+     * enough here; the team-level consequence (invitees need the install)
+     * is caught gracefully by the invitee no-installation screen.
+     */
+    skipReassure: "You can connect code anytime from Settings.",
   },
   /** connect-computer states */
   connectComputer: {

@@ -1283,26 +1283,13 @@ describe("web DOM interaction coverage", () => {
     expect(sessionStorage.getItem("onboarding:connect-code:install-attempt")).toBeTruthy();
     expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
 
+    // Skip is one click now — a legitimate, recoverable choice goes straight
+    // through with no confirm gate (the old "Skip connecting code?" panel +
+    // Keep-connecting / Skip-anyway was confirmshaming and was removed).
+    expect(disconnected.container.textContent).toContain("You can connect code anytime from Settings.");
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
-      ) ?? null,
-    );
-    await waitForText("Skip connecting code?", disconnected.container);
-    await click(
-      [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Keep connecting"),
-      ) ?? null,
-    );
-    expect(disconnected.container.textContent).not.toContain("Skip connecting code?");
-    await click(
-      [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Skip for now"),
-      ) ?? null,
-    );
-    await click(
-      [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Skip anyway"),
       ) ?? null,
     );
     expect(disconnected.flow.goNext).toHaveBeenCalled();

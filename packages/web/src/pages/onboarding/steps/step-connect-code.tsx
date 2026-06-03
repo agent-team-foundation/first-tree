@@ -34,7 +34,6 @@ export function StepConnectCode() {
   const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
-  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
   const [postAttemptStuck, setPostAttemptStuck] = useState(false);
 
   const installQuery = useQuery({
@@ -99,8 +98,11 @@ export function StepConnectCode() {
     }
   };
 
-  const handleSkipClick = (): void => setShowSkipConfirm(true);
-  const handleSkipConfirmed = (): void => {
+  // Skipping is a legitimate, fully-recoverable choice (re-connect anytime
+  // from Settings), so it goes straight through — no confirm gate. The
+  // always-visible `skipReassure` line below the CTA makes the choice
+  // informed before the click rather than shamed after it.
+  const handleSkip = (): void => {
     window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
     goNext();
   };
@@ -137,61 +139,20 @@ export function StepConnectCode() {
             {/* Decision row: primary CTA + Skip as a quiet sibling. Both
                 actions visible side-by-side so the user sees their full set
                 of options at a glance instead of hunting for Skip in a
-                footer. */}
+                footer. Skip goes straight through (no confirm gate); the
+                muted reassurance line below keeps the choice informed. */}
             <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
               <Button type="button" onClick={() => void handleConnect()} disabled={redirecting || !organizationId}>
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
               </Button>
-              {!showSkipConfirm && (
-                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkipClick}>
-                  {COPY.skipForNow}
-                </Button>
-              )}
+              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkip}>
+                {COPY.skipForNow}
+              </Button>
             </div>
-
-            {showSkipConfirm && (
-              // Neutral contained panel — skipping is a legitimate choice, not
-              // an error/info, so no callout color. The consequences live in
-              // the bullets + button wording, not in alarming color. Button
-              // hierarchy: "Keep connecting" is primary (the encouraged path);
-              // "Skip anyway" is a quiet link, deliberately under-weighted.
-              <div
-                className="flex flex-col"
-                style={{
-                  gap: "var(--sp-2)",
-                  padding: "var(--sp-3)",
-                  borderRadius: "var(--radius-panel)",
-                  border: "var(--hairline) solid var(--border)",
-                  background: "color-mix(in oklch, var(--bg-sunken) 60%, transparent)",
-                }}
-              >
-                <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg)" }}>
-                  {COPY.connectCode.skipWarningTitle}
-                </p>
-                <ul className="text-label" style={{ margin: 0, paddingLeft: "var(--sp-4)" }}>
-                  {COPY.connectCode.skipWarningBullets.map((bullet) => (
-                    <li key={bullet} style={{ color: "var(--fg-3)" }}>
-                      {bullet}
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex items-center" style={{ gap: "var(--sp-3)", marginTop: "var(--sp-1)" }}>
-                  <Button type="button" onClick={() => setShowSkipConfirm(false)}>
-                    {COPY.connectCode.keepConnecting}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="link"
-                    className="h-auto p-0 text-label"
-                    style={{ color: "var(--fg-3)" }}
-                    onClick={handleSkipConfirmed}
-                  >
-                    {COPY.connectCode.skipAnyway}
-                  </Button>
-                </div>
-              </div>
-            )}
+            <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+              {COPY.connectCode.skipReassure}
+            </p>
 
             {installError === "generic" && (
               <FlowHint tone="error" role="alert">
