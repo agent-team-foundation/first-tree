@@ -222,7 +222,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("E4: system prompt contains new redesign sections; no legacy 'Predeclared worktrees' wording", async () => {
+  it("E4: unified briefing contains new redesign sections in AGENTS.md (CLAUDE.md symlinks to it); no legacy 'Predeclared worktrees' wording", async () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e4-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
@@ -234,26 +234,33 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
     await handler.start(makeMessage("chat-e4", "msg-e4"), buildSessionCtx("chat-e4"));
 
-    expect(capturedSdkOptions.length).toBeGreaterThan(0);
-    const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
-    const systemPrompt = lastOptions?.systemPrompt as { append?: string } | undefined;
-    expect(systemPrompt).toBeDefined();
-    const append = systemPrompt?.append ?? "";
+    // Per the unified-briefing redesign the SDK no longer carries a
+    // `systemPrompt.append` — agent identity / working-dir convention /
+    // source repos / chat context all flow through AGENTS.md (with
+    // CLAUDE.md symlinked to it). Assert against the on-disk briefing.
+    const agentsMdPath = join(workspaceRoot, "AGENTS.md");
+    const claudeMdPath = join(workspaceRoot, "CLAUDE.md");
+    expect(existsSync(agentsMdPath)).toBe(true);
+    expect(existsSync(claudeMdPath)).toBe(true);
+    const briefing = readFileSync(agentsMdPath, "utf-8");
 
     // New redesign sections — must be present.
-    expect(append).toContain("# Working Directory Convention");
-    expect(append).toContain("## Source Repositories");
-    expect(append).toContain("## Creating Worktrees On Demand");
-    expect(append).toContain("git worktree add");
-    expect(append).toContain("No worktrees are pre-created");
+    expect(briefing).toContain("# Working Directory Convention");
+    expect(briefing).toContain("## Source Repositories");
+    expect(briefing).toContain("## Creating Worktrees On Demand");
+    expect(briefing).toContain("git worktree add");
+    expect(briefing).toContain("No worktrees are pre-created");
 
-    // Top-level path of predeclared repo surfaces in prompt.
-    expect(append).toContain(join(workspaceRoot, "lib"));
+    // Top-level path of predeclared repo surfaces in the briefing.
+    expect(briefing).toContain(join(workspaceRoot, "lib"));
 
     // Legacy wording from the previous design MUST be gone.
-    expect(append).not.toContain("Predeclared worktrees");
+    expect(briefing).not.toContain("Predeclared worktrees");
     // Negation: the repo path should NOT be presented under worktrees/.
-    expect(append).not.toContain(`${workspaceRoot}/worktrees/lib`);
+    expect(briefing).not.toContain(`${workspaceRoot}/worktrees/lib`);
+
+    // CLAUDE.md symlinks to AGENTS.md — reading it yields the same payload.
+    expect(readFileSync(claudeMdPath, "utf-8")).toBe(briefing);
 
     await handler.shutdown();
     rmSync(dataDir, { recursive: true, force: true });
@@ -438,11 +445,22 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
       // cwd points at the legacy chat dir, NOT at the agent home root.
       expect(lastOptions?.cwd).toBe(legacyCwd);
 
-      // The legacy dir's existing files are untouched — we intentionally
-      // skip ensureAgentBootstrap so the v1.x layout (CLAUDE.md, identity.json)
-      // is not overwritten with new-design files.
-      expect(readFileSync(join(legacyCwd, "CLAUDE.md"), "utf-8")).toBe("legacy session prompt\n");
+      // The legacy `.agent/` layout is left alone — we still skip
+      // `ensureAgentBootstrap` so v1.x identity.json and source-repo
+      // checkouts at `<localPath>/` survive intact.
       expect(readFileSync(join(legacyCwd, ".agent", "identity.json"), "utf-8")).toBe('{"agentId":"legacy"}');
+
+      // CLAUDE.md / AGENTS.md are refreshed though — without the SDK
+      // `systemPrompt.append` channel the unified briefing MUST be
+      // materialised in the legacy cwd, otherwise the resumed session
+      // would only see the v1.x stable CLAUDE.md and lose
+      // `payload.prompt.append` / Current Chat Context. The briefing now
+      // lands as AGENTS.md, and CLAUDE.md becomes a relative symlink to it.
+      const refreshedClaudeMd = readFileSync(join(legacyCwd, "CLAUDE.md"), "utf-8");
+      expect(refreshedClaudeMd).not.toBe("legacy session prompt\n");
+      expect(refreshedClaudeMd).toContain("# Agent Identity");
+      expect(refreshedClaudeMd).toContain("# Working Directory Convention");
+      expect(readFileSync(join(legacyCwd, "AGENTS.md"), "utf-8")).toBe(refreshedClaudeMd);
 
       await handler.shutdown();
     } finally {

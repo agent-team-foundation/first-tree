@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD } from "@first-tree/shared";
 import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
+import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
@@ -32,7 +33,6 @@ const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const TURN_POLL_MS = 250;
 const TURN_GRACE_MS = 1500;
 const READY_TIMEOUT_MS = 30_000;
-const SHORT_PROMPT_INLINE_THRESHOLD = 200;
 
 type Worktree = { url: string; path: string; branchName: string };
 
@@ -106,10 +106,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let configTempDir: string | null = null;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
-  // Per-chat state captured at session start — surfaced into the
-  // --append-system-prompt block via buildChatSystemPrompt. Unlike the SDK
-  // path the TUI handler can't update the prompt between turns (claude is a
-  // persistent process), so we snapshot once per startClaude().
+  // Per-chat state captured at session start — feeds the unified briefing
+  // (AGENTS.md / CLAUDE.md symlink) that claude reads at startup via
+  // `--setting-sources user,project`. The TUI handler can't update the
+  // briefing mid-thread (claude is a persistent process holding the file
+  // contents in memory), so we snapshot once per startClaude().
   let chatContextForPrompt: ChatContext | undefined;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
@@ -128,24 +129,21 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Compose the `--append-system-prompt` content: agent-config-managed
-   * append (from payload.prompt.append) + the per-chat block built via
-   * `buildChatSystemPrompt` (working-dir convention, source repos,
-   * worktree-on-demand, chat context). Mirrors the claude-code SDK
-   * handler's `combinedAppend` — both providers feed claude through the
-   * same prompt-append channel; we just deliver it via a CLI flag instead
-   * of a Query option.
+   * Build the unified briefing for the current session — agent identity,
+   * payload.prompt.append, source-repo list, chat context, and the Context
+   * Tree / runtime sections. Materialised by {@link ensureAgentBootstrap} as
+   * `<cwd>/AGENTS.md` (with `<cwd>/CLAUDE.md` symlinked to it) before claude
+   * spawns; the CLI then loads CLAUDE.md via `--setting-sources user,project`.
    */
-  function buildPromptAppend(payload: AgentRuntimeConfigPayload, workspaceCwd: string | null): string {
-    const agentConfigAppend = payload.prompt.append?.trim() ?? "";
-    const perChatAppend = workspaceCwd
-      ? buildChatSystemPrompt({
-          agentHome: workspaceCwd,
-          chatContext: chatContextForPrompt,
-          sourceRepos: sourceReposForPrompt,
-        }).trim()
-      : "";
-    return [agentConfigAppend, perChatAppend].filter((s) => s.length > 0).join("\n\n");
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
+    return buildAgentBriefing({
+      identity: sessionCtx.agent,
+      payload,
+      chatContext: chatContextForPrompt,
+      workspacePath: workspaceCwd,
+      sourceRepos: sourceReposForPrompt,
+      contextTreePath,
+    });
   }
 
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
@@ -197,17 +195,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const tempDir = ensureConfigTempDir(workspaceCwd, sessionId);
     configTempDir = tempDir;
 
-    const promptAppend = buildPromptAppend(payload, workspaceCwd).trim();
-    if (promptAppend.length > 0) {
-      if (promptAppend.length <= SHORT_PROMPT_INLINE_THRESHOLD && !promptAppend.includes("\n")) {
-        args.push("--append-system-prompt", shellQuote(promptAppend));
-      } else {
-        const path = join(tempDir, "system-prompt-append.txt");
-        writeFileSync(path, promptAppend, "utf-8");
-        args.push("--append-system-prompt-file", shellQuote(path));
-      }
-    }
-
     if (payload.mcpServers.length > 0) {
       const mcpConfigPath = join(tempDir, "mcp-config.json");
       writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: mapMcpServers(payload) }, null, 2), "utf-8");
@@ -215,6 +202,9 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       args.push("--strict-mcp-config");
     }
 
+    // The unified briefing is delivered via `<cwd>/CLAUDE.md` (symlink to
+    // AGENTS.md) which `--setting-sources user,project` instructs claude to
+    // load at startup. No `--append-system-prompt` is needed anymore.
     args.push("--setting-sources", "user,project");
 
     return args.join(" ");
@@ -539,18 +529,26 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
         const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
-        // Per-chat material flows through the system-prompt-append channel built
-        // in `buildPromptAppend`. The stable agent-home bootstrap (CLAUDE.md
-        // briefing, core skills, Context-Tree/CLI drift pins) is the SAME shared
-        // contract the SDK handler uses — see runtime/agent-bootstrap.ts.
+        // Per-chat material flows through the unified briefing
+        // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
+        // chat-context and source repos BEFORE bootstrap so the briefing the
+        // shared `ensureAgentBootstrap` materialises is fully populated; claude
+        // then reads CLAUDE.md once on spawn via `--setting-sources project`.
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        ensureAgentBootstrap({ workspace: cwd, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
         sourceReposForPrompt = await prepareSourceRepos({
           workspace: cwd,
           payload,
           sessionCtx,
           gitMirrorManager,
           agentName,
+        });
+        ensureAgentBootstrap({
+          workspace: cwd,
+          sessionCtx,
+          contextTreePath,
+          contextTreeRepoUrl,
+          agentName,
+          briefing: buildBriefing(sessionCtx, payload, cwd),
         });
         markWorkspaceInitComplete(cwd);
 
@@ -581,16 +579,23 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        // Same shared bootstrap as start(): ensureAgentBootstrap handles the
-        // sentinel + Context-Tree/CLI drift internally, so a stale or failed
-        // integration is re-run on resume instead of being skipped.
-        ensureAgentBootstrap({ workspace: cwd, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
         sourceReposForPrompt = await prepareSourceRepos({
           workspace: cwd,
           payload,
           sessionCtx,
           gitMirrorManager,
           agentName,
+        });
+        // Same shared bootstrap as start(): ensureAgentBootstrap handles the
+        // sentinel + Context-Tree/CLI drift internally, so a stale or failed
+        // integration is re-run on resume instead of being skipped.
+        ensureAgentBootstrap({
+          workspace: cwd,
+          sessionCtx,
+          contextTreePath,
+          contextTreeRepoUrl,
+          agentName,
+          briefing: buildBriefing(sessionCtx, payload, cwd),
         });
         markWorkspaceInitComplete(cwd);
 

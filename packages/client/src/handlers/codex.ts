@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -7,31 +7,23 @@ import {
   type ToolFileRef,
 } from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
+import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import {
-  bootstrapWorkspace,
-  buildChatSystemPrompt,
-  deepEqualIdentity,
-  FIRST_TREE_WORKSPACE_MARKER,
-  generateToolsDoc,
-  installCoreSkills,
-  installFirstTreeIntegration,
-  isHubWorktreeMarker,
-  type PredeclaredSourceRepo,
-  readCachedBundledCliVersion,
-  readCachedContextTreeHead,
-  readContextTreeHead,
-  resolveBundledCliVersion,
-  writeBundledCliVersion,
-  writeContextTreeHead,
-} from "../runtime/bootstrap.js";
+import { FIRST_TREE_WORKSPACE_MARKER, isHubWorktreeMarker, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
-import { buildResourceSkillsBriefing, materializeResourceSkills } from "../runtime/resource-skills.js";
-import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import type {
+  AgentHandler,
+  AgentIdentity,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
+import { materializeResourceSkills } from "../runtime/resource-skills.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
 
@@ -324,45 +316,27 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   return opts;
 }
 
+/**
+ * Thin wrapper over the unified {@link buildAgentBriefing} kept for the
+ * codex-bootstrap test suite. Production paths call `buildAgentBriefing`
+ * directly via the inner `buildBriefing` helper inside the handler closure.
+ */
 export function buildCodexAgentBriefing(
+  identity: AgentIdentity,
   payload: AgentRuntimeConfigPayload,
   chatContext: ChatContext | undefined,
   workspaceCwd: string,
-  sourceRepos: PredeclaredSourceRepo[],
+  sourceRepos: ReadonlyArray<PredeclaredSourceRepo>,
+  contextTreePath: string | null = null,
 ): string {
-  const lines: string[] = [];
-  lines.push("# Agent Briefing");
-  lines.push("");
-  if (payload.prompt.append.trim()) {
-    lines.push(payload.prompt.append.trim());
-    lines.push("");
-  }
-  const skillsBriefing = buildResourceSkillsBriefing(workspaceCwd, payload).trim();
-  if (skillsBriefing.length > 0) {
-    lines.push(skillsBriefing);
-    lines.push("");
-  }
-  // Per agent-session-cwd-redesign: the Claude Code handler injects the
-  // working-directory convention + worktree list + chat context via the
-  // SDK's `systemPrompt.append`. Codex has no equivalent option, so we
-  // serialise the same block into AGENTS.md instead. The codex CLI reads
-  // AGENTS.md once at thread startup, so concurrent sessions for the same
-  // agent only race during the short window between bootstrap and CLI
-  // launch — accepted under proposal §⓪.3.
-  const perChatBlock = buildChatSystemPrompt({
-    agentHome: workspaceCwd,
+  return buildAgentBriefing({
+    identity,
+    payload,
     chatContext,
+    workspacePath: workspaceCwd,
     sourceRepos,
-  }).trim();
-  if (perChatBlock.length > 0) {
-    lines.push(perChatBlock);
-    lines.push("");
-  }
-  lines.push(generateToolsDoc().trim());
-  lines.push("");
-  lines.push("Refer to `.agent/identity.json` for your agent identity, and `.agent/context/`");
-  lines.push("for organisational context (when configured).");
-  return lines.join("\n").concat("\n");
+    contextTreePath,
+  });
 }
 
 function contextTreeTargetPathOf(
@@ -537,12 +511,20 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return cfg;
   }
 
-  function buildAgentBriefing(
+  function buildBriefing(
+    sessionCtx: SessionContext,
     payload: AgentRuntimeConfigPayload,
     chatContext: ChatContext | undefined,
     workspaceCwd: string,
   ): string {
-    return buildCodexAgentBriefing(payload, chatContext, workspaceCwd, sourceReposForPrompt);
+    return buildAgentBriefing({
+      identity: sessionCtx.agent,
+      payload,
+      chatContext,
+      workspacePath: workspaceCwd,
+      sourceRepos: sourceReposForPrompt,
+      contextTreePath,
+    });
   }
 
   /**
@@ -1106,148 +1088,27 @@ export const createCodexHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Install the first-tree skill + binding block; no-op when context tree is
-   * unconfigured. Returns the integration result so the caller can decide
-   * whether to pin the CLI-version drift marker (don't pin on failure or the
-   * next start skips the retry).
-   */
-  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): boolean {
-    if (!contextTreePath) return true;
-    return installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath,
-      // Workspace id identifies the agent home (per agent-session-cwd-
-      // redesign), not the chat — so the first-tree skill installs once and
-      // remains stable across every chat session of this agent.
-      workspaceId: agentName ?? sessionCtx.agent.agentId,
-      treeRepoUrl: contextTreeRepoUrl ?? undefined,
-      log: (msg) => sessionCtx.log(msg),
-    });
-  }
-
-  /**
-   * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree skill install` shell-out + briefing write) or — when the sentinel and
-   * Context-Tree HEAD match the cached state — only refresh the per-chat
-   * briefing (AGENTS.md). Mirrors the claude-code handler's
-   * `ensureAgentBootstrap` so both handlers converge on identical per-agent-
-   * home bootstrap semantics.
+   * Bootstrap wrapper around the shared {@link ensureAgentBootstrapShared}
+   * helper that adds codex's AGENTS.md concurrent-write detector.
    *
-   * 🔥 RACE WINDOW (proposal §⓪.3 accepted): unlike claude-code's
-   * `systemPrompt.append`, codex has no per-turn prompt injection. We
-   * therefore write the per-chat block (Current Chat Context, source repo
-   * list) **into AGENTS.md on every start/resume**. Two chats starting
-   * concurrently for the same agent can clobber each other's briefing
-   * between the write and the codex CLI's first read — accepted in the
-   * proposal because the window is short (millis between bootstrap and CLI
-   * spawn). If you are debugging "wrong chat context surfaces in codex",
-   * look here first.
-   *
-   * Note: AGENTS.md is **always rewritten** because it carries per-chat
-   * content (Current Chat Context, predeclared worktree list) and codex has
-   * no equivalent of Claude SDK's `appendSystemPrompt`.
+   * 🔥 RACE WINDOW (proposal §⓪.3 accepted): the codex CLI reads AGENTS.md
+   * once at thread startup, so two writers landing inside the race window
+   * mean the second writer likely clobbered the first briefing before codex
+   * read it. Claude Code has the same property now that the briefing is the
+   * single channel, but Codex still hits this most visibly because there is
+   * no per-turn prompt API to update mid-thread — debug "wrong chat context
+   * surfaces in codex" symptoms by looking here first.
    */
   function ensureCodexBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
-    // Race-window detector: every `ensureCodexBootstrap` call rewrites
-    // AGENTS.md (per-chat block always changes). The detector logs when
-    // two writes for the same workspace land inside the race window — see
-    // proposal §⓪.3. Fix lives upstream (per-turn prompt API); we surface
-    // the operational signal so "wrong chat context surfaces in codex"
-    // bugs can be triaged.
     detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
-
-    const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
-    const currentTreeHead = readContextTreeHead(contextTreePath);
-    const cachedTreeHead = readCachedContextTreeHead(workspace);
-    if (cachedTreeHead !== null && currentTreeHead === null) {
-      // PR #506 review Q1: drift detection silently fails when the head
-      // probe errors out — log the asymmetry so it isn't invisible.
-      sessionCtx.log(
-        `Context Tree HEAD probe returned null while cached value is ` +
-          `${cachedTreeHead.slice(0, 7)}; drift detection bypassed for this start`,
-      );
-    }
-    const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
-
-    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
-    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
-    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
-    // tree drift: a null on either side means "unknown" and we do not
-    // force re-bootstrap.
-    const currentCliVersion = resolveBundledCliVersion();
-    const cachedCliVersion = readCachedBundledCliVersion(workspace);
-    const cliDrifted =
-      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
-
-    if (sentinelPresent && !treeDrifted && !cliDrifted) {
-      // Fast path: identity hash check, briefing rewrite, no integrate.
-      const identityPath = join(workspace, ".agent", "identity.json");
-      const desired = {
-        agentId: sessionCtx.agent.agentId,
-        displayName: sessionCtx.agent.displayName,
-        type: sessionCtx.agent.type,
-        delegateMention: sessionCtx.agent.delegateMention,
-        metadata: sessionCtx.agent.metadata,
-        serverUrl: sessionCtx.sdk.serverUrl,
-        contextTreePath,
-      };
-      let identityMatches = false;
-      if (existsSync(identityPath)) {
-        try {
-          identityMatches = deepEqualIdentity(JSON.parse(readFileSync(identityPath, "utf-8")), desired);
-        } catch {
-          identityMatches = false;
-        }
-      }
-      // Bootstrap writes identity, context dir, tools.md, briefing (AGENTS.md),
-      // and the boundary marker. We always call it — even when identity
-      // matches — because briefing changes every session (per-chat block).
-      bootstrapWorkspace({
-        workspacePath: workspace,
-        identity: sessionCtx.agent,
-        contextTreePath,
-        serverUrl: sessionCtx.sdk.serverUrl,
-        briefing: { format: "agents-md", content: briefing },
-      });
-      if (!identityMatches) {
-        sessionCtx.log("Agent identity drift detected; .agent/ refreshed");
-      }
-      return;
-    }
-
-    if (sentinelPresent && treeDrifted) {
-      sessionCtx.log(
-        `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
-      );
-    }
-    if (sentinelPresent && cliDrifted) {
-      sessionCtx.log(
-        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
-      );
-    }
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: sessionCtx.agent,
+    ensureAgentBootstrapShared({
+      workspace,
+      sessionCtx,
       contextTreePath,
-      serverUrl: sessionCtx.sdk.serverUrl,
-      briefing: { format: "agents-md", content: briefing },
+      contextTreeRepoUrl,
+      agentName,
+      briefing,
     });
-    // Core skills ship with every agent, with or without a Context Tree.
-    // The core skill set is currently empty, so this is effectively a no-op;
-    // the wiring stays so re-introducing one needs no handler change.
-    installCoreSkills({
-      workspacePath: workspace,
-      log: (msg) => sessionCtx.log(msg),
-    });
-    const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
-    writeContextTreeHead(workspace, currentTreeHead);
-    // Only pin the CLI version when integrate actually succeeded — pinning
-    // on a failed run would silently mask the gap and the next start would
-    // skip the retry that this drift trigger exists to perform.
-    if (integrationOk) {
-      writeBundledCliVersion(workspace, currentCliVersion);
-    }
   }
 
   return {
@@ -1281,7 +1142,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       await prepareSourceRepos(payload, cwd, sessionCtx);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = buildAgentBriefing(payload, chatContext, cwd);
+      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing);
       markWorkspaceInitComplete(cwd);
 
@@ -1338,7 +1199,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       await prepareSourceRepos(payload, cwd, sessionCtx);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = buildAgentBriefing(payload, chatContext, cwd);
+      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing);
       markWorkspaceInitComplete(cwd);
 

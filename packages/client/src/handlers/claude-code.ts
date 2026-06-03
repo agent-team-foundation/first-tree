@@ -18,8 +18,9 @@ import {
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
+import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { classify } from "../runtime/error-taxonomy.js";
@@ -27,7 +28,7 @@ import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
-import { buildResourceSkillsBriefing, materializeResourceSkills } from "../runtime/resource-skills.js";
+import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { prepareSourceRepos as prepareSourceReposShared } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
@@ -511,31 +512,30 @@ export function mapMcpServers(payload: AgentRuntimeConfigPayload): Record<string
 /** Payload-derived slice of the Claude Code SDK query options. */
 export type ClaudeQueryConfigOptions = {
   model?: string;
-  systemPrompt?: { type: "preset"; preset: "claude_code"; append: string };
   mcpServers?: Record<string, McpServerConfig>;
   effort?: EffortLevel;
 };
 
 /**
- * Build the config-derived slice of the SDK query options (model, systemPrompt
- * append, MCP servers, reasoning effort). Kept pure and exported so these
- * mappings are unit-testable; the session-bound options (env, canUseTool,
- * abortController, sessionId/resume) stay inline in `buildQuery`.
+ * Build the config-derived slice of the SDK query options (model, MCP
+ * servers, reasoning effort). Kept pure and exported so these mappings are
+ * unit-testable; the session-bound options (env, canUseTool, abortController,
+ * sessionId/resume) stay inline in `buildQuery`.
+ *
+ * Per-agent prompt instructions, working-directory convention, source-repo
+ * list, and Current Chat Context land in `<cwd>/AGENTS.md` (which `CLAUDE.md`
+ * symlinks to). The Claude Code SDK loads CLAUDE.md via `settingSources:
+ * ["project"]`, so the briefing file is the single channel — there is no
+ * SDK-side `systemPrompt.append` anymore.
  *
  * Reasoning effort: the claude variant's `""` is an inherit sentinel — when
  * set we omit the `effort` option so the SDK falls back to the operator's local
  * `~/.claude/settings.json` effortLevel (preserving pre-feature behavior). A
  * non-empty value is passed explicitly and overrides that local setting.
  */
-export function buildClaudeQueryOptions(
-  payload: AgentRuntimeConfigPayload | undefined,
-  combinedAppend: string,
-): ClaudeQueryConfigOptions {
+export function buildClaudeQueryOptions(payload: AgentRuntimeConfigPayload | undefined): ClaudeQueryConfigOptions {
   const options: ClaudeQueryConfigOptions = {};
   if (payload?.model) options.model = payload.model;
-  if (combinedAppend.length > 0) {
-    options.systemPrompt = { type: "preset", preset: "claude_code", append: combinedAppend };
-  }
   if (payload?.mcpServers.length) options.mcpServers = mapMcpServers(payload);
   if (payload?.kind === "claude-code" && payload.reasoningEffort) {
     options.effort = payload.reasoningEffort;
@@ -808,12 +808,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /** Create query and input controller, then start consumer loop. */
-  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string, chatContext?: ChatContext): void {
-    // Stash the chat-context so respawn (config hot-switch retry) keeps it
-    // available without the caller having to thread it through again.
-    if (chatContext !== undefined) {
-      chatContextForPrompt = chatContext;
-    }
+  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+    // The latest chat-context and source-repo snapshot live in module-scoped
+    // caches (`chatContextForPrompt`, `sourceReposForPrompt`) which the
+    // handler refreshes in start/resume BEFORE this call. `maybeSwitchConfig`
+    // additionally rewrites the briefing before invoking `buildQuery` so a
+    // mid-session config swap surfaces in the freshly read CLAUDE.md.
     buildQuery(sessionId, sessionCtx, resume);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
@@ -937,24 +937,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
 
-    // Compose `systemPrompt.append`: agent-config-managed append (server) +
-    // per-chat block (built from the latest chatContext + predeclared
-    // worktrees). The SDK only accepts a single string here, so we
-    // concatenate with a blank-line separator. Either piece may be empty;
-    // the systemPrompt option is omitted entirely if the combined string
-    // is empty so we don't change SDK behavior for callers that never had
-    // a server-managed append.
-    const agentConfigAppend = payload?.prompt.append?.trim() ?? "";
-    const perChatAppend = cwd
-      ? buildChatSystemPrompt({
-          agentHome: cwd,
-          chatContext: chatContextForPrompt,
-          sourceRepos: sourceReposForPrompt,
-        }).trim()
-      : "";
-    const skillsAppend = cwd ? buildResourceSkillsBriefing(cwd, payload).trim() : "";
-    const combinedAppend = [agentConfigAppend, skillsAppend, perChatAppend].filter((s) => s.length > 0).join("\n\n");
-
     currentQuery = claudeQuery({
       prompt: inputController.iterable,
       options: {
@@ -967,13 +949,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         allowDangerouslySkipPermissions: true,
         // SDK 0.2.84 defaults to isolation mode — no filesystem settings are
         // read. We opt into both `user` and `project`:
-        //   - `project` loads the workspace CLAUDE.md generated by bootstrap
-        //     (agent identity + First Tree SDK usage + tools reference).
+        //   - `project` loads the workspace CLAUDE.md (symlinked to AGENTS.md
+        //     written by `writeAgentBriefing`). That single briefing carries
+        //     identity, the per-agent prompt.append, working-dir convention,
+        //     source-repo list, Current Chat Context, operating instructions,
+        //     domain map, and the First Tree Agent Runtime block — the entire
+        //     channel that used to split between SDK `systemPrompt.append` and
+        //     a stable CLAUDE.md is now this one file.
         //   - `user` inherits the operator's local `~/.claude/settings.json`
         //     so their Claude Code customizations (thinking mode, effortLevel,
         //     outputStyle, statusLine, plugins, skills, hooks, MCP servers)
         //     carry over to agent sessions on their machine. Server-managed
-        //     fields (model, systemPrompt, env, permissionMode, and the First Tree
+        //     fields (model, env, permissionMode, and the First Tree
         //     `mcpServers` list) still win because they are passed as
         //     explicit SDK options below, which layer on top of settings.
         settingSources: ["user", "project"],
@@ -983,9 +970,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // surfaces in a session.
         disallowedTools: ["AskUserQuestion"],
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
-        // model / systemPrompt / mcpServers / effort — the config-derived slice.
-        // `effort: ""` (inherit) is omitted so the SDK uses the local effortLevel.
-        ...buildClaudeQueryOptions(payload, combinedAppend),
+        // model / mcpServers / effort — the config-derived slice. `effort: ""`
+        // (inherit) is omitted so the SDK uses the local effortLevel.
+        ...buildClaudeQueryOptions(payload),
       },
     });
   }
@@ -1026,6 +1013,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // still iterating the OLD query and will exit once `oldQuery.close()`
     // drains it, so the new query would otherwise have no reader.
     sessionCtx.log(`[configHotSwitch] path=restart fromVersion=${appliedConfigVersion} toVersion=${cached.version}`);
+    // Rewrite AGENTS.md (CLAUDE.md symlink) with the new payload so the
+    // restarted SDK Query — which reads CLAUDE.md via `settingSources:
+    // ["project"]` on construction — picks up the new prompt.append. The
+    // briefing is now the single channel; without this rewrite the swap
+    // would update model/mcp/effort but silently leave the per-agent prompt
+    // at the old version until the next session restart.
+    if (cwd) {
+      writeAgentBriefing(cwd, currentBriefing(sessionCtx, cwd, newPayload));
+    }
     const sid = claudeSessionId;
     const oldQuery = currentQuery;
     buildQuery(sid, sessionCtx, sid);
@@ -1462,6 +1458,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
+   * Build the unified briefing for the current session state — agent identity,
+   * the latest `prompt.append`, source-repo list, the latest chat-context
+   * snapshot, and the Context Tree / runtime sections. The handler rebuilds
+   * this on every start/resume and on config hot-switch so AGENTS.md (and the
+   * CLAUDE.md symlink the Claude Code SDK reads) is always current.
+   */
+  function currentBriefing(
+    sessionCtx: SessionContext,
+    workspace: string,
+    payload: AgentRuntimeConfigPayload | null | undefined,
+  ): string {
+    return buildAgentBriefing({
+      identity: sessionCtx.agent,
+      payload: payload ?? null,
+      chatContext: chatContextForPrompt,
+      workspacePath: workspace,
+      sourceRepos: sourceReposForPrompt,
+      contextTreePath,
+    });
+  }
+
+  /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
    * tree skill install` shell-out). Gated by the stage-2 sentinel + Context-Tree
    * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
@@ -1469,16 +1487,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    *   - Sentinel absent → full bootstrap.
    *   - Sentinel present + Tree HEAD unchanged → cheap identity refresh only.
    *   - Sentinel present + Tree HEAD drifted → full bootstrap re-runs so the
-   *     stable CLAUDE.md and first-tree skill pick up the new tree state.
+   *     stable .agent/ layout and first-tree skill pick up the new tree state.
+   *
+   * The unified briefing is rewritten on every call regardless of the drift
+   * decision — chat context and the agent payload may have changed between
+   * sessions for the same agent home.
    *
    * `workspaceId` for the integrate shell-out is the agent name — the home
    * directory is per-agent, so the skill identity stays stable across chats.
    */
-  function ensureAgentBootstrap(workspace: string, sessionCtx: SessionContext): void {
+  function ensureAgentBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
     // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
     // and TUI handlers share one briefing / core-skill / drift-pin contract
     // rather than each maintaining a partial copy.
-    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName });
+    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName, briefing });
   }
 
   const handler: AgentHandler = {
@@ -1490,15 +1512,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // boundary marker on first call; afterwards it is a no-op.
       cwd = acquireAgentHome(workspaceRoot);
 
-      // Fetch chat-context for per-turn prompt injection (Step 4 wires it).
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      ensureAgentBootstrap(cwd, sessionCtx);
-
-      // Materialise gitRepos under `<cwd>/worktrees/<name>` before the
-      // child process starts. Failures here abort session creation (D10/D13).
+      // Resolve the per-chat inputs that drive the unified briefing BEFORE
+      // bootstrap: the briefing is the single channel that materialises agent
+      // identity, payload.prompt.append, source-repo list, and Current Chat
+      // Context for the Claude Code SDK (read via `settingSources:
+      // ["project"]` from CLAUDE.md → AGENTS.md). Bootstrap must therefore
+      // see fully-resolved inputs.
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      chatContextForPrompt = chatContext;
+      // Materialise gitRepos under `<cwd>/<localPath>/` before computing the
+      // briefing so the source-repo list reflects what the agent will see on
+      // disk. Failures here abort session creation (D10/D13).
       await prepareSourceRepos(cwd, payload, sessionCtx);
       await materializeResourceSkills(cwd, payload, sessionCtx);
+
+      const briefing = currentBriefing(sessionCtx, cwd, payload);
+      ensureAgentBootstrap(cwd, sessionCtx, briefing);
 
       // Stage-2 sentinel: written once per agent home. Future starts short-
       // circuit the expensive integrate path on its presence.
@@ -1515,7 +1545,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // `claude-code-stream-error-retry-replay.test.ts` regression.
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
       stashedSdkMessage = sdkMsg;
-      spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
+      spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(sdkMsg);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
@@ -1546,13 +1576,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           `Resume: detected pre-redesign SDK transcript at legacy cwd ${legacyCwd}; ` +
             "running this session under the legacy per-chat layout to preserve agent memory",
         );
+        const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
         const chatContext = await fetchChatContextOrLog(sessionCtx);
+        chatContextForPrompt = chatContext;
         // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
         // markWorkspaceInitComplete here — those write the new agent-home
-        // layout, which would pollute the legacy chat dir. The dir already
-        // carries the v1.x bootstrap output (CLAUDE.md, AGENTS.md, .agent/,
-        // <localPath>/ source repos), and the agent reads it via the SDK's
-        // `settingSources: ["project"]` option.
+        // layout, which would pollute the legacy chat dir's v1.x `.agent/`
+        // and `<localPath>/` source repos.
+        //
+        // We DO refresh the briefing (writeAgentBriefing only touches the
+        // AGENTS.md file + CLAUDE.md symlink, not `.agent/` or source repos)
+        // because under the unified-briefing redesign the SDK no longer has
+        // a `systemPrompt.append` path — without this rewrite a legacy resume
+        // would only see the stale v1.x stable CLAUDE.md, dropping the
+        // current `prompt.append`, resource-skill briefing, and Current Chat
+        // Context the previous per-turn SDK append used to deliver.
+        // `sourceReposForPrompt` stays `[]` here on purpose: we don't run
+        // `prepareSourceRepos` against the legacy cwd, so the briefing's
+        // Source Repositories section is omitted for legacy resumes. The
+        // agent still finds the v1.x checkouts at their original `<localPath>/`
+        // — just without a top-level enumeration in the prompt.
+        writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
         // through `respawnQuery`.
@@ -1561,7 +1605,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
           stashedSdkMessage = sdkMsg;
         }
-        spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+        spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
           inputController?.push(sdkMsg);
         }
@@ -1577,12 +1621,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // sentinel gates the expensive integrate. The cheap stable-identity
       // hash check runs every time so agent rename / inboxId changes
       // propagate even after the sentinel is set (R5 in the proposal).
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      ensureAgentBootstrap(cwd, sessionCtx);
-
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      chatContextForPrompt = chatContext;
       await prepareSourceRepos(cwd, payload, sessionCtx);
       await materializeResourceSkills(cwd, payload, sessionCtx);
+
+      const briefing = currentBriefing(sessionCtx, cwd, payload);
+      ensureAgentBootstrap(cwd, sessionCtx, briefing);
 
       markWorkspaceInitComplete(cwd);
 
@@ -1602,7 +1648,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
           stashedSdkMessage = freshSdkMsg;
         }
-        spawnQuery(freshSessionId, sessionCtx, undefined, chatContext);
+        spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
         }
@@ -1617,7 +1663,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
         stashedSdkMessage = resumeSdkMsg;
       }
-      spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+      spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
       }
