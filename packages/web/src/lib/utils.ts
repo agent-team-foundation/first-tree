@@ -1,5 +1,24 @@
 import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// The design system defines its typography scale (text-eyebrow … text-display)
+// as Tailwind v4 @theme font-size utilities — see the `@theme inline` block in
+// index.css. tailwind-merge's default config doesn't know these custom names, so
+// it misclassifies them as text-COLOR utilities. When a class string carries both
+// a color (e.g. `text-primary-foreground`) and a size (e.g. `text-label`, added by
+// Button size="sm"/"xs"), the default twMerge thinks they conflict and drops the
+// earlier color class — leaving small filled buttons with no text color (they then
+// inherit --fg → dark-on-dark). Registering the scale in the `font-size` group keeps
+// size and color in separate conflict groups so both survive.
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [
+        { text: ["eyebrow", "caption", "label", "body", "subtitle", "title", "lead", "headline", "display"] },
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
