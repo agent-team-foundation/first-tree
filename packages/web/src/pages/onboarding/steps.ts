@@ -23,6 +23,23 @@
 export const ADMIN_STEPS = ["team", "connect-computer", "create-agent", "connect-code", "kickoff"] as const;
 export const INVITEE_STEPS = ["welcome", "connect-computer", "create-agent", "kickoff"] as const;
 
+/**
+ * The subset of steps the progress indicator actually tracks: the real
+ * hands-on configuration work. The opening step (`team` / `welcome`) and the
+ * closing `kickoff` are journey *bookends* — an orientation page and a
+ * completion celebration, not tasks — so they're deliberately excluded.
+ *
+ * Why this matters for the indicator: counting "name your team" or "say hello
+ * and start" as steps reads them as chores and reinflates the task-list
+ * pressure the wizard is trying to shed. With the bookends dropped the bar
+ * shows admin 3 / invitee 2 — small enough that "how much is left" stops being
+ * a source of anxiety. The bookends still render full screens; they just don't
+ * carry a progress bar (the opening page previews the journey in prose
+ * instead, the celebration page stays rail-free for a cleaner finish).
+ */
+export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent", "connect-code"] as const;
+export const INVITEE_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
+
 export type AdminStepId = (typeof ADMIN_STEPS)[number];
 export type InviteeStepId = (typeof INVITEE_STEPS)[number];
 export type StepId = AdminStepId | InviteeStepId;
@@ -31,8 +48,6 @@ export type OnboardingPath = "admin" | "invitee";
 
 /** Server-inferred coarse onboarding state from `/me` (see api/me.ts). */
 export type ServerOnboardingStep = "connect" | "create_agent" | "completed" | null;
-
-export type StepVisualState = "complete" | "active" | "pending";
 
 /**
  * Resolve which path the user is on. The team creator is the org admin; a
@@ -98,15 +113,29 @@ export function clampStepIndex(path: OnboardingPath, index: number): number {
   return index;
 }
 
+/** The config-step subset for a path (the steps the progress bar tracks). */
+export function getConfigSteps(path: OnboardingPath): readonly StepId[] {
+  return path === "admin" ? ADMIN_CONFIG_STEPS : INVITEE_CONFIG_STEPS;
+}
+
+export type StepProgress = {
+  /** 0-based position of the active step among the config steps. */
+  index: number;
+  /** How many config steps this path has (3 for admin, 2 for invitee). */
+  total: number;
+};
+
 /**
- * Visual state for the stepper pip at `index`, given the active index.
- * The flow is a linear wizard: everything before the cursor is done,
- * everything after is not yet reachable.
+ * Where `step` sits in the progress bar, or `null` when it's a bookend
+ * (`team` / `welcome` / `kickoff`) the bar doesn't track — the indicator
+ * renders nothing on those screens. Pure so the React layer stays a thin map
+ * from this result to segments + a "Step N of M" label.
  */
-export function stepVisualState(index: number, activeIndex: number): StepVisualState {
-  if (index < activeIndex) return "complete";
-  if (index === activeIndex) return "active";
-  return "pending";
+export function resolveStepProgress(path: OnboardingPath, step: StepId): StepProgress | null {
+  const steps = getConfigSteps(path);
+  const index = steps.indexOf(step);
+  if (index < 0) return null;
+  return { index, total: steps.length };
 }
 
 export type OnboardingGateFacts = {

@@ -35,16 +35,7 @@ vi.mock("../onboarding-flow.js", () => ({
 }));
 
 vi.mock("../onboarding-shell.js", () => ({
-  OnboardingShell: ({ rail, children }: { rail: ReactNode; children: ReactNode }) => (
-    <main>
-      <aside>{rail}</aside>
-      {children}
-    </main>
-  ),
-}));
-
-vi.mock("../progress-rail.js", () => ({
-  ProgressRail: () => <nav>Progress Rail</nav>,
+  OnboardingShell: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }));
 
 vi.mock("../steps/step-connect-code.js", () => ({
@@ -154,7 +145,6 @@ describe("OnboardingPage", () => {
       authMock.value = { ...authMock.value, role };
       const container = await renderRoute(<OnboardingPage />);
 
-      expect(container.textContent).toContain("Progress Rail");
       expect(container.textContent).toContain(label);
       expect(container.querySelector(`[data-flow-path="${path}"]`)).toBeTruthy();
       await cleanupRoot();
@@ -166,7 +156,6 @@ describe("OnboardingPage", () => {
 
     const container = await renderRoute(<OnboardingPage />);
 
-    expect(container.textContent).toContain("Progress Rail");
     expect(container.textContent).not.toContain("Step");
   });
 });

@@ -6,7 +6,7 @@ import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { COPY } from "../copy.js";
-import { FlowNote } from "../flow-ui.js";
+import { FlowHint } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -78,26 +78,35 @@ export function StepTeam() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      {/* No visible <label> — the step title ("Name your team") and the
-          field's `aria-label` already name the input. Repeating "Team name"
-          here was visual noise on a single-input page. */}
-      <Input
-        ref={inputRef}
-        id="onboarding-team-name"
-        aria-label="Team name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        maxLength={200}
-        disabled={saving}
-      />
+      {/* The welcome's first action: name the team. A visible label now names
+          the field (the step title is the greeting, not the field label), with
+          the "shared space" reassurance as a hint underneath. */}
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+        <label htmlFor="onboarding-team-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
+          {COPY.team.nameLabel}
+        </label>
+        <Input
+          ref={inputRef}
+          id="onboarding-team-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+          disabled={saving}
+        />
+        <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+          {COPY.team.renameHint}
+        </p>
+      </div>
 
       {(saveError || loadError) && (
-        <FlowNote>{saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}</FlowNote>
+        <FlowHint tone="error" role="alert">
+          {saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}
+        </FlowHint>
       )}
 
       <div className="flex">
         <Button type="submit" disabled={!canSubmit}>
-          <span>{COPY.continue}</span>
+          <span>{COPY.getStarted}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

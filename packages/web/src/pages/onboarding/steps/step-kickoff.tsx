@@ -12,7 +12,7 @@ import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { CommandBox, FlowNote, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
+import { CommandBox, FlowHint, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
@@ -185,11 +185,15 @@ function AdminKickoff() {
       <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
         <StepHeading title={COPY.kickoff.noProjectTitle} />
         <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-          <FlowNote tone="info">{COPY.kickoff.noProjectBody}</FlowNote>
-          {error && <FlowNote>{error}</FlowNote>}
+          <FlowHint>{COPY.kickoff.noProjectBody}</FlowHint>
+          {error && (
+            <FlowHint tone="error" role="alert">
+              {error}
+            </FlowHint>
+          )}
           <div className="flex">
             <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-              <span>{COPY.kickoff.start}</span>
+              <span>{COPY.kickoff.startChatting}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -233,7 +237,11 @@ function AdminKickoff() {
                 {COPY.kickoff.autoDetectedNote}
               </p>
             ) : null}
-            {urlInvalid && <FlowNote>{COPY.kickoff.invalidUrl}</FlowNote>}
+            {urlInvalid && (
+              <FlowHint tone="error" role="alert">
+                {COPY.kickoff.invalidUrl}
+              </FlowHint>
+            )}
             <Button
               type="button"
               variant="link"
@@ -257,10 +265,14 @@ function AdminKickoff() {
             {COPY.kickoff.haveExisting}
           </Button>
         )}
-        {error && <FlowNote>{error}</FlowNote>}
+        {error && (
+          <FlowHint tone="error" role="alert">
+            {error}
+          </FlowHint>
+        )}
         <div className="flex">
-          <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
-            <span>{COPY.kickoff.start}</span>
+          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
+            <span>{COPY.kickoff.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -438,13 +450,17 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
             </SelectableRow>
           ))}
         </div>
-        {error && <FlowNote>{error}</FlowNote>}
+        {error && (
+          <FlowHint tone="error" role="alert">
+            {error}
+          </FlowHint>
+        )}
         {/* Primary is never disabled by deselect-all; the bailout link
             preserves the "continue with intro only" path so users can't
             soft-lock themselves. */}
         <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
           <Button type="button" variant="cta" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
-            <span>{COPY.kickoff.start}</span>
+            <span>{COPY.kickoff.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
           <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
@@ -504,33 +520,38 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
             Loading your projects…
           </p>
         ) : scopeMissing ? (
-          <FlowNote tone="info">
-            <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-              <span>{COPY.kickoff.inviteePickerScopeMissing}</span>
-              <a
-                href="/api/v1/auth/github/start?next=/onboarding"
-                className="font-medium self-start"
-                style={{ color: "var(--primary)" }}
-              >
-                {COPY.connectCode.reconnect}
-              </a>
-            </div>
-          </FlowNote>
+          <FlowHint>
+            {COPY.kickoff.inviteePickerScopeMissing}{" "}
+            <a
+              href="/api/v1/auth/github/start?next=/onboarding"
+              className="font-medium"
+              style={{ color: "var(--primary)" }}
+            >
+              {COPY.connectCode.reconnect}
+            </a>
+          </FlowHint>
         ) : networkErr ? (
-          <FlowNote>{COPY.kickoff.inviteePickerNetworkError}</FlowNote>
+          <FlowHint tone="error" role="alert">
+            {COPY.kickoff.inviteePickerNetworkError}
+          </FlowHint>
         ) : empty ? (
-          <FlowNote tone="info">{COPY.kickoff.inviteePickerEmpty}</FlowNote>
+          <FlowHint>{COPY.kickoff.inviteePickerEmpty}</FlowHint>
         ) : (
           <RepoPicker repos={reposQuery.data ?? []} selected={selected} onToggle={toggle} fill />
         )}
-        {error && <FlowNote>{error}</FlowNote>}
+        {error && (
+          <FlowHint tone="error" role="alert">
+            {error}
+          </FlowHint>
+        )}
         <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
           <Button
             type="button"
+            variant="cta"
             onClick={() => void handleStart(selected)}
             disabled={!hasRepos || selected.length === 0}
           >
-            <span>{COPY.kickoff.start}</span>
+            <span>{COPY.kickoff.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
           {/* Always visible — covers empty, scope-missing, network, AND
@@ -549,9 +570,11 @@ function InviteeWaiting() {
   const { finishLater } = useOnboardingFlow();
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.invitee.waitingTitle} />
+      {/* The heading (title + why) carries this blocked screen; the body text
+          moved into the why so it's properly weighted, not a lone light line.
+          The pulsing StatusRow carries the "still alive / watching" signal. */}
+      <StepHeading title={COPY.invitee.waitingTitle} why={COPY.invitee.waitingBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <FlowNote tone="info">{COPY.invitee.waitingBody}</FlowNote>
         {/* Visible polling so the user trusts the page is alive — the
             previous "no status" state had users wondering if it was
             stuck. */}
@@ -589,9 +612,10 @@ function InviteeNoInstallation() {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.invitee.noInstallTitle} />
+      {/* Heading (title + why) carries the screen; the body moved into the why.
+          Pulse = liveness; the share-link block below is the real action. */}
+      <StepHeading title={COPY.invitee.noInstallTitle} why={COPY.invitee.noInstallBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <FlowNote tone="info">{COPY.invitee.noInstallBody}</FlowNote>
         <StatusRow state="waiting" label={COPY.invitee.noInstallStatus} />
 
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>

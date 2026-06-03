@@ -1,5 +1,5 @@
 import type { ClientCapabilities } from "@first-tree/shared";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";
 import { api } from "../../api/client.js";
 import { runVisibilityAwareInterval } from "../../lib/visibility-interval.js";
@@ -29,9 +29,15 @@ export type ComputerConnection = {
   setSelectedRuntime: (next: string | null) => void;
   /** The full multi-line command the user pastes into their terminal. */
   cliCommand: string | null;
-  /** Non-null when minting the connect token failed. */
+  /** Non-null when minting the connect token failed (after silent retries). */
   tokenError: string | null;
+  /** Manually re-attempt minting the connect token (clears `tokenError`). */
+  retry: () => void;
 };
+
+/** Silent auto-retries before surfacing a token-mint failure to the user. */
+const TOKEN_MINT_ATTEMPTS = 3;
+const TOKEN_MINT_BACKOFF_MS = [600, 1500];
 
 function pickPreferredRuntime(caps: ClientCapabilities): string | null {
   const ok = (provider: string) => caps[provider]?.state === "ok";
@@ -50,6 +56,8 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
   const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  // Bumped by retry() to force a fresh mint attempt from the effect below.
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const capabilitiesClientIdRef = useRef<string | null>(null);
   const detectSeqRef = useRef(0);
@@ -100,6 +108,9 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
   }, [enabled]);
 
   // Mint / refresh the connect token while no computer is connected yet.
+  // retryNonce in the deps is an intentional re-run trigger (bumped by retry()
+  // after a failure); it isn't read inside, hence the suppression.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate trigger dep
   useEffect(() => {
     if (!enabled) return;
     if (connectedClient) return;
@@ -117,25 +128,49 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
     }
     let cancelled = false;
     void (async () => {
-      try {
-        const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
-          "/me/connect-tokens",
-          {},
-        );
-        if (!cancelled) {
+      // Most token-mint failures are a momentary blip (network, server warming
+      // up), so retry silently a couple of times before showing the user an
+      // error — they usually never see one. Only the final failure surfaces.
+      setTokenError(null);
+      for (let attempt = 0; attempt < TOKEN_MINT_ATTEMPTS; attempt++) {
+        if (cancelled) return;
+        try {
+          const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
+            "/me/connect-tokens",
+            {},
+          );
+          if (cancelled) return;
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
           setBootstrapCommand(r.bootstrapCommand);
           setTokenError(null);
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          if (attempt === TOKEN_MINT_ATTEMPTS - 1) {
+            setTokenError(err instanceof Error ? err.message : "Failed to generate connect command");
+            return;
+          }
+          // Silent backoff before the next attempt.
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, TOKEN_MINT_BACKOFF_MS[attempt] ?? 1500);
+          });
         }
-      } catch (err) {
-        if (!cancelled) setTokenError(err instanceof Error ? err.message : "Failed to generate connect command");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [enabled, connectedClient, connectToken, connectTokenExpiresAt]);
+  }, [enabled, connectedClient, connectToken, connectTokenExpiresAt, retryNonce]);
+
+  // Manual retry from the error UI: clear the error + token so the mint effect
+  // re-runs from scratch.
+  const retry = useCallback(() => {
+    setTokenError(null);
+    setConnectToken(null);
+    setConnectTokenExpiresAt(null);
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   const activeCapabilities = connectedClient && capabilitiesClientId === connectedClient.id ? capabilities : null;
 
@@ -165,5 +200,6 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
     setSelectedRuntime,
     cliCommand,
     tokenError,
+    retry,
   };
 }

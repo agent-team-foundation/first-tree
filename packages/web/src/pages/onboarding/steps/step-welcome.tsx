@@ -4,11 +4,10 @@ import { COPY } from "../copy.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
- * Invitee step 1: a warm landing that names the team they just joined and
- * sets expectations for the two quick steps ahead (connect a computer,
- * create their agent). No setup work here — just orientation so the
- * jump from "I clicked an invite link" to "I'm configuring things" isn't
- * jarring.
+ * Invitee step 1: a warm landing that names the team they just joined. One
+ * personalized line — no setup work, no step list (the progress bar names
+ * where they are once they start) — so the jump from "I clicked an invite
+ * link" to "I'm configuring things" isn't jarring.
  */
 export function StepWelcome() {
   const { teamDisplayName, goNext } = useOnboardingFlow();
@@ -19,14 +18,11 @@ export function StepWelcome() {
         <span className="font-semibold" style={{ color: "var(--fg)" }}>
           {teamDisplayName ?? "your team"}
         </span>
-        . Your team's projects and Context Tree are already set up — you just need your own agent.
-      </p>
-      <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
-        Two quick steps: connect a computer for it to run on, then give it a name.
+        . It's all set up — you just need your own agent.
       </p>
       <div className="flex">
         <Button type="button" onClick={goNext}>
-          <span>{COPY.continue}</span>
+          <span>{COPY.getStarted}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

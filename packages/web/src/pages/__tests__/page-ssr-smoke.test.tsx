@@ -743,6 +743,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
       setSelectedRuntime: () => undefined,
       cliCommand: "npm install -g first-tree\nfirst-tree login connect-token",
       tokenError: null,
+      retry: () => undefined,
     },
     agentDisplayName: "Gandy's assistant",
     setAgentDisplayName: () => undefined,
@@ -1218,7 +1219,9 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Install Node.js");
     expect(html).toContain("Choose your projects");
 
-    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain("Team name");
+    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
+      "What should we call your team?",
+    );
     expect(await renderOnboardingStep(<StepWelcome />, { path: "invitee", activeStep: "welcome" })).toContain("Acme");
     expect(await renderOnboardingStep(<StepConnectComputer />, { activeStep: "connect-computer" })).toContain(
       "gandy-macbook",

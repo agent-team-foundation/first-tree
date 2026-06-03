@@ -4,7 +4,7 @@ import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
 import { COPY } from "../copy.js";
-import { FlowNote, WorkingState } from "../flow-ui.js";
+import { FlowHint, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 // Copy mirrors the New Agent dialog's Visibility block so the two
@@ -61,7 +61,12 @@ export function StepCreateAgent() {
         <p className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
           {COPY.createAgent.timeoutTitle}
         </p>
-        <FlowNote tone="info">{COPY.createAgent.timeoutBody}</FlowNote>
+        {/* Light treatment (consistent with the connect-computer states): the
+            heading already signals the problem, so the body is a plain line,
+            not a saturated callout box. */}
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          {COPY.createAgent.timeoutBody}
+        </p>
         <div className="flex">
           <Button type="button" onClick={() => void retryAgent()}>
             {COPY.createAgent.retry}
@@ -99,7 +104,7 @@ export function StepCreateAgent() {
 
       <fieldset className="flex flex-col" style={{ gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}>
         <legend className="text-label font-medium" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
-          Visibility
+          Who can use it?
         </legend>
         {/* Reuses the dialog's OptionCard so the selection visual matches
             exactly: same faint border selected/unselected, a neutral filled
@@ -119,11 +124,16 @@ export function StepCreateAgent() {
         ))}
       </fieldset>
 
-      {agentError && <FlowNote>{COPY.errors.agentFailed}</FlowNote>}
+      {agentError && (
+        // Light inline error; the Create button right below is the retry.
+        <FlowHint tone="error" role="alert">
+          {COPY.errors.agentFailed}
+        </FlowHint>
+      )}
 
       <div className="flex">
         <Button type="button" variant="cta" onClick={handleCreate} disabled={!canCreate}>
-          <span>Create {trimmed || "your agent"}</span>
+          <span>Create {trimmed || "an agent"}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

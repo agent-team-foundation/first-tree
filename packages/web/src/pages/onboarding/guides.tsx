@@ -9,9 +9,20 @@ import { COPY } from "./copy.js";
  * reader support; the only motion (chevron rotation, terminal caret) is
  * stilled under prefers-reduced-motion via index.css.
  */
-export function ShowMeHow({ label = "Show me how", children }: { label?: string; children: ReactNode }) {
+export function ShowMeHow({
+  label = "Need help?",
+  open,
+  onToggle,
+  children,
+}: {
+  label?: string;
+  /** Controlled open state. Omit for an uncontrolled (native) disclosure. */
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  children: ReactNode;
+}) {
   return (
-    <details className="onboarding-show-me-how">
+    <details className="onboarding-show-me-how" open={open} onToggle={(e) => onToggle?.(e.currentTarget.open)}>
       <summary
         className="inline-flex items-center text-label font-medium"
         style={{ gap: "var(--sp-1)", color: "var(--primary)" }}
@@ -21,6 +32,41 @@ export function ShowMeHow({ label = "Show me how", children }: { label?: string;
       </summary>
       <div style={{ marginTop: "var(--sp-3)" }}>{children}</div>
     </details>
+  );
+}
+
+/**
+ * Troubleshooting block for the Connect-computer "Need help?" disclosure:
+ * a neutral-titled list of "why it might not be connecting" reasons + the
+ * Node.js install link. Distinct from the shared `ConnectStuckPanel` (which
+ * the Settings → Computers dialog still uses, auto-shown only after the
+ * stuck timeout) — here it lives inside the disclosure with a state-neutral
+ * title, since the user can open Need help? proactively, not only when stuck.
+ */
+export function ConnectTroubleshooting() {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
+      <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+        {COPY.connectComputer.troubleshootTitle}
+      </p>
+      <ul className="flex flex-col" style={{ gap: "var(--sp-1_5)", margin: 0, paddingLeft: "var(--sp-4)" }}>
+        {COPY.connectComputer.stuckReasons.map((reason) => (
+          <li key={reason} className="text-label" style={{ color: "var(--fg-3)" }}>
+            {reason}
+          </li>
+        ))}
+      </ul>
+      <a
+        href={COPY.connectComputer.nodeUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center text-label font-medium self-start"
+        style={{ gap: "var(--sp-1)", color: "var(--primary)" }}
+      >
+        {COPY.connectComputer.nodeLinkLabel}
+        <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+      </a>
+    </div>
   );
 }
 
@@ -133,23 +179,13 @@ export function TerminalGuide() {
       </div>
       <GuideSteps
         steps={[
-          "On a Mac: open the app called Terminal. On Windows: press the Start button, type PowerShell, and open it.",
-          "Paste the command above and press Enter.",
-          "When it finishes, this page updates to “connected” on its own.",
+          "Open Terminal (Mac) or PowerShell (Windows).",
+          "Paste the command and press Enter.",
+          "This page switches to “connected” on its own.",
         ]}
       />
-      <p className="text-label" style={{ margin: "var(--sp-3) 0 0", color: "var(--fg-4)" }}>
-        First time? Your computer may need Node.js (a free, one-time install) before the command works:{" "}
-        <a
-          href={COPY.connectComputer.nodeUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium"
-          style={{ color: "var(--primary)" }}
-        >
-          {COPY.connectComputer.nodeLinkLabel}
-        </a>
-      </p>
+      {/* The Node.js install hint lives in <ConnectTroubleshooting> now (one
+          home for it), so it isn't repeated here. */}
     </div>
   );
 }
@@ -202,6 +238,26 @@ export function InstallGuide() {
           "GitHub sends you straight back here to keep going.",
         ]}
       />
+    </div>
+  );
+}
+
+/**
+ * Troubleshooting block for the connect-code "Need help?" disclosure (paired
+ * with InstallGuide), mirroring ConnectTroubleshooting on connect-computer:
+ * a neutral-titled "if the install didn't go through" line. The disclosure
+ * auto-opens when the user returns from GitHub without an installation, so the
+ * two steps give the same "stuck → help opens" experience.
+ */
+export function InstallTroubleshooting() {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-4)" }}>
+      <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+        {COPY.connectCode.troubleshootTitle}
+      </p>
+      <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+        {COPY.connectCode.troubleshootBody}
+      </p>
     </div>
   );
 }

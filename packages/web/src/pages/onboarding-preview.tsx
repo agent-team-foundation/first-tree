@@ -8,7 +8,6 @@ import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeMode } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
-import { ProgressRail } from "./onboarding/progress-rail.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
@@ -104,6 +103,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   tokenError: {
     connectedClient: null,
@@ -113,6 +113,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: null,
     tokenError: "Failed to generate connect command",
+    retry: NOOP,
   },
   detecting: {
     connectedClient: HOST,
@@ -122,6 +123,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   noRuntime: {
     connectedClient: HOST,
@@ -131,6 +133,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
   ready: {
     connectedClient: HOST,
@@ -140,6 +143,7 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
     tokenError: null,
+    retry: NOOP,
   },
 };
 
@@ -171,6 +175,14 @@ type NetProfile = {
   contextTree?: string | null | "pending";
   /** GET /orgs/:id/settings/source_repos → { repos: [{ url }] } */
   sourceRepos?: string[];
+  /**
+   * GET /orgs/:id/github-app-installation/install-url — when set, the install
+   * URL mint fails with this status, so clicking "Install First Tree on GitHub"
+   * surfaces the matching installError state (503 → not_configured, 403 →
+   * not_admin, else → generic). Omit it and the call falls through (real
+   * fetch), so only the error scenarios opt in.
+   */
+  installUrlError?: 403 | 503 | 500;
 };
 
 // The active scenario's net profile, read by the shim. Set during render of the
@@ -209,6 +221,11 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   }
   if (p === `/orgs/${ORG_ID}/github-app-installation/exists`) {
     return jsonResponse({ exists: !!activeNet.installExists });
+  }
+  if (p === `/orgs/${ORG_ID}/github-app-installation/install-url`) {
+    // Only intercept when a scenario opts into an install-url failure;
+    // otherwise fall through (a successful mint would navigate the preview away).
+    return activeNet.installUrlError ? statusResponse(activeNet.installUrlError) : null;
   }
   if (p === `/orgs/${ORG_ID}/settings/context_tree`) {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
@@ -254,7 +271,17 @@ type WizardSpec = {
   net?: NetProfile;
   /** Override the rendered body (used for transient working states). */
   body?: ReactNode;
+  /**
+   * Seed the connect-code "returned from GitHub without an install" marker so
+   * the post-attempt stuck path fires (auto-opens Need help? after the
+   * component's short delay). Mirrors the per-tab key StepConnectCode sets.
+   */
+  seedInstallAttempt?: boolean;
 };
+
+// Per-tab marker StepConnectCode reads to detect "came back without an install"
+// (kept in sync with the literal in step-connect-code.tsx).
+const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
 
 type Scenario = {
   id: string;
@@ -292,7 +319,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-cc-noruntime",
-    label: "Connected · no AI engine",
+    label: "Connected · no AI tool",
     group: "2 · Connect computer",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
@@ -343,6 +370,34 @@ const SCENARIOS: Scenario[] = [
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false } },
+  },
+  {
+    id: "admin-code-err-notconfigured",
+    label: "Install error · not configured (click Install)",
+    group: "4 · Connect code",
+    role: "admin",
+    wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
+  },
+  {
+    id: "admin-code-err-notadmin",
+    label: "Install error · not a team admin (click Install)",
+    group: "4 · Connect code",
+    role: "admin",
+    wizard: { step: "connect-code", net: { installed: false, installUrlError: 403 } },
+  },
+  {
+    id: "admin-code-err-generic",
+    label: "Install error · generic (click Install)",
+    group: "4 · Connect code",
+    role: "admin",
+    wizard: { step: "connect-code", net: { installed: false, installUrlError: 500 } },
+  },
+  {
+    id: "admin-code-stuck",
+    label: "Came back without install (stuck → Need help)",
+    group: "4 · Connect code",
+    role: "admin",
+    wizard: { step: "connect-code", net: { installed: false }, seedInstallAttempt: true },
   },
   {
     id: "admin-code-loading",
@@ -551,7 +606,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "inv-cc-noruntime",
-    label: "Connected · no AI engine",
+    label: "Connected · no AI tool",
     group: "2 · Connect computer",
     role: "invitee",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
@@ -769,7 +824,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   return (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={flow}>
-        <OnboardingShell rail={<ProgressRail />}>{spec.body ?? <StepBody step={spec.step} />}</OnboardingShell>
+        <OnboardingShell>{spec.body ?? <StepBody step={spec.step} />}</OnboardingShell>
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );
@@ -796,6 +851,12 @@ export function OnboardingPreviewPage() {
   // subtree below mounts and fetches. Render is synchronous and parent-first,
   // so the shim sees the right profile by the time the step components fetch.
   activeNet = active?.wizard?.net ?? {};
+  // Seed / clear the connect-code post-attempt marker for the matching scenario
+  // (synchronous, before the keyed child mounts and its effect reads it).
+  if (typeof window !== "undefined") {
+    if (active?.wizard?.seedInstallAttempt) window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, "preview");
+    else window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
+  }
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg)" }}>

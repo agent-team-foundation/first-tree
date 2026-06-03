@@ -16,28 +16,9 @@
  * (no marketing word slips a banned term past review).
  */
 
-import type { OnboardingPath, StepId } from "./steps.js";
-
-/**
- * A string that can either apply to both paths, or differ per path.
- * Use the object form when admin and invitee should see different copy on
- * the same logical step (currently only `kickoff` needs this — admin builds
- * a Context Tree, invitee just kicks off their own work).
- */
-export type PathScopedString = string | { admin: string; invitee: string };
-
-export function resolvePathScoped(value: PathScopedString, path: OnboardingPath): string {
-  return typeof value === "string" ? value : value[path];
-}
-
-/** Convenience: pull a step's rail label for the given path. */
-export function resolveStepLabel(step: StepId, path: OnboardingPath): string {
-  return resolvePathScoped(STEP_COPY[step].label, path);
-}
+import type { StepId } from "./steps.js";
 
 export type StepCopy = {
-  /** Short label shown in the left progress rail. May vary by path. */
-  label: PathScopedString;
   /** Heading at the top of the content column. */
   title: string;
   /** One plain-language sentence: why this step exists. */
@@ -46,36 +27,43 @@ export type StepCopy = {
 
 export const STEP_COPY: Record<StepId, StepCopy> = {
   team: {
-    label: "Welcome",
-    title: "Name your team",
-    why: "The shared space where you, your teammates, and your AI agents work together. Rename it anytime.",
+    // The admin's first screen is their welcome moment (the invitee path has
+    // one too) — landing straight on a bare "Name your team" form felt abrupt.
+    // The title greets, the why sets expectations, and naming the team becomes
+    // a warm first action below rather than a cold prompt.
+    title: "Welcome to First Tree",
+    // Lead with the team (the thing being named right below), not the agent —
+    // otherwise the value line and the naming field talk past each other. The
+    // agent is introduced in the journey preview / its own step.
+    why: "Let's start with your team — where you, your teammates, and your AI agents work together.",
   },
   "connect-code": {
-    label: "Connect code",
     title: "Connect your code",
-    why: "Connect your projects so your agent can read the code. Every change comes back as a request you review.",
+    why: "Connect your GitHub projects so your agent can work on them.",
   },
   "connect-computer": {
-    label: "Connect computer",
-    title: "Connect a computer",
-    why: "Your agent needs a real computer — link one to your team so it has somewhere to run.",
+    title: "Connect your computer",
+    why: "Run the command below on the computer where your agent should run.",
   },
   "create-agent": {
-    label: "Create agent",
-    title: "Create your agent",
-    why: "Name your agent and pick who can work with it. You'll be chatting in a moment.",
+    // "an agent", not "your agent": it can be team-visible (see the Visibility
+    // choice), so "your" would over-claim private ownership. No `why` — the
+    // title + form are self-explanatory; a subtitle would only restate fields.
+    title: "Create an agent",
+    why: "",
   },
   kickoff: {
-    label: { admin: "Start tree", invitee: "Start work" },
     // title/why are rendered per-state by StepKickoff (new / existing / no
     // project / invitee sub-states); the shell skips them while empty.
     title: "",
     why: "",
   },
   welcome: {
-    label: "Welcome",
     title: "Welcome to the team",
-    why: "Your team is already set up. Let's get your own agent working in a couple of quick steps.",
+    // The personalized one-liner (with the team name) lives in StepWelcome's
+    // body, so the static why stays empty — avoids the old why+body
+    // duplication, and the step list is dropped (the progress bar covers it).
+    why: "",
   },
 };
 
@@ -84,11 +72,22 @@ export const COPY = {
   /** Title shown across the flow's top chrome. */
   productName: "First Tree",
   continue: "Continue",
+  /** Opening-step advance (team / invitee welcome) — warmer than "Continue". */
+  getStarted: "Get started",
   back: "Back",
   cancel: "Cancel",
   skipForNow: "Skip for now",
   finishLater: "I'll finish later",
   hideSetup: "Hide setup",
+  /** team (opening / welcome) states */
+  team: {
+    // Welcome-screen copy, kept terse — greeting + value live in STEP_COPY;
+    // here are just the field label and a 3-word reassurance. No step preview:
+    // the progress bar already names where you are once you start, so listing
+    // the steps here only added reading + chore-list weight.
+    nameLabel: "What should we call your team?",
+    renameHint: "Rename it anytime.",
+  },
   /** connect-code states */
   connectCode: {
     // `intro` was deleted (R1 from baixiaohang review): it duplicated
@@ -115,26 +114,45 @@ export const COPY = {
      * non-owner installs through an owner-approval flow, so the right
      * advice is to click Install anyway and let GitHub handle the ask.
      */
-    notOwnerHint: "Not a GitHub organization owner? Click Install anyway — GitHub will ask an owner to approve.",
-    /** Returned from the install dialog without a new installation. */
-    postAttemptStuckTitle: "Looks like the install didn't complete.",
-    postAttemptStuckBody:
-      "GitHub sent you back without adding First Tree. Try again — GitHub will ask an org owner to approve if you're not one.",
-    /** Skip-for-now warning. */
-    skipWarningTitle: "Skip connecting code?",
-    skipWarningBullets: [
-      "Your teammates' agents won't be able to read code (they'll hit errors)",
-      "Your first agent will start with just an intro chat",
-      "You can connect code later from Settings",
-    ],
-    skipAnyway: "Skip anyway",
+    notOwnerHint:
+      "Only a GitHub org owner can connect your team's code. Not one? Installing sends them a request — continue now and connect it later.",
+    /** Connected but GitHub access lacks repo scope — explain; the link carries the verb. */
+    scopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
+    /**
+     * Replaces the "Waiting for GitHub…" status once the user returns from the
+     * install dialog without an installation (postAttemptStuck). Guidance-y, so
+     * the auto-opened "Need help?" below isn't missed — not a flat "still
+     * waiting" (which would contradict the help saying it didn't go through).
+     */
+    stuckStatus: "Still not connected? The steps under Need help? can get you unstuck.",
+    /**
+     * Troubleshooting shown inside the "Need help?" disclosure (alongside the
+     * InstallGuide how-to), mirroring connect-computer. The disclosure
+     * auto-opens when the user returns from GitHub without an installation, so
+     * the title is state-neutral (it can also be opened proactively).
+     */
+    troubleshootTitle: "If GitHub didn't add First Tree:",
+    troubleshootBody: "Click Install again — it'll ask an org owner to approve if you're not one.",
+    /**
+     * Calm, always-visible reassurance shown beside the skip affordance so
+     * the choice is *informed before* clicking. Replaces the old confirm
+     * panel (a "Skip connecting code?" title + consequence bullets +
+     * Keep-connecting / Skip-anyway), which confirmshamed a legitimate,
+     * fully-recoverable choice — re-asking the question, leading with a
+     * teammates-will-hit-errors scare, and under-weighting the real exit.
+     * The "agent starts with just an intro" consequence is already stated
+     * honestly on the kickoff no-project screen, so one recovery line is
+     * enough here; the team-level consequence (invitees need the install)
+     * is caught gracefully by the invitee no-installation screen.
+     */
+    skipReassure: "You can connect code anytime from Settings.",
   },
   /** connect-computer states */
   connectComputer: {
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
-      "Your computer is connected, but it doesn't have an AI engine ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
+      "Your computer is connected, but it doesn't have an AI coding tool ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
     detecting: "Checking what's installed…",
     stuckTitle: "Taking a while? A few common reasons:",
     stuckReasons: [
@@ -144,6 +162,16 @@ export const COPY = {
     ],
     nodeLinkLabel: "Install Node.js (free)",
     nodeUrl: "https://nodejs.org",
+    /** "Need help?" disclosure — label, and the stuck variant it switches to. */
+    helpStuckLabel: "Taking a while? Need help?",
+    /** Troubleshooting block inside the disclosure (neutral title — it can be
+        opened proactively, not only when stuck). Reuses `stuckReasons`. */
+    troubleshootTitle: "If it's not connecting:",
+    /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).
+        Calm + recoverable: the auto-retry handles transient blips, so by the
+        time this shows it's worth a manual Try again. */
+    tokenErrorTitle: "We couldn't prepare your setup command — this is usually temporary.",
+    retry: "Try again",
   },
   /** create-agent states */
   createAgent: {
@@ -152,7 +180,7 @@ export const COPY = {
     creatingHint: "Usually about 10 seconds",
     timeoutTitle: "This is taking longer than expected.",
     timeoutBody:
-      "Your agent was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI engine couldn't start. Check that computer, then try again.",
+      "Your agent was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI coding tool couldn't start. Check that computer, then try again.",
     retry: "Try again",
   },
   /** kickoff / "Start" states (title/why are per-state, rendered by the step) */
@@ -183,7 +211,12 @@ export const COPY = {
     inviteeContinueNoProject: "Continue without a project",
     /** Shown atop confirm / picker so invitee knows where the work lands. */
     treeLabel: "Context Tree",
-    start: "Start",
+    // Launch CTA — per-substate so it names what's actually starting:
+    //   admin + tree → building the Context Tree; admin no-project → just a
+    //   first chat; invitee → getting to work. (Green `cta` everywhere.)
+    startBuilding: "Start building",
+    startChatting: "Start chatting",
+    startWorking: "Start working",
     starting: "Starting your agent…",
     invalidUrl:
       "That doesn't look like a web link — paste the full address, e.g. https://github.com/your-team/context-tree",

@@ -6,8 +6,8 @@ import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
-import { InstallGuide, ShowMeHow } from "../guides.js";
+import { FlowHint, RepoPicker, StatusRow } from "../flow-ui.js";
+import { InstallGuide, InstallTroubleshooting, ShowMeHow } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -34,7 +34,6 @@ export function StepConnectCode() {
   const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
-  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
   const [postAttemptStuck, setPostAttemptStuck] = useState(false);
 
   const installQuery = useQuery({
@@ -67,6 +66,14 @@ export function StepConnectCode() {
     return () => window.clearTimeout(t);
   }, [installed, installQuery.isLoading]);
 
+  // "Need help?" auto-opens when the user returns from GitHub without an
+  // install — same "stuck → help opens" behavior as connect-computer (just
+  // triggered by a failed return rather than a timer).
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    if (postAttemptStuck) setHelpOpen(true);
+  }, [postAttemptStuck]);
+
   const reposQuery = useQuery({
     queryKey: ["onboarding", "github-repos"],
     queryFn: listGithubRepos,
@@ -91,8 +98,11 @@ export function StepConnectCode() {
     }
   };
 
-  const handleSkipClick = (): void => setShowSkipConfirm(true);
-  const handleSkipConfirmed = (): void => {
+  // Skipping is a legitimate, fully-recoverable choice (re-connect anytime
+  // from Settings), so it goes straight through — no confirm gate. The
+  // always-visible `skipReassure` line below the CTA makes the choice
+  // informed before the click rather than shamed after it.
+  const handleSkip = (): void => {
     window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
     goNext();
   };
@@ -116,12 +126,12 @@ export function StepConnectCode() {
 
         {installError === "not_configured" ? (
           <>
-            <FlowNote tone="info">{COPY.connectCode.notConfigured}</FlowNote>
+            <FlowHint>{COPY.connectCode.notConfigured}</FlowHint>
             <ContinueWithout onClick={goNext} />
           </>
         ) : installError === "not_admin" ? (
           <>
-            <FlowNote tone="info">{COPY.connectCode.notAdmin}</FlowNote>
+            <FlowHint>{COPY.connectCode.notAdmin}</FlowHint>
             <ContinueWithout onClick={goNext} />
           </>
         ) : (
@@ -129,61 +139,34 @@ export function StepConnectCode() {
             {/* Decision row: primary CTA + Skip as a quiet sibling. Both
                 actions visible side-by-side so the user sees their full set
                 of options at a glance instead of hunting for Skip in a
-                footer. */}
+                footer. Skip goes straight through (no confirm gate); the
+                muted reassurance line below keeps the choice informed. */}
             <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
               <Button type="button" onClick={() => void handleConnect()} disabled={redirecting || !organizationId}>
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
               </Button>
-              {!showSkipConfirm && (
-                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkipClick}>
-                  {COPY.skipForNow}
-                </Button>
-              )}
+              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkip}>
+                {COPY.skipForNow}
+              </Button>
             </div>
+            <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+              {COPY.connectCode.skipReassure}
+            </p>
 
-            {showSkipConfirm && (
-              <FlowNote tone="info">
-                <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-                  <p className="font-medium" style={{ margin: 0, color: "var(--fg)" }}>
-                    {COPY.connectCode.skipWarningTitle}
-                  </p>
-                  <ul style={{ margin: 0, paddingLeft: "var(--sp-4)" }}>
-                    {COPY.connectCode.skipWarningBullets.map((bullet) => (
-                      <li key={bullet} style={{ color: "var(--fg-3)" }}>
-                        {bullet}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex items-center" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-1)" }}>
-                    <Button type="button" variant="outline" onClick={handleSkipConfirmed}>
-                      {COPY.connectCode.skipAnyway}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="link"
-                      className="h-auto p-0 text-label"
-                      onClick={() => setShowSkipConfirm(false)}
-                    >
-                      {COPY.cancel}
-                    </Button>
-                  </div>
-                </div>
-              </FlowNote>
+            {installError === "generic" && (
+              <FlowHint tone="error" role="alert">
+                {COPY.errors.generic}
+              </FlowHint>
             )}
-
-            {installError === "generic" && <FlowNote>{COPY.errors.generic}</FlowNote>}
-            <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-
-            {postAttemptStuck && (
-              <FlowNote tone="info">
-                <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-                  <p className="font-medium" style={{ margin: 0, color: "var(--fg)" }}>
-                    {COPY.connectCode.postAttemptStuckTitle}
-                  </p>
-                  <p style={{ margin: 0, color: "var(--fg-3)" }}>{COPY.connectCode.postAttemptStuckBody}</p>
-                </div>
-              </FlowNote>
+            {/* Once the user comes back from GitHub without an install, a flat
+                "Waiting for GitHub…" would contradict the auto-opened help that
+                says it didn't go through — swap to a guidance line that points
+                there. */}
+            {postAttemptStuck ? (
+              <FlowHint>{COPY.connectCode.stuckStatus}</FlowHint>
+            ) : (
+              <StatusRow state="waiting" label={COPY.connectCode.waiting} />
             )}
 
             {/* Non-owner hint. We can't hand the user a shareable install
@@ -201,8 +184,9 @@ export function StepConnectCode() {
               {COPY.connectCode.notOwnerHint}
             </p>
 
-            <ShowMeHow>
+            <ShowMeHow open={helpOpen} onToggle={setHelpOpen}>
               <InstallGuide />
+              <InstallTroubleshooting />
             </ShowMeHow>
           </>
         )}
@@ -221,7 +205,8 @@ export function StepConnectCode() {
         </p>
 
         {scopeMissing ? (
-          <FlowNote tone="info">
+          <FlowHint>
+            {COPY.connectCode.scopeMissing}{" "}
             <a
               href="/api/v1/auth/github/start?next=/onboarding"
               className="font-medium"
@@ -229,13 +214,13 @@ export function StepConnectCode() {
             >
               {COPY.connectCode.reconnect}
             </a>
-          </FlowNote>
+          </FlowHint>
         ) : reposQuery.isLoading ? (
           <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
             Loading your projects…
           </p>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
-          <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
+          <FlowHint>{COPY.connectCode.noRepos}</FlowHint>
         ) : (
           <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
         )}

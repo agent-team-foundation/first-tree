@@ -50,6 +50,48 @@ export function FlowNote({ children, tone = "error" }: { children: ReactNode; to
 }
 
 /**
+ * Light inline note — a quiet icon + line, NOT a filled callout box. This is
+ * the onboarding default for passive status / problem / info messages
+ * (recoverable errors, "still missing X", troubleshooting hints). The filled
+ * `<FlowNote>` is reserved for interactive panels that genuinely need
+ * containment (e.g. a confirm-with-consequences).
+ *
+ * The text stays muted and there's no box/background — keeping it light. Only
+ * the `error` glyph carries a restrained error color (`--fg-error-strong`, not
+ * a neon red) so a failure still reads AS a failure at a glance for sighted
+ * users, not just via `role="alert"`. `info` keeps the neutral muted glyph.
+ */
+export function FlowHint({
+  children,
+  tone = "info",
+  role,
+}: {
+  children: ReactNode;
+  tone?: "error" | "info";
+  role?: "status" | "alert";
+}) {
+  const Icon = tone === "error" ? CircleAlert : Info;
+  return (
+    <p
+      className="flex items-start text-label"
+      role={role}
+      style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
+    >
+      <Icon
+        className="h-3.5 w-3.5"
+        style={{
+          flexShrink: 0,
+          marginTop: "var(--sp-0_5)",
+          color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)",
+        }}
+        aria-hidden="true"
+      />
+      <span style={{ minWidth: 0 }}>{children}</span>
+    </p>
+  );
+}
+
+/**
  * Centered "we're working on it" state for the two waits that are the
  * emotional peaks (creating the teammate, getting it started). Three
  * breathing dots + a reassuring line; motion stilled under reduced-motion.
