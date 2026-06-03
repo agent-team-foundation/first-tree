@@ -16,28 +16,9 @@
  * (no marketing word slips a banned term past review).
  */
 
-import type { OnboardingPath, StepId } from "./steps.js";
-
-/**
- * A string that can either apply to both paths, or differ per path.
- * Use the object form when admin and invitee should see different copy on
- * the same logical step (currently only `kickoff` needs this — admin builds
- * a Context Tree, invitee just kicks off their own work).
- */
-export type PathScopedString = string | { admin: string; invitee: string };
-
-export function resolvePathScoped(value: PathScopedString, path: OnboardingPath): string {
-  return typeof value === "string" ? value : value[path];
-}
-
-/** Convenience: pull a step's rail label for the given path. */
-export function resolveStepLabel(step: StepId, path: OnboardingPath): string {
-  return resolvePathScoped(STEP_COPY[step].label, path);
-}
+import type { StepId } from "./steps.js";
 
 export type StepCopy = {
-  /** Short label shown in the left progress rail. May vary by path. */
-  label: PathScopedString;
   /** Heading at the top of the content column. */
   title: string;
   /** One plain-language sentence: why this step exists. */
@@ -46,7 +27,6 @@ export type StepCopy = {
 
 export const STEP_COPY: Record<StepId, StepCopy> = {
   team: {
-    label: "Welcome",
     // The admin's first screen is their welcome moment (the invitee path has
     // one too) — landing straight on a bare "Name your team" form felt abrupt.
     // The title greets, the why sets expectations, and naming the team becomes
@@ -58,33 +38,27 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "Let's start with your team — where you, your teammates, and your AI agents work together.",
   },
   "connect-code": {
-    label: "Connect code",
     title: "Connect your code",
     why: "Connect your projects so your agent can read the code. Every change comes back as a request you review.",
   },
   "connect-computer": {
-    label: "Connect computer",
     title: "Connect your computer",
     why: "Run the command below on the computer where your agent should run.",
   },
   "create-agent": {
-    label: "Create agent",
     // "an agent", not "your agent": it can be team-visible (see the Visibility
-    // choice), so "your" would over-claim private ownership. Matches the rail
-    // label too. No `why` — the title + form are self-explanatory; a subtitle
-    // would only restate the fields.
+    // choice), so "your" would over-claim private ownership. No `why` — the
+    // title + form are self-explanatory; a subtitle would only restate fields.
     title: "Create an agent",
     why: "",
   },
   kickoff: {
-    label: { admin: "Start tree", invitee: "Start work" },
     // title/why are rendered per-state by StepKickoff (new / existing / no
     // project / invitee sub-states); the shell skips them while empty.
     title: "",
     why: "",
   },
   welcome: {
-    label: "Welcome",
     title: "Welcome to the team",
     // The personalized one-liner (with the team name) lives in StepWelcome's
     // body, so the static why stays empty — avoids the old why+body
@@ -139,9 +113,15 @@ export const COPY = {
      * advice is to click Install anyway and let GitHub handle the ask.
      */
     notOwnerHint: "Not a GitHub organization owner? Click Install anyway — GitHub will ask an owner to approve.",
-    /** Connected but GitHub access lacks repo scope — explain + point at the action. */
-    scopeMissing:
-      "Couldn't see your projects — your GitHub access is missing project read permission. Reconnect to grant it.",
+    /** Connected but GitHub access lacks repo scope — explain; the link carries the verb. */
+    scopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
+    /**
+     * Replaces the "Waiting for GitHub…" status once the user returns from the
+     * install dialog without an installation (postAttemptStuck). Guidance-y, so
+     * the auto-opened "Need help?" below isn't missed — not a flat "still
+     * waiting" (which would contradict the help saying it didn't go through).
+     */
+    stuckStatus: "Still don't see an install — the steps under Need help? can get you unstuck.",
     /**
      * Troubleshooting shown inside the "Need help?" disclosure (alongside the
      * InstallGuide how-to), mirroring connect-computer. The disclosure

@@ -6,7 +6,7 @@ import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { COPY } from "../copy.js";
-import { FlowNote } from "../flow-ui.js";
+import { FlowHint } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -99,7 +99,9 @@ export function StepTeam() {
       </div>
 
       {(saveError || loadError) && (
-        <FlowNote>{saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}</FlowNote>
+        <FlowHint tone="error" role="alert">
+          {saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}
+        </FlowHint>
       )}
 
       <div className="flex">

@@ -54,9 +54,12 @@ export function FlowNote({ children, tone = "error" }: { children: ReactNode; to
  * the onboarding default for passive status / problem / info messages
  * (recoverable errors, "still missing X", troubleshooting hints). The filled
  * `<FlowNote>` is reserved for interactive panels that genuinely need
- * containment (e.g. a confirm-with-consequences). The icon is deliberately
- * muted (`--fg-4`) — a gentle cue, not an alarm; `tone` only swaps the glyph
- * (error = alert, info = i). Keeps every step's quiet states visually identical.
+ * containment (e.g. a confirm-with-consequences).
+ *
+ * The text stays muted and there's no box/background — keeping it light. Only
+ * the `error` glyph carries a restrained error color (`--fg-error-strong`, not
+ * a neon red) so a failure still reads AS a failure at a glance for sighted
+ * users, not just via `role="alert"`. `info` keeps the neutral muted glyph.
  */
 export function FlowHint({
   children,
@@ -70,13 +73,17 @@ export function FlowHint({
   const Icon = tone === "error" ? CircleAlert : Info;
   return (
     <p
-      className="inline-flex items-start text-label"
+      className="flex items-start text-label"
       role={role}
       style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
     >
       <Icon
         className="h-3.5 w-3.5"
-        style={{ flexShrink: 0, marginTop: "var(--sp-0_5)", color: "var(--fg-4)" }}
+        style={{
+          flexShrink: 0,
+          marginTop: "var(--sp-0_5)",
+          color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)",
+        }}
         aria-hidden="true"
       />
       <span style={{ minWidth: 0 }}>{children}</span>

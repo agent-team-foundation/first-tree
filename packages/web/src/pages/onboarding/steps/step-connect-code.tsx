@@ -198,7 +198,15 @@ export function StepConnectCode() {
                 {COPY.errors.generic}
               </FlowHint>
             )}
-            <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+            {/* Once the user comes back from GitHub without an install, a flat
+                "Waiting for GitHub…" would contradict the auto-opened help that
+                says it didn't go through — swap to a guidance line that points
+                there. */}
+            {postAttemptStuck ? (
+              <FlowHint>{COPY.connectCode.stuckStatus}</FlowHint>
+            ) : (
+              <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+            )}
 
             {/* Non-owner hint. We can't hand the user a shareable install
                 URL because the OAuth state JWT is paired with a per-browser

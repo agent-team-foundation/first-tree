@@ -10,7 +10,6 @@ import {
   resolveStepProgress,
   shouldEnterOnboarding,
   shouldLeaveOnboarding,
-  stepVisualState,
 } from "../steps.js";
 
 describe("resolveOnboardingPath", () => {
@@ -98,14 +97,6 @@ describe("clampStepIndex", () => {
     expect(clampStepIndex("admin", -3)).toBe(0);
     expect(clampStepIndex("admin", 99)).toBe(ADMIN_STEPS.length - 1);
     expect(clampStepIndex("invitee", 2)).toBe(2);
-  });
-});
-
-describe("stepVisualState", () => {
-  it("is complete before, active at, pending after the cursor", () => {
-    expect(stepVisualState(0, 2)).toBe("complete");
-    expect(stepVisualState(2, 2)).toBe("active");
-    expect(stepVisualState(3, 2)).toBe("pending");
   });
 });
 

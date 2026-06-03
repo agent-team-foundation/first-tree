@@ -49,8 +49,6 @@ export type OnboardingPath = "admin" | "invitee";
 /** Server-inferred coarse onboarding state from `/me` (see api/me.ts). */
 export type ServerOnboardingStep = "connect" | "create_agent" | "completed" | null;
 
-export type StepVisualState = "complete" | "active" | "pending";
-
 /**
  * Resolve which path the user is on. The team creator is the org admin; a
  * member who was invited into an already-created team takes the lighter
@@ -113,17 +111,6 @@ export function clampStepIndex(path: OnboardingPath, index: number): number {
   if (index < 0) return 0;
   if (index > last) return last;
   return index;
-}
-
-/**
- * Visual state for the stepper pip at `index`, given the active index.
- * The flow is a linear wizard: everything before the cursor is done,
- * everything after is not yet reachable.
- */
-export function stepVisualState(index: number, activeIndex: number): StepVisualState {
-  if (index < activeIndex) return "complete";
-  if (index === activeIndex) return "active";
-  return "pending";
 }
 
 /** The config-step subset for a path (the steps the progress bar tracks). */

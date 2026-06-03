@@ -133,7 +133,7 @@ export function StepCreateAgent() {
 
       <div className="flex">
         <Button type="button" variant="cta" onClick={handleCreate} disabled={!canCreate}>
-          <span>Create {trimmed || "your agent"}</span>
+          <span>Create {trimmed || "an agent"}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
