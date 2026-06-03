@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { chats } from "./chats.js";
 
@@ -33,7 +34,16 @@ export const messages = pgTable(
      * routing through this column.
      */
     replyToChat: text("reply_to_chat"),
-    /** Original message ID; threads replies in the same chat. */
+    /**
+     * Original message ID; threads replies in the same chat. Maintained
+     * field (NOT decision-inert — unlike `replyToInbox`/`replyToChat`).
+     * Consumers: loop-detector reply-chain guard C4, client dispatcher /
+     * inbox / chat-list projections, and — as of the open-question feature —
+     * the "answer" signal: a reply whose `inReplyTo` points at a
+     * `format='request'` message directed at the replier decrements that
+     * human's `chat_user_state.open_request_count`. (Keep decision per
+     * issue #754: do NOT remove this column.)
+     */
     inReplyTo: text("in_reply_to"),
     /**
      * Entry point that created this message: web / cli / github / api.
@@ -48,5 +58,12 @@ export const messages = pgTable(
     index("idx_messages_chat_time").on(table.chatId, table.createdAt),
     index("idx_messages_in_reply_to").on(table.inReplyTo),
     index("idx_messages_chat_source_time").on(table.chatId, table.source, table.createdAt.desc()),
+    /**
+     * GIN over the `metadata.mentions` uuid array — serves "messages
+     * mentioning member X" lookups (the cross-chat "open questions directed
+     * at me" list). `jsonb_path_ops` is the smaller/faster opclass for the
+     * containment query `metadata -> 'mentions' @> '["<uuid>"]'`.
+     */
+    index("idx_messages_mentions").using("gin", sql`((${table.metadata} -> 'mentions')) jsonb_path_ops`),
   ],
 );

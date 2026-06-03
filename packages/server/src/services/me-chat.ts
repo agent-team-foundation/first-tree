@@ -344,6 +344,7 @@ export async function listMeChats(
       cm.access_mode AS access_mode,
       cm.role AS membership_role,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
+      COALESCE(cus.open_request_count, 0) AS open_request_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
       c.metadata->>'entityType' AS entity_type,
@@ -384,6 +385,7 @@ export async function listMeChats(
     access_mode: "speaker" | "watcher";
     membership_role: string;
     unread_mention_count: number;
+    open_request_count: number;
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
     entity_type: string | null;
@@ -566,6 +568,7 @@ export async function listMeChats(
       lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
+      openRequestCount: r.open_request_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
