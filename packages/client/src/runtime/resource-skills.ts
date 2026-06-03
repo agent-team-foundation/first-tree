@@ -18,9 +18,11 @@ export async function materializeResourceSkills(
 ): Promise<void> {
   const skills = payload?.resourceSkills ?? [];
   const root = resourceSkillsDir(workspace);
-  await mkdir(root, { recursive: true });
+  if (skills.length > 0) {
+    await mkdir(root, { recursive: true });
+  }
   const activeIds = new Set(skills.map((skill) => skill.resourceId));
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  for (const entry of await readResourceSkillDirs(root)) {
     if (!entry.isDirectory() || activeIds.has(entry.name)) continue;
     const stalePath = join(root, entry.name);
     await rm(stalePath, { recursive: true, force: true });
@@ -31,6 +33,15 @@ export async function materializeResourceSkills(
     await mkdir(join(root, skill.resourceId), { recursive: true });
     await writeFile(target, buildSkillMarkdown(skill), "utf-8");
     sessionCtx.log(`Resource skill materialized: ${skill.name} -> ${target}`);
+  }
+}
+
+async function readResourceSkillDirs(root: string) {
+  try {
+    return await readdir(root, { withFileTypes: true });
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    throw err;
   }
 }
 
