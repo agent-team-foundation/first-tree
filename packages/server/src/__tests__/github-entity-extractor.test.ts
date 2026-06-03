@@ -45,6 +45,40 @@ describe("extractGithubEntity", () => {
     });
   });
 
+  it("extracts a pull_request entity from Codex bash-wrapped gh commands with a repo flag", () => {
+    const result = extractGithubEntity(
+      basePayload({
+        name: "command",
+        args: {
+          command:
+            '/bin/bash -lc \'gh -R baixiaohang/first-tree-agent-prompts pr create --base main --head prompt-git-autonomy-362531 --title "Allow codex agents to refresh their workspaces" --body "body"\'',
+        },
+        resultPreview: "https://github.com/baixiaohang/first-tree-agent-prompts/pull/6\n",
+      }),
+    );
+    expect(result).toEqual({
+      entityType: "pull_request",
+      entityKey: "baixiaohang/first-tree-agent-prompts#6",
+      entityUrl: "https://github.com/baixiaohang/first-tree-agent-prompts/pull/6",
+      source: "bash-gh-pr",
+    });
+  });
+
+  it("extracts a pull_request entity from gh commands with an equals-form repo flag", () => {
+    const result = extractGithubEntity(
+      basePayload({
+        args: { command: "gh --repo=owner/repo pr create --title feat --body body" },
+        resultPreview: "https://github.com/owner/repo/pull/79",
+      }),
+    );
+    expect(result).toEqual({
+      entityType: "pull_request",
+      entityKey: "owner/repo#79",
+      entityUrl: "https://github.com/owner/repo/pull/79",
+      source: "bash-gh-pr",
+    });
+  });
+
   it("extracts an issue entity from `gh issue create` output", () => {
     const result = extractGithubEntity(
       basePayload({
@@ -56,6 +90,21 @@ describe("extractGithubEntity", () => {
       entityType: "issue",
       entityKey: "owner/repo#77",
       entityUrl: "https://github.com/owner/repo/issues/77",
+      source: "bash-gh-issue",
+    });
+  });
+
+  it("extracts an issue entity from gh commands with a global repo flag", () => {
+    const result = extractGithubEntity(
+      basePayload({
+        args: { command: "gh --repo owner/repo issue create --title bug --body details" },
+        resultPreview: "https://github.com/owner/repo/issues/78",
+      }),
+    );
+    expect(result).toEqual({
+      entityType: "issue",
+      entityKey: "owner/repo#78",
+      entityUrl: "https://github.com/owner/repo/issues/78",
       source: "bash-gh-issue",
     });
   });
@@ -104,6 +153,18 @@ describe("extractGithubEntity", () => {
         basePayload({
           args: { command: "gh pr list" },
           resultPreview: "#1 fix bug https://github.com/owner/repo/pull/1",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores long dash-token gh commands that do not create an entity", () => {
+    const dashTokens = Array.from({ length: 48 }, () => "-x").join(" ");
+    expect(
+      extractGithubEntity(
+        basePayload({
+          args: { command: `gh ${dashTokens} zzz` },
+          resultPreview: "https://github.com/owner/repo/pull/1",
         }),
       ),
     ).toBeNull();

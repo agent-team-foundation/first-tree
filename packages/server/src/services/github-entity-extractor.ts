@@ -31,8 +31,15 @@ export type ExtractedEntity = {
   source: "bash-gh-pr" | "bash-gh-issue";
 };
 
-const PR_COMMAND_RE = /\bgh\s+pr\s+create\b/;
-const ISSUE_COMMAND_RE = /\bgh\s+issue\s+create\b/;
+const SHELL_WORD_RE = String.raw`(?:"[^"]*"|'[^']*'|[^\s]+)`;
+const GH_GLOBAL_OPTION_RE = String.raw`-{1,2}[^\s=]+(?:=${SHELL_WORD_RE})?(?:\s+${SHELL_WORD_RE})?`;
+const MAX_GH_GLOBAL_OPTIONS = 12;
+const PR_COMMAND_RE = new RegExp(
+  String.raw`\bgh(?:\s+${GH_GLOBAL_OPTION_RE}){0,${MAX_GH_GLOBAL_OPTIONS}}\s+pr\s+create\b`,
+);
+const ISSUE_COMMAND_RE = new RegExp(
+  String.raw`\bgh(?:\s+${GH_GLOBAL_OPTION_RE}){0,${MAX_GH_GLOBAL_OPTIONS}}\s+issue\s+create\b`,
+);
 const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/;
 const ISSUE_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+)/;
 const SHELL_TOOL_NAMES = new Set(["Bash", "command"]);
@@ -43,7 +50,8 @@ export function extractGithubEntity(payload: ToolCallEventPayload): ExtractedEnt
 
   const args = payload.args;
   if (typeof args !== "object" || args === null) return null;
-  const command = (args as { command?: unknown }).command;
+  if (!("command" in args)) return null;
+  const command = args.command;
   if (typeof command !== "string") return null;
 
   const preview = payload.resultPreview ?? "";
