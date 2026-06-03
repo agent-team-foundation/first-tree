@@ -15,9 +15,12 @@ const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
 });
 
 /**
- * `GET /orgs/:orgId/github-app-installation/repositories` — member-readable
- * list of the repos the team's GitHub App installation can access. Powers
- * the onboarding admin connect-code project picker.
+ * `GET /orgs/:orgId/github-app-installation/repositories` — admin-only list
+ * of the repos the team's GitHub App installation can access. Powers the
+ * onboarding admin connect-code project picker. Admin-gated (not
+ * member-readable like `/exists`) because the response is the full
+ * installation candidate catalog — private repo names / clone URLs the
+ * caller may not be a GitHub collaborator on.
  *
  * The product is team-by-default, so the picker offers the team's *org*
  * code (the installation's grant) rather than the admin's personal
