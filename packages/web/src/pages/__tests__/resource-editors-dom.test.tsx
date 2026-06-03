@@ -163,9 +163,9 @@ describe("resource editors", () => {
     const { root } = await render();
     await click(byAria("Edit github"));
 
-    // Prefilled from the existing resource.
-    const urlInput = [...document.body.querySelectorAll("input")].find((i) => i.value.includes("mcp.example.com"));
-    expect(urlInput).toBeTruthy();
+    // Prefilled from the existing resource (assert exact value by field id —
+    // not a URL substring scan, which CodeQL flags).
+    expect(input("mcp-url").value).toBe("https://mcp.example.com/github");
     // Edit mode → the primary action is "Save", not "Create".
     expect(byText("Save")).toBeTruthy();
     expect(byText("Create")).toBeUndefined();
