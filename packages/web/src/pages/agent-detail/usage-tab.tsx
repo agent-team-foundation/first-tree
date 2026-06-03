@@ -94,7 +94,7 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="Daily input tokens. Darker cells mean more usage."
+      description="Daily total tokens. Darker cells mean more usage."
       action={<DensityLegend />}
     >
       {isError ? (
@@ -214,7 +214,7 @@ function Cell({
     <span
       role="img"
       aria-label={`${WEEKDAYS[day.weekday]} ${MONTHS[day.month]} ${day.day}: ${
-        day.tokens > 0 ? `${formatCompactCount(day.tokens)} input tokens` : "no activity"
+        day.tokens > 0 ? `${formatCompactCount(day.tokens)} total tokens` : "no activity"
       }`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
@@ -226,7 +226,7 @@ function Cell({
 
 function CellTooltip({ day, anchorX, anchorY }: { day: DayBucket; anchorX: number; anchorY: number }): ReactElement {
   const label = `${WEEKDAYS[day.weekday]} · ${MONTHS[day.month]} ${day.day}, ${day.year}`;
-  const value = day.tokens > 0 ? `${formatCompactCount(day.tokens)} input tokens` : "No activity";
+  const value = day.tokens > 0 ? `${formatCompactCount(day.tokens)} total tokens` : "No activity";
   return (
     <div role="tooltip" className="usage-cal-tooltip" style={{ left: anchorX, top: anchorY }}>
       <div className="text-eyebrow mono" style={{ color: "var(--fg-3)" }}>
@@ -259,7 +259,7 @@ function ActivityStatsPanel({
           </>
         }
       />
-      <StatTile label="Avg input / day" value={formatCompactCount(stats.avgPerDay)} mono />
+      <StatTile label="Avg tokens / day" value={formatCompactCount(stats.avgPerDay)} mono />
       <StatTile label="Peak day" value={peakLabel} mono />
       <StatTile
         label="Current streak"
@@ -417,7 +417,9 @@ function buildDays(daily: UsageAgentSummary["daily"] | undefined): DayBucket[] {
   // UTC consistently — local-tz Date methods would shift weekday/date by ±1
   // half the day in non-UTC zones and silently miss the join key.
   const byDate = new Map<string, number>();
-  for (const d of daily ?? []) byDate.set(d.date, d.inputTokens);
+  for (const d of daily ?? []) {
+    byDate.set(d.date, d.inputTokens + d.cachedInputTokens + d.outputTokens);
+  }
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   const days: DayBucket[] = [];
