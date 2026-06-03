@@ -244,16 +244,33 @@ afterEach(() => {
 describe("UsageTab", () => {
   it("renders activity, recent turns, and chat navigation", async () => {
     const { UsageTab } = await import("../usage-tab.js");
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    usageMocks.getAgentUsageSummary.mockResolvedValue(
+      summary({
+        daily: [
+          {
+            date: today.toISOString().slice(0, 10),
+            inputTokens: 9_000,
+            cachedInputTokens: 1_000,
+            outputTokens: 500,
+            turns: 4,
+          },
+        ],
+      }),
+    );
 
     const { container, root } = await renderUsageTab(<UsageTab />);
+    const activityCells = [...container.querySelectorAll("span.usage-cal-cell[role='img']")];
     expect(container.textContent).not.toContain("Usage overview");
     expect(container.textContent).toContain("Activity");
     expect(container.textContent).toContain("last 90 days");
-    expect(container.querySelectorAll("span.usage-cal-cell[role='img']").length).toBe(90);
+    expect(activityCells.length).toBe(90);
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
-    expect(container.textContent).toContain("Daily input tokens. Darker cells mean more usage.");
+    expect(container.textContent).toContain("Daily total tokens. Darker cells mean more usage.");
+    expect(activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("10.5K total tokens"))).toBeDefined();
     expect(container.textContent).toContain("Last 10 turns from the last 30 days.");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
