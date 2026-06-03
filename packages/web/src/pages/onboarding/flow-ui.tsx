@@ -357,7 +357,19 @@ export function RepoPicker({
               {repoOwner && <span style={{ color: "var(--fg-4)" }}>{repoOwner}</span>}
               <span style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>{repoName}</span>
             </span>
-            {repo.private && <Lock className="h-3.5 w-3.5" style={{ color: "var(--fg-4)", flexShrink: 0 }} />}
+            {repo.private && (
+              // Wrapped so the padlock has a hover tooltip + accessible label —
+              // bare, it reads ambiguously (a new user can misread it as
+              // "locked / can't pick" rather than "this repo is private").
+              <span
+                role="img"
+                title="Private repository"
+                aria-label="Private repository"
+                style={{ display: "inline-flex", flexShrink: 0 }}
+              >
+                <Lock className="h-3.5 w-3.5" style={{ color: "var(--fg-4)" }} />
+              </span>
+            )}
             <a
               href={repo.htmlUrl}
               target="_blank"

@@ -35,6 +35,13 @@ export function StepConnectCode() {
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [postAttemptStuck, setPostAttemptStuck] = useState(false);
+  // Whether the user has actually kicked off an install (this tab). We only
+  // show the "Waiting for GitHub…" status once they have — before the first
+  // click there's nothing to wait for, and a pre-action "Waiting…" reads as
+  // "waiting for what? I haven't done anything."
+  const [attempted, setAttempted] = useState(
+    () => typeof window !== "undefined" && !!window.sessionStorage.getItem(INSTALL_ATTEMPT_KEY),
+  );
 
   const installQuery = useQuery({
     queryKey: ["onboarding", "installation", organizationId],
@@ -97,6 +104,7 @@ export function StepConnectCode() {
     try {
       const url = await getGithubAppInstallUrl(organizationId, "/onboarding");
       window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
+      setAttempted(true);
       window.location.assign(url);
     } catch (err) {
       setRedirecting(false);
@@ -167,15 +175,17 @@ export function StepConnectCode() {
                 {COPY.errors.generic}
               </FlowHint>
             )}
-            {/* Once the user comes back from GitHub without an install, a flat
-                "Waiting for GitHub…" would contradict the auto-opened help that
-                says it didn't go through — swap to a guidance line that points
-                there. */}
+            {/* Status only after the user has actually started an install:
+                before the first click there's nothing to wait for, so showing
+                "Waiting for GitHub…" up front reads as "waiting for what?".
+                Once they come back without an install, a flat "Waiting…" would
+                contradict the auto-opened help that says it didn't go through —
+                swap to a guidance line that points there. */}
             {postAttemptStuck ? (
               <FlowHint>{COPY.connectCode.stuckStatus}</FlowHint>
-            ) : (
+            ) : attempted ? (
               <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-            )}
+            ) : null}
 
             {/* Non-owner hint. We can't hand the user a shareable install
                 URL because the OAuth state JWT is paired with a per-browser

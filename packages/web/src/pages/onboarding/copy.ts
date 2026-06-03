@@ -43,7 +43,11 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
   "connect-computer": {
     title: "Connect your computer",
-    why: "Run the command below on the computer where your agent should run.",
+    // why is rendered per-state by StepConnectComputer (the "run the command
+    // below" line is only true while waiting — once connected there's no
+    // command shown, so a static shell subtitle would read as stale). The
+    // shell skips it while empty.
+    why: "",
   },
   "create-agent": {
     // "an agent", not "your agent": it can be team-visible (see the Visibility
@@ -158,6 +162,12 @@ export const COPY = {
   },
   /** connect-computer states */
   connectComputer: {
+    // Step subtitle, rendered per-state by the step (not the shell): the
+    // command-pointing line only holds while waiting; once connected we swap
+    // to a neutral confirmation so it doesn't tell the user to "run the
+    // command below" when no command is shown.
+    whyWaiting: "Run the command below on the computer where your agent should run.",
+    whyConnected: "This is where your agent will run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
@@ -194,10 +204,12 @@ export const COPY = {
   },
   /** kickoff / "Start" states (title/why are per-state, rendered by the step) */
   kickoff: {
-    // admin — new Context Tree (default when the team has none yet)
+    // admin — new Context Tree (default when the team has none yet). This is
+    // the first time the user meets "Context Tree", so lead with a plain
+    // one-line gloss of what it is + why it helps before saying what happens.
     newTitle: "Start building your Context Tree",
     newWhy:
-      "You're all set. Your agent builds your team's Context Tree with you in the chat, walking you through each change to approve.",
+      "A Context Tree is a living map of how your team works, so your agent starts with real context instead of guessing. You're all set — your agent builds it with you in the chat, walking you through each change to approve.",
     haveExisting: "I already have a Context Tree",
     // admin — existing Context Tree (auto-detected from team settings, or pasted)
     existingTitle: "Use your team's Context Tree",
