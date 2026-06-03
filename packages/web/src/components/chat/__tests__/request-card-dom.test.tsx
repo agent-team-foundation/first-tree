@@ -80,6 +80,29 @@ describe("RequestCard rendering", () => {
     expect(container.textContent).toContain(BODY);
     expect(container.textContent).toContain("Ship 5% or 20%?");
     expect(container.textContent).toContain("REQUEST");
+    // bodyShowsTarget defaults false here (the body prop has no @target), so the
+    // chip keeps `· @human-1` as the target signal — the metadata-derived
+    // fallback for non-normalised bodies.
+    expect(container.textContent).toContain("@human-1");
+  });
+
+  it("drops the chip's `· @target` when the body already shows the target", async () => {
+    const msg = requestMsg();
+    const container = await renderDom(
+      wrap(
+        <RequestCard
+          message={msg}
+          thread={[msg]}
+          viewerAgentId={HUMAN}
+          bodyShowsTarget
+          body={<div>{BODY}</div>}
+          resolveAgentName={(id) => id}
+        />,
+      ),
+    );
+    // Target is carried by the body, so the status chip must not repeat it.
+    expect(container.textContent).not.toContain("@human-1");
+    expect(container.textContent).toContain("REQUEST");
   });
 
   it("collapses for an unrelated viewer — body and answer block hidden", async () => {
@@ -101,6 +124,40 @@ describe("RequestCard rendering", () => {
     // summary); the whole row expands on click — no separate "Expand" word.
     expect(container.textContent).toContain("REQUEST");
     expect(container.textContent).toContain("Rollout");
+    // Collapsed hides the body, so the target is shown once in the summary line
+    // (the only place it appears in this state).
+    expect(container.textContent).toContain("@human-1");
+  });
+
+  it("lets an unrelated viewer collapse again after expanding", async () => {
+    // Regression: the Collapse button used to be gated on `related`, so an
+    // unrelated viewer who clicked the collapsed row to expand had no way back.
+    const msg = requestMsg();
+    const container = await renderDom(
+      wrap(
+        <RequestCard
+          message={msg}
+          thread={[msg]}
+          viewerAgentId="someone-else"
+          body={<div>{BODY}</div>}
+          resolveAgentName={(id) => id}
+        />,
+      ),
+    );
+    // Starts collapsed (unrelated default) — click the row to expand.
+    const expandRow = container.querySelector("button");
+    if (!expandRow) throw new Error("expected collapsed row button");
+    await act(async () => {
+      expandRow.click();
+    });
+    expect(container.textContent).toContain(BODY);
+    // A Collapse affordance must exist for this unrelated viewer.
+    const collapse = [...container.querySelectorAll("button")].find((b) => b.textContent === "Collapse");
+    if (!collapse) throw new Error("expected a Collapse button when expanded");
+    await act(async () => {
+      collapse.click();
+    });
+    expect(container.textContent).not.toContain(BODY);
   });
 
   it("namespaces option radio groups by message id so two open requests don't merge", async () => {

@@ -33,8 +33,12 @@ export function registerChatSendCommand(chat: Command): void {
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .option("-b, --broadcast", "Send with no @mention — enters the stream, wakes no one")
-    .option("--request", "Send as an open question (format=request) directed at <agentName>")
-    .option("--question <text>", "The question prompt (with --request)")
+    .option(
+      "--request",
+      "Send as an open question (format=request) directed at <agentName>. The message body carries the " +
+        "background/context; --question carries only the ask",
+    )
+    .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
     .option("--reply-to <messageId>", "Answer/thread this message — sets inReplyTo (clears the asker's red dot)")
     .action(async (agentName: string | undefined, message: string | undefined, options: SendOptions) => {
@@ -67,9 +71,19 @@ export function registerChatSendCommand(chat: Command): void {
 
         const content = inlineBody ?? (await readStdin());
         const isRequest = options.request === true;
-        // A request carries its ask in --question; an empty body is allowed
-        // (the question is the actionable part). Every other send needs content.
-        if (!content && !(isRequest && options.question)) {
+        // Every send needs a body. For a request the split is: the body carries
+        // the background/context (rendered as the card's markdown body), and
+        // --question carries ONLY the ask. Allowing an empty body let agents
+        // cram the whole context into --question, leaving the card bodyless.
+        if (!content && isRequest) {
+          fail(
+            "REQUEST_NEEDS_BODY",
+            "--request still needs a message body: put the background/context in the body " +
+              "(argument or stdin) and keep --question to just the ask.",
+            2,
+          );
+        }
+        if (!content) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
         }
 

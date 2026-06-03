@@ -1,6 +1,7 @@
 import type { Message } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
+  contentStartsWithMention,
   defaultExpanded,
   deriveRequestState,
   findAnswerableRequestId,
@@ -162,5 +163,34 @@ describe("parseAnswerSelections", () => {
   it("returns {} for free-form (non-matching) content", () => {
     expect(parseAnswerSelections("let's just do 5%", ["Ship?"])).toEqual({});
     expect(parseAnswerSelections(42, ["Ship?"])).toEqual({});
+  });
+});
+
+describe("contentStartsWithMention", () => {
+  it("detects a leading server-normalised @target (case-insensitive)", () => {
+    expect(contentStartsWithMention("@gandy please decide", ["gandy"])).toBe(true);
+    expect(contentStartsWithMention("@Gandy please decide", ["gandy"])).toBe(true);
+  });
+  it("is false for a MID-body mention — it isn't the leading normalised prefix", () => {
+    // The body renders this as a chip, but the chip-dedup only fires for the
+    // leading server prefix; a mid-body mention keeps the metadata target.
+    expect(contentStartsWithMention("ping @gandy about this", ["gandy"])).toBe(false);
+  });
+  it("is false for non-chippable leading tokens the renderer skips (codex R1/R5)", () => {
+    // rehypeMentions skips <code>/<pre>/<a>; a raw anywhere-scan would wrongly
+    // report these. Leading-only detection never trips on them.
+    expect(contentStartsWithMention("`@gandy` is in inline code", ["gandy"])).toBe(false);
+    expect(contentStartsWithMention("```\n@gandy\n```", ["gandy"])).toBe(false);
+    expect(contentStartsWithMention("[@gandy](https://x) link text", ["gandy"])).toBe(false);
+  });
+  it("is false when the leading mention is a different participant", () => {
+    expect(contentStartsWithMention("@someone-else heads up", ["gandy"])).toBe(false);
+  });
+  it("respects MENTION_REGEX boundaries — @gandy/notes is not a mention", () => {
+    expect(contentStartsWithMention("@gandy/notes is the file", ["gandy"])).toBe(false);
+  });
+  it("is false for non-string content or empty names", () => {
+    expect(contentStartsWithMention(42, ["gandy"])).toBe(false);
+    expect(contentStartsWithMention("@gandy hi", [])).toBe(false);
   });
 });

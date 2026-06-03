@@ -73,7 +73,11 @@ import {
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
 import { RequestCard } from "../../../components/chat/request-card.js";
-import { findAnswerableRequestId } from "../../../components/chat/request-state.js";
+import {
+  contentStartsWithMention,
+  findAnswerableRequestId,
+  readMentions,
+} from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -287,6 +291,19 @@ function TextRow({
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
+  // Does the request body *lead* with its target mention — the server-
+  // normalised `@target …` shape that the renderer always chips? Resolved
+  // against the same membership projection the rehype plugin uses. RequestCard
+  // uses it to drop its duplicate `· @target` only when the body is guaranteed
+  // to show it; every other shape keeps the metadata target. False for
+  // non-request rows.
+  const requestBodyShowsTarget = useMemo(() => {
+    if (msg.format !== "request") return false;
+    const targetNames = readMentions(msg.metadata)
+      .map((id) => mentionParticipants.find((p) => p.agentId === id)?.name)
+      .filter((name): name is string => typeof name === "string");
+    return contentStartsWithMention(msg.content, targetNames);
+  }, [msg.format, msg.content, msg.metadata, mentionParticipants]);
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
   // user typed in the web composer (`source === "web"`) is left untouched
   // so paths that humans write — code-fence walkthroughs, quoted snippets,
@@ -520,6 +537,7 @@ function TextRow({
               message={msg}
               thread={messages}
               viewerAgentId={myAgentId}
+              bodyShowsTarget={requestBodyShowsTarget}
               body={
                 <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
                   {textContent ?? ""}

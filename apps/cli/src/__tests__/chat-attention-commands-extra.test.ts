@@ -142,6 +142,44 @@ describe("chat command behavior", () => {
     await expect(runChat(["send", "kael"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
   });
 
+  it("sends a --request with the body as context and --question as just the ask", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "send",
+      "kael",
+      "Rollout is at 5% and error rate is flat for 24h.",
+      "--request",
+      "--question",
+      "Ship to 20%?",
+      "--option",
+      "yes",
+      "--option",
+      "hold",
+    ]);
+
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        format: "request",
+        content: "Rollout is at 5% and error rate is flat for 24h.",
+        receiverNames: ["kael"],
+        metadata: expect.objectContaining({
+          request: {
+            questions: [{ id: "q1", prompt: "Ship to 20%?", kind: "single", options: ["yes", "hold"], required: true }],
+          },
+        }),
+      }),
+    );
+  });
+
+  it("rejects a --request with no body — context belongs in the body, not the question", async () => {
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    await expect(runChat(["send", "kael", "--request", "--question", "Ship to 20%?"])).rejects.toMatchObject({
+      code: "REQUEST_NEEDS_BODY",
+      exitCode: 2,
+    });
+  });
+
   it("sets, clears, and validates chat topics", async () => {
     const sdk = localAgentMocks.createSdk();
 

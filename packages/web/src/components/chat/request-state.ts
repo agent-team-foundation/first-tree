@@ -1,5 +1,5 @@
 import type { Message, OpenQuestionRequest } from "@first-tree/shared";
-import { openQuestionRequestSchema } from "@first-tree/shared";
+import { MENTION_REGEX, openQuestionRequestSchema } from "@first-tree/shared";
 
 /**
  * Lifecycle of a `format="request"` message. Derived from the message thread —
@@ -21,6 +21,30 @@ export type RequestState = "open" | "resolved" | "closed";
 export function readMentions(metadata: Record<string, unknown> | null | undefined): string[] {
   const raw = metadata?.mentions;
   return Array.isArray(raw) ? raw.filter((m): m is string => typeof m === "string") : [];
+}
+
+/**
+ * Whether `content` *starts* with a mention token for any of `names` — the
+ * shape the server's `normalizeMentionsInContent` produces (`@target ` prepended
+ * at index 0).
+ *
+ * Deliberately leading-only, not an anywhere-scan: `rehypeMentions` skips
+ * `<code>`/`<pre>`/`<a>`, so a raw anywhere-scan would report a mention that the
+ * body never actually chips (e.g. `` `@target` ``, a fenced block, or
+ * `[@target](…)`). A token at index 0, by contrast, can never sit inside code
+ * or a link (those need a leading `` ` `` / `[`), so it is always chippable —
+ * making this a render-faithful, false-positive-free signal. Every other shape
+ * (mid-body, code, link) conservatively returns false, so the caller keeps its
+ * metadata-derived target. Uses the same shared `MENTION_REGEX` (sticky-anchored
+ * to index 0) and case-insensitive resolution as the renderer.
+ */
+export function contentStartsWithMention(content: unknown, names: readonly string[]): boolean {
+  if (typeof content !== "string" || names.length === 0) return false;
+  const anchored = new RegExp(MENTION_REGEX.source, "y"); // sticky → match only at index 0
+  anchored.lastIndex = 0;
+  const m = anchored.exec(content);
+  if (!m || m[1] === undefined) return false;
+  return new Set(names.map((n) => n.toLowerCase())).has(m[1].toLowerCase());
 }
 
 /** Parse `metadata.request` into the structured ask; `null` when absent/malformed. */
