@@ -310,6 +310,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       turnProcessor = createToolCallProcessor(
         (event) => sessionCtx.emitEvent(event),
         contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl, branch: contextTreeBranch } : undefined,
+        { cwd },
       );
     }
     return turnProcessor;

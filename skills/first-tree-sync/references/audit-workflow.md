@@ -6,11 +6,12 @@ workflow uses `tree verify` plus manual reading.
 
 ## Inputs
 
-- one tree repo (the one bound to the current source/workspace)
-- one or more source repos (read from the tree's managed code-repo registry
-  block in `AGENTS.md` / `CLAUDE.md`, or from `source-repos.md`). Phase 4
-  iterates over **every** registered source repo; for multi-source trees
-  this fans out serially per repo.
+- one tree repo at `<workspaceRoot>/<manifest.tree>`, resolved from
+  `first-tree tree status --json`
+- one or more source repos at `<workspaceRoot>/<name>` for each
+  `name` in `manifest.sources` (also exposed as `boundSources[]`).
+  Phase 4 iterates over **every** bound source; for multi-source
+  trees this fans out serially per repo.
 - optional `--since <ref>` to scope Phases 2–3 to changes since a commit
   (Phase 4 always sweeps current state, not a range)
 
@@ -76,7 +77,7 @@ The reverse of Phase 2: walk source structure and ask "does the tree
 register this?". This is where `code-not-synced` drift is discovered on
 its own (not just as a side-effect of reading the tree).
 
-For each source repo listed in the tree's `source-repos.md`:
+For each source repo in `manifest.sources` (from `tree status --json`):
 
 1. **Top-level directories**
 
@@ -94,10 +95,11 @@ For each source repo listed in the tree's `source-repos.md`:
    git config -f <source-root>/.gitmodules --get-regexp 'submodule\..*\.path'
    ```
 
-   For each submodule path not listed in the tree's `source-repos.md`,
-   emit `code-not-synced/structural`. The fix is registration; sync
-   does not auto-bind the submodule as its own source repo (that's a
-   `first-tree tree init` decision).
+   For each submodule path whose subdir name is not in
+   `manifest.sources` (and is not an obvious vendored / build dir),
+   emit `code-not-synced/structural`. The fix is to add the submodule's
+   subdir name to `workspace.json.sources` (one-line JSON edit); sync
+   does not auto-bind the submodule itself.
 
 3. **Active contributors**
 

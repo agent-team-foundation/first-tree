@@ -339,7 +339,7 @@
 
   /* Muted (low-chroma) companions of the avatar hues. Same lightness +
      hue angle as their vivid sibling — only the chroma is dropped to a
-     uniform ~0.06 — so identity stays recognisable (you can still tell
+     uniform ~0.05 — so identity stays recognisable (you can still tell
      the green agent from the blue one) while the disc reads as a quiet
      tinted neutral rather than a saturated swatch. The conversation
      list uses these (`muted` path in `pickAvatarHue` /
@@ -348,14 +348,14 @@
      where only a few appear at once. Lightness is unchanged, so the
      near-white `--fg-on-vivid` initials keep the same AA contrast as on
      the vivid set. */
-  --avatar-hue-0-muted: oklch(0.66 0.06 150);
-  --avatar-hue-1-muted: oklch(0.62 0.06 250);
-  --avatar-hue-2-muted: oklch(0.6 0.06 295);
-  --avatar-hue-3-muted: oklch(0.65 0.06 0);
-  --avatar-hue-4-muted: oklch(0.68 0.06 50);
-  --avatar-hue-5-muted: oklch(0.65 0.06 200);
-  --avatar-hue-6-muted: oklch(0.72 0.06 90);
-  --avatar-hue-7-muted: oklch(0.55 0.06 270);
+  --avatar-hue-0-muted: oklch(0.66 0.05 150);
+  --avatar-hue-1-muted: oklch(0.62 0.05 250);
+  --avatar-hue-2-muted: oklch(0.6 0.05 295);
+  --avatar-hue-3-muted: oklch(0.65 0.05 0);
+  --avatar-hue-4-muted: oklch(0.68 0.05 50);
+  --avatar-hue-5-muted: oklch(0.65 0.05 200);
+  --avatar-hue-6-muted: oklch(0.72 0.05 90);
+  --avatar-hue-7-muted: oklch(0.55 0.05 270);
 
   --radius: 0.5rem;
 
@@ -407,30 +407,31 @@
   /* Dialog / lightbox scrim (both modes — uniformly dark). */
   --overlay-scrim: oklch(0 0 0 / 0.55);
 
-  /* ── Context-tree "live" page palette (/context hero) ─────────────────────
-     A bespoke set — cool blue "ink" + faint-green card surfaces — lifted here
-     from the hardcoded oklch in the .context-live-* rules below so the page's
-     palette lives in one place. Value-preserving 1:1 lift (a later pass can
-     rationalize the near-duplicate inks). Light-only: the page predates dark
-     theming and these values are mode-independent (unchanged behavior). */
-  --context-ink: oklch(0.2 0.04 265);
-  --context-ink-em: oklch(0.25 0.04 265);
-  --context-ink-dim: oklch(0.52 0.035 255);
-  --context-ink-summary: oklch(0.2 0.035 255);
-  --context-ink-scale: oklch(0.18 0.04 255);
-  --context-ink-node: oklch(0.23 0.025 255);
-  --context-ink-mark: oklch(0.22 0.04 255);
-  --context-mark-bg: oklch(0.91 0.01 255 / 0.72);
-  --context-shadow: oklch(0.25 0.04 255 / 0.08);
-  --context-card-edge: oklch(0.89 0.008 150);
-  --context-card-edge-hover: oklch(0.78 0.09 150);
-  --context-card-edge-live: oklch(0.78 0.13 150);
-  --context-card-bg: oklch(0.98 0.003 150 / 0.9);
-  --context-card-bg-live: oklch(0.985 0.012 150 / 0.94);
-  --context-summary-edge: oklch(0.88 0.008 150);
-  --context-summary-bg: oklch(1 0 0 / 0.86);
-  --context-halo: oklch(0.72 0.17 150 / 0.34);
-  --context-pin-glow: oklch(0.72 0.17 150 / 0.18);
+  /* ── Context page palette ─────────────────────────────────────────────────
+     The /context tab now consumes the neutral semantic ramp like every other
+     tab. Every entry resolves through --fg* / --bg* / --border* / --brand /
+     --success, all of which have .dark overrides, so the page inherits dark
+     mode automatically. Kept as a thin alias layer so the .context-* rules
+     below still read by intent ("ink", "card", "halo"). This replaces the old
+     bespoke light-only blue-ink palette, which broke dark mode and violated
+     the near-monochrome rule (DESIGN Pillars 1 & 4, §10). */
+  --context-ink: var(--fg);
+  --context-ink-em: var(--fg);
+  --context-ink-dim: var(--fg-3);
+  --context-ink-summary: var(--fg-2);
+  --context-ink-scale: var(--fg);
+  --context-ink-node: var(--fg-2);
+  --context-ink-mark: var(--fg);
+  --context-mark-bg: var(--bg-sunken);
+  --context-card-edge: var(--border);
+  --context-card-edge-hover: var(--border-strong);
+  --context-card-edge-live: var(--success);
+  --context-card-bg: var(--bg-raised);
+  --context-card-bg-live: var(--brand-bg);
+  --context-summary-edge: var(--border);
+  --context-summary-bg: var(--bg-raised);
+  --context-halo: color-mix(in oklch, var(--brand) 34%, transparent);
+  --context-pin-glow: color-mix(in oklch, var(--success) 18%, transparent);
 
   /* Hairline widths. Exposing these as vars lets component inline styles
      reference --hairline / --hairline-bold instead of writing "1px" /
@@ -868,81 +869,68 @@
   animation: subtle-fade 180ms ease-out;
 }
 
+/* Left-aligned content column that fills the shared 960 canvas, matching the
+   Team / Agent Detail tabs (same `--sp-2 --sp-5 --sp-7` content padding under a
+   PageHeader). No min-height / centering — the page used to render as a
+   centered hero landing surface, which made its content read narrower than
+   every other tab. */
 .context-live-page {
-  min-height: calc(100vh - 74px);
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
   padding: var(--sp-2) var(--sp-5) var(--sp-7);
 }
 
-.context-live-hero {
-  display: flex;
-  flex-direction: column;
+/* Live-sync chip in the PageHeader right slot: pulsing glow dot + "LIVE"
+   eyebrow + last-synced time. Always-present liveness signal, dense. */
+.context-live-status {
+  display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding-top: var(--sp-8);
-  text-align: center;
+  gap: var(--sp-1_5);
 }
 
-.context-live-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-3);
+/* .context-live-label color is set inline to the severity tone (green when
+   healthy); typography comes from the text-eyebrow tier class. */
+.context-live-time {
+  color: var(--fg-3);
 }
 
 .context-live-dot {
-  width: var(--sp-4);
-  height: var(--sp-4);
-  border-radius: 50%;
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--radius-full);
   flex: 0 0 auto;
   animation: context-live-dot-pulse 2.4s ease-in-out infinite;
 }
 
-.context-live-title {
-  color: var(--context-ink);
-  font-size: 44px;
-  font-weight: 700;
-  line-height: 1.05;
-}
-
-.context-live-subtitle {
-  color: var(--context-ink-dim);
-}
-
-.context-live-subtitle strong {
-  color: var(--context-ink-em);
-  font-weight: 700;
-}
-
-.context-live-status-detail {
-  max-width: 560px;
-  color: var(--fg-3);
-}
-
 .context-map-section {
-  width: min(100%, 1120px);
+  width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: var(--sp-2);
 }
 
 .context-map-kicker {
-  color: var(--context-ink-dim);
-  font-size: 12px;
-  font-weight: 700;
+  color: var(--fg-3);
 }
 
+/* Contained module: the change map reads as a deliberate left-aligned well
+   (sunken surface so the raised domain cards pop) rather than a diagram
+   floating in whitespace. */
 .context-map-frame {
   width: 100%;
-  min-height: 400px;
+  min-height: 360px;
+  padding: var(--sp-4);
+  border: var(--hairline) solid var(--border-faint);
+  border-radius: var(--radius-panel);
+  background: var(--bg-sunken);
   overflow: hidden;
 }
 
 .context-network-svg {
   display: block;
   width: 100%;
-  height: 400px;
+  height: 328px;
 }
 
 .context-network-card-wrap {
@@ -969,9 +957,9 @@
   gap: var(--sp-1);
   padding: var(--sp-3) var(--sp-4);
   border: var(--hairline) solid var(--context-card-edge);
-  border-radius: var(--radius-dialog);
+  border-radius: var(--radius-panel);
   background: var(--context-card-bg);
-  box-shadow: 0 8px 28px var(--context-shadow);
+  box-shadow: var(--shadow-sm);
   color: var(--fg);
   text-align: left;
   transition:
@@ -999,9 +987,9 @@
   justify-content: center;
   gap: var(--sp-1);
   border: var(--hairline) solid var(--context-summary-edge);
-  border-radius: var(--radius-dialog);
+  border-radius: var(--radius-panel);
   background: var(--context-summary-bg);
-  box-shadow: 0 14px 36px var(--context-shadow);
+  box-shadow: var(--shadow-md);
   color: var(--fg);
   text-align: center;
 }
@@ -1011,17 +999,17 @@
   width: var(--sp-11);
   height: var(--sp-11);
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--brand-bg);
   color: var(--success);
 }
 
+/* Typography for the summary card comes from the text-* tier classes applied
+   in context.tsx (text-eyebrow / text-title / text-caption); these rules carry
+   only color + layout. */
 .context-network-summary-title {
   color: var(--context-ink-summary);
-  font-size: 13px;
-  font-weight: 700;
   line-height: 1.15;
-  text-transform: uppercase;
 }
 
 .context-network-summary-scale {
@@ -1030,15 +1018,11 @@
   justify-content: center;
   gap: var(--sp-1);
   color: var(--context-ink-scale);
-  font-size: 40px;
-  font-weight: 500;
   line-height: 1;
 }
 
-.context-network-summary-scale span {
+.context-network-summary-unit {
   color: var(--context-ink-dim);
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .context-network-summary-badge {
@@ -1046,7 +1030,6 @@
   border-radius: var(--radius-chip);
   background: var(--brand-bg);
   color: var(--success);
-  font-weight: 600;
 }
 
 .context-network-pin {
@@ -1055,7 +1038,7 @@
   right: calc(var(--sp-1) * -1);
   width: var(--sp-3);
   height: var(--sp-3);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--success);
   box-shadow: 0 0 0 var(--sp-0_75) var(--context-pin-glow);
 }
@@ -1099,23 +1082,21 @@
 }
 
 .context-signal {
-  width: min(100%, 760px);
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-0_5);
-  padding: 0 var(--sp-2);
-  line-height: 1.35;
-  text-align: center;
+  flex-wrap: wrap;
+  gap: var(--sp-0_5) var(--sp-1);
+  line-height: 1.45;
 }
 
 .context-signal mark {
   display: inline-block;
   margin: 0 var(--sp-0_5);
   padding: 0 var(--sp-1);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-chip);
   background: var(--context-mark-bg);
   color: var(--context-ink-mark);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /*
@@ -1130,70 +1111,10 @@
  * because the list re-renders every 30s for the "Xm ago" tick.
  */
 .context-usage-feed {
-  width: min(100%, 760px);
-  margin: 0 auto;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-}
-
-.context-io-agents {
-  width: min(100%, 760px);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-
-.context-io-agents-header {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  color: var(--fg-3);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.context-io-agents-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.context-io-agent-row {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--sp-1_5);
-  padding: var(--sp-1_5) var(--sp-3);
-  border-top: 1px solid var(--border);
-}
-
-.context-io-agent-main {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-1);
-  overflow: hidden;
-}
-
-.context-io-agent-main > span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-io-agent-counts {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--fg-2);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .context-usage-feed-header {
@@ -1208,7 +1129,7 @@
 .context-usage-feed-live-dot {
   width: var(--sp-1);
   height: var(--sp-1);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--success);
   animation: context-usage-feed-pulse 2.4s ease-in-out infinite;
   flex: 0 0 auto;
@@ -1259,20 +1180,20 @@
 
 .context-usage-feed-row {
   display: grid;
-  grid-template-columns: 16px 22px 1fr auto;
+  grid-template-columns: var(--sp-4) 22px 1fr auto;
   align-items: center;
   gap: var(--sp-1_5);
   padding: var(--sp-1_5) 0;
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
 .context-usage-feed-dot {
   width: var(--sp-1);
   height: var(--sp-1);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--success);
-  margin-left: 3px;
+  margin-left: var(--sp-0_75);
   position: relative;
   z-index: 1;
   /* Page-bg ring "breaks" the dashed rail at this dot. */
@@ -1291,7 +1212,7 @@
 .context-usage-feed-avatar {
   width: 22px;
   height: 22px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1447,20 +1368,6 @@
   .context-live-page {
     padding-right: var(--sp-3);
     padding-left: var(--sp-3);
-  }
-
-  .context-live-hero {
-    padding-top: var(--sp-4);
-  }
-
-  .context-live-title-row {
-    align-items: flex-start;
-    gap: var(--sp-2);
-  }
-
-  .context-live-title {
-    font-size: 34px;
-    text-align: left;
   }
 
   .context-map-frame {

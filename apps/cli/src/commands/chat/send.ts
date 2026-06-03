@@ -9,18 +9,35 @@ interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
+  broadcast?: boolean;
+  request?: boolean;
+  question?: string;
+  option?: string[];
+  replyTo?: string;
+}
+
+/** Commander collector for a repeatable flag (`--option a --option b`). */
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 export function registerChatSendCommand(chat: Command): void {
   chat
-    .command("send <agentName> [message]")
+    .command("send [agentName] [message]")
     .description(
-      "Send a message to an agent in the caller's current chat (the chat identified by FIRST_TREE_CHAT_ID). The recipient must already be a participant; run `chat invite <agentName>` first if they are not.",
+      "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). With <agentName> the recipient is " +
+        "@mentioned and woken (must already be a participant — `chat invite` first). With --broadcast the message " +
+        "enters the stream but wakes no one. Use --request to ask an open question, --reply-to to answer one.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
-    .action(async (agentName: string, message: string | undefined, options: SendOptions) => {
+    .option("-b, --broadcast", "Send with no @mention — enters the stream, wakes no one")
+    .option("--request", "Send as an open question (format=request) directed at <agentName>")
+    .option("--question <text>", "The question prompt (with --request)")
+    .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
+    .option("--reply-to <messageId>", "Answer/thread this message — sets inReplyTo (clears the asker's red dot)")
+    .action(async (agentName: string | undefined, message: string | undefined, options: SendOptions) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
         if (!chatId) {
@@ -33,8 +50,26 @@ export function registerChatSendCommand(chat: Command): void {
           );
         }
 
-        const content = message ?? (await readStdin());
-        if (!content) {
+        // Resolve target vs broadcast. In --broadcast mode there is no
+        // recipient, so the first positional is actually the message.
+        const broadcast = options.broadcast === true;
+        const target = broadcast ? undefined : agentName;
+        const inlineBody = broadcast ? (message ?? agentName) : message;
+
+        if (!broadcast && !target) {
+          fail(
+            "NO_TARGET",
+            "Pass <agentName> to @mention a recipient, or use --broadcast to send with no @mention " +
+              "(enters the stream, wakes no one).",
+            2,
+          );
+        }
+
+        const content = inlineBody ?? (await readStdin());
+        const isRequest = options.request === true;
+        // A request carries its ask in --question; an empty body is allowed
+        // (the question is the actionable part). Every other send needs content.
+        if (!content && !(isRequest && options.question)) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
         }
 
@@ -47,36 +82,57 @@ export function registerChatSendCommand(chat: Command): void {
           }
         }
 
+        let format: MessageFormat = options.format;
+        if (isRequest) {
+          if (!target) {
+            fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human <agentName>.", 2);
+          }
+          if (!options.question) {
+            fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
+          }
+          const opts = options.option ?? [];
+          format = "request";
+          metadata = {
+            ...(metadata ?? {}),
+            request: {
+              questions: [
+                {
+                  id: "q1",
+                  prompt: options.question,
+                  kind: opts.length > 0 ? "single" : "free",
+                  options: opts,
+                  required: true,
+                },
+              ],
+            },
+          };
+        }
+
         const sdk = createSdk(options.agent);
 
         // L3: snapshot any `.md` this message references, exactly like the
         // runtime's result-sink does for final-text — closing the biggest
-        // doc-preview gap (chat-send messages never built snapshots before).
-        // Pure pass-through outside an agent session / when the runtime did
-        // not inject FIRST_TREE_DOC_BASE. `content` may come back rewritten
-        // (absolute-in-root paths → relative) so the web preview can match.
-        const captured = await captureOutboundDocs(content);
+        // doc-preview gap. Pure pass-through outside an agent session.
+        const captured = await captureOutboundDocs(content ?? "");
         const outboundMetadata = captured.documentContext
           ? { ...(metadata ?? {}), documentContext: captured.documentContext }
           : metadata;
 
         const result = await sdk.sendMessage(chatId, {
-          format: options.format,
-          // Send the agent's content verbatim (modulo the doc-path rewrite
-          // above). The server owns mention injection: `receiverNames`
-          // declares routing intent, and the agent endpoint's
-          // `normalizeMentionsInContent` will prepend `@<name>` only when
-          // the content doesn't already contain it (idempotent,
-          // case-insensitive). Prepending here too would double-stamp when
-          // the agent already wrote `@<name>` in the body — see
-          // services/message.ts step 2c.
+          format,
           content: captured.content,
           metadata: outboundMetadata,
           source: "cli",
-          // Server resolves the name against the current chat's participant
-          // list and adds it to mentions; an unknown name fails the write
-          // with a `chat invite` hint.
-          receiverNames: [agentName],
+          // Server resolves the name against the chat's participant list and
+          // adds it to mentions; an unknown name fails with a `chat invite`
+          // hint. Omitted in --broadcast mode → no @mention, no wake-up.
+          ...(target ? { receiverNames: [target] } : {}),
+          // Answer/thread a prior message; the server's open-question counter
+          // decrements off exactly this when the target answers a request.
+          ...(options.replyTo ? { inReplyTo: options.replyTo } : {}),
+          // Explicit broadcast: enter the stream, wake no one, skip the
+          // group-chat @mention guard server-side.
+          ...(broadcast ? { broadcast: true } : {}),
         });
         success(result);
       } catch (error) {

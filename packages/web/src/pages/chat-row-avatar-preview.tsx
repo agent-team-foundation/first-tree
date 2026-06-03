@@ -34,6 +34,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     lastMessageAt: overrides.lastMessageAt ?? new Date().toISOString(),
     lastMessagePreview: overrides.lastMessagePreview ?? null,
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
+    openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity: overrides.liveActivity ?? null,
@@ -261,7 +262,7 @@ function PreviewCard({ name, row }: { name: string; row: MeChatRow }) {
         className="w-full text-left flex items-center"
         style={{
           padding: "var(--sp-2) var(--sp-3)",
-          gap: "var(--sp-2_5)",
+          gap: "var(--sp-2)",
           background: "transparent",
           borderLeft: "var(--hairline-bold) solid transparent",
           width: 320,

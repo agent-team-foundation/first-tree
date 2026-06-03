@@ -17,7 +17,7 @@ per finding, whether to:
 | `tree-stale`                  | auto-fix                                                                                                  | Code is the ground truth; mechanical update.                                                                        |
 | `tree-wrong`                  | auto-fix when the correction is small; needs-human if rationale changes                                   | Always link the offending PR / commit so reviewers see the source of truth.                                         |
 | `tree-outdated`               | needs-human                                                                                               | Superseding decisions cross domains; require an owner.                                                              |
-| `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md domain entries, source-repos.md additions, org.yaml dep registration, member stubs.  |
+| `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md domain entries, `workspace.json.sources` additions, org.yaml dep registration, member stubs. |
 | `code-not-synced/substantive` | write-handoff (always)                                                                                    | Sync surfaces the source pointer and stops. Substantive write goes through write's "default to not writing" filter. |
 | `cross-domain-broken`         | auto-fix when the new target is unambiguous; needs-human when the link could go to multiple replacements. |
 | `ownership-stale`             | needs-human always                                                                                        | Ownership changes are high-trust and require a person.                                                              |
@@ -37,9 +37,11 @@ For each drift routed to auto-fix:
      list and create `<domain>/NODE.md` with `title`, `owners: []`
      frontmatter and an empty body. Do **not** describe what the domain
      does — that's substantive.
-   - **new submodule**: add the path to `source-repos.md`. Do not bind
+   - **new submodule**: add the submodule's subdir name to
+     `workspace.json.sources` (one-line JSON edit). Do not bind
      it as its own tree (that's a user decision via
-     `first-tree tree init`).
+     `first-tree tree init` plus the lone-repo migrate flow in
+     `first-tree-onboarding`).
    - **new dep**: append to `.first-tree/org.yaml` `techStackConstraints`.
    - **new member**: create `members/<slug>/NODE.md` with `title`,
      `owners: []`, `type: human`, `role: contributor` frontmatter and

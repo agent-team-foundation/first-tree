@@ -26,6 +26,7 @@ import {
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -555,13 +556,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  // NOTE: codex's stream exposes only `command_execution` (shell) items — it
-  // cannot cleanly tell which Context Tree node a turn read without parsing
-  // shell commands. Rather than emit a fake per-turn signal (the old
-  // `emitContextTreeUsage` did), codex produces NO `context_tree_usage` events.
-  // Precise codex tree-read tracking is a known gap (P1). See the claude-code
-  // handler's tool-call processor for the real per-read signal.
-
   async function prepareSourceRepos(
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
@@ -681,12 +675,23 @@ export const createCodexHandler: HandlerFactory = (config) => {
             : item.status === "failed"
               ? ("error" as const)
               : ("pending" as const);
+        const toolFileRefs =
+          status === "ok" && cwd
+            ? toolFileRefsFromShellCommand({
+                command: item.command,
+                cwd,
+                contextTreePath,
+                contextTreeRepoUrl,
+                contextTreeBranch,
+              })
+            : undefined;
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "command",
-          args: { command: item.command },
+          args: { command: item.command, ...(cwd ? { cwd } : {}) },
           status,
           resultPreview: item.aggregated_output,
+          toolFileRefs,
         });
         return "";
       }

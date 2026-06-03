@@ -12,7 +12,6 @@
 ## Change Surface
 
 - [ ] `apps/cli` public CLI or help output
-- [ ] `packages/github-scan` / `first-tree github scan`
 - [ ] tree onboarding / binding / inspection behavior
 - [ ] shipped or planned skill topology
 - [ ] docs or contributor-facing repository metadata

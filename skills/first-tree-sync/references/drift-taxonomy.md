@@ -63,12 +63,15 @@ invented.
 
 - a top-level source directory has no entry in the relevant `NODE.md`
   domain list
-- `.gitmodules` lists a submodule path not present in the tree's
-  `source-repos.md`
+- `.gitmodules` lists a submodule path whose subdir name is not in
+  `workspace.json.sources` (the W1 manifest at
+  `<workspaceRoot>/.first-tree/workspace.json`)
 - `package.json` / `pyproject.toml` / `go.mod` / `Cargo.toml` declares a
   decision-relevant dependency (framework, runtime, datastore) that is
   absent from `.first-tree/org.yaml`'s `techStackConstraints`
-- a newly bound source repo is not yet registered in `source-repos.md`
+- a newly cloned source repo at `<workspaceRoot>/<name>` is not yet
+  in `workspace.json.sources` (surfaces as `unboundGitSiblings[]` in
+  `tree status`)
 - an active contributor (commits within the last 6 months) is not
   present under `members/`
 

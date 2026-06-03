@@ -182,12 +182,14 @@ describe("ContextPage DOM behavior", () => {
 
     const { container, root, queryClient } = await renderDom(<ContextPage previewSnapshot={liveSnapshot} />);
     expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Context tree is live");
+    // The old centered "Context tree is live" hero is now a LIVE chip in the
+    // PageHeader right slot; the warning detail still renders via ContextStatusNote.
+    expect(container.textContent).toContain("LIVE");
     expect(container.textContent).toContain("Tree sync is stale.");
     expect(container.textContent).toContain("4 agents");
-    expect(container.textContent).toContain("18 reads");
+    expect(container.textContent).toContain("read the tree 18 times");
     expect(container.textContent).toContain("2 agents");
-    expect(container.textContent).toContain("5 writes");
+    expect(container.textContent).toContain("wrote 5 times");
     expect(container.textContent).toContain("23total nodes");
     expect(container.textContent).toContain("+6 updates");
     expect(container.textContent).toContain("QB");
@@ -240,8 +242,11 @@ describe("ContextPage DOM behavior", () => {
 
     const { container, root } = await renderDom(<ContextPage previewSnapshot={empty} />);
     expect(container.textContent).toContain("No context updates in the past 7 days.");
-    expect(container.textContent).toContain("No explicit Context Tree read/write recorded in the last 7 days.");
-    expect(container.textContent).not.toContain("LIVE");
+    expect(container.textContent).toContain("No Context Tree reads or writes in the past 7 days.");
+    // LIVE reflects the tree's sync liveness, not usage: a synced (active)
+    // snapshot shows the header LIVE chip even with zero reads/writes / no
+    // events (the streaming IO feed is what hides when empty).
+    expect(container.textContent).toContain("LIVE");
     await act(async () => root.unmount());
   });
 
@@ -290,7 +295,7 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => {
       resolveSnapshot(snapshot());
     });
-    await waitForText(loading.container, "Context tree is live");
+    await waitForText(loading.container, "LIVE");
     await act(async () => loading.root.unmount());
 
     contextApiMocks.getContextTreeSnapshot.mockRejectedValueOnce(new Error("Snapshot unavailable"));
@@ -300,7 +305,14 @@ describe("ContextPage DOM behavior", () => {
 
     authMock.value = { organizationId: null };
     const noOrg = await renderDom(<ContextPage />);
-    expect(noOrg.container.textContent).toBe("/");
+    // No org → query disabled, no snapshot. The page renders only its
+    // PageHeader chrome (always present, like every other tab) — no live
+    // chip, no IO feed, and no navigation occurs.
+    expect(noOrg.container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
+    expect(noOrg.container.textContent).not.toContain("LIVE");
+    // Assert the IO feed section element is absent (robust to its label text)
+    // rather than matching a sublabel string that the data model may rename.
+    expect(noOrg.container.querySelector(".context-usage-feed")).toBeNull();
     expect(contextApiMocks.getContextTreeSnapshot).toHaveBeenCalledTimes(2);
     await act(async () => noOrg.root.unmount());
   });

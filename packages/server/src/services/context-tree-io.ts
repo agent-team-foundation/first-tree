@@ -6,6 +6,7 @@ import {
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
+  classifyShellCommandIo,
   contextTreeIoSourceSchema,
   type SessionEvent,
   sessionEventSchema,
@@ -19,11 +20,13 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { sessionEvents } from "../db/schema/session-events.js";
+import { createLogger } from "../observability/index.js";
 import { getOrgContextTree } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead"]);
 const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+const log = createLogger("ContextTreeIo");
 
 export type ContextTreeIoViewer = {
   humanAgentId: string;
@@ -60,6 +63,54 @@ type NormalizedFileRef = {
   targetPath: string;
   metadata: Record<string, unknown>;
 };
+
+type NormalizedFileRefRecord = {
+  normalized: NormalizedFileRef;
+  sourceIndex: number;
+};
+
+export type ContextTreeIoSkipReason =
+  | "no_org_context_tree_binding"
+  | "event_kind_not_io"
+  | "status_not_ok"
+  | "unsupported_tool"
+  | "unsupported_shell_command"
+  | "no_tool_file_refs"
+  | "ref_schema_invalid"
+  | "ref_repo_mismatch"
+  | "ref_path_invalid"
+  | "chat_not_in_org";
+
+export type ContextTreeIoDecision =
+  | {
+      recordable: true;
+    }
+  | {
+      recordable: false;
+      reason: ContextTreeIoSkipReason;
+    };
+
+export type ExplainContextTreeIoDecisionInput = {
+  runtimeProvider: string;
+  sessionEvent: {
+    kind: string;
+    payload: unknown;
+  };
+  bindingRepo: string | null | undefined;
+  bindingBranch?: string | null;
+  chatInOrg?: boolean;
+};
+
+type InternalContextTreeIoDecision =
+  | {
+      recordable: true;
+      derivation: EventIoDerivation;
+      refs: NormalizedFileRefRecord[];
+    }
+  | {
+      recordable: false;
+      reason: ContextTreeIoSkipReason;
+    };
 
 function canonicalRepoUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -105,9 +156,31 @@ function isClaudeRuntime(runtimeProvider: string): boolean {
   return runtimeProvider === "claude-code" || runtimeProvider === "claude-code-tui";
 }
 
-function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDerivation | null {
+function shellCommandArg(event: SessionEvent): string | null {
+  if (event.kind !== "tool_call") return null;
+  const args = event.payload.args;
+  if (!args || typeof args !== "object") return null;
+  const command = (args as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function shellToolCanRead(event: SessionEvent): boolean {
+  const command = shellCommandArg(event);
+  if (command === null) return false;
+  const classification = classifyShellCommandIo(command);
+  return classification.supported && classification.action === "read";
+}
+
+function isShellTool(runtimeProvider: string, toolName: string): boolean {
+  return (
+    (runtimeProvider === "codex" && toolName === "command") || (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
+  );
+}
+
+function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDerivation | ContextTreeIoSkipReason {
   if (event.kind === "context_tree_usage") return { action: "read", source: "legacy_context_tree_usage" };
-  if (event.kind !== "tool_call" || event.payload.status !== "ok") return null;
+  if (event.kind !== "tool_call") return "event_kind_not_io";
+  if (event.payload.status !== "ok") return "status_not_ok";
 
   const toolName = event.payload.name;
   if (runtimeProvider === "codex" && toolName === "file_change") {
@@ -119,10 +192,11 @@ function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDer
   if (isClaudeRuntime(runtimeProvider) && CLAUDE_WRITE_TOOLS.has(toolName)) {
     return { action: "write", source: "claude_write_tool" };
   }
+  if (isShellTool(runtimeProvider, toolName)) {
+    return shellToolCanRead(event) ? { action: "read", source: "shell_command" } : "unsupported_shell_command";
+  }
 
-  // P1 only: shell read tracking needs a server-side command parser before it
-  // can become a trusted fact. Bash/Codex command tool calls are ignored here.
-  return null;
+  return "unsupported_tool";
 }
 
 function legacyFileRef(event: SessionEvent, bindingRepo: string, bindingBranch: string): ToolFileRef | null {
@@ -151,54 +225,148 @@ function extractFileRefs(event: SessionEvent, bindingRepo: string, bindingBranch
   return records;
 }
 
-function normalizeFileRef(ref: ToolFileRef, bindingRepo: string, bindingBranch: string): NormalizedFileRef | null {
+function normalizeFileRef(
+  ref: ToolFileRef,
+  bindingRepo: string,
+  bindingBranch: string,
+): { ok: true; normalized: NormalizedFileRef } | { ok: false; reason: ContextTreeIoSkipReason } {
   const parsed = toolFileRefSchema.safeParse(ref);
-  if (!parsed.success) return null;
+  if (!parsed.success) return { ok: false, reason: "ref_schema_invalid" };
 
   const expectedRepo = canonicalRepoUrl(bindingRepo);
   const reportedRepo = canonicalRepoUrl(parsed.data.repoUrl);
-  if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) return null;
+  if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) {
+    return { ok: false, reason: "ref_repo_mismatch" };
+  }
 
   const targetKind = parsed.data.pathKind ?? "file";
-  if (!parsed.data.repoRelativePath) return null;
+  if (!parsed.data.repoRelativePath) return { ok: false, reason: "ref_path_invalid" };
   const targetPath = normalizeTargetPath(parsed.data.repoRelativePath, targetKind);
-  if (!targetPath) return null;
+  if (!targetPath) return { ok: false, reason: "ref_path_invalid" };
 
   return {
-    treeRepoUrl: bindingRepo,
-    treeBranch: parsed.data.repoBranch ?? bindingBranch,
-    targetKind,
-    targetPath,
-    metadata: {
-      origin: parsed.data.origin,
-      ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
+    ok: true,
+    normalized: {
+      treeRepoUrl: bindingRepo,
+      treeBranch: parsed.data.repoBranch ?? bindingBranch,
+      targetKind,
+      targetPath,
+      metadata: {
+        origin: parsed.data.origin,
+        ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
+      },
     },
   };
 }
 
+function buildContextTreeIoDecision(input: {
+  event: SessionEvent;
+  runtimeProvider: string;
+  bindingRepo: string | null | undefined;
+  bindingBranch: string;
+  chatInOrg?: boolean;
+}): InternalContextTreeIoDecision {
+  if (!input.bindingRepo) return { recordable: false, reason: "no_org_context_tree_binding" };
+
+  const derivation = deriveEventIo(input.event, input.runtimeProvider);
+  if (typeof derivation === "string") return { recordable: false, reason: derivation };
+
+  const refs = extractFileRefs(input.event, input.bindingRepo, input.bindingBranch);
+  if (refs.length === 0) return { recordable: false, reason: "no_tool_file_refs" };
+
+  const normalizedRefs: NormalizedFileRefRecord[] = [];
+  let firstRejectedReason: ContextTreeIoSkipReason | null = null;
+  for (const { ref, sourceIndex } of refs) {
+    const normalized = normalizeFileRef(ref, input.bindingRepo, input.bindingBranch);
+    if (!normalized.ok) {
+      firstRejectedReason ??= normalized.reason;
+      continue;
+    }
+    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex });
+  }
+
+  if (normalizedRefs.length === 0) {
+    return { recordable: false, reason: firstRejectedReason ?? "ref_schema_invalid" };
+  }
+  if (input.chatInOrg === false) return { recordable: false, reason: "chat_not_in_org" };
+
+  return { recordable: true, derivation, refs: normalizedRefs };
+}
+
+function toolNameOf(event: SessionEvent): string | null {
+  return event.kind === "tool_call" ? event.payload.name : null;
+}
+
+export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecisionInput): ContextTreeIoDecision {
+  const parsed = sessionEventSchema.safeParse({
+    kind: input.sessionEvent.kind,
+    payload: input.sessionEvent.payload,
+  });
+  if (!parsed.success) return { recordable: false, reason: "event_kind_not_io" };
+
+  const decision = buildContextTreeIoDecision({
+    event: parsed.data,
+    runtimeProvider: input.runtimeProvider,
+    bindingRepo: input.bindingRepo,
+    bindingBranch: input.bindingBranch ?? "main",
+    chatInOrg: input.chatInOrg,
+  });
+  return decision.recordable ? { recordable: true } : { recordable: false, reason: decision.reason };
+}
+
 export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
   const binding = await getOrgContextTree(db, input.organizationId);
-  if (!binding.repo) return;
   const bindingBranch = binding.branch ?? "main";
 
   const event = sessionEventSchema.parse({ kind: input.sessionEvent.kind, payload: input.sessionEvent.payload });
-  const derivation = deriveEventIo(event, input.runtimeProvider);
-  if (!derivation) return;
-  const refs = extractFileRefs(event, binding.repo, bindingBranch);
-  if (refs.length === 0) return;
+  const decision = buildContextTreeIoDecision({
+    event,
+    runtimeProvider: input.runtimeProvider,
+    bindingRepo: binding.repo,
+    bindingBranch,
+  });
+  if (!decision.recordable) {
+    log.debug(
+      {
+        reason: decision.reason,
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        chatId: input.chatId,
+        sessionEventId: input.sessionEvent.id,
+        runtimeProvider: input.runtimeProvider,
+        eventKind: event.kind,
+        toolName: toolNameOf(event),
+      },
+      "context tree io event skipped",
+    );
+    return;
+  }
 
   const [chat] = await db
     .select({ id: chats.id })
     .from(chats)
     .where(and(eq(chats.id, input.chatId), eq(chats.organizationId, input.organizationId)))
     .limit(1);
-  if (!chat) return;
+  if (!chat) {
+    log.debug(
+      {
+        reason: "chat_not_in_org",
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        chatId: input.chatId,
+        sessionEventId: input.sessionEvent.id,
+        runtimeProvider: input.runtimeProvider,
+        eventKind: event.kind,
+        toolName: toolNameOf(event),
+      },
+      "context tree io event skipped",
+    );
+    return;
+  }
 
   const createdAt = new Date(input.sessionEvent.createdAt);
   const rows = [];
-  for (const { ref, sourceIndex } of refs) {
-    const normalized = normalizeFileRef(ref, binding.repo, bindingBranch);
-    if (!normalized) continue;
+  for (const { normalized, sourceIndex } of decision.refs) {
     rows.push({
       id: `${input.sessionEvent.id}:${sourceIndex}`,
       organizationId: input.organizationId,
@@ -207,8 +375,8 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
       sourceSessionEventId: input.sessionEvent.id,
       sourceIndex,
       runtimeProvider: input.runtimeProvider,
-      action: derivation.action,
-      source: derivation.source,
+      action: decision.derivation.action,
+      source: decision.derivation.source,
       treeRepoUrl: normalized.treeRepoUrl,
       treeBranch: normalized.treeBranch,
       targetKind: normalized.targetKind,

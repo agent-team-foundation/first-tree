@@ -72,6 +72,8 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import { RequestCard } from "../../../components/chat/request-card.js";
+import { findAnswerableRequestId } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -256,6 +258,7 @@ function TextRow({
   agentAvatarFn,
   agentColorTokenFn,
   mentionParticipants,
+  messages,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
@@ -263,6 +266,8 @@ function TextRow({
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
+  /** Full visible thread — RequestCard derives a request's lifecycle from it. */
+  messages: readonly MessageWithDelivery[];
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -300,7 +305,11 @@ function TextRow({
   // failed-mention wrapper uses), and only the genuinely-failed remainder
   // becomes chips.
   const textContent = useMemo<string | null>(() => {
-    if (msg.format !== "text" && msg.format !== "markdown") return null;
+    // `request` is included so RequestCard's `body` (the long narrative /
+    // decision context) renders through the same markdown + doc-link path as
+    // text/markdown — without this it falls back to "" and the card shows
+    // only the chip + answer block (QA: missing body on expanded requests).
+    if (msg.format !== "text" && msg.format !== "markdown" && msg.format !== "request") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
     if (msg.source === "web") return msg.content;
     const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
@@ -506,6 +515,19 @@ function TextRow({
             </Markdown>
           ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
             <GithubEventCardMessage content={msg.content} />
+          ) : msg.format === "request" ? (
+            <RequestCard
+              message={msg}
+              thread={messages}
+              viewerAgentId={myAgentId}
+              body={
+                <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
+                  {textContent ?? ""}
+                </Markdown>
+              }
+              resolveAgentName={agentNameFn}
+              onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
+            />
           ) : (
             <pre
               className="mono text-label"
@@ -1078,8 +1100,22 @@ export function ChatView({
   );
 
   const sendMut = useMutation({
-    mutationFn: ({ content, mentions }: { content: string; mentions: string[] }) =>
-      sendChatMessage(chatId, content, mentions),
+    mutationFn: ({
+      content,
+      mentions,
+      broadcast,
+      inReplyTo,
+    }: {
+      content: string;
+      mentions: string[];
+      broadcast?: boolean;
+      inReplyTo?: string;
+    }) => {
+      const opts = { ...(broadcast ? { broadcast: true } : {}), ...(inReplyTo ? { inReplyTo } : {}) };
+      return Object.keys(opts).length > 0
+        ? sendChatMessage(chatId, content, mentions, opts)
+        : sendChatMessage(chatId, content, mentions);
+    },
     // Optimistic insert: render the user's row above the composer immediately
     // and clear the draft so the input feels responsive even when the POST
     // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
@@ -1179,12 +1215,15 @@ export function ChatView({
     // would 400 just like a text without an addressee (issue 387). Surface
     // a hint when the user has only attached images so the silent-return
     // doesn't look like a stuck send.
-    if (requiresMention && draftMentions.length === 0) {
-      if (images.length > 0) {
-        // English matches the other uploadError strings in this file
-        // (Failed to send image / Failed to add participants / Image too large).
-        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
-      }
+    // No @mention in a group chat = an explicit BROADCAST: enter the stream,
+    // wake no one (proposal §D6). Text sends fall through with `broadcast`;
+    // image sends still need an addressee (the image fan-out path has no
+    // broadcast affordance yet), so keep the hint-and-return for those.
+    const broadcasting = requiresMention && draftMentions.length === 0;
+    if (broadcasting && images.length > 0) {
+      // English matches the other uploadError strings in this file
+      // (Failed to send image / Failed to add participants / Image too large).
+      setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
       return;
     }
 
@@ -1321,7 +1360,19 @@ export function ChatView({
       return;
     }
 
-    sendMut.mutate({ content: text, mentions: effectiveSendMentions });
+    // Auto-thread an answer: a plain reply that @-mentions the agent which
+    // asked an open question directed at me counts as the answer (proposal
+    // §D2) — attach `inReplyTo` so the server clears the red dot. Skipped for
+    // broadcasts (no mentions).
+    const answeredRequestId = broadcasting
+      ? undefined
+      : (findAnswerableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined);
+    sendMut.mutate({
+      content: text,
+      mentions: effectiveSendMentions,
+      broadcast: broadcasting,
+      inReplyTo: answeredRequestId,
+    });
   };
 
   const [renaming, setRenaming] = useState(false);
@@ -2667,6 +2718,7 @@ export function ChatView({
                           agentAvatarFn={agentAvatar}
                           agentColorTokenFn={agentColorToken}
                           mentionParticipants={renderMentionParticipants}
+                          messages={mergedMessages}
                         />
                       );
                     }
@@ -3081,24 +3133,18 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
-                            disabled={
-                              sendMut.isPending ||
-                              uploading ||
-                              (!draft.trim() && pendingImages.length === 0) ||
-                              (requiresMention && draftMentions.length === 0)
-                            }
+                            disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
                             title={
                               requiresMention && draftMentions.length === 0
-                                ? "Group chats need at least one @member to send"
+                                ? draft.trim()
+                                  ? "Broadcast — no @mention, enters the stream and wakes no one"
+                                  : "@mention a member, or type a message to broadcast"
                                 : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              (sendMut.isPending ||
-                                uploading ||
-                                (!draft.trim() && pendingImages.length === 0) ||
-                                (requiresMention && draftMentions.length === 0)) &&
+                              (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
                                 "opacity-40 cursor-not-allowed",
                             )}
                             style={{

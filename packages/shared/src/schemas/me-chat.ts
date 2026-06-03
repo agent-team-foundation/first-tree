@@ -239,6 +239,15 @@ export const meChatRowSchema = z.object({
   lastMessageAt: z.string().nullable(),
   lastMessagePreview: z.string().nullable(),
   unreadMentionCount: z.number().int(),
+  /**
+   * Count of open questions (`format=request` messages) directed at the
+   * caller in this chat and not yet answered by them. Drives the re-introduced
+   * `needs_you` red-dot. Answer-cleared, NOT read-cleared — independent of
+   * `unreadMentionCount`. `.default(0)` for version skew (a server build that
+   * predates this field leaves the dot off rather than blanking the row).
+   * See proposals/group-chat-unified-send §D1.
+   */
+  openRequestCount: z.number().int().default(0),
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
   /**

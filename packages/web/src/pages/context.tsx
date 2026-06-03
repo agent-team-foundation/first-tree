@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 
 const CONTEXT_WINDOW = "7d";
@@ -50,67 +51,79 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
+  const liveStatusReady = snapshot && (preview || !query.isLoading) && snapshot.snapshotStatus !== "unavailable";
+
   return (
-    <div
-      className="context-live-page"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--sp-10)",
-      }}
-    >
-      {!preview && query.isLoading ? <LoadingState /> : null}
-      {!preview && query.error ? (
-        <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
-      ) : null}
-      {snapshot && (preview || !query.isLoading) ? (
-        snapshot.snapshotStatus === "unavailable" ? (
-          <UnavailableState snapshot={snapshot} />
-        ) : (
-          <>
-            <LiveContextHero snapshot={snapshot} />
-            <ChangeMap
-              snapshot={snapshot}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={(nodeId) => {
-                const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
-                setSelectedUpdateId(matchingUpdate?.id ?? null);
-              }}
-            />
-            <ContextSignal snapshot={snapshot} />
-            <ContextIoByAgent snapshot={snapshot} />
-            <ContextUsageFeed snapshot={snapshot} />
-          </>
-        )
-      ) : null}
-    </div>
+    <>
+      <PageHeader
+        title="Context"
+        subtitle="Your team's Context Tree."
+        right={liveStatusReady ? <LiveStatus snapshot={snapshot} /> : null}
+      />
+      <div className="context-live-page">
+        {!preview && query.isLoading ? <LoadingState /> : null}
+        {!preview && query.error ? (
+          <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
+        ) : null}
+        {snapshot && (preview || !query.isLoading) ? (
+          snapshot.snapshotStatus === "unavailable" ? (
+            <UnavailableState snapshot={snapshot} />
+          ) : (
+            <>
+              <ContextStatusNote snapshot={snapshot} />
+              <ChangeMap
+                snapshot={snapshot}
+                selectedNodeId={selectedNodeId}
+                onSelectNode={(nodeId) => {
+                  const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
+                  setSelectedUpdateId(matchingUpdate?.id ?? null);
+                }}
+              />
+              <ContextSignal snapshot={snapshot} />
+              <ContextUsageFeed snapshot={snapshot} />
+            </>
+          )
+        ) : null}
+      </div>
+    </>
   );
 }
 
-function LiveContextHero({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const lastUpdated = exactTimeLabel(snapshot.syncedAt) ?? "sync time unknown";
+/**
+ * Live-sync chip for the page header's right slot. A severity-toned dot pulses
+ * with a glow (DESIGN: green = the living system, working-form = pulse + glow),
+ * next to a "LIVE" eyebrow and the exact last-synced time. The always-present
+ * liveness signal in dense, left-of-the-page-edge chrome — no marketing hero.
+ */
+function LiveStatus({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const lastUpdated = exactTimeLabel(snapshot.syncedAt);
   const statusTone = severityColor(snapshot.contextStatus.severity);
-  const statusDetail =
-    snapshot.contextStatus.severity === "ok" ? null : (snapshot.contextStatus.detail ?? snapshot.contextStatus.label);
-
   return (
-    <section className="context-live-hero" aria-label={snapshot.contextStatus.label}>
-      <div className="context-live-title-row">
-        <span
-          aria-hidden="true"
-          className="context-live-dot"
-          style={{
-            background: statusTone,
-            ["--context-live-dot-color" as string]: statusTone,
-          }}
-        />
-        <h2 className="m-0 context-live-title">Context tree is live</h2>
-      </div>
-      <div className="text-lead context-live-subtitle">
-        Last updated at <strong>{lastUpdated}</strong>
-      </div>
-      {statusDetail ? <div className="text-body context-live-status-detail">{statusDetail}</div> : null}
-    </section>
+    <span className="context-live-status" title={snapshot.contextStatus.label}>
+      <span
+        aria-hidden="true"
+        className="context-live-dot"
+        style={{ background: statusTone, ["--context-live-dot-color" as string]: statusTone }}
+      />
+      <span className="text-eyebrow context-live-label" style={{ color: statusTone }}>
+        LIVE
+      </span>
+      {lastUpdated ? <span className="text-label context-live-time">· synced {lastUpdated}</span> : null}
+    </span>
+  );
+}
+
+/** Inline notice shown only when the tree sync is not healthy (warning/danger);
+ *  the ok path stays chrome-free per the read-only / informational rule. */
+function ContextStatusNote({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  if (snapshot.contextStatus.severity === "ok") return null;
+  const detail = snapshot.contextStatus.detail ?? snapshot.contextStatus.label;
+  const tone = severityColor(snapshot.contextStatus.severity);
+  return (
+    <div className="flex items-center text-label" style={{ gap: "var(--sp-2)", color: tone }}>
+      <AlertTriangle size={14} aria-hidden="true" />
+      <span>{detail}</span>
+    </div>
   );
 }
 
@@ -164,12 +177,12 @@ function ChangeMap({
                 <span className="context-network-summary-icon" aria-hidden="true">
                   <Network size={30} strokeWidth={2.3} />
                 </span>
-                <span className="context-network-summary-title">Context Tree</span>
-                <span className="context-network-summary-scale">
+                <span className="text-eyebrow context-network-summary-title">Context Tree</span>
+                <span className="text-title context-network-summary-scale">
                   {formatNumber(snapshot.nodes.length)}
-                  <span>total nodes</span>
+                  <span className="text-caption context-network-summary-unit">total nodes</span>
                 </span>
-                <span className="text-body context-network-summary-badge">
+                <span className="text-caption font-semibold context-network-summary-badge">
                   +{formatNumber(summaryUpdateCount)} updates
                 </span>
               </div>
@@ -213,62 +226,28 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
     snapshot.io.summary.read.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.read.agentCount} agents`;
   const writeAgentText =
     snapshot.io.summary.write.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.write.agentCount} agents`;
-  const readText =
-    snapshot.io.summary.read.eventCount === 1 ? "1 read" : `${snapshot.io.summary.read.eventCount} reads`;
-  const writeText =
-    snapshot.io.summary.write.eventCount === 1 ? "1 write" : `${snapshot.io.summary.write.eventCount} writes`;
+  const readTimesText =
+    snapshot.io.summary.read.eventCount === 1 ? "1 time" : `${snapshot.io.summary.read.eventCount} times`;
+  const writeTimesText =
+    snapshot.io.summary.write.eventCount === 1 ? "1 time" : `${snapshot.io.summary.write.eventCount} times`;
 
   if (snapshot.io.summary.read.eventCount === 0 && snapshot.io.summary.write.eventCount === 0) {
     return (
-      <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
-        <span>No explicit Context Tree read/write recorded in the last {windowText}.</span>
+      <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
+        <span>No Context Tree reads or writes in the past {windowText}.</span>
       </div>
     );
   }
 
   return (
-    <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
+    <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
       <span>
-        In the last {windowText}, <mark>{readAgentText}</mark>
+        In the past {windowText}, <mark>{readAgentText}</mark> read the tree <mark>{readTimesText}</mark>
       </span>
       <span>
-        made <mark>{readText}</mark> and <mark>{writeAgentText}</mark> made <mark>{writeText}</mark>.
+        and <mark>{writeAgentText}</mark> wrote <mark>{writeTimesText}</mark>.
       </span>
     </div>
-  );
-}
-
-function ContextIoByAgent({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const agents = snapshot.io.agents.slice(0, 8);
-  if (agents.length === 0) return null;
-
-  return (
-    <section className="context-io-agents" aria-label="Context Tree IO by agent">
-      <div className="context-io-agents-header">
-        <span>By agent</span>
-        <span>Explicit IO</span>
-      </div>
-      <ul className="context-io-agents-list">
-        {agents.map((agent) => {
-          const hue = resolveAvatarHue(agent.agentAvatarColorToken, agent.agentId);
-          return (
-            <li key={agent.agentId} className="context-io-agent-row">
-              <span className="context-usage-feed-avatar" aria-hidden="true" style={{ background: hue }}>
-                {agentInitials(agent.agentName)}
-              </span>
-              <span className="context-io-agent-main">
-                <span className="context-usage-feed-agent">{agent.agentName}</span>
-                <span className="context-usage-feed-action">{agent.runtimeProvider}</span>
-              </span>
-              <span className="context-io-agent-counts">
-                <span>{formatNumber(agent.readCount)} read</span>
-                <span>{formatNumber(agent.writeCount)} write</span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }
 

@@ -122,11 +122,14 @@ export async function resolveAudience(
   const subscribedRows = await db
     .select({
       humanAgentId: githubEntityChatMappings.humanAgentId,
+      humanAgentName: agents.name,
       delegateAgentId: githubEntityChatMappings.delegateAgentId,
       chatId: githubEntityChatMappings.chatId,
       boundAt: githubEntityChatMappings.boundAt,
+      boundVia: githubEntityChatMappings.boundVia,
     })
     .from(githubEntityChatMappings)
+    .innerJoin(agents, eq(agents.uuid, githubEntityChatMappings.humanAgentId))
     .where(
       and(
         eq(githubEntityChatMappings.organizationId, organizationId),
@@ -150,7 +153,32 @@ export async function resolveAudience(
       earliestByHuman.set(row.humanAgentId, row);
     }
   }
-  const subscribed: AudienceTarget[] = [...earliestByHuman.values()].map((row) => ({
+  // #766: A `pull_request.opened` delivery reaching a reviewer purely through
+  // the subscribed path renders a redundant "opened this" card right next to
+  // the actionable "requested your review" one. This happens during PR
+  // creation: GitHub fires `opened` and `review_requested` near-simultaneously,
+  // and when `review_requested` is processed first it mints the mapping, so the
+  // racing `opened` then sees that mapping and fans out as a subscribed card.
+  // Drop those subscribed `opened` targets. Two carve-outs preserve genuinely
+  // useful `opened` delivery:
+  //   - `boundVia === "agent_created"`: the mapping exists because the agent
+  //     opened this PR inside the chat (see `maybeBindGithubEntityFromToolCall`),
+  //     so "opened this" is the deliberate PR-creation confirmation, not a
+  //     review-routing echo.
+  //   - the target is explicitly named (mention / assignee) in the `opened`
+  //     payload: an intentional, directed signal worth keeping.
+  // Scope is intentionally narrow: `pull_request` + `opened` only. `issues`
+  // has no `review_requested`, and every other event (synchronize, review,
+  // comment, …) is a legitimately distinct subscribed signal.
+  const isPullRequestOpened = event.rawEventType === "pull_request" && event.rawAction === "opened";
+  const involvedLogins = new Set(event.involves.map((i) => i.githubLogin.toLowerCase()));
+  const keepSubscribedOpened = (row: (typeof subscribedRows)[number]): boolean => {
+    if (!isPullRequestOpened) return true;
+    if (row.boundVia === "agent_created") return true;
+    return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
+  };
+
+  const subscribed: AudienceTarget[] = [...earliestByHuman.values()].filter(keepSubscribedOpened).map((row) => ({
     humanAgentId: row.humanAgentId,
     delegateAgentId: row.delegateAgentId,
     kind: "existing",

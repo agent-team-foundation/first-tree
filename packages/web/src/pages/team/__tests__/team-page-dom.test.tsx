@@ -325,6 +325,9 @@ const MEMBERS = [
 ];
 
 function installBrowserStubs(): void {
+  const storage = createStorage();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: (query: string) => ({
@@ -338,6 +341,24 @@ function installBrowserStubs(): void {
       dispatchEvent: () => false,
     }),
   });
+}
+
+function createStorage(): Storage {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => data.clear(),
+    getItem: (key: string) => data.get(key) ?? null,
+    key: (index: number) => [...data.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  };
 }
 
 function createClient(): QueryClient {
@@ -454,6 +475,7 @@ function seedDefaultMocks(): void {
 beforeEach(() => {
   document.body.innerHTML = "";
   installBrowserStubs();
+  window.localStorage.clear();
   vi.clearAllMocks();
   routerMocks.navigate.mockClear();
   seedDefaultMocks();
@@ -588,6 +610,25 @@ describe("TeamPage", () => {
     await click(container.querySelector('button[aria-label="Actions for Ops Helper"]'));
     await waitForText(container, "Chat");
     expect(exactButton(container, "Suspend")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("remembers the agent filter preference", async () => {
+    window.localStorage.setItem("first-tree:team-agent-filter:v1", "mine");
+    const { TeamPage } = await import("../index.js");
+    const { container, root } = await renderDom(<TeamPage />);
+
+    await waitForText(container, "Kael");
+    expect(exactButton(container, "Mine")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).not.toContain("Ops Helper");
+
+    await click(exactButton(container, "All"));
+    expect(window.localStorage.getItem("first-tree:team-agent-filter:v1")).toBe("all");
+    expect(exactButton(container, "All")?.getAttribute("aria-pressed")).toBe("true");
+
+    await click(exactButton(container, "Mine"));
+    expect(window.localStorage.getItem("first-tree:team-agent-filter:v1")).toBe("mine");
 
     await act(async () => root.unmount());
   });

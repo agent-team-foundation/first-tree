@@ -292,15 +292,21 @@ export function ConversationList({
 
   const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
   const isDraftActive = selectedChatId === DRAFT_CHAT_ID;
-
-  // Auto-recover from the unread-filter dead-end: when the user reads
-  // every unread chat, the visible list collapses to zero and there's
-  // no signal to switch back. Flip the triad back to `all` for them.
-  useEffect(() => {
-    if (railFilter === "unread" && totalUnread === 0 && data && !isLoading) {
-      onRailFilterChange("all");
+  // The chip row mirrors only origin + participants (the removable
+  // multi-selects). Scope is surfaced by the popover badge, not a chip.
+  const hasActiveChips = origin.length > 0 || participants.length > 0;
+  const emptyCopy = (() => {
+    if (railFilter === "unread") {
+      return { title: "No unread conversations.", detail: "All caught up." };
     }
-  }, [railFilter, totalUnread, data, isLoading, onRailFilterChange]);
+    if (railFilter === "watching") {
+      return { title: "No watched conversations.", detail: "Switch to All to see active conversations." };
+    }
+    if (hasActiveChips || engagement !== "active") {
+      return { title: "No matching conversations.", detail: "Clear filters to see more conversations." };
+    }
+    return { title: "No conversations yet.", detail: "Start with New chat." };
+  })();
 
   const isBucketCollapsed = (key: string, defaultCollapsed: boolean): boolean => {
     const override = bucketCollapse.get(key);
@@ -325,9 +331,6 @@ export function ConversationList({
   // header: origin, participants, and a non-default scope. The primary
   // triad (unread / watching) lives in the header and is not counted here.
   const popoverFilterCount = origin.length + participants.length + (engagement !== "active" ? 1 : 0);
-  // The chip row mirrors only origin + participants (the removable
-  // multi-selects). Scope is surfaced by the popover badge, not a chip.
-  const hasActiveChips = origin.length > 0 || participants.length > 0;
 
   const resolveAgentName = useAgentNameMap();
 
@@ -480,9 +483,9 @@ export function ConversationList({
         )}
         {!isLoading && allRows.length === 0 && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
-            <p style={{ margin: 0 }}>No conversations yet.</p>
+            <p style={{ margin: 0 }}>{emptyCopy.title}</p>
             <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
-              Start with New chat.
+              {emptyCopy.detail}
             </p>
           </div>
         )}
@@ -532,11 +535,12 @@ export function ConversationList({
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          // Single-line rows, but with comfortable vertical
-                          // breathing room (--sp-2_5) so the list doesn't read as
-                          // a dense wall — still well under the old two-line row.
-                          padding: "var(--sp-2_5) var(--sp-3)",
-                          gap: "var(--sp-2_5)",
+                          // Single-line rows tuned for desktop-inbox density:
+                          // tightened vertical padding (--sp-2) now that the
+                          // preview subtitle line is gone, so more conversations
+                          // fit per screen without reading as a dense wall.
+                          padding: "var(--sp-2) var(--sp-3)",
+                          gap: "var(--sp-2)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
                           // Left bar is the SELECTED affordance only (DESIGN.md:
                           // selected = green left-rail + tint). Attention no longer
@@ -551,6 +555,7 @@ export function ConversationList({
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
                           failed={failed}
+                          needsYou={row.openRequestCount > 0}
                           size={26}
                           muted
                           badge={false}

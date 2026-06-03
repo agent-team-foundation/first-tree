@@ -12,11 +12,11 @@ This skill is the sub-entry for the Context-management arm of First Tree.
 Load it whenever your task is about a Context Tree — its content, ownership,
 or maintenance — and you need the shared concepts before acting.
 
-For the workspace-collaboration arm (talking to other agents), see
-`first-tree-cloud` instead. For the top-level "what is First Tree" picture,
-see `first-tree`. (Asking humans via dedicated NHA was removed in PR #747
-and is being rebuilt on top of messages; use plain `chat send` until the
-new archetype lands.)
+For the workspace-collaboration arm (talking to other agents — the
+Communication Principles, `chat send` / `chat invite` mechanics, and the
+hosting-daemon mental model) and for the top-level "what is First Tree"
+picture, see the top-level `first-tree` skill. Both arms are owned there
+now; the dedicated `first-tree-cloud` skill was retired.
 
 ## Core Model
 

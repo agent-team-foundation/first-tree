@@ -459,6 +459,10 @@ export {
   messagePurposeSchema,
   messageSchema,
   messageSourceSchema,
+  type OpenQuestionItem,
+  type OpenQuestionRequest,
+  openQuestionItemSchema,
+  openQuestionRequestSchema,
   type ParticipantMode,
   type PrecedingMessage,
   participantModeSchema,
@@ -673,3 +677,10 @@ export {
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "./schemas/ws-auth.js";
+export {
+  classifyShellCommandIo,
+  type ShellIoClassification,
+  type ShellIoPathArg,
+  type ShellIoPathKindHint,
+  type ShellIoUnsupportedReason,
+} from "./shell-command-io.js";

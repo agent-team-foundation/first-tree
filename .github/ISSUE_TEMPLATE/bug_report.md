@@ -13,7 +13,6 @@ Describe the bug in one or two sentences.
 ## Surface Area
 
 - `first-tree tree`
-- `first-tree github scan`
 - docs
 - packaging or CI
 

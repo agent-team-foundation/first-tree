@@ -965,17 +965,19 @@ export function generateToolsDoc(): string {
   // hardcoding "first-tree" used to leave staging/dev agents calling a
   // binary that wasn't installed on the host.
   //
-  // Per skill-restructure proposal (skill-restructure.20260602) P3, the
-  // long-form Sending Messages CLI usage (chat send / chat invite syntax,
-  // markdown / stdin, mention-resolution mechanics) has been sunk into
-  // the `first-tree-cloud` skill (SKILL.md + references/agent-
-  // communication.md). What stays here:
+  // The long-form Sending Messages CLI usage (chat send / chat invite
+  // syntax, markdown / stdin, mention-resolution mechanics) lives in the
+  // top-level `first-tree` skill (SKILL.md + references/agent-
+  // communication.md) — the dedicated `first-tree-cloud` skill it used
+  // to live in was deleted because almost all of its content was
+  // operator-facing (login, daemon install, agent create, etc.) and
+  // never used by an in-chat agent at runtime. What stays here:
   //   - runtime safety invariants the result-sink + silent-turn guard
   //     depend on (final-text contract, silent-turn, Issue #389);
   //   - the short behavioural directives (Decision guide table + Fallback
-  //     paragraph) that every agent needs regardless of whether
-  //     `first-tree-cloud` is installed in its workspace.
-  // Why the second group stays inline: `first-tree-cloud` is in
+  //     paragraph) that every agent needs regardless of whether the
+  //     `first-tree` skill is installed in its workspace.
+  // Why the second group stays inline: `first-tree` is in
   // `TREE_SKILL_NAMES` (only installed alongside a Context Tree binding),
   // not `CORE_SKILL_NAMES`. A tree-less agent (contextTreePath: null —
   // explicitly supported per CLAUDE.md "Context Tree integration is
@@ -1013,17 +1015,17 @@ injection may have failed): use conservative mode — all cross-agent
 collaboration goes through explicit \`chat send\`; do not rely on final
 text to wake anyone.
 
-## Hub Collaboration
+## Workspace Collaboration
 
 For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
-stdin, reaching non-members, mention resolution — load the
-**\`first-tree-cloud\` skill** (or its \`references/agent-communication.md\`).
+stdin, reaching non-members, mention resolution — load the top-level
+**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
 The skill's \`description\` triggers progressive disclosure whenever the user
-mentions chat, daemon, agent config, or login.
+mentions chat, daemon, agent config, or anything related to First Tree.
 
 Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
 there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less agents**
-(no Context Tree binding) won't have \`first-tree-cloud\` installed on disk;
+(no Context Tree binding) won't have \`first-tree\` installed on disk;
 the Communication Rules above are inline here for exactly that reason — the
 sunk content is the long CLI mechanics, not the routing rules.
 

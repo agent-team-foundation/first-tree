@@ -17,7 +17,6 @@ Describe the change you want to see.
 ## Surface Area
 
 - `first-tree tree`
-- `first-tree github scan`
 - skill topology
 - docs or onboarding
 - packaging or CI
