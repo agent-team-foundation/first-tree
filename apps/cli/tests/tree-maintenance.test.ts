@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CLAUDE_SETTINGS_PATH,
+  CODEX_CONFIG_PATH,
   CODEX_HOOKS_PATH,
   ensureAgentContextHooks,
   INJECT_CONTEXT_COMMAND,
+  removeAgentContextHooks,
 } from "../src/commands/tree/agent-context-hooks.js";
 import { writeTreeState } from "../src/commands/tree/binding-state.js";
 import { runTreeReview } from "../src/commands/tree/review-helper.js";
@@ -196,6 +198,173 @@ describe("ensureAgentContextHooks legacy migration", () => {
     expect(claudeContent).not.toContain(LEGACY_TREE_FRAGMENT);
     expect(codexContent).toContain(INJECT_CONTEXT_COMMAND);
     expect(codexContent).not.toContain(LEGACY_TREE_FRAGMENT);
+  });
+});
+
+describe("agent hooks scope to workspace-root only", () => {
+  function writeBinding(
+    root: string,
+    bindingMode: "workspace-root" | "workspace-member" | "shared-source" | "standalone-source",
+  ): void {
+    const entrypointByMode: Record<typeof bindingMode, string> = {
+      "workspace-root": "/workspaces/liuchao-staff",
+      "workspace-member": "/workspaces/liuchao-staff/repos/product-repo",
+      "shared-source": "/repos/product-repo",
+      "standalone-source": "/",
+    };
+    writeFileSync(
+      join(root, "AGENTS.md"),
+      `${buildSourceIntegrationBlock("context-tree", {
+        bindingMode,
+        entrypoint: entrypointByMode[bindingMode],
+        treeMode: "shared",
+        treeRepoName: "context-tree",
+        ...(bindingMode === "workspace-root" || bindingMode === "workspace-member"
+          ? { workspaceId: "liuchao-staff" }
+          : {}),
+      })}\n`,
+    );
+  }
+
+  it("workspace-root: installs hooks", () => {
+    const root = makeTempDir("first-tree-hooks-ws-root-");
+    writeBinding(root, "workspace-root");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("source");
+    expect(summary.hookSync.claudeSettings).toBe("created");
+    expect(summary.hookSync.codexHooks).toBe("created");
+    expect(summary.hookSync.codexConfig).toBe("created");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(true);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+  });
+
+  it("workspace-member: does not install hooks (no-op when none exist)", () => {
+    const root = makeTempDir("first-tree-hooks-ws-member-");
+    writeBinding(root, "workspace-member");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("source");
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(summary.hookSync.codexConfig).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+    expect(existsSync(join(root, CODEX_HOOKS_PATH))).toBe(false);
+  });
+
+  it("workspace-member: strips legacy managed hooks installed by older versions", () => {
+    const root = makeTempDir("first-tree-hooks-ws-member-strip-");
+    // Pretend an older version had installed hooks here recursively.
+    ensureAgentContextHooks(root);
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(true);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+
+    writeBinding(root, "workspace-member");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("removed");
+    expect(summary.hookSync.codexHooks).toBe("removed");
+    expect(summary.hookSync.codexConfig).toBe("removed");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(readFileSync(join(root, CODEX_HOOKS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(readFileSync(join(root, CODEX_CONFIG_PATH), "utf-8")).not.toMatch(/codex_hooks\s*=/);
+  });
+
+  it("shared-source: does not install hooks", () => {
+    const root = makeTempDir("first-tree-hooks-shared-");
+    writeBinding(root, "shared-source");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+  });
+
+  it("standalone-source: does not install hooks", () => {
+    const root = makeTempDir("first-tree-hooks-standalone-");
+    writeBinding(root, "standalone-source");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+  });
+
+  it("tree repo upgrade: strips legacy hooks, never installs", () => {
+    const root = makeTempDir("first-tree-hooks-tree-strip-");
+    writeTreeState(root, {
+      treeId: "context-tree",
+      treeMode: "shared",
+      treeRepoName: "context-tree",
+    });
+    // Simulate a tree repo that an older version had installed hooks into.
+    ensureAgentContextHooks(root);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("tree");
+    expect(summary.hookSync.claudeSettings).toBe("removed");
+    expect(summary.hookSync.codexHooks).toBe("removed");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+  });
+
+  it("removeAgentContextHooks preserves user-added hooks in the same file", () => {
+    const root = makeTempDir("first-tree-hooks-preserve-user-");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    // User-added Stop hook in .claude/settings.json alongside the first-tree managed hook.
+    writeFileSync(
+      join(root, CLAUDE_SETTINGS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: "command", command: INJECT_CONTEXT_COMMAND }] },
+              { hooks: [{ type: "command", command: "echo my-own-hook" }] },
+            ],
+            Stop: [{ hooks: [{ type: "command", command: "echo stop-hook" }] }],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = removeAgentContextHooks(root);
+
+    expect(result.claudeSettings).toBe("removed");
+    const after = readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8");
+    expect(after).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(after).toContain("echo my-own-hook");
+    expect(after).toContain("echo stop-hook");
+  });
+
+  it("removeAgentContextHooks is a no-op when no managed hooks are present", () => {
+    const root = makeTempDir("first-tree-hooks-remove-noop-");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, CLAUDE_SETTINGS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            Stop: [{ hooks: [{ type: "command", command: "echo stop-hook" }] }],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const before = readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8");
+
+    const result = removeAgentContextHooks(root);
+
+    expect(result.claudeSettings).toBe("unchanged");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toBe(before);
   });
 });
 
