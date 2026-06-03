@@ -80,6 +80,7 @@ export function RequestCard({
   thread,
   viewerAgentId,
   body,
+  bodyShowsTarget = false,
   resolveAgentName,
   onSent,
 }: {
@@ -88,6 +89,14 @@ export function RequestCard({
   viewerAgentId: string | null;
   /** Pre-rendered markdown body (the chat-view owns the Markdown setup). */
   body: ReactNode;
+  /**
+   * Whether the rendered body already shows the target as a mention chip
+   * (chat-view computes this against the same membership projection rehype
+   * uses). When true the expanded chip drops its `· @target` to avoid showing
+   * the target twice; when false (web / non-normalised / historical writes
+   * whose body has no `@target`) the chip keeps it as the target signal.
+   */
+  bodyShowsTarget?: boolean;
   resolveAgentName: (agentId: string) => string;
   /** Called after a successful answer send so the parent can refresh. */
   onSent?: () => void;
@@ -194,7 +203,10 @@ export function RequestCard({
   return (
     <div style={{ marginTop: "var(--sp-1)" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--sp-2)", flexWrap: "wrap" }}>
-        <Chip state={state} target={targetLabel} />
+        {/* Drop the chip's `· @target` only when the body already shows the
+            target mention (server-normalised content), to avoid showing it
+            twice. Otherwise keep it as the target signal. */}
+        <Chip state={state} target={bodyShowsTarget ? undefined : targetLabel} />
         <span
           className="text-subtitle font-semibold"
           style={{ color: state === "closed" ? "var(--fg-3)" : "var(--fg)" }}
@@ -206,22 +218,22 @@ export function RequestCard({
             awaiting your answer
           </span>
         ) : null}
-        {related ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(false)}
-            className="mono text-caption"
-            style={{
-              marginLeft: canAnswer ? "var(--sp-2)" : "auto",
-              background: "none",
-              border: "none",
-              color: "var(--fg-4)",
-              cursor: "pointer",
-            }}
-          >
-            Collapse
-          </button>
-        ) : null}
+        {/* Collapse is available to anyone who can expand — gating it on
+            `related` stranded unrelated viewers expanded with no way back. */}
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="mono text-caption"
+          style={{
+            marginLeft: canAnswer ? "var(--sp-2)" : "auto",
+            background: "none",
+            border: "none",
+            color: "var(--fg-4)",
+            cursor: "pointer",
+          }}
+        >
+          Collapse
+        </button>
       </div>
 
       {/* long markdown body */}
