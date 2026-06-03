@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Github } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../../../api/client.js";
-import { listGithubRepos } from "../../../api/github.js";
+import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
@@ -74,10 +74,13 @@ export function StepConnectCode() {
     if (postAttemptStuck) setHelpOpen(true);
   }, [postAttemptStuck]);
 
+  // Team-by-default: the admin picks from the team's *org* code, sourced
+  // from the GitHub App installation's repo grant (not the admin's personal
+  // `/user/repos`). Only repos the agent can actually reach show up.
   const reposQuery = useQuery({
-    queryKey: ["onboarding", "github-repos"],
-    queryFn: listGithubRepos,
-    enabled: installed,
+    queryKey: ["onboarding", "org-github-repos", organizationId],
+    queryFn: () => listOrgGithubRepos(organizationId ?? ""),
+    enabled: installed && !!organizationId,
   });
   const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
   const hasPickableRepos = !scopeMissing && (reposQuery.data?.length ?? 0) > 0;

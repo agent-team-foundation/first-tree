@@ -12,6 +12,7 @@ import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
 import {
   buildAppInstallUrl,
   GithubAppApiError,
+  listInstallationRepos,
   verifyUserCanAdministerInstallation,
 } from "../../services/github-app.js";
 import {
@@ -19,6 +20,7 @@ import {
   findInstallationByGithubId,
   findInstallationByOrg,
 } from "../../services/github-app-installations.js";
+import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
 import { buildCookie } from "../auth/oauth-cookie.js";
 
@@ -120,6 +122,61 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
     const scope = await requireOrgMembership(request, app.db);
     const row = await findInstallationByOrg(app.db, scope.organizationId);
     return { exists: row !== null && row !== undefined };
+  });
+
+  /**
+   * GET `/repositories` — member-readable list of the repos this team's
+   * GitHub App installation can access. Powers the onboarding admin
+   * connect-code project picker.
+   *
+   * Why this instead of the caller's OAuth `/user/repos` (the `/me/github/repos`
+   * endpoint): the product is team-by-default, so the picker should offer
+   * the team's *org* code, not the admin's unrelated personal repos. The
+   * installation's repository set IS exactly that — the repos the App was
+   * granted on the bound org account — so personal repos fall out naturally
+   * and we only ever list repos the agent can actually reach (no picking a
+   * repo the installation can't touch, which would 403 on the first git op).
+   *
+   * Failure shapes (each a distinct `code` so the picker can react):
+   *   - no installation bound      → 503 `no_installation` ("connect code first / later")
+   *   - installation suspended     → 503 `suspended`
+   *   - App not configured server  → 503 `not_configured`
+   *   - mint / GitHub upstream blip → 502 `upstream`
+   */
+  app.get<{ Params: { orgId: string } }>("/repositories", async (request, reply) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const row = await findInstallationByOrg(app.db, scope.organizationId);
+    const mint = await mintContextTreeInstallationToken(row, app.config.oauth?.githubApp);
+    if (!mint.ok) {
+      if (mint.reason === "no-installation") {
+        return reply
+          .status(503)
+          .send({ error: "No GitHub App installation is connected for this team yet.", code: "no_installation" });
+      }
+      if (mint.reason === "suspended") {
+        return reply
+          .status(503)
+          .send({ error: "This team's GitHub App installation is suspended.", code: "suspended" });
+      }
+      if (mint.reason === "no-app-config") {
+        return reply
+          .status(503)
+          .send({ error: "GitHub App is not configured on this server.", code: "not_configured" });
+      }
+      // mint-failed — a transient mint/upstream error.
+      app.log.warn(
+        { organizationId: scope.organizationId, detail: mint.detail },
+        "list installation repos: token mint failed",
+      );
+      return reply.status(502).send({ error: "Couldn't reach GitHub. Try again in a moment.", code: "upstream" });
+    }
+    try {
+      const repos = await listInstallationRepos(mint.token);
+      return { repos };
+    } catch (err) {
+      app.log.warn({ err, organizationId: scope.organizationId }, "list installation repos failed");
+      return reply.status(502).send({ error: "Couldn't reach GitHub. Try again in a moment.", code: "upstream" });
+    }
   });
 
   // ── POST-ish helper: build the "Install on GitHub" URL ──────────────

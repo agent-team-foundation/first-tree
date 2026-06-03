@@ -213,7 +213,11 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === "/me/organizations") {
     return jsonResponse([{ id: ORG_ID, name: "acme", displayName: TEAM_NAME, role: "admin" }]);
   }
+  // Invitee kickoff picker → /me/github/repos; admin connect-code picker →
+  // the org-scoped installation repos. Both render from the same `repos`
+  // outcome so existing picker scenarios cover either source.
   if (p === "/me/github/repos") return reposResponse(activeNet.repos);
+  if (p === `/orgs/${ORG_ID}/github-app-installation/repositories`) return reposResponse(activeNet.repos);
   if (p === `/orgs/${ORG_ID}/github-app-installation`) {
     return activeNet.installed
       ? jsonResponse({ installed: true })

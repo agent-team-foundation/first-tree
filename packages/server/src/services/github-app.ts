@@ -1,6 +1,7 @@
 import { importPKCS8, SignJWT } from "jose";
 import type { GithubProfile } from "./auth-identity.js";
 import { GITHUB_API_BASE } from "./github-api-base.js";
+import type { GithubRepo } from "./github-oauth.js";
 
 /**
  * GitHub App service helpers. Two surfaces that ride on top of an App's
@@ -48,6 +49,7 @@ const APP_JWT_IAT_SKEW_SECONDS = 60;
 
 const APP_INSTALLATION_TOKEN_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}/access_tokens`;
 const APP_INSTALLATION_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}`;
+const INSTALLATION_REPOS_URL = `${GITHUB_API_BASE}/installation/repositories`;
 const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const USER_API_URL = `${GITHUB_API_BASE}/user`;
@@ -280,6 +282,76 @@ export async function mintInstallationToken(
     // one fewer optional to thread through.
     repositorySelection: body.repository_selection ?? "all",
   };
+}
+
+/**
+ * List the repositories an installation can access, via
+ * `GET /installation/repositories` with an installation token (mint one
+ * with `mintInstallationToken` first).
+ *
+ * This is the honest "what can the agent actually work on" set: it's the
+ * subset of repos the App was granted on this account, so it's naturally
+ * scoped to the bound team org and excludes the caller's unrelated personal
+ * repos (which the team-by-default product deliberately does not surface in
+ * onboarding). Contrast `listUserRepos`, which proxies the *user's* OAuth
+ * `/user/repos` — personal + every org the user belongs to, with no notion
+ * of whether the agent can reach any of them.
+ *
+ * Returns the same `GithubRepo` shape as `listUserRepos` so the repo picker
+ * is source-agnostic. Sorted by most-recently-pushed (the endpoint has no
+ * `sort` param, so we order client-side to match the OAuth picker's feel).
+ * Walks paginated responses up to the cap.
+ *
+ * Throws `GithubAppApiError` on non-2xx (401 = bad/expired installation
+ * token, 403 = suspended, 5xx = transient upstream).
+ */
+export async function listInstallationRepos(
+  installationToken: string,
+  opts: { fetcher?: typeof fetch; perPage?: number; maxPages?: number } = {},
+): Promise<GithubRepo[]> {
+  const fetcher = opts.fetcher ?? fetch;
+  const perPage = opts.perPage ?? 100;
+  const maxPages = opts.maxPages ?? 5;
+  const out: GithubRepo[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await fetcher(`${INSTALLATION_REPOS_URL}?per_page=${perPage}&page=${page}`, {
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (!res.ok) {
+      throw new GithubAppApiError(res.status, `GitHub installation repo list failed (${res.status})`);
+    }
+    // Unlike `/user/repos` (a bare array), this endpoint wraps the page in
+    // `{ total_count, repositories: [...] }`.
+    const body = (await res.json()) as {
+      repositories?: Array<{
+        full_name: string;
+        clone_url: string;
+        html_url: string;
+        private: boolean;
+        default_branch?: string | null;
+        pushed_at?: string | null;
+      }>;
+    };
+    const rows = body.repositories ?? [];
+    for (const r of rows) {
+      out.push({
+        fullName: r.full_name,
+        cloneUrl: r.clone_url,
+        htmlUrl: r.html_url,
+        private: r.private,
+        defaultBranch: r.default_branch ?? null,
+        pushedAt: r.pushed_at ?? null,
+      });
+    }
+    if (rows.length < perPage) break;
+  }
+  // Most-recently-pushed first; repos without a pushedAt sort last.
+  out.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
+  return out;
 }
 
 export type RefreshedUserToken = {
