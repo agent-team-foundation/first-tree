@@ -253,6 +253,7 @@ describe("UsageTab", () => {
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
+    expect(container.textContent).toContain("Daily input tokens. Darker cells mean more usage.");
     expect(container.textContent).toContain("Last 10 turns from the last 30 days.");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");

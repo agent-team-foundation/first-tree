@@ -72,8 +72,8 @@ export function RuntimeSection(props: RuntimeSectionProps) {
       </Section>
       <div style={{ marginTop: "var(--sp-8)" }}>
         <Section
-          title="Model behavior"
-          description="Model and reasoning changes remain drafts until saved from the Save bar."
+          title="Model settings"
+          description="Model and reasoning settings remain drafts until saved from the Save bar."
         >
           {props.modelSlot}
           {props.effortSlot}

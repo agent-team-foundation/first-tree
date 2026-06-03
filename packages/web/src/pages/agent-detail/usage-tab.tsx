@@ -94,7 +94,7 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="Daily input-token activity. Darker cells indicate heavier turns."
+      description="Daily input tokens. Darker cells mean more usage."
       action={<DensityLegend />}
     >
       {isError ? (

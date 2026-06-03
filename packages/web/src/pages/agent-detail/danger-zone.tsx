@@ -39,10 +39,10 @@ export function DangerZone(props: DangerZoneProps) {
   const canDelete = agent.status === "suspended";
 
   return (
-    <section id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
+    <div id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
       <Section
         title="Agent lifecycle"
-        description="Control whether this agent can run, receive messages, or be removed."
+        description="Manage availability and deletion. Lifecycle changes save immediately."
       >
         {agent.status === "active" ? (
           <DangerActionRow
@@ -127,7 +127,7 @@ export function DangerZone(props: DangerZoneProps) {
         }}
         deleting={props.deletePending}
       />
-    </section>
+    </div>
   );
 }
 

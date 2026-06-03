@@ -63,8 +63,8 @@ export function ResourcesTab() {
       {ctx.draft.summary.anyDirty && (
         <div style={{ marginTop: "var(--sp-8)" }}>
           <Section
-            title="Server preview"
-            description="Validate this resource draft with the same server-side merge used during save."
+            title="Save preview"
+            description="Preview resource changes before saving."
             action={
               <Button type="button" size="xs" variant="outline" onClick={ctx.onRunDryRun} disabled={ctx.dryRunPending}>
                 {ctx.dryRunPending ? "Computing…" : "Preview diff"}

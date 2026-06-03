@@ -390,7 +390,7 @@ describe("AgentDetailPage", () => {
     const first = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(first.container, "No computer bound");
     expect(first.container.textContent).toContain("Execution");
-    expect(first.container.textContent).toContain("Model behavior");
+    expect(first.container.textContent).toContain("Model settings");
     expect(first.container.textContent).toContain("No computer bound");
     await click(buttonByText(first.container, "Bind computer"));
     await waitForText(document.body, "gandy-macbook");
@@ -404,7 +404,7 @@ describe("AgentDetailPage", () => {
     const second = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(second.container, "Execution");
     expect(second.container.textContent).toContain("Execution");
-    expect(second.container.textContent).toContain("Model behavior");
+    expect(second.container.textContent).toContain("Model settings");
     await click(exactButtonByText(second.container, "Re-bind"));
     await waitForText(document.body, "Current binding:");
     expect(document.body.textContent).toContain("Current binding:");
@@ -443,6 +443,12 @@ describe("AgentDetailPage", () => {
     expect(active.container.textContent).toContain("@kael");
     expect(active.container.textContent).toContain("Owner");
     expect(active.container.textContent).toContain("Agent lifecycle");
+    expect(active.container.textContent).toContain("Lifecycle changes save immediately.");
+    expect(
+      [...active.container.querySelectorAll("section h2")].filter((heading) =>
+        heading.textContent?.includes("Agent lifecycle"),
+      ),
+    ).toHaveLength(1);
     expect(active.container.textContent).toContain("Availability");
     expect(active.container.textContent).toContain("Deletion");
     await click(exactButtonByText(active.container, "Suspend"));
