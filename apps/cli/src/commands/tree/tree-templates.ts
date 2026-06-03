@@ -9,21 +9,9 @@ export function renderRootNode(treeTitle: string): string {
     "",
     `# ${treeTitle}`,
     "",
-    "The living source of truth for your organization. A structured knowledge base that agents and humans build and maintain together across one or more source repositories and systems.",
-    "",
-    "---",
-    "",
     "## Domains",
     "",
     "- **[members/](members/NODE.md)** — Team member definitions and responsibilities.",
-    "",
-    "---",
-    "",
-    "## Working with the Tree",
-    "",
-    "Keep decision context here. Keep implementation detail in the source repos this tree describes.",
-    "",
-    "See [AGENTS.md](AGENTS.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.",
     "",
   ].join("\n");
 }
@@ -678,52 +666,6 @@ export function renderReviewEnforcerWorkflow(): string {
     "                `Auto-dismissed: cross-owner PRs require approval from a ` +",
     "                `frontmatter-listed owner. Eligible: ${intersection.join(', ')}.`",
     "            });",
-  ].join("\n");
-}
-
-/**
- * Render the Context-Tree framework block injected into a tree-bound agent's
- * AGENTS.md.
- */
-export function renderTreeAgentsInstructions(): string {
-  return [
-    "<!-- BEGIN CONTEXT-TREE FRAMEWORK — do not edit this section -->",
-    "# Agent Instructions for Context Tree",
-    "",
-    "You are working in a **Context Tree** — the living source of truth for decisions across the organization. Read and follow this before doing anything.",
-    "",
-    "## Principles",
-    "",
-    "1. **Source of truth for decisions, not execution.** The tree captures the *what* and *why* — strategic choices, cross-domain relationships, constraints. Execution details stay in source systems.",
-    "2. **Agents are first-class participants.** The tree is designed to be navigated and updated by agents, not just humans.",
-    "3. **Transparency by default.** All information is readable by everyone. Writing requires owner approval; reading is open.",
-    "4. **Git-native tree structure.** Each node is a file; each domain is a directory.",
-    "",
-    "## Before Every Task",
-    "",
-    "1. Read the root NODE.md to understand the domain map.",
-    "2. Read the NODE.md of every domain relevant to your task.",
-    "3. Follow soft_links and read the linked nodes too.",
-    "4. Read relevant leaf nodes before making cross-domain decisions.",
-    "",
-    "## During the Task",
-    "",
-    "- Decide in the tree, execute in source systems.",
-    "- Keep execution detail in code repos and runtime systems.",
-    "- Respect ownership fields in node frontmatter.",
-    "",
-    "## After Every Task",
-    "",
-    "- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, confirm whether the tree needs updating before opening any code PR. A tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. Asking a human is [pending redesign, 自行判断].",
-    "- If a tree update is needed (or the change is obviously tree-relevant), open the tree PR first, then the source/workspace code PR.",
-    "- If the task changed only implementation details, skip the tree PR — open only the source/workspace code PR.",
-    "",
-    "<!-- END CONTEXT-TREE FRAMEWORK -->",
-    "",
-    "# Project-Specific Instructions",
-    "",
-    "<!-- Add your project-specific agent instructions below this line. -->",
-    "",
   ].join("\n");
 }
 

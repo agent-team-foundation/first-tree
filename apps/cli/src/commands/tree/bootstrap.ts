@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
@@ -16,7 +16,6 @@ import {
   renderMembersDomainNode,
   renderOrgConfigPlaceholder,
   renderRootNode,
-  renderTreeAgentsInstructions,
   renderTreeProgress,
 } from "./tree-templates.js";
 
@@ -51,15 +50,6 @@ function writeIfMissing(path: string, contents: string): void {
   writeFileSync(path, `${contents.trimEnd()}\n`);
 }
 
-function ensureClaudeSymlink(targetRoot: string): void {
-  const claudePath = join(targetRoot, "CLAUDE.md");
-  if (existsSync(claudePath)) {
-    return;
-  }
-
-  symlinkSync("AGENTS.md", claudePath);
-}
-
 export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions): BootstrapSummary {
   const treeMode = options?.treeMode === "shared" ? "shared" : "dedicated";
   const treeRepoName = repoNameForRoot(targetRoot);
@@ -70,8 +60,6 @@ export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions
   upsertLocalTreeGitIgnore(targetRoot);
 
   writeIfMissing(join(targetRoot, "NODE.md"), renderRootNode("Context Tree"));
-  writeIfMissing(join(targetRoot, "AGENTS.md"), renderTreeAgentsInstructions());
-  ensureClaudeSymlink(targetRoot);
   writeIfMissing(join(targetRoot, "members", "NODE.md"), renderMembersDomainNode());
   writeIfMissing(join(targetRoot, "members", "owner", "NODE.md"), renderDefaultMemberNode());
   writeIfMissing(join(targetRoot, ".first-tree", "agent-templates", "developer.yaml"), renderDeveloperAgentTemplate());
