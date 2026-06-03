@@ -32,6 +32,10 @@ const DEFAULT_OPTIONS: SelectOption[] = [
   { value: "recommended", label: "Recommended", hint: "On by default" },
 ];
 const TRANSPORT_OPTIONS: SelectOption[] = TRANSPORTS.map((t) => ({ value: t, label: t }));
+// Mirrors MCP_NAME_PATTERN (agent-runtime-config.ts). Validated explicitly in
+// JS rather than via the HTML `pattern` attr — `pattern` is compiled with the
+// regex `v` flag by browsers and doesn't reliably block this character class.
+const MCP_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function typeLabelPlural(type: ResourceType): string {
   if (type === "repo") return "Repos";
@@ -70,6 +74,19 @@ function record(payload: unknown, key: string): [string, string][] {
     }
   }
   return [];
+}
+// Entries whose value is NOT a string — the string-only KeyValueField can't
+// display these, so we preserve them untouched across an edit instead of
+// dropping them (skill `metadata` is z.record(string, unknown)).
+function nonStringRecord(payload: unknown, key: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (payload && typeof payload === "object" && key in payload) {
+    const v = (payload as Record<string, unknown>)[key];
+    if (v && typeof v === "object") {
+      for (const [k, val] of Object.entries(v)) if (typeof val !== "string") out[k] = val;
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -176,6 +193,7 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
     mutationFn: previewOrgResourceImpact,
     onSuccess: (r) =>
       setImpact(`${r.affectedAgentCount} agents affected, ${r.promptOverflowAgentCount} prompt overflows`),
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
   return {
@@ -185,7 +203,13 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
       else createMut.mutate(payload);
     },
     preview: (payload) =>
-      previewMut.mutate({ type: payload.type, defaultEnabled: payload.defaultEnabled, payload: payload.payload }),
+      previewMut.mutate({
+        type: payload.type,
+        defaultEnabled: payload.defaultEnabled,
+        payload: payload.payload,
+        // On edit, scope the impact to the resource being changed (not "new").
+        ...(state.mode === "edit" ? { resourceId: state.resource.id } : {}),
+      }),
     saving: createMut.isPending || updateMut.isPending,
     error,
     impact,
@@ -204,6 +228,7 @@ function Field(props: {
   placeholder?: string;
   hint?: string;
   mono?: boolean;
+  required?: boolean;
 }) {
   return (
     <div className="space-y-2">
@@ -219,6 +244,7 @@ function Field(props: {
         onChange={(e) => props.onChange(e.target.value)}
         placeholder={props.placeholder}
         className={props.mono ? "mono" : undefined}
+        required={props.required}
       />
     </div>
   );
@@ -355,11 +381,14 @@ function EditorFooter({
   payload,
   saveLabel,
   onCancel,
+  localError,
 }: {
   save: SaveApi;
   payload: () => CreateTeamResource;
   saveLabel: string;
   onCancel: () => void;
+  /** Client-side validation message (blocks submit before the API call). */
+  localError?: string | null;
 }) {
   return (
     <>
@@ -368,9 +397,9 @@ function EditorFooter({
           {save.impact}
         </p>
       ) : null}
-      {save.error ? (
+      {localError || save.error ? (
         <p className="text-body" style={{ color: "var(--state-error)" }}>
-          {save.error}
+          {localError ?? save.error}
         </p>
       ) : null}
       <Button type="button" variant="ghost" onClick={onCancel}>
@@ -421,6 +450,7 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         onChange={setUrl}
         placeholder="git@github.com:org/repo.git"
         mono
+        required
       />
       <Field
         id="repo-branch"
@@ -444,9 +474,10 @@ function McpEditor({ state, save, onClose }: EditorProps) {
   const [command, setCommand] = useState(str(init?.payload, "command"));
   const [args, setArgs] = useState<string[]>(strList(init?.payload, "args"));
   const [url, setUrl] = useState(str(init?.payload, "url"));
-  const [headers, setHeaders] = useState<[string, string][]>(record(init?.payload, "headers"));
   const [mode, setMode] = useState<DefaultMode>(asDefaultMode(init?.defaultEnabled ?? "available"));
 
+  // The MCP server name is an identifier, validated server-side against
+  // MCP_NAME_PATTERN; it doubles as both the resource name and payload.name.
   const payload = (): CreateTeamResource => {
     const serverName = name.trim() || "mcp";
     if (transport === "stdio") {
@@ -463,29 +494,43 @@ function McpEditor({ state, save, onClose }: EditorProps) {
         },
       };
     }
-    const hdrs = pairsToRecord(headers);
-    const hdrPart = Object.keys(hdrs).length ? { headers: hdrs } : {};
     // http / sse share a shape but each schema member pins a literal transport,
-    // so branch to keep `transport` a single literal (no `as` needed).
+    // so branch to keep `transport` a single literal (no `as` needed). The
+    // no-secret MCP schema deliberately omits headers (they can carry secrets),
+    // so this editor doesn't collect them.
     if (transport === "http") {
       return {
         type: "mcp",
         name: serverName,
         defaultEnabled: mode,
-        payload: { name: serverName, transport: "http", url: url.trim(), ...hdrPart },
+        payload: { name: serverName, transport: "http", url: url.trim() },
       };
     }
     return {
       type: "mcp",
       name: serverName,
       defaultEnabled: mode,
-      payload: { name: serverName, transport: "sse", url: url.trim(), ...hdrPart },
+      payload: { name: serverName, transport: "sse", url: url.trim() },
     };
   };
 
+  // Block submit on an invalid server id, with a clear message (the server
+  // would otherwise reject it with a raw regex error).
+  const validate = (): string | null =>
+    MCP_NAME_RE.test(name.trim() || "mcp") ? null : "Name must be letters, digits, _ or - (e.g. github), max 64 chars.";
+
   return (
-    <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
-      <Field id="mcp-name" label="Name" value={name} onChange={setName} placeholder="github" mono />
+    <ModalEditor state={state} save={save} onClose={onClose} payload={payload} validate={validate}>
+      <Field
+        id="mcp-name"
+        label="Name"
+        hint="Server id — letters, digits, _ or - (e.g. github)."
+        value={name}
+        onChange={setName}
+        placeholder="github"
+        mono
+        required
+      />
       <FieldShell id="mcp-transport" label="Transport">
         <Select
           id="mcp-transport"
@@ -498,21 +543,27 @@ function McpEditor({ state, save, onClose }: EditorProps) {
       </FieldShell>
       {transport === "stdio" ? (
         <>
-          <Field id="mcp-command" label="Command" value={command} onChange={setCommand} placeholder="npx" mono />
+          <Field
+            id="mcp-command"
+            label="Command"
+            value={command}
+            onChange={setCommand}
+            placeholder="npx"
+            mono
+            required
+          />
           <StringListField label="Args" values={args} onChange={setArgs} placeholder="--flag" />
         </>
       ) : (
-        <>
-          <Field
-            id="mcp-url"
-            label="URL"
-            value={url}
-            onChange={setUrl}
-            placeholder="https://mcp.example.com/sse"
-            mono
-          />
-          <KeyValueField label="Headers" pairs={headers} onChange={setHeaders} />
-        </>
+        <Field
+          id="mcp-url"
+          label="URL"
+          value={url}
+          onChange={setUrl}
+          placeholder="https://mcp.example.com/sse"
+          mono
+          required
+        />
       )}
       <DefaultModeField value={mode} onChange={setMode} />
     </ModalEditor>
@@ -524,15 +575,20 @@ function ModalEditor({
   save,
   onClose,
   payload,
+  validate,
   children,
-}: EditorProps & { payload: () => CreateTeamResource; children: ReactNode }) {
+}: EditorProps & { payload: () => CreateTeamResource; validate?: () => string | null; children: ReactNode }) {
+  const [localError, setLocalError] = useState<string | null>(null);
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    const v = validate?.() ?? null;
+    setLocalError(v);
+    if (v) return;
     save.submit(payload());
   };
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>{titleFor(state)}</DialogTitle>
         </DialogHeader>
@@ -544,6 +600,7 @@ function ModalEditor({
               payload={payload}
               saveLabel={state.mode === "edit" ? "Save" : "Create"}
               onCancel={onClose}
+              localError={localError}
             />
           </DialogFooter>
         </form>
@@ -594,6 +651,9 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
   const [body, setBody] = useState(str(init?.payload, "body"));
   const [metadata, setMetadata] = useState<[string, string][]>(record(init?.payload, "metadata"));
   const [mode, setMode] = useState<DefaultMode>(asDefaultMode(init?.defaultEnabled ?? "available"));
+  // Non-string metadata values aren't editable in the key/value UI; keep them
+  // so an edit doesn't silently drop them.
+  const preservedMeta = nonStringRecord(init?.payload, "metadata");
 
   const payload = (): CreateTeamResource => {
     const skillName = name.trim() || "skill";
@@ -606,7 +666,7 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
         ...(namespace.trim() ? { namespace: namespace.trim() } : {}),
         description: description.trim() || skillName,
         body,
-        metadata: pairsToRecord(metadata),
+        metadata: { ...preservedMeta, ...pairsToRecord(metadata) },
       },
     };
   };
@@ -656,15 +716,20 @@ function SheetEditor({
   save,
   onClose,
   payload,
+  validate,
   children,
-}: EditorProps & { payload: () => CreateTeamResource; children: ReactNode }) {
+}: EditorProps & { payload: () => CreateTeamResource; validate?: () => string | null; children: ReactNode }) {
+  const [localError, setLocalError] = useState<string | null>(null);
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    const v = validate?.() ?? null;
+    setLocalError(v);
+    if (v) return;
     save.submit(payload());
   };
   return (
     <Sheet open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <SheetContent>
+      <SheetContent aria-describedby={undefined}>
         <SheetHeader>
           <SheetTitle>{titleFor(state)}</SheetTitle>
         </SheetHeader>
@@ -678,6 +743,7 @@ function SheetEditor({
               payload={payload}
               saveLabel={state.mode === "edit" ? "Save" : "Create"}
               onCancel={onClose}
+              localError={localError}
             />
           </SheetFooter>
         </form>

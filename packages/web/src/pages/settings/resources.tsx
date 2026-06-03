@@ -87,7 +87,15 @@ export function SettingsResourcesPage() {
           ))
         )}
       </div>
-      {editor ? <ResourceEditor state={editor} onClose={() => setEditor(null)} /> : null}
+      {editor ? (
+        // Key by target so switching create-type / edit-target remounts the
+        // editor with fresh field state (useState initializers run on mount).
+        <ResourceEditor
+          key={editor.mode === "edit" ? `edit-${editor.resource.id}` : `create-${editor.type}`}
+          state={editor}
+          onClose={() => setEditor(null)}
+        />
+      ) : null}
     </>
   );
 }

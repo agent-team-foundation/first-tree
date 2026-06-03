@@ -101,6 +101,22 @@ function byText(text: string): HTMLButtonElement | undefined {
 function byAria(label: string): HTMLButtonElement | undefined {
   return [...document.body.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === label);
 }
+function input(id: string): HTMLInputElement {
+  const el = document.getElementById(id);
+  if (!(el instanceof HTMLInputElement)) throw new Error(`input #${id} not found`);
+  return el;
+}
+async function selectOption(triggerId: string, label: string): Promise<void> {
+  await click(document.getElementById(triggerId));
+  const opt = [...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === label);
+  await click(opt);
+}
+function lastByPlaceholder(placeholder: string): HTMLInputElement {
+  const els = [...document.body.querySelectorAll(`input[placeholder="${placeholder}"]`)];
+  const el = els[els.length - 1];
+  if (!(el instanceof HTMLInputElement)) throw new Error(`no input[placeholder=${placeholder}]`);
+  return el;
+}
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -157,7 +173,82 @@ describe("resource editors", () => {
     await click(byText("Save"));
     expect(resourceMocks.updateResource).toHaveBeenCalledTimes(1);
     expect(resourceMocks.updateResource.mock.calls[0]?.[0]).toBe("mcp-1");
+    // The edit round-trips the resource's payload unchanged (no transport/name drop).
+    expect(resourceMocks.updateResource.mock.calls[0]?.[1]?.payload).toEqual({
+      name: "github",
+      transport: "http",
+      url: "https://mcp.example.com/github",
+    });
     expect(resourceMocks.createTeamResource).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("creates a stdio mcp with command + args", async () => {
+    const { root } = await render();
+    await click(byText("Add resource"));
+    await click(byText("MCP"));
+    await setInputValue(input("mcp-name"), "github");
+    await setInputValue(input("mcp-command"), "npx");
+    await click(byText("Add")); // add an args row
+    await setInputValue(lastByPlaceholder("--flag"), "-y");
+    await click(byText("Create"));
+
+    expect(resourceMocks.createTeamResource.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        type: "mcp",
+        payload: { name: "github", transport: "stdio", command: "npx", args: ["-y"] },
+      }),
+    );
+    await act(async () => root.unmount());
+  });
+
+  it("creates an http mcp with url and no headers key (no-secret schema)", async () => {
+    const { root } = await render();
+    await click(byText("Add resource"));
+    await click(byText("MCP"));
+    await selectOption("mcp-transport", "http");
+    await setInputValue(input("mcp-name"), "remote");
+    await setInputValue(input("mcp-url"), "https://x.example.com/sse");
+    await click(byText("Create"));
+
+    const payload = resourceMocks.createTeamResource.mock.calls[0]?.[0]?.payload;
+    expect(payload).toEqual({ name: "remote", transport: "http", url: "https://x.example.com/sse" });
+    expect("headers" in payload).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("creates a skill with body and metadata", async () => {
+    const { root } = await render();
+    await click(byText("Add resource"));
+    await click(byText("Skill"));
+    await setInputValue(input("skill-name"), "rel");
+    const body = document.getElementById("skill-body");
+    if (!(body instanceof HTMLTextAreaElement)) throw new Error("skill-body");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(body, "hello world");
+      body.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+    await click(byText("Add")); // metadata row
+    await setInputValue(lastByPlaceholder("key"), "team");
+    await setInputValue(lastByPlaceholder("value"), "core");
+    await click(byText("Create"));
+
+    const payload = resourceMocks.createTeamResource.mock.calls[0]?.[0]?.payload;
+    expect(payload).toEqual(expect.objectContaining({ name: "rel", body: "hello world", metadata: { team: "core" } }));
+    await act(async () => root.unmount());
+  });
+
+  it("blocks an invalid mcp server name client-side (no API call)", async () => {
+    const { root } = await render();
+    await click(byText("Add resource"));
+    await click(byText("MCP"));
+    await setInputValue(input("mcp-name"), "my server"); // space → invalid server id
+    await setInputValue(input("mcp-command"), "npx");
+    await click(byText("Create"));
+
+    // Validation blocks the call and surfaces a message; nothing is sent.
+    expect(resourceMocks.createTeamResource).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Name must be");
     await act(async () => root.unmount());
   });
 
