@@ -73,6 +73,10 @@ const orgSettingsMocks = vi.hoisted(() => ({
   putSourceReposSetting: vi.fn(),
 }));
 
+const resourceMocks = vi.hoisted(() => ({
+  createTeamResourceForOrg: vi.fn(),
+}));
+
 const onboardingEventMocks = vi.hoisted(() => ({
   reportOnboardingEvent: vi.fn(),
 }));
@@ -138,6 +142,7 @@ vi.mock("../../api/members.js", () => memberApiMocks);
 vi.mock("../../api/me-chats.js", () => meChatMocks);
 vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
 vi.mock("../../api/org-settings.js", () => orgSettingsMocks);
+vi.mock("../../api/resources.js", () => resourceMocks);
 vi.mock("../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client.js")>();
   return {
@@ -685,6 +690,22 @@ beforeEach(() => {
     branch: "main",
   });
   orgSettingsMocks.putSourceReposSetting.mockResolvedValue({ repos: [] });
+  resourceMocks.createTeamResourceForOrg.mockResolvedValue({
+    id: "resource-repo",
+    organizationId: "org-1",
+    type: "repo",
+    scope: "team",
+    ownerAgentId: null,
+    name: "web",
+    repoCanonicalKey: "github.com/acme/web",
+    defaultEnabled: "recommended",
+    status: "active",
+    payload: { url: "https://github.com/acme/web.git" },
+    createdBy: "member-self",
+    updatedBy: "member-self",
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   clientApiMocks.post.mockResolvedValue({
     token: "connect-token",
     expiresIn: 600,
@@ -1418,8 +1439,11 @@ describe("web DOM interaction coverage", () => {
       expect.stringContaining("https://github.com/acme/context-tree"),
       ["agent-1"],
     );
-    expect(orgSettingsMocks.putSourceReposSetting).toHaveBeenCalledWith("org-1", {
-      repos: [{ url: "https://github.com/acme/web.git" }],
+    expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
+      type: "repo",
+      name: "acme/web",
+      defaultEnabled: "recommended",
+      payload: { url: "https://github.com/acme/web.git" },
     });
     expect(orgSettingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", {
       repo: "https://github.com/acme/context-tree",

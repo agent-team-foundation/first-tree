@@ -88,6 +88,12 @@ describe("api wrapper paths", () => {
       defaultEnabled: "available",
       payload: { url: "https://github.com/acme/web.git" },
     });
+    await resources.createTeamResourceForOrg("org/id", {
+      type: "repo",
+      name: "API",
+      defaultEnabled: "recommended",
+      payload: { url: "https://github.com/acme/api.git" },
+    });
     await resources.previewOrgResourceImpact({ type: "repo", defaultEnabled: "recommended" });
     await resources.getResource("res/id");
     await resources.updateResource("res/id", { name: "New" });
@@ -122,6 +128,12 @@ describe("api wrapper paths", () => {
       name: "Web",
       defaultEnabled: "available",
       payload: { url: "https://github.com/acme/web.git" },
+    });
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/org%2Fid/resources", {
+      type: "repo",
+      name: "API",
+      defaultEnabled: "recommended",
+      payload: { url: "https://github.com/acme/api.git" },
     });
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/resources/impact-preview", {
       type: "repo",

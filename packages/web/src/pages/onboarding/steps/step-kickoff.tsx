@@ -7,7 +7,7 @@ import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, getSourceReposSetting, putContextTreeSetting } from "../../../api/org-settings.js";
-import { createTeamResource } from "../../../api/resources.js";
+import { createTeamResourceForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
@@ -41,10 +41,11 @@ async function runKickoff(args: {
   // Org-level writes are a convenience cache for future teammates — never
   // let them block the user's first chat.
   if (args.orgWrites) {
-    if (args.orgWrites.sourceRepos.length > 0) {
+    const orgWrites = args.orgWrites;
+    if (orgWrites.sourceRepos.length > 0) {
       await Promise.allSettled(
-        args.orgWrites.sourceRepos.map((url) =>
-          createTeamResource({
+        orgWrites.sourceRepos.map((url) =>
+          createTeamResourceForOrg(orgWrites.organizationId, {
             type: "repo",
             name: repoLabel(url),
             defaultEnabled: "recommended",
@@ -53,10 +54,8 @@ async function runKickoff(args: {
         ),
       );
     }
-    if (args.orgWrites.contextTreeUrl) {
-      await putContextTreeSetting(args.orgWrites.organizationId, { repo: args.orgWrites.contextTreeUrl }).catch(
-        () => {},
-      );
+    if (orgWrites.contextTreeUrl) {
+      await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});
     }
   }
 

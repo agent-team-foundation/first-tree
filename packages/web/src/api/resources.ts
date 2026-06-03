@@ -6,7 +6,7 @@ import type {
   ResourceUsageOutput,
   UpdateTeamResource,
 } from "@first-tree/shared";
-import { api, withOrg } from "./client.js";
+import { api, withOrg, withOrgAt } from "./client.js";
 
 export function listTeamResources(): Promise<ResourceRow[]> {
   return api.get<ResourceRow[]>(withOrg("/resources"));
@@ -14,6 +14,10 @@ export function listTeamResources(): Promise<ResourceRow[]> {
 
 export function createTeamResource(body: CreateTeamResource): Promise<ResourceRow> {
   return api.post<ResourceRow>(withOrg("/resources"), body);
+}
+
+export function createTeamResourceForOrg(orgId: string, body: CreateTeamResource): Promise<ResourceRow> {
+  return api.post<ResourceRow>(withOrgAt(orgId, "/resources"), body);
 }
 
 export function previewOrgResourceImpact(body: ResourceImpactPreview): Promise<ResourceImpactPreviewOutput> {
