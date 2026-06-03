@@ -17,17 +17,20 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
       const current = await getAgentResources(serverUrl, adminToken, uuid);
       const targetCanonical = safeCanonicalRepoUrl(url);
       const matchingResourceIds = new Set<string>();
+      let matchingTeamResourceId: string | null = null;
       if (targetCanonical) {
         for (const resource of current.availableTeamResources) {
           const payload = resource.payload as { url?: unknown };
           if (typeof payload.url === "string" && safeCanonicalRepoUrl(payload.url) === targetCanonical) {
             matchingResourceIds.add(resource.id);
+            matchingTeamResourceId ??= resource.id;
           }
         }
         for (const row of current.effective.repos) {
           const repoUrl = row.repo?.url ?? ((row.payload as { url?: unknown } | null)?.url as string | undefined);
           if (row.resourceId && typeof repoUrl === "string" && safeCanonicalRepoUrl(repoUrl) === targetCanonical) {
             matchingResourceIds.add(row.resourceId);
+            if (row.scope === "team") matchingTeamResourceId ??= row.resourceId;
           }
         }
       }
@@ -45,14 +48,23 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
         expectedVersion: current.version,
         bindings: [
           ...remaining,
-          {
-            type: "repo",
-            mode: "include",
-            agentExtraRepo: { url },
-            repoRef: opts.ref,
-            repoLocalPath: opts.path,
-            order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
-          },
+          matchingTeamResourceId
+            ? {
+                type: "repo",
+                mode: "include",
+                resourceId: matchingTeamResourceId,
+                repoRef: opts.ref,
+                repoLocalPath: opts.path,
+                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+              }
+            : {
+                type: "repo",
+                mode: "include",
+                agentExtraRepo: { url },
+                repoRef: opts.ref,
+                repoLocalPath: opts.path,
+                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+              },
         ],
       });
       success({ agentId: uuid, version: updated.version, repo: url });

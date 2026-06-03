@@ -417,9 +417,11 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     const byId = new Map(resourceRows.map((r) => [r.id, r]));
     const disabled = new Set<string>();
     const replaced = new Set<string>();
+    const explicitlyBound = new Set<string>();
     for (const binding of bindings) {
       if (binding.mode === "disable" && binding.resourceId) disabled.add(binding.resourceId);
       if (binding.mode === "replace" && binding.replacesResourceId) replaced.add(binding.replacesResourceId);
+      if (binding.mode !== "disable" && binding.resourceId) explicitlyBound.add(binding.resourceId);
     }
 
     const repos: EffectiveResourceRow[] = [];
@@ -436,7 +438,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
 
     for (const resource of resourceRows) {
       if (resource.scope !== "team" || resource.defaultEnabled !== "recommended") continue;
-      if (disabled.has(resource.id) || replaced.has(resource.id)) continue;
+      if (disabled.has(resource.id) || replaced.has(resource.id) || explicitlyBound.has(resource.id)) continue;
       const runtimeRepo = resource.type === "repo" ? repoRuntimeRow(resource, null) : null;
       bucket(resource.type).push(
         emptyRow({

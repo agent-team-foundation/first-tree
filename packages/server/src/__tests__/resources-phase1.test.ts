@@ -201,6 +201,56 @@ describe("Resources Phase 1", () => {
     expect(rows[0]).toMatchObject({ scope: "team", defaultEnabled: "recommended" });
   });
 
+  it("lets an explicit repo binding override a recommended team repo without duplicating it", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const teamRepo = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Web",
+        defaultEnabled: "recommended",
+        payload: { url: "https://github.com/acme/web.git", defaultBranch: "main" },
+      },
+      owner.memberId,
+    );
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+
+    const updated = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: current.version,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            resourceId: teamRepo.id,
+            repoRef: "feature",
+            repoLocalPath: "custom-web",
+          },
+        ],
+      },
+      owner.memberId,
+    );
+
+    const enabledRows = updated.effective.repos.filter(
+      (row) => row.mode === "enabled" && row.resourceId === teamRepo.id,
+    );
+    expect(enabledRows).toHaveLength(1);
+    expect(enabledRows[0]?.repo).toEqual({
+      url: "https://github.com/acme/web.git",
+      ref: "feature",
+      localPath: "custom-web",
+    });
+
+    const baseConfig = await app.configService.get(agent.uuid);
+    const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
+    expect(resolved.payload.gitRepos).toEqual([
+      { url: "https://github.com/acme/web.git", ref: "feature", localPath: "custom-web" },
+    ]);
+  });
+
   it("runs legacy backfill once, bumps affected agent versions, and does not resurrect retired or removed resources", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

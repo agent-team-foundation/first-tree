@@ -317,6 +317,88 @@ describe("agent config command behavior", () => {
     );
   });
 
+  it("updates a matching team repo binding without converting it to an agent extra", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 5,
+      bindings: [
+        {
+          id: "team-binding",
+          type: "repo",
+          mode: "include",
+          resourceId: "team-repo",
+          repoRef: "old",
+          repoLocalPath: "web",
+          order: 2,
+        },
+      ],
+      effective: {
+        version: 5,
+        repos: [
+          {
+            id: "binding:team-binding:enabled",
+            bindingId: "team-binding",
+            resourceId: "team-repo",
+            replacesResourceId: null,
+            type: "repo",
+            name: "web",
+            scope: "team",
+            source: "team_available",
+            mode: "enabled",
+            defaultEnabled: "available",
+            payload: { url: "git@github.com:Acme/Web.git" },
+            repo: { url: "git@github.com:Acme/Web.git", ref: "old", localPath: "web" },
+            promptBody: null,
+            unavailableReason: null,
+            order: 2,
+          },
+        ],
+        prompts: [],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [
+        {
+          id: "team-repo",
+          organizationId: "org-1",
+          type: "repo",
+          scope: "team",
+          ownerAgentId: null,
+          name: "web",
+          repoCanonicalKey: "github.com/acme/web",
+          defaultEnabled: "available",
+          status: "active",
+          payload: { url: "https://github.com/acme/web.git" },
+          createdBy: "member-1",
+          updatedBy: "member-1",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    });
+
+    await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 5,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            resourceId: "team-repo",
+            repoRef: "main",
+            repoLocalPath: "web",
+            order: 2,
+          },
+        ],
+      },
+    );
+  });
+
   it("shows config and prints dry-run diffs", async () => {
     await runConfig(["show", "kael"]);
     expect(fetcherMocks.printConfig).toHaveBeenCalledWith(config());
