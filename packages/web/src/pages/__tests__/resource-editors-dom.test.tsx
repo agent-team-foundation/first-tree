@@ -183,6 +183,31 @@ describe("resource editors", () => {
     await act(async () => root.unmount());
   });
 
+  it("edits an mcp whose display name differs from its server id (no-op safe)", async () => {
+    // Migrated/API resource: outer name "Team tools" vs payload.name "team-tools".
+    resourceMocks.listTeamResources.mockResolvedValue([
+      row({
+        id: "mcp-2",
+        type: "mcp",
+        name: "Team tools",
+        payload: { name: "team-tools", transport: "stdio", command: "npx" },
+      }),
+    ]);
+    const { root } = await render();
+    await click(byAria("Edit Team tools"));
+
+    // Server-id field prefills from payload.name (valid), not the display name.
+    expect(input("mcp-name").value).toBe("team-tools");
+    await click(byText("Save")); // no-op save must not be blocked
+
+    expect(resourceMocks.updateResource).toHaveBeenCalledTimes(1);
+    const [id, body] = resourceMocks.updateResource.mock.calls[0] ?? [];
+    expect(id).toBe("mcp-2");
+    expect(body?.name).toBe("Team tools"); // display name preserved
+    expect(body?.payload).toEqual({ name: "team-tools", transport: "stdio", command: "npx" });
+    await act(async () => root.unmount());
+  });
+
   it("creates a stdio mcp with command + args", async () => {
     const { root } = await render();
     await click(byText("Add resource"));

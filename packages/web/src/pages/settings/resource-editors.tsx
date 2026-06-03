@@ -2,7 +2,12 @@ import type { CreateTeamResource, ResourceRow, ResourceType } from "@first-tree/
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
-import { createTeamResource, previewOrgResourceImpact, updateResource } from "../../api/resources.js";
+import {
+  createTeamResource,
+  previewOrgResourceImpact,
+  previewResourceImpact,
+  updateResource,
+} from "../../api/resources.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
@@ -190,7 +195,13 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
   const previewMut = useMutation({
-    mutationFn: previewOrgResourceImpact,
+    // Edit must use the per-resource impact endpoint — the org endpoint only
+    // simulates a brand-new recommended resource and under-reports changes to
+    // an existing (e.g. available, already-bound) one.
+    mutationFn: (payload: CreateTeamResource) => {
+      const body = { type: payload.type, defaultEnabled: payload.defaultEnabled, payload: payload.payload };
+      return state.mode === "edit" ? previewResourceImpact(state.resource.id, body) : previewOrgResourceImpact(body);
+    },
     onSuccess: (r) =>
       setImpact(`${r.affectedAgentCount} agents affected, ${r.promptOverflowAgentCount} prompt overflows`),
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
@@ -202,14 +213,7 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
       if (state.mode === "edit") updateMut.mutate(payload);
       else createMut.mutate(payload);
     },
-    preview: (payload) =>
-      previewMut.mutate({
-        type: payload.type,
-        defaultEnabled: payload.defaultEnabled,
-        payload: payload.payload,
-        // On edit, scope the impact to the resource being changed (not "new").
-        ...(state.mode === "edit" ? { resourceId: state.resource.id } : {}),
-      }),
+    preview: (payload) => previewMut.mutate(payload),
     saving: createMut.isPending || updateMut.isPending,
     error,
     impact,
@@ -469,7 +473,10 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
 function McpEditor({ state, save, onClose }: EditorProps) {
   const init = state.mode === "edit" ? state.resource : null;
   const initTransport = asTransport(str(init?.payload, "transport") || "stdio");
-  const [name, setName] = useState(init?.name ?? "");
+  // The editable field is the MCP server id (`payload.name`), NOT the outer
+  // resource display name — they can differ (e.g. "Team tools" / "team-tools").
+  // Prefill from payload.name so a migrated resource shows a valid id.
+  const [name, setName] = useState(str(init?.payload, "name") || init?.name || "");
   const [transport, setTransport] = useState<Transport>(initTransport);
   const [command, setCommand] = useState(str(init?.payload, "command"));
   const [args, setArgs] = useState<string[]>(strList(init?.payload, "args"));
@@ -480,11 +487,14 @@ function McpEditor({ state, save, onClose }: EditorProps) {
   // MCP_NAME_PATTERN; it doubles as both the resource name and payload.name.
   const payload = (): CreateTeamResource => {
     const serverName = name.trim() || "mcp";
+    // Preserve the original display name on edit (the editor only exposes the
+    // server id); on create the two start equal.
+    const outerName = init ? init.name : serverName;
     if (transport === "stdio") {
       const cleanArgs = args.map((a) => a.trim()).filter(Boolean);
       return {
         type: "mcp",
-        name: serverName,
+        name: outerName,
         defaultEnabled: mode,
         payload: {
           name: serverName,
@@ -501,14 +511,14 @@ function McpEditor({ state, save, onClose }: EditorProps) {
     if (transport === "http") {
       return {
         type: "mcp",
-        name: serverName,
+        name: outerName,
         defaultEnabled: mode,
         payload: { name: serverName, transport: "http", url: url.trim() },
       };
     }
     return {
       type: "mcp",
-      name: serverName,
+      name: outerName,
       defaultEnabled: mode,
       payload: { name: serverName, transport: "sse", url: url.trim() },
     };
@@ -645,7 +655,9 @@ function PromptEditor({ state, save, onClose }: EditorProps) {
 
 function SkillEditor({ state, save, onClose }: EditorProps) {
   const init = state.mode === "edit" ? state.resource : null;
-  const [name, setName] = useState(init?.name ?? "");
+  // Editable field is the skill id (`payload.name`); prefill from it so an edit
+  // round-trips the real skill name, not a divergent display name.
+  const [name, setName] = useState(str(init?.payload, "name") || init?.name || "");
   const [namespace, setNamespace] = useState(str(init?.payload, "namespace"));
   const [description, setDescription] = useState(str(init?.payload, "description"));
   const [body, setBody] = useState(str(init?.payload, "body"));
@@ -657,9 +669,10 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
 
   const payload = (): CreateTeamResource => {
     const skillName = name.trim() || "skill";
+    const outerName = init ? init.name : skillName; // preserve display name on edit
     return {
       type: "skill",
-      name: skillName,
+      name: outerName,
       defaultEnabled: mode,
       payload: {
         name: skillName,
