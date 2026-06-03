@@ -121,7 +121,7 @@ export const COPY = {
      * the auto-opened "Need help?" below isn't missed — not a flat "still
      * waiting" (which would contradict the help saying it didn't go through).
      */
-    stuckStatus: "Still don't see an install — the steps under Need help? can get you unstuck.",
+    stuckStatus: "Still not connected? The steps under Need help? can get you unstuck.",
     /**
      * Troubleshooting shown inside the "Need help?" disclosure (alongside the
      * InstallGuide how-to), mirroring connect-computer. The disclosure
