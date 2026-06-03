@@ -455,6 +455,85 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
+  it("keeps the edit entry visible when an inline prompt binding has an empty body", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "resource:team-prompt-1",
+              bindingId: null,
+              resourceId: "team-prompt-1",
+              name: "Team style guide",
+              scope: "team",
+              source: "team_recommended",
+              defaultEnabled: "recommended",
+              promptBody: "Use the team style guide.",
+              order: 0,
+            }),
+            effectivePrompt({
+              id: "binding:inline-1:enabled",
+              bindingId: "inline-1",
+              promptBody: "",
+              order: 1,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "inline-1",
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            replacesResourceId: null,
+            inlinePromptBody: "",
+            order: 1,
+          },
+        ],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Team Resource: Team style guide");
+    await waitForText(container, "Agent Resource: custom prompt");
+    expect(container.textContent).toContain("No prompt body.");
+
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(container, "Save prompt");
+    expect(container.textContent).toContain("Use the team style guide.");
+    const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(textarea?.value).toBe("");
+    if (!textarea) throw new Error("Expected custom prompt textarea");
+    await setValue(textarea, "Recovered custom prompt.");
+    await click(exactButtonByText(container, "Save prompt"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [
+        {
+          id: "inline-1",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Recovered custom prompt.",
+          order: 1,
+        },
+      ],
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("creates an inline replacement when editing a recommended team prompt", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     agentResourceMocks.getAgentResources.mockResolvedValueOnce(

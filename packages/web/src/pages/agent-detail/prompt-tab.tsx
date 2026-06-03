@@ -214,11 +214,15 @@ function PromptResourceBlocks(props: {
   const rows = enabledPromptRows(props.data);
   const inlineBinding = findInlinePromptBinding(props.data.bindings);
   const editableBindingId = inlineBinding?.binding.id ?? null;
+  const editableInlineRowExists = !!editableBindingId && rows.some((row) => row.bindingId === editableBindingId);
+  const hasHiddenInlineBinding = !!editableBindingId && !editableInlineRowExists;
   const singleTeamPrompt = findSingleEnabledTeamPrompt(props.data);
-  const editorIsInline = props.editor?.target.kind === "update-inline";
+  const editorIsInline = props.editor?.target.kind === "update-inline" && editableInlineRowExists;
   const editorNeedsAgentBlock = props.editor !== null && !editorIsInline;
   const shouldShowCustomPlaceholder =
-    !props.editor && props.canEdit && !editableBindingId && (rows.length === 0 || !singleTeamPrompt);
+    !props.editor &&
+    props.canEdit &&
+    (hasHiddenInlineBinding || (!editableBindingId && (rows.length === 0 || !singleTeamPrompt)));
   const blocks: ReactNode[] = rows.map((row, index) => {
     const isEditableInlineRow = !!row.bindingId && row.bindingId === editableBindingId;
     const isEditingRow = !!props.editor && editorIsInline && isEditableInlineRow;
@@ -269,11 +273,20 @@ function PromptResourceBlocks(props: {
       <PromptResourceBlock
         key="agent-custom-placeholder"
         title="Agent Resource: custom prompt"
-        action={<PromptBlockAction label="Add custom prompt" onClick={props.onStartEdit} />}
+        action={
+          <PromptBlockAction
+            label={hasHiddenInlineBinding ? "Edit custom prompt" : "Add custom prompt"}
+            onClick={props.onStartEdit}
+          />
+        }
         separated={blocks.length > 0}
       >
         <span className="text-muted-foreground">
-          {rows.length === 0 ? "No prompt resources enabled." : "No custom prompt yet."}
+          {hasHiddenInlineBinding
+            ? "No prompt body."
+            : rows.length === 0
+              ? "No prompt resources enabled."
+              : "No custom prompt yet."}
         </span>
       </PromptResourceBlock>,
     );
