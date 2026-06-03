@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { readTreeState } from "../src/commands/tree/binding-state.js";
 import { bootstrapTreeRoot } from "../src/commands/tree/bootstrap.js";
 import { readCurrentCliVersion } from "../src/commands/tree/cli-version.js";
 import {
@@ -12,6 +13,7 @@ import {
   validateWorkflowPath,
 } from "../src/commands/tree/rule-layer.js";
 import { parseTemplateVersion, writeTemplatedFile } from "../src/commands/tree/template-write.js";
+import { readTreeIdentityContract } from "../src/commands/tree/tree-identity.js";
 import { upgradeTargetRoot } from "../src/commands/tree/upgrade.js";
 
 const tempDirs: string[] = [];
@@ -104,6 +106,23 @@ describe("tree rule-layer templates", () => {
     expect(readFileSync(workflowPath, "utf8")).toContain(
       `run: npx -p first-tree@${readCurrentCliVersion()} first-tree tree verify`,
     );
+  });
+
+  it("persists tree identity to .first-tree/tree.json so verify and upgrade can resolve it", () => {
+    const root = makeTempDir("first-tree-bootstrap-identity-");
+
+    bootstrapTreeRoot(root, { treeMode: "shared" });
+
+    const state = readTreeState(root);
+    expect(state).not.toBeNull();
+    expect(state?.treeMode).toBe("shared");
+    expect(state?.treeRepoName.length ?? 0).toBeGreaterThan(0);
+    expect(state?.treeId.length ?? 0).toBeGreaterThan(0);
+
+    const identity = readTreeIdentityContract(root);
+    expect(identity).toBeDefined();
+    expect(identity?.treeRepoName).toBe(state?.treeRepoName);
+    expect(identity?.treeMode).toBe("shared");
   });
 
   it("upgrades existing tree roots by adding the missing Tier 0 validate workflow", () => {

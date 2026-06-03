@@ -90,7 +90,7 @@ function upgradeSourceRoot(targetRoot: string, bundledSkillVersion: string): Upg
 function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): UpgradeSummary {
   const treeIdentity = readTreeIdentityContract(targetRoot);
   if (treeIdentity === undefined) {
-    throw new Error("No managed tree identity was found in `.first-tree/` state.");
+    throw new Error(".first-tree/tree.json is missing — cannot resolve tree identity.");
   }
 
   copyCanonicalSkills(targetRoot);
