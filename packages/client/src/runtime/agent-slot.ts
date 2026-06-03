@@ -123,6 +123,9 @@ export class AgentSlot {
     };
     const onBound = (boundAgent: { agentId: string }) => {
       if (boundAgent.agentId === this.config.agentId) {
+        if (typeof this.sessionManager?.noteBindRecoveryComplete === "function") {
+          this.sessionManager.noteBindRecoveryComplete();
+        }
         // `fullStateSync` short-circuits when `sessionManager` is null,
         // so it's safe to fire on the FIRST `agent:bound` (which now
         // reaches this listener because we attached it pre-bind) — the

@@ -258,6 +258,13 @@ function previousAvailable(entry: SessionEntry): boolean {
   return Boolean(entry.claudeSessionId) || Boolean(entry.retryFromEvicted?.claudeSessionId);
 }
 
+type TrackedInFlightEntry = {
+  entryId: number;
+  messageId: string;
+  dedupKey: string;
+  admitted: boolean;
+};
+
 /**
  * Encode a resilience event into the closed `error` event payload by
  * prefixing the message with the event name. Future server-side consumers
@@ -284,10 +291,11 @@ export class SessionManager {
   private readonly currentTrigger = new Map<string, Trigger>();
   private readonly registry: SessionRegistry | null;
   /**
-   * In-flight inbox entries per chat — FIFO of entryIds populated at
-   * `dispatch()` time and drained when the handler calls
-   * `ctx.markCompleted()` after a turn (or when the runtime tears a session
-   * down on a permanent failure / terminate command).
+   * In-flight inbox entries per chat — delivered entries that this process
+   * has handed toward a handler and has not yet committed. Completion is
+   * identity based: handlers report the concrete SessionMessage or fused
+   * batch they actually consumed, and the runtime sends one ack-through for
+   * that batch's last inbox entry.
    *
    * Kept here (not on `SessionEntry`) because dispatch may push an entryId
    * before any session record exists for the chat (`startNewSession` runs
@@ -295,11 +303,29 @@ export class SessionManager {
    * suspended / evicted between dispatch and markCompleted.
    *
    * Sized small in practice: usually 1, briefly up to N when several
-   * messages land while a turn is mid-flight (codex `mergeAndRun` fuses
-   * them into a single forwardResult). See
+   * messages land while a turn is mid-flight. Entries that were delivered
+   * but only queued inside a handler remain tracked until the handler's
+   * actual consuming turn calls `markMessagesCompleted`.
+   * See
    * docs/inflight-message-recovery-design.md §4.
    */
-  private readonly inFlightEntries = new Map<string, number[]>();
+  private readonly inFlightEntries = new Map<string, TrackedInFlightEntry[]>();
+  /**
+   * Per-chat admission barrier. It serializes the pre-handler admission phase
+   * only: config refresh, eager asset fetch, marking the entry admitted, and
+   * invoking `routeMessage()`. It deliberately does NOT wait for the handler's
+   * turn promise to settle, so A2 can still be appended/injected while A1's
+   * attempt is running; it just cannot overtake A1 before A1 reaches handler
+   * membership.
+   */
+  private readonly admissionQueues = new Map<string, Promise<void>>();
+  /**
+   * Chats whose local handler state was abandoned while server-side entries
+   * may still be `delivered`. Until the next bind reset, processing a newer
+   * entry in that chat could make ack-through commit an older abandoned entry,
+   * so dispatch fails closed and waits for bind recovery.
+   */
+  private readonly needsBindRecovery = new Set<string>();
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
@@ -333,7 +359,7 @@ export class SessionManager {
 
   /**
    * Dispatch an inbox entry. ACK is deferred until the handler reports a
-   * completed turn via `ctx.markCompleted()`.
+   * completed turn via `ctx.markMessagesCompleted(...)`.
    *
    * Delayed ACK semantics (post inflight-message-recovery): the entry stays
    * `delivered` server-side until forwardResult succeeds (or the handler
@@ -351,105 +377,100 @@ export class SessionManager {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
 
-    // 1. Deduplication — key by (chatId, messageId). Cross-chat reply
-    // routing has been removed (see first-tree-context PR #281) so a single
-    // message now produces exactly one inbox entry per recipient, but the
-    // server-side identity is still (inboxId, messageId, chatId) and we
-    // mirror it defensively in case a legacy entry surfaces or fan-out is
-    // ever extended again.
-    //
-    // Network-blip redelivery (server resets `delivered → pending` on every
-    // `agent:bind`) also lands here for the duration of one process: if
-    // we've already processed this messageId in-memory the dedup short-
-    // circuits before we re-enqueue an entry that the previous turn will
-    // ack on its own.
-    //
-    // Re-ack on dedup hit (post inflight-message-recovery). Three paths
-    // remove an entryId from `inFlightEntries`:
-    //   (a) `markCompleted` via `ackInFlightEntries`  — entry was acked.
-    //   (b) `drainAllInFlightEntries` (terminate / permanent error)
-    //                                                — entry was acked.
-    //   (c) `evictIfNeeded` LRU eviction              — entry was NOT
-    //       acked, and the recovery contract is "server's bind-reset
-    //       redelivers against a fresh session." The LRU path synchronously
-    //       drops this chat's dedup keys (see `evictIfNeeded`), so by the
-    //       time the redelivery reaches dispatch the messageId is NOT in
-    //       the dedup set and we don't land in this branch at all.
-    // That leaves (a) and (b) as the only ways to arrive here with the
-    // entry already off the in-flight queue. Both mean the ack frame was
-    // already sent — and since the server is still redelivering this
-    // entryId, that ack didn't land (fire-and-forget WS / TCP half-open /
-    // reaper race against `ackEntryByIdForBoundAgents`'s `status='delivered'`
-    // filter). Re-ack closes the "reset on bind → redeliver → dedup-hit →
-    // never ack" loop that otherwise persists until process restart (at
-    // which point the dedup is empty, the redelivered entry is mis-
-    // classified as a fresh message, and the agent re-runs the turn).
-    // If the entry IS still in `inFlightEntries` we leave it alone — the
-    // turn's eventual `markCompleted` will ack it, and acking early would
-    // prematurely defuse the recovery path if the client crashes mid-turn.
-    const dedupKey = `${chatId}:${messageId}`;
-    if (this.deduplicator.isDuplicate(dedupKey)) {
-      const queue = this.inFlightEntries.get(chatId);
-      const stillInFlight = queue ? queue.includes(entry.id) : false;
-      this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message, skipping");
-      if (!stillInFlight) {
-        this.config.ackEntry(entry.id).catch((err) => {
-          this.config.log.warn({ chatId, messageId, entryId: entry.id, err }, "dedup-hit re-ack failed");
-        });
-      }
+    if (this.needsBindRecovery.has(chatId)) {
+      this.config.log.warn(
+        { chatId, messageId, entryId: entry.id },
+        "chat has abandoned delivered entries; deferring inbox delivery until bind reset",
+      );
       return;
     }
 
-    // Push the entry into the in-flight FIFO BEFORE routing. The handler
-    // (or the session-manager teardown path) drains the queue via
-    // `markCompleted()` once the turn is complete; nothing acks until then.
-    const queue = this.inFlightEntries.get(chatId);
-    if (queue) queue.push(entry.id);
-    else this.inFlightEntries.set(chatId, [entry.id]);
-
-    // 2. Step 4: refresh runtime config if the message brought a newer
-    // version. This is the *only* trigger for active-session re-config —
-    // matches PRD §7.2. Failures are logged but do not block delivery on
-    // M1: handler integration in Step 6 will decide whether to use the
-    // stale config or hold the message until the server recovers.
-    if (this.config.agentConfigCache) {
-      try {
-        await this.config.agentConfigCache.refreshIfNewer(
-          this.config.agentIdentity.agentId,
-          entry.message.configVersion,
-        );
-      } catch (err) {
-        this.config.log.warn(
-          {
-            chatId,
-            agentId: this.config.agentIdentity.agentId,
-            incomingVersion: entry.message.configVersion,
-            err,
-          },
-          "config version mismatch — skipping refresh",
-        );
-      }
+    // 1. Deduplication — key by (chatId, messageId). Dedup is now only an
+    // in-process duplicate-injection guard for entries still tracked by the
+    // active local turn/batch. It must not independently re-ack: ack-through
+    // can commit older delivered prefix rows, so only a concrete successful
+    // turn completion may send the cursor.
+    const dedupKey = `${chatId}:${messageId}`;
+    if (this.deduplicator.isDuplicate(dedupKey)) {
+      const queue = this.inFlightEntries.get(chatId);
+      const stillInFlight = queue ? queue.some((tracked) => tracked.entryId === entry.id) : false;
+      this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message observed");
+      if (stillInFlight) return;
+      this.config.log.debug(
+        { chatId, messageId, entryId: entry.id },
+        "duplicate key is not tied to an active entry; reprocessing redelivery",
+      );
     }
 
-    // Note: the "mention_only" filter now lives on the server (see
-    // services/message.ts sendMessage fan-out). If an entry reaches dispatch
-    // we assume server already decided we should handle it — this avoids a
-    // double-guard that drifted between server / client in early M1.
+    // Track before routing. The handler (or teardown path) commits by
+    // message identity once work is complete; nothing acks until then.
+    const queue = this.inFlightEntries.get(chatId);
+    const tracked = { entryId: entry.id, messageId, dedupKey, admitted: false };
+    if (queue) queue.push(tracked);
+    else this.inFlightEntries.set(chatId, [tracked]);
 
-    // 4. Extract message content (handler does not see inbox metadata)
-    const message = this.extractMessage(entry);
+    let routePromise: Promise<void> | undefined;
+    await this.withAdmissionBarrier(chatId, async () => {
+      if (this.needsBindRecovery.has(chatId) || !this.isTrackedEntry(chatId, entry.id)) return;
 
-    // 4b. Pull any referenced image bytes to local disk before the handler
-    // renders. Bytes live in the server's `attachments` object store (uploaded
-    // by the sender); each client fetches once and caches under the chat's
-    // images dir. Best-effort — a failed fetch leaves the handler to surface a
-    // "not available on this device" placeholder for that ref.
-    await this.ensureImagesLocal(message);
+      // 2. Step 4: refresh runtime config if the message brought a newer
+      // version. This is the *only* trigger for active-session re-config —
+      // matches PRD §7.2. Failures are logged but do not block delivery on
+      // M1: handler integration in Step 6 will decide whether to use the
+      // stale config or hold the message until the server recovers.
+      if (this.config.agentConfigCache) {
+        try {
+          await this.config.agentConfigCache.refreshIfNewer(
+            this.config.agentIdentity.agentId,
+            entry.message.configVersion,
+          );
+        } catch (err) {
+          this.config.log.warn(
+            {
+              chatId,
+              agentId: this.config.agentIdentity.agentId,
+              incomingVersion: entry.message.configVersion,
+              err,
+            },
+            "config version mismatch — skipping refresh",
+          );
+        }
+      }
 
-    // 5. Route by session state. ACK no longer happens inside route — the
-    // entry sits in `inFlightEntries` until the handler calls
-    // `ctx.markCompleted()` at turn end.
-    await this.routeMessage(chatId, message);
+      if (this.needsBindRecovery.has(chatId) || !this.isTrackedEntry(chatId, entry.id)) return;
+
+      // Note: the "mention_only" filter now lives on the server (see
+      // services/message.ts sendMessage fan-out). If an entry reaches dispatch
+      // we assume server already decided we should handle it — this avoids a
+      // double-guard that drifted between server / client in early M1.
+
+      // 4. Extract message content (handler does not see inbox metadata)
+      const message = this.extractMessage(entry);
+
+      // 4b. Pull any referenced image bytes to local disk before the handler
+      // renders. Bytes live in the server's `attachments` object store (uploaded
+      // by the sender); each client fetches once and caches under the chat's
+      // images dir. Best-effort — a failed fetch leaves the handler to surface a
+      // "not available on this device" placeholder for that ref.
+      await this.ensureImagesLocal(message);
+
+      if (this.needsBindRecovery.has(chatId) || !this.markTrackedEntryAdmitted(chatId, entry.id)) return;
+
+      // 5. Route by session state. ACK no longer happens inside route — the
+      // entry sits in `inFlightEntries` until the handler completes the
+      // concrete message/batch it actually consumed. Do not await inside the
+      // admission barrier: for Codex/TUI, route promises can span the whole
+      // turn, but same-chat later messages must still be able to append once
+      // this entry has reached handler membership.
+      routePromise = this.routeMessage(chatId, message).catch((err) => {
+        if (this.isTrackedEntry(chatId, entry.id)) {
+          this.abandonInFlightForBindRecovery(chatId, "route_message_failed");
+        }
+        throw err;
+      });
+    });
+
+    if (routePromise) await routePromise;
   }
 
   /**
@@ -648,7 +669,38 @@ export class SessionManager {
     return [...this.evictedMappings.keys()];
   }
 
+  /**
+   * The server resets delivered-but-unacked rows back to pending during
+   * `agent:bind`. After that point chats blocked by local abandoned state can
+   * safely accept redelivery again.
+   */
+  noteBindRecoveryComplete(): void {
+    this.needsBindRecovery.clear();
+  }
+
   // ---- Internal -----------------------------------------------------------
+
+  private async withAdmissionBarrier(chatId: string, op: () => Promise<void>): Promise<void> {
+    const prev = this.admissionQueues.get(chatId) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    this.admissionQueues.set(chatId, next);
+    const cleanup = () => {
+      if (this.admissionQueues.get(chatId) === next) this.admissionQueues.delete(chatId);
+    };
+    void next.then(cleanup, cleanup);
+    await next;
+  }
+
+  private isTrackedEntry(chatId: string, entryId: number): boolean {
+    return this.inFlightEntries.get(chatId)?.some((tracked) => tracked.entryId === entryId) ?? false;
+  }
+
+  private markTrackedEntryAdmitted(chatId: string, entryId: number): boolean {
+    const tracked = this.inFlightEntries.get(chatId)?.find((entry) => entry.entryId === entryId);
+    if (!tracked) return false;
+    tracked.admitted = true;
+    return true;
+  }
 
   private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
     // Record the trigger BEFORE dispatching to any handler path (start /
@@ -667,8 +719,8 @@ export class SessionManager {
     // user message is a strong signal the user is waiting — replace the
     // stored startMessage so the retry uses the fresher content, then fire
     // an immediate retry. The new entry sits alongside any prior entries in
-    // `inFlightEntries[chatId]`; the retry's eventual forwardResult drains
-    // the whole queue via `markCompleted()`.
+    // `inFlightEntries[chatId]`; the retry's eventual forwardResult commits
+    // the concrete message/batch it consumed.
     if (existing && existing.retryAttempt > 0) {
       existing.startMessage = message;
       this.triggerImmediateRetry(chatId);
@@ -1136,6 +1188,7 @@ export class SessionManager {
   }
 
   private suspendSession(entry: SessionEntry): void {
+    this.abandonInFlightForBindRecovery(entry.chatId, "session_suspended");
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
@@ -1218,16 +1271,7 @@ export class SessionManager {
       // markCompleted will ever fire. The server-side entries stay
       // `delivered`; the next `agent:bind` resets them back to `pending`
       // for redelivery against a fresh session.
-      this.inFlightEntries.delete(candidate.key);
-      // Synchronously drop the same chat's dedup keys. Without this, the
-      // `dispatch()` dedup-hit short-circuit (post-fix: ack-on-dedup-hit
-      // when the entry isn't in-flight) would treat the bind-reset
-      // redelivery as "already handled" and ack it — shortcutting the
-      // recovery path the comment above describes. The invariant we want
-      // to preserve: a dedup hit means "this entryId was acked or will be
-      // acked by an in-flight turn"; LRU eviction breaks neither half, so
-      // the key must come out with the entry.
-      this.deduplicator.dropByPrefix(`${candidate.key}:`);
+      this.abandonInFlightForBindRecovery(candidate.key, "session_evicted");
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
@@ -1330,38 +1374,82 @@ export class SessionManager {
     this.config.onStateChange(chatId, state);
   }
 
-  /**
-   * Shift up to `count` in-flight entries off the head of this chat's
-   * FIFO and ack each one over the WS data plane. Called by the handler
-   * via `ctx.markCompleted(count)` when a turn closes cleanly
-   * (forwardResult success, silent turn, SDK-reported "no result", or
-   * permanent error surfaced through `emitEvent`).
-   *
-   * One-shift-per-turn pairing is the invariant: claude-code's
-   * streaming-input model produces one SDK `result` event per user
-   * message pushed, so `count = 1` per turn keeps the queue aligned with
-   * the SDK's user-message tally. Codex's `mergeAndRun` fuses N injected
-   * messages into a single turn — it passes `count = N` so the matching
-   * fused entries clear together. Over-shifting (count > queue.length)
-   * is clamped to "drain all"; under-shifting leaves entries queued for
-   * the next turn (or the next bind reset on crash).
-   *
-   * Idempotent — a missing or empty queue is a no-op. Ack failures are
-   * logged but never thrown: the entry stays `delivered` server-side and
-   * the next `agent:bind` resets it back to `pending` if recovery is still
-   * needed.
-   */
-  private ackInFlightEntries(chatId: string, count: number): void {
-    if (count <= 0) return;
+  private ackThroughTrackedEntry(chatId: string, throughEntryId: number): void {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
-    const shifted = queue.splice(0, count);
-    if (queue.length === 0) this.inFlightEntries.delete(chatId);
-    for (const entryId of shifted) {
-      this.config.ackEntry(entryId).catch((err) => {
-        this.config.log.warn({ chatId, entryId, err }, "ACK failed, continuing");
-      });
+    const index = queue.findIndex((tracked) => tracked.entryId === throughEntryId);
+    if (index < 0) {
+      this.config.log.warn({ chatId, throughEntryId }, "attempt completion ignored for untracked inbox entry");
+      return;
     }
+
+    const prefix = queue.slice(0, index + 1);
+    const unadmitted = prefix.filter((tracked) => !tracked.admitted);
+    if (unadmitted.length > 0) {
+      this.config.log.warn(
+        { chatId, throughEntryId, unadmittedEntryIds: unadmitted.map((entry) => entry.entryId) },
+        "attempt completion ignored for unadmitted inbox prefix",
+      );
+      this.abandonInFlightForBindRecovery(chatId, "unadmitted_ack_prefix");
+      return;
+    }
+
+    const committed = queue.splice(0, index + 1);
+    for (const tracked of committed) {
+      this.deduplicator.drop(tracked.dedupKey);
+    }
+    if (queue.length === 0) this.inFlightEntries.delete(chatId);
+
+    this.config.ackEntry(throughEntryId).catch((err) => {
+      this.config.log.warn({ chatId, entryId: throughEntryId, err }, "ACK-through failed, continuing");
+    });
+  }
+
+  private ackOldestTrackedEntry(chatId: string): void {
+    const entryId = this.inFlightEntries.get(chatId)?.[0]?.entryId;
+    if (entryId !== undefined) this.ackThroughTrackedEntry(chatId, entryId);
+  }
+
+  private abandonInFlightForBindRecovery(chatId: string, reason: string): void {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+    this.inFlightEntries.delete(chatId);
+    this.deduplicator.dropByPrefix(`${chatId}:`);
+    this.needsBindRecovery.add(chatId);
+    this.config.log.warn(
+      { chatId, reason, entryIds: queue.map((entry) => entry.entryId) },
+      "abandoned in-flight inbox entries; waiting for bind recovery",
+    );
+  }
+
+  private markMessagesCompleted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
+    const batch = Array.isArray(messages) ? messages : [messages];
+    let throughEntryId: number | undefined;
+    for (const message of batch) {
+      if (message.chatId !== chatId) continue;
+      if (message.inboxEntryId !== undefined) throughEntryId = message.inboxEntryId;
+    }
+    if (throughEntryId === undefined) {
+      this.config.log.warn({ chatId }, "attempt completion ignored because no inboxEntryId was provided");
+      return;
+    }
+    this.ackThroughTrackedEntry(chatId, throughEntryId);
+  }
+
+  private markMessagesRetryable(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+  ): void {
+    const batch = Array.isArray(messages) ? messages : [messages];
+    const hasTrackedMessage = batch.some(
+      (message) =>
+        message.chatId === chatId &&
+        message.inboxEntryId !== undefined &&
+        (this.inFlightEntries.get(chatId) ?? []).some((entry) => entry.entryId === message.inboxEntryId),
+    );
+    if (!hasTrackedMessage) return;
+    this.abandonInFlightForBindRecovery(chatId, reason);
   }
 
   /**
@@ -1370,12 +1458,23 @@ export class SessionManager {
    * entry is doomed) and on permanent `handler.start` / `handler.resume`
    * failure (re-handling on redelivery would re-hit the same permanent
    * error, so acking avoids a loop). NOT to be called from handlers — the
-   * per-turn pairing path is `markCompleted(count)`.
+   * per-turn pairing path is `markMessagesCompleted(messageOrBatch)`.
    */
   private drainAllInFlightEntries(chatId: string): void {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
-    this.ackInFlightEntries(chatId, queue.length);
+    let admittedPrefixCount = 0;
+    for (const tracked of queue) {
+      if (!tracked.admitted) break;
+      admittedPrefixCount++;
+    }
+    if (admittedPrefixCount > 0) {
+      const lastAdmitted = queue[admittedPrefixCount - 1];
+      if (lastAdmitted) this.ackThroughTrackedEntry(chatId, lastAdmitted.entryId);
+    }
+    if (this.inFlightEntries.has(chatId)) {
+      this.abandonInFlightForBindRecovery(chatId, "drain_unadmitted_remainder");
+    }
   }
 
   private buildSessionContext(chatId: string): SessionContext {
@@ -1458,8 +1557,14 @@ export class SessionManager {
         this.config.onSessionEvent?.(chatId, event);
       },
       forwardResult,
-      markCompleted: (count) => {
-        this.ackInFlightEntries(chatId, count ?? 1);
+      markCompleted: () => {
+        this.ackOldestTrackedEntry(chatId);
+      },
+      markMessagesCompleted: (messages) => {
+        this.markMessagesCompleted(chatId, messages);
+      },
+      markMessagesRetryable: (messages, reason) => {
+        this.markMessagesRetryable(chatId, messages, reason);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
@@ -1560,6 +1665,7 @@ export class SessionManager {
   private extractMessage(entry: InboxEntryWithMessage): SessionMessage {
     const msg = entry.message;
     return {
+      inboxEntryId: entry.id,
       id: msg.id,
       chatId: entry.chatId ?? msg.chatId,
       senderId: msg.senderId,

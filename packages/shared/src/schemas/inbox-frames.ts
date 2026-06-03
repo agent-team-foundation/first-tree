@@ -36,7 +36,12 @@ export type InboxAckFrame = z.infer<typeof inboxAckFrameSchema>;
 export const inboxAckAcceptedDispositionSchema = z.enum(["acked", "already_acked", "accepted_from_pending"]);
 export type InboxAckAcceptedDisposition = z.infer<typeof inboxAckAcceptedDispositionSchema>;
 
-export const inboxAckRejectedReasonSchema = z.enum(["not_found_or_not_bound", "failed_or_dead"]);
+export const inboxAckRejectedReasonSchema = z.enum([
+  "not_found_or_not_bound",
+  "failed_or_dead",
+  "non_notify",
+  "prefix_gap",
+]);
 export type InboxAckRejectedReason = z.infer<typeof inboxAckRejectedReasonSchema>;
 
 export const inboxAckAcceptedFrameSchema = z.object({
@@ -44,6 +49,7 @@ export const inboxAckAcceptedFrameSchema = z.object({
   entryId: z.number().int().nonnegative(),
   ref: z.string().min(1),
   disposition: inboxAckAcceptedDispositionSchema,
+  ackedCount: z.number().int().nonnegative().optional(),
 });
 export type InboxAckAcceptedFrame = z.infer<typeof inboxAckAcceptedFrameSchema>;
 

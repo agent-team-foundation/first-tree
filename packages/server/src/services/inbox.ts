@@ -1,5 +1,5 @@
 import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -16,11 +16,12 @@ type ClaimedEntry = typeof inboxEntries.$inferSelect;
 export type AckEntryResult =
   | {
       ok: true;
-      entry: typeof inboxEntries.$inferSelect;
-      disposition: "acked" | "already_acked" | "accepted_from_pending";
-      transitionedFromDelivered: boolean;
+      throughEntry: typeof inboxEntries.$inferSelect;
+      disposition: "acked" | "already_acked";
+      ackedCount: number;
+      ackedEntryIds: number[];
     }
-  | { ok: false; reason: "not_found_or_not_bound" | "failed_or_dead" };
+  | { ok: false; reason: "not_found_or_not_bound" | "non_notify" | "prefix_gap" };
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
 type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
@@ -126,7 +127,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
       .select({ id: inboxEntries.id })
       .from(inboxEntries)
       .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)))
-      .orderBy(asc(inboxEntries.createdAt))
+      .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
       .limit(limit)
       .for("update", { skipLocked: true });
 
@@ -165,10 +166,10 @@ export async function bundleDeliveryWithSilentContext(
   if (claimed.length === 0) return [];
 
   // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so we sort
-  // by createdAt (ascending) before assembling the response. Downstream
+  // by createdAt/id (ascending) before assembling the response. Downstream
   // consumers — and silent-context bundling in particular — depend on
   // chronological order to split context windows correctly.
-  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
 
   const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed);
 
@@ -224,30 +225,19 @@ export async function bundleDeliveryWithSilentContext(
 }
 
 /**
- * Realistic upper bound on rows a single NOTIFY references. The unique
- * constraint `(inbox_id, message_id, chat_id)` caps a `(inbox, message)`
- * pair at one row per chatId. With cross-chat reply routing removed
- * (first-tree-context PR #281), a regular fan-out yields exactly one row;
- * 8 leaves headroom for any future fan-out variant without requiring a
- * schema change here.
- */
-const PUSH_CLAIM_BATCH_LIMIT = 8;
-
-/**
- * WS-push path: atomically claim every pending entry the just-fired
- * `NOTIFY (inboxId:messageId)` references and assemble their wire payloads.
+ * WS-push helper for a just-fired `NOTIFY (inboxId:messageId)`: find the
+ * pending target entry, then atomically claim the same-chat pending prefix
+ * through that target.
  *
  * Returns `[]` if no row matches — benign race with another server instance
  * (or the debug `GET /inbox` endpoint) that already claimed the entry.
  * NOTIFY is fire-and-forget (proposal §3.2).
  *
- * Why an array, not a single row: kept defensive after the cross-chat
- * reply-routing fan-out (which previously wrote a second `(inbox, message)`
- * row keyed by chatId) was removed. The unique key is still
- * `(inbox_id, message_id, chat_id)`, so any future fan-out variant that
- * legitimately produces more than one row per NOTIFY drops in without a
- * shape change. Aligning with `pollInboxInner`'s `LIMIT N` shape also keeps
- * push/poll behaviour interchangeable.
+ * Ack-through safety depends on this prefix behavior: a newer entry must not
+ * be claimed/sent while an older same-chat pending entry remains invisible to
+ * the client attempt. The production WS handler additionally serializes
+ * delivery per agent before sending frames, so the claimed prefix is emitted
+ * oldest-first on the socket.
  */
 export async function claimAndBuildForPush(
   db: Database,
@@ -256,8 +246,8 @@ export async function claimAndBuildForPush(
 ): Promise<InboxEntryWithMessage[]> {
   return withSpan("inbox.deliver.push", { "inbox.id": inboxId, "message.id": messageId }, () =>
     db.transaction(async (tx) => {
-      const targetIds = tx
-        .select({ id: inboxEntries.id })
+      const [target] = await tx
+        .select({ id: inboxEntries.id, chatId: inboxEntries.chatId })
         .from(inboxEntries)
         .where(
           and(
@@ -267,9 +257,27 @@ export async function claimAndBuildForPush(
             eq(inboxEntries.notify, true),
           ),
         )
-        .orderBy(asc(inboxEntries.createdAt))
-        .limit(PUSH_CLAIM_BATCH_LIMIT)
-        .for("update", { skipLocked: true });
+        .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+        .for("update")
+        .limit(1);
+      if (!target) return [];
+
+      const chatPredicate =
+        target.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, target.chatId);
+      const targetIds = tx
+        .select({ id: inboxEntries.id })
+        .from(inboxEntries)
+        .where(
+          and(
+            eq(inboxEntries.inboxId, inboxId),
+            chatPredicate,
+            eq(inboxEntries.status, "pending"),
+            eq(inboxEntries.notify, true),
+            sql`${inboxEntries.id} <= ${target.id}`,
+          ),
+        )
+        .orderBy(asc(inboxEntries.id))
+        .for("update");
 
       const claimed = await tx
         .update(inboxEntries)
@@ -327,7 +335,7 @@ async function collectPrecedingContext(
   }
 
   for (const [chatId, chatTriggers] of byChat) {
-    chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
 
     // For each trigger, fetch silent context strictly before it (and after
     // the previous trigger in this batch). Window: 24h before the trigger.
@@ -422,15 +430,19 @@ async function collectPrecedingContext(
 }
 
 /**
- * Ack an entry from the WS data plane, scoped to the inboxes the connected
- * socket has bound. The operation is idempotent: duplicate ACKs for `acked`
- * rows are accepted, and owned `pending` rows may be ACKed to close the
- * bind-reset race after the client has already completed the turn.
+ * Commit inbox progress through the supplied entry id from the WS data plane,
+ * scoped to the inboxes the connected socket has bound.
+ *
+ * `entryId` is interpreted as a cursor, not as an exact single-row ack:
+ * every notify=true row in the same `(inboxId, chatId)` partition up to that
+ * id must already be `acked` or `delivered`. Delivered rows in that contiguous
+ * prefix are atomically marked `acked`; `pending` / `failed` gaps reject the
+ * commit so the database cannot persist `A pending, B acked`.
  *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
  */
-export async function ackEntryByIdForBoundAgents(
+export async function ackThroughEntryIdForBoundAgents(
   db: Database,
   entryId: number,
   inboxIds: string[],
@@ -445,35 +457,56 @@ export async function ackEntryByIdForBoundAgents(
         .for("update")
         .limit(1);
       if (!entry) return { ok: false, reason: "not_found_or_not_bound" };
-      if (entry.status === "acked") {
-        return { ok: true, entry, disposition: "already_acked", transitionedFromDelivered: false };
-      }
-      if (entry.status !== "delivered" && entry.status !== "pending") {
-        return { ok: false, reason: "failed_or_dead" };
-      }
+      if (!entry.notify) return { ok: false, reason: "non_notify" };
 
-      const previousStatus = entry.status;
-      const [updated] = await tx
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
+      const chatPredicate = entry.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, entry.chatId);
+      const prefixRows = await tx
+        .select()
+        .from(inboxEntries)
         .where(
           and(
-            eq(inboxEntries.id, entryId),
-            inArray(inboxEntries.inboxId, inboxIds),
-            eq(inboxEntries.status, previousStatus),
+            eq(inboxEntries.inboxId, entry.inboxId),
+            chatPredicate,
+            eq(inboxEntries.notify, true),
+            sql`${inboxEntries.id} <= ${entryId}`,
           ),
         )
+        .orderBy(asc(inboxEntries.id))
+        .for("update");
+
+      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered")) {
+        return { ok: false, reason: "prefix_gap" };
+      }
+
+      const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
+      if (deliveredIds.length === 0) {
+        return {
+          ok: true,
+          throughEntry: entry,
+          disposition: "already_acked",
+          ackedCount: 0,
+          ackedEntryIds: [],
+        };
+      }
+
+      const updated = await tx
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt: new Date() })
+        .where(and(inArray(inboxEntries.id, deliveredIds), eq(inboxEntries.status, "delivered")))
         .returning();
-      if (!updated) return { ok: false, reason: "not_found_or_not_bound" };
+      const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
-        entry: updated,
-        disposition: previousStatus === "delivered" ? "acked" : "accepted_from_pending",
-        transitionedFromDelivered: previousStatus === "delivered",
+        throughEntry: updatedThroughEntry,
+        disposition: "acked",
+        ackedCount: updated.length,
+        ackedEntryIds: updated.map((row) => row.id),
       };
     });
   });
 }
+
+export const ackEntryByIdForBoundAgents = ackThroughEntryIdForBoundAgents;
 
 /**
  * Reset every `delivered` entry across the given `inboxIds` back to `pending`

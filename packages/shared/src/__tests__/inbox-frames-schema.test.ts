@@ -187,6 +187,7 @@ describe("inboxAckAcceptedFrameSchema", () => {
       entryId: 7,
       ref: "ack_123",
       disposition: "accepted_from_pending",
+      ackedCount: 2,
     });
     expect(res.success).toBe(true);
   });

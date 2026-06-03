@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -38,6 +38,34 @@ describe("inbox WS data-plane claim helpers", () => {
     return { a2, messageId: msgRes.json().id, chatId };
   }
 
+  async function seedDeliverables(app: FastifyInstance, count: number) {
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `wspm-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `wspm-a2-${uid}` });
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chatId = chatRes.json().id;
+    const messageIds: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const msgRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+        format: "text",
+        content: `WS push test ${i}`,
+        receiverNames: [a2.agent.name],
+      });
+      messageIds.push(msgRes.json().id);
+    }
+    const rows = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(
+        and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)),
+      )
+      .orderBy(asc(inboxEntries.id));
+    return { a2, chatId, messageIds, rows };
+  }
+
   it("claimAndBuildForPush atomically claims a pending entry and bundles it", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
@@ -71,6 +99,27 @@ describe("inbox WS data-plane claim helpers", () => {
     // `[]`, NOT throw, otherwise a NOTIFY storm crashes the LISTEN loop.
     const second = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
     expect(second).toEqual([]);
+  });
+
+  it("claimAndBuildForPush claims the same-chat pending prefix through a newer target", async () => {
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+    expect(claimed.map((entry) => entry.id)).toEqual([first.id, second.id]);
+
+    const after = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.id));
+    expect(after.map((row) => [row.id, row.status])).toEqual([
+      [first.id, "delivered"],
+      [second.id, "delivered"],
+    ]);
   });
 
   it("claimAndBuildForPush bundles silent context for a mention_only trigger", async () => {
@@ -187,6 +236,98 @@ describe("inbox WS data-plane claim helpers", () => {
     for (const e of drained) expect(typeof e.id).toBe("number");
   });
 
+  it("ackEntryByIdForBoundAgents commits delivered notify=true prefix through the target entry", async () => {
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[0] ?? "");
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.disposition).toBe("acked");
+    expect(accepted.ackedCount).toBe(2);
+    expect(accepted.ackedEntryIds).toEqual([first.id, second.id]);
+    expect(accepted.throughEntry.id).toBe(second.id);
+
+    const after = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.id));
+    expect(after.map((row) => [row.id, row.status])).toEqual([
+      [first.id, "acked"],
+      [second.id, "acked"],
+    ]);
+  });
+
+  it("ackEntryByIdForBoundAgents rejects an ack-through when an earlier notify=true row is pending", async () => {
+    const app = getApp();
+    const { a2, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(eq(inboxEntries.id, second.id));
+
+    const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
+
+    const after = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.id));
+    expect(after.map((row) => [row.id, row.status])).toEqual([
+      [first.id, "pending"],
+      [second.id, "delivered"],
+    ]);
+  });
+
+  it("ackEntryByIdForBoundAgents rejects an ack-through when an earlier notify=true row failed", async () => {
+    const app = getApp();
+    const { a2, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await app.db.update(inboxEntries).set({ status: "failed" }).where(eq(inboxEntries.id, first.id));
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(eq(inboxEntries.id, second.id));
+
+    const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
+  });
+
+  it("ackEntryByIdForBoundAgents commits only delivered rows after an already-acked prefix", async () => {
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "acked", ackedAt: new Date() })
+      .where(eq(inboxEntries.id, first.id));
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.ackedCount).toBe(1);
+    expect(accepted.ackedEntryIds).toEqual([second.id]);
+  });
+
   it("ackEntryByIdForBoundAgents acks only entries in the supplied inbox set", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
@@ -209,8 +350,8 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(accepted.ok).toBe(true);
     if (!accepted.ok) throw new Error("ack unexpectedly rejected");
     expect(accepted.disposition).toBe("acked");
-    expect(accepted.transitionedFromDelivered).toBe(true);
-    expect(accepted.entry.status).toBe("acked");
+    expect(accepted.ackedCount).toBe(1);
+    expect(accepted.throughEntry.status).toBe("acked");
   });
 
   it("ackEntryByIdForBoundAgents accepts when the inbox list contains the owner alongside other inboxes", async () => {
@@ -233,8 +374,8 @@ describe("inbox WS data-plane claim helpers", () => {
     ]);
     expect(accepted.ok).toBe(true);
     if (!accepted.ok) throw new Error("ack unexpectedly rejected");
-    expect(accepted.entry.status).toBe("acked");
-    expect(accepted.entry.inboxId).toBe(a2.agent.inboxId);
+    expect(accepted.throughEntry.status).toBe("acked");
+    expect(accepted.throughEntry.inboxId).toBe(a2.agent.inboxId);
   });
 
   it("ackEntryByIdForBoundAgents accepts duplicate ACKs idempotently", async () => {
@@ -252,11 +393,11 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(second.ok).toBe(true);
     if (!second.ok) throw new Error("duplicate ack unexpectedly rejected");
     expect(second.disposition).toBe("already_acked");
-    expect(second.transitionedFromDelivered).toBe(false);
-    expect(second.entry.status).toBe("acked");
+    expect(second.ackedCount).toBe(0);
+    expect(second.throughEntry.status).toBe("acked");
   });
 
-  it("ackEntryByIdForBoundAgents accepts an owned pending row to close bind-reset races", async () => {
+  it("ackEntryByIdForBoundAgents rejects an owned pending row as a prefix gap", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
 
@@ -265,11 +406,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(entry.status).toBe("pending");
 
     const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(accepted.ok).toBe(true);
-    if (!accepted.ok) throw new Error("pending ack unexpectedly rejected");
-    expect(accepted.disposition).toBe("accepted_from_pending");
-    expect(accepted.transitionedFromDelivered).toBe(false);
-    expect(accepted.entry.status).toBe("acked");
+    expect(accepted).toEqual({ ok: false, reason: "prefix_gap" });
   });
 
   it("ackEntryByIdForBoundAgents rejects terminal failed rows", async () => {
@@ -284,7 +421,7 @@ describe("inbox WS data-plane claim helpers", () => {
     if (!entry) throw new Error("seed entry missing");
 
     const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(rejected).toEqual({ ok: false, reason: "failed_or_dead" });
+    expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
   });
 
   it("ackEntryByIdForBoundAgents short-circuits on empty inbox list", async () => {

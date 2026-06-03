@@ -109,6 +109,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-resume-fail"),
       markCompleted,
+      markMessagesCompleted: () => markCompleted(),
     };
 
     await handler.start(

@@ -305,6 +305,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" })); // start succeeds
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" })); // preempts chat-A
+    sm.noteBindRecoveryComplete(); // bind reset completed; redelivery may resume chat-A
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → throws
 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
@@ -350,6 +351,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" }));
+    sm.noteBindRecoveryComplete(); // bind reset completed; redelivery may resume chat-A
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → errored
 
     // A fresh inbound for chat-A should route as start (entry was dropped

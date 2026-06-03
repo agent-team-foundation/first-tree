@@ -773,16 +773,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
   /**
    * Run one Codex turn.
    *
-   * `entryCount` is the number of inbox entries this turn is consuming —
-   * always 1 for `start` / `resume` / single-inject paths, and `N` when
-   * `mergeAndRun` fuses N queued messages into one input. The runtime acks
-   * exactly `entryCount` entries from the chat's in-flight FIFO once the
-   * turn closes (markCompleted N). Drift between this number and what the
-   * SDK actually consumed loses the per-turn pairing — under-counts leak
-   * entries (stay `delivered` server-side until next bind), over-counts
-   * ack future turns prematurely (loss on crash).
+   * `messages` is the concrete inbox batch this turn consumed — always one
+   * message for start / resume / single-inject paths, and N when mergeAndRun
+   * fuses queued messages into one input. Completion acks through the last
+   * consumed message id instead of shifting a count from SessionManager state.
    */
-  async function runTurn(input: Input, sessionCtx: SessionContext, entryCount: number): Promise<void> {
+  async function runTurn(input: Input, sessionCtx: SessionContext, messages: readonly SessionMessage[]): Promise<void> {
     const activeThread = thread;
     if (!activeThread) return;
 
@@ -1014,11 +1010,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // Ack the entries this turn consumed. All four turn outcomes (success,
     // silent / no-text, SDK turn.failed, forwardResult failure) are
     // terminal for this turn — redelivery would either replay an already-
-    // delivered reply or re-hit the same failure. Pass `entryCount` so a
-    // fused `mergeAndRun` (N injected messages → one turn) acks exactly
-    // those N entries and leaves any in-flight entries for the NEXT turn
-    // alone.
-    sessionCtx.markCompleted(entryCount);
+    // delivered reply or re-hit the same failure.
+    sessionCtx.markMessagesCompleted(messages);
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1076,15 +1069,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // permanent failure for this batch (redelivery would re-hit the same
       // format errors). Ack the entries so they don't leak in
       // `inFlightEntries` and pile up server-side as `delivered` rows.
-      sessionCtx.markCompleted(drained.length);
+      sessionCtx.markMessagesCompleted(drained);
       return;
     }
-    // `drained.length` is the authoritative fused-entry count — formatting
-    // a single message could throw (it gets logged and skipped above) but
-    // the inbox entry was still pushed at dispatch time, so it must still
-    // be acked. Using `inputs.length` here would leak the formatting-failed
-    // entry until the next bind reset.
-    await runTurn(inputs.join("\n\n"), sessionCtx, drained.length);
+    await runTurn(inputs.join("\n\n"), sessionCtx, drained);
   }
 
   /**
@@ -1155,7 +1143,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       threadIsFresh = true;
 
       const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx, 1);
+      await runTurn(input, sessionCtx, [message]);
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1210,7 +1198,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx, 1);
+        await runTurn(input, sessionCtx, [message]);
       }
       return sessionId;
     },
@@ -1220,7 +1208,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // is buffered and drained on the next available turn. Queue every
       // inject instead of only mid-turn injects so the async gap before
       // `runTurn()` sets `currentTurnPromise` cannot start parallel turns
-      // and desynchronise the in-flight entry FIFO.
+      // and desynchronise completion from the messages actually consumed.
       if (!ctx) return;
       queuedMessages.push(message);
       scheduleQueuedMessagesDrain();

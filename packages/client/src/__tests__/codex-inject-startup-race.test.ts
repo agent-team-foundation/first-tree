@@ -131,6 +131,7 @@ function makeContext(
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-startup-race"),
     markCompleted,
+    markMessagesCompleted: (messages) => markCompleted(Array.isArray(messages) ? messages.length : 1),
   };
 }
 
