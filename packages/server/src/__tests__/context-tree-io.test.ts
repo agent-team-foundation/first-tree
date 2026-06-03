@@ -2,7 +2,11 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
-import { recordFromSessionEvent, summarizeContextTreeIo } from "../services/context-tree-io.js";
+import {
+  explainContextTreeIoDecision,
+  recordFromSessionEvent,
+  summarizeContextTreeIo,
+} from "../services/context-tree-io.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { appendEvent } from "../services/session-event.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -252,16 +256,97 @@ describe("context-tree IO service", () => {
     expect(invalidPathRows).toHaveLength(0);
   });
 
-  it("rejects shell command file refs until server-side command parsing exists", async () => {
+  it("derives shell command read IO for Codex command and Claude Bash", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
 
-    const persisted = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+    const codexRead = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
       kind: "tool_call",
       payload: {
-        toolUseId: "tu-shell",
+        toolUseId: "tu-codex-shell",
+        name: "command",
+        args: { command: "sed -n '1,120p' /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    const claudeRead = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-claude-shell",
         name: "Bash",
-        args: { command: "cat /tmp/context-tree/NODE.md" },
+        args: { command: "cat /tmp/context-tree/practices/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "practices/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    for (const item of [
+      { runtimeProvider: "codex", sessionEvent: codexRead },
+      { runtimeProvider: "claude-code", sessionEvent: claudeRead },
+    ]) {
+      await recordFromSessionEvent(app.db, {
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        runtimeProvider: item.runtimeProvider,
+        sessionEvent: item.sessionEvent,
+      });
+    }
+
+    const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, seed.chatId));
+    expect(rows).toHaveLength(2);
+    expect(
+      rows
+        .map((row) => ({
+          runtimeProvider: row.runtimeProvider,
+          action: row.action,
+          source: row.source,
+          targetPath: row.targetPath,
+        }))
+        .sort((a, b) => a.runtimeProvider.localeCompare(b.runtimeProvider)),
+    ).toEqual([
+      {
+        runtimeProvider: "claude-code",
+        action: "read",
+        source: "shell_command",
+        targetPath: "practices/NODE.md",
+      },
+      {
+        runtimeProvider: "codex",
+        action: "read",
+        source: "shell_command",
+        targetPath: "NODE.md",
+      },
+    ]);
+  });
+
+  it("keeps shell write commands unsupported and explains common skip reasons", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const shellWrite = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write",
+        name: "command",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
         status: "ok",
         toolFileRefs: [
           {
@@ -279,14 +364,108 @@ describe("context-tree IO service", () => {
       organizationId: seed.organizationId,
       agentId: seed.agent.uuid,
       chatId: seed.chatId,
-      runtimeProvider: "claude-code",
-      sessionEvent: persisted,
+      runtimeProvider: "codex",
+      sessionEvent: shellWrite,
     });
 
     const rows = await app.db
       .select()
       .from(contextTreeIoEvents)
-      .where(eq(contextTreeIoEvents.sourceSessionEventId, persisted.id));
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, shellWrite.id));
     expect(rows).toHaveLength(0);
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: shellWrite,
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-no-refs",
+            name: "command",
+            args: { command: "cat /tmp/context-tree/NODE.md" },
+            status: "ok",
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "no_tool_file_refs" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-repo-mismatch",
+            name: "command",
+            args: { command: "cat /tmp/context-tree/NODE.md" },
+            status: "ok",
+            toolFileRefs: [
+              {
+                origin: "tool_arg",
+                repoUrl: "https://github.com/acme/other.git",
+                repoBranch: "main",
+                repoRelativePath: "NODE.md",
+                pathKind: "file",
+              },
+            ],
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "ref_repo_mismatch" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-find-delete",
+            name: "command",
+            args: { command: "find /tmp/context-tree -delete" },
+            status: "ok",
+            toolFileRefs: [
+              {
+                origin: "tool_arg",
+                repoUrl: TREE_REPO,
+                repoBranch: "main",
+                repoRelativePath: "/",
+                pathKind: "repo",
+              },
+            ],
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-comment",
+            name: "command",
+            args: { command: "cat NODE.md # members/alice/NODE.md" },
+            status: "ok",
+            toolFileRefs: [
+              {
+                origin: "tool_arg",
+                repoUrl: TREE_REPO,
+                repoBranch: "main",
+                repoRelativePath: "members/alice/NODE.md",
+                pathKind: "file",
+              },
+            ],
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
   });
 });

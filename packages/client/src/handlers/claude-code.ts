@@ -21,6 +21,7 @@ import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/a
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -361,6 +362,32 @@ function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTree
   };
 }
 
+function readCommandArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const command = (input as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function toolFileRefs(
+  toolName: string,
+  input: unknown,
+  contextTree: ContextTreeBinding | undefined,
+  cwd: string | null | undefined,
+): ToolFileRef[] {
+  const directRef = toolFileRef(toolName, input, contextTree);
+  if (directRef) return [directRef];
+  if (toolName !== "Bash" || !cwd) return [];
+  const command = readCommandArg(input);
+  if (command === null) return [];
+  return toolFileRefsFromShellCommand({
+    command,
+    cwd,
+    contextTreePath: contextTree?.path ?? null,
+    contextTreeRepoUrl: contextTree?.repoUrl ?? null,
+    contextTreeBranch: contextTree?.branch ?? null,
+  });
+}
+
 /**
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
  * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
@@ -378,6 +405,7 @@ export type ToolCallProcessor = {
 export function createToolCallProcessor(
   emit: (event: SessionEvent) => void,
   contextTree?: ContextTreeBinding,
+  options: { cwd?: string | null } = {},
 ): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
@@ -389,10 +417,7 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
-    const toolFileRefs =
-      status === "ok"
-        ? [toolFileRef(entry.name, entry.args, contextTree)].filter((ref): ref is ToolFileRef => ref !== null)
-        : [];
+    const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
 
     emit({
       kind: "tool_call",
@@ -403,7 +428,7 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(toolFileRefs.length > 0 ? { toolFileRefs } : {}),
+        ...(refs.length > 0 ? { toolFileRefs: refs } : {}),
       },
     });
 
@@ -1013,11 +1038,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event), {
-      path: contextTreePath,
-      repoUrl: contextTreeRepoUrl,
-      branch: contextTreeBranch,
-    });
+    const toolCallProcessor = createToolCallProcessor(
+      (event) => sessionCtx.emitEvent(event),
+      {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      { cwd },
+    );
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted
     // in the result-error branch so we don't double-emit (once as a hint,

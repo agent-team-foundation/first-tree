@@ -54,7 +54,7 @@ describe("Agent WS — session event protocol (S10)", () => {
       .sign(secret);
   }
 
-  async function seedBoundAgent(suffix: string) {
+  async function seedBoundAgent(suffix: string, runtimeProvider: "claude-code" | "codex" = "claude-code") {
     const orgId = await resolveDefaultOrgId(app.db);
     const userId = uuidv7();
     const memberId = uuidv7();
@@ -101,6 +101,7 @@ describe("Agent WS — session event protocol (S10)", () => {
         managerId: memberId,
         clientId,
         organizationId: orgId,
+        runtimeProvider,
       });
     });
 
@@ -148,9 +149,9 @@ describe("Agent WS — session event protocol (S10)", () => {
         type: "agent:bind",
         agentId: seed.agent.uuid,
         ref: "bind-1",
-        // Match the seeded agent's `runtime_provider` (defaults to claude-code)
-        // so the post-0026 RUNTIME_PROVIDER_MISMATCH check passes.
-        runtimeType: "claude-code",
+        // Match the seeded agent's `runtime_provider` so the post-0026
+        // RUNTIME_PROVIDER_MISMATCH check passes.
+        runtimeType: seed.agent.runtimeProvider,
         runtimeVersion: "0.0.0",
       }),
     );
@@ -283,6 +284,70 @@ describe("Agent WS — session event protocol (S10)", () => {
         action: "write",
         source: "claude_write_tool",
         targetPath: "domains/runtime/NODE.md",
+      });
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("persists Context Tree IO from a Codex shell read `session:event` frame", async () => {
+    const seed = await seedBoundAgent("context-shell-codex", "codex");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const treeRepoUrl = "https://github.com/acme/first-tree-context.git";
+
+    try {
+      await putOrgSetting(
+        app.db,
+        seed.organizationId,
+        "context_tree",
+        { repo: treeRepoUrl, branch: "main" },
+        { updatedBy: seed.userId },
+      );
+      await app.db.insert(chats).values({ id: chatId, organizationId: seed.organizationId });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: seed.agent.uuid,
+          chatId,
+          event: {
+            kind: "tool_call",
+            payload: {
+              toolUseId: "tu-codex-shell-read",
+              name: "command",
+              args: { command: "sed -n '1,120p' /tmp/context-tree/NODE.md", cwd: "/tmp/source" },
+              status: "ok",
+              toolFileRefs: [
+                {
+                  origin: "tool_arg",
+                  repoUrl: treeRepoUrl,
+                  repoBranch: "main",
+                  repoRelativePath: "NODE.md",
+                  pathKind: "file",
+                },
+              ],
+            },
+          },
+        }),
+      );
+
+      const ioRows = await waitForCondition(async () => {
+        const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, chatId));
+        return rows.length > 0 ? rows : null;
+      });
+      const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+
+      expect(items).toHaveLength(1);
+      expect(ioRows).toHaveLength(1);
+      expect(ioRows[0]).toMatchObject({
+        agentId: seed.agent.uuid,
+        chatId,
+        runtimeProvider: "codex",
+        action: "read",
+        source: "shell_command",
+        targetPath: "NODE.md",
       });
     } finally {
       ws.close();

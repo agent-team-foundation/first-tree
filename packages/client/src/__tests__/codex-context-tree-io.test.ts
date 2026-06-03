@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { collectCodexFileChangePaths, toolFileRefsFromCodexFileChange } from "../handlers/codex.js";
+import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 
 describe("Codex Context Tree file refs", () => {
   it("collects explicit path fields and object keys from file_change payloads", () => {
@@ -47,5 +48,38 @@ describe("Codex Context Tree file refs", () => {
         pathKind: "file",
       },
     ]);
+  });
+
+  it("emits shell read refs for Codex command_execution paths under the Context Tree checkout", () => {
+    const refs = toolFileRefsFromShellCommand({
+      command: "sed -n '1,240p' /home/op/context-tree/NODE.md",
+      cwd: "/home/op/source",
+      contextTreePath: "/home/op/context-tree",
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    expect(refs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: "/home/op/context-tree/NODE.md",
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
+  it("rejects Codex shell read candidates outside the Context Tree checkout or using write syntax", () => {
+    const base = {
+      cwd: "/home/op/source",
+      contextTreePath: "/home/op/context-tree",
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+    };
+
+    expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree-sibling/NODE.md" })).toEqual([]);
+    expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree/NODE.md | head" })).toEqual([]);
+    expect(toolFileRefsFromShellCommand({ ...base, command: "echo x > /home/op/context-tree/NODE.md" })).toEqual([]);
   });
 });
