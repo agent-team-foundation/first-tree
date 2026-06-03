@@ -40,8 +40,6 @@ function writeValidTree(root: string): void {
   mkdirSync(join(root, ".first-tree"), { recursive: true });
   writeFileSync(join(root, ".git"), "gitdir: /tmp/tree\n");
   writeFileSync(join(root, "NODE.md"), ["---", "title: Root", "owners: [team]", "---", "", "# Root", ""].join("\n"));
-  writeFileSync(join(root, "AGENTS.md"), "BEGIN CONTEXT-TREE FRAMEWORK\n");
-  writeFileSync(join(root, "CLAUDE.md"), "BEGIN CONTEXT-TREE FRAMEWORK\n");
   writeFileSync(join(root, ".first-tree", "VERSION"), "1\n");
   writeFileSync(join(root, ".first-tree", "progress.md"), "- [x] done\n");
   mkdirSync(join(root, "members", "gandy"), { recursive: true });
