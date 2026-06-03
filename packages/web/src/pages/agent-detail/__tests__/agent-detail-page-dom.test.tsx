@@ -325,11 +325,10 @@ describe("AgentDetailPage", () => {
       );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Additional instructions");
+    await waitForText(container, "Instructions");
     expect(container.textContent).toContain("Kael");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
-    expect(container.textContent).toContain("Test");
     expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
       "Runtime",
@@ -338,7 +337,7 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
 
-    await click(exactButtonByText(container, "Edit prompt"));
+    await click(exactButtonByText(container, "Edit instructions"));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Prompt textarea missing");
     await setValue(textarea, "New prompt");
@@ -352,7 +351,7 @@ describe("AgentDetailPage", () => {
     await click(buttonByText(container, "Discard mine, load latest"));
     expect(agentConfigMocks.getAgentConfig).toHaveBeenCalledTimes(2);
 
-    await click(exactButtonByText(container, "Edit prompt"));
+    await click(exactButtonByText(container, "Edit instructions"));
     const latestTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!latestTextarea) throw new Error("Prompt textarea missing after reload");
     await setValue(latestTextarea, "Throw this away");
@@ -369,7 +368,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Additional instructions");
+    await waitForText(container, "Instructions");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");
@@ -378,7 +377,7 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
-  it("binds unclaimed agents, rebinds bound agents, and renders test results", async () => {
+  it("binds unclaimed agents and rebinds bound agents", async () => {
     const { RuntimeTab } = await import("../runtime-tab.js");
     agentConfigMocks.getAgentClientStatus.mockResolvedValueOnce({
       online: false,
@@ -406,12 +405,6 @@ describe("AgentDetailPage", () => {
     await waitForText(second.container, "Execution");
     expect(second.container.textContent).toContain("Execution");
     expect(second.container.textContent).toContain("Model behavior");
-    await click(second.container.querySelector('button[aria-label="Test connection"]'));
-    expect(agentMocks.testAgentConnection).toHaveBeenCalledWith("agent-1");
-    await waitForText(second.container, "Connected");
-    expect(second.container.textContent).toContain("Connected");
-    expect(second.container.textContent).toContain("runtime: idle");
-
     await click(exactButtonByText(second.container, "Re-bind"));
     await waitForText(document.body, "Current binding:");
     expect(document.body.textContent).toContain("Current binding:");

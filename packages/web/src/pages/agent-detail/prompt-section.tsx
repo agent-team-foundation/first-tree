@@ -40,7 +40,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
   const action =
     !editing && !disabled ? (
       <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
-        <Pencil className="h-3 w-3" /> Edit prompt
+        <Pencil className="h-3 w-3" /> Edit instructions
       </Button>
     ) : null;
 
@@ -48,11 +48,11 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
     <Section
       title={
         <span className="inline-flex items-center gap-2">
-          Additional instructions
+          Instructions
           {dirty && <DraftStatusChip status="modified" />}
         </span>
       }
-      description="Appended to the runtime's default system prompt. Changes remain drafts until saved from the Save bar."
+      description="Guidance this agent follows during runtime. Changes remain drafts until saved from the Save bar."
       action={action}
     >
       <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
@@ -111,11 +111,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
               padding: "var(--sp-3)",
             }}
           >
-            {value ? (
-              <Markdown>{value}</Markdown>
-            ) : (
-              <span className="text-muted-foreground">No additional instructions.</span>
-            )}
+            {value ? <Markdown>{value}</Markdown> : <span className="text-muted-foreground">No instructions yet.</span>}
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MessageSquare, Monitor, Play } from "lucide-react";
+import { ArrowLeft, MessageSquare, Monitor } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
@@ -11,22 +11,13 @@ import {
   getAgentConfig,
   updateAgentConfig,
 } from "./../api/agent-config.js";
-import {
-  deleteAgent,
-  getAgent,
-  reactivateAgent,
-  suspendAgent,
-  type TestResult,
-  testAgentConnection,
-  updateAgent,
-} from "./../api/agents.js";
+import { deleteAgent, getAgent, reactivateAgent, suspendAgent, updateAgent } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
 import { useAuth } from "./../auth/auth-context.js";
 import { Avatar } from "./../components/avatar.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
-import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +31,7 @@ import { Tab, TabBar } from "./../components/ui/tab-bar.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
-import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
+import { isBindableClient } from "./agent-detail/action-state.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
@@ -96,12 +87,11 @@ export function AgentDetailPage() {
     queryKey: ["agent", uuid],
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
-    // The header `<PresenceChip>` and the Test-action gate both derive
-    // from `agent.runtimeState` off this query. No admin-WS frame
-    // invalidates `["agent"]` today, so without polling an agent that
-    // goes offline / reconnects while the page stays open would keep
-    // showing the cached value. Match the 10s cadence the legacy
-    // `/activity` poll used before this surface migrated off it.
+    // The header `<PresenceChip>` derives from `agent.runtimeState` off this
+    // query. No admin-WS frame invalidates `["agent"]` today, so without
+    // polling an agent that goes offline / reconnects while the page stays
+    // open would keep showing the cached value. Match the 10s cadence the
+    // legacy `/activity` poll used before this surface migrated off it.
     refetchInterval: 10_000,
   });
   const canManageAgent = canManageAgentDetail(agentQuery.data, memberId, role);
@@ -229,8 +219,6 @@ export function AgentDetailPage() {
     onSuccess: () => navigate("/team"),
     onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
-
-  const testMutation = useMutation({ mutationFn: () => testAgentConnection(uuid) });
 
   const [bindClientOpen, setBindClientOpen] = useState(false);
   const [bindClientSelected, setBindClientSelected] = useState<string>("");
@@ -387,13 +375,6 @@ export function AgentDetailPage() {
   // reporting), qualified with `clientStatus?.clientId` so unclaimed agents
   // don't double-count as "offline" (we surface those separately).
   const isOffline = !isHuman && agent.runtimeState == null && !!clientStatus?.clientId;
-  const testAction = getAgentTestActionState({
-    agentStatus: agent.status,
-    clientStatus,
-    clientStatusLoading: clientStatusInitialLoading,
-    runtimeState: agent.runtimeState,
-    testPending: testMutation.isPending,
-  });
 
   const shortId = agent.uuid.slice(0, 8);
 
@@ -536,23 +517,6 @@ export function AgentDetailPage() {
               <MessageSquare className="h-4 w-4" />
               Chat
             </Button>
-            {!isHuman && canManageAgent && agent.status === "active" && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  testMutation.reset();
-                  testMutation.mutate();
-                }}
-                disabled={testAction.disabled}
-                title={testMutation.isPending ? "Testing…" : (testAction.title ?? "Test connection")}
-                aria-label="Test connection"
-                style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
-              >
-                <Play className="h-4 w-4" />
-                Test
-              </Button>
-            )}
           </div>
         </div>
       </div>
@@ -578,12 +542,6 @@ export function AgentDetailPage() {
               : "var(--agent-detail-rail)",
         }}
       >
-        {(testMutation.data || testMutation.error) && (
-          <TestResultCard
-            result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
-            onDismiss={() => testMutation.reset()}
-          />
-        )}
         <Outlet context={outletContext} />
       </div>
 
@@ -859,84 +817,5 @@ function BindClientList({
         );
       })}
     </ul>
-  );
-}
-
-const STATUS_LABELS: Record<TestResult["status"], string> = {
-  success: "Connected",
-  offline: "Offline",
-  stale: "Stale",
-  error: "Error",
-};
-
-const TEST_RESULT_BORDER: Record<TestResult["status"], string> = {
-  success: "var(--success)",
-  offline: "var(--state-offline)",
-  stale: "var(--state-blocked)",
-  error: "var(--state-error)",
-};
-
-const TEST_RESULT_TONE: Record<TestResult["status"], DenseBadgeTone> = {
-  success: "accent",
-  stale: "warn",
-  offline: "neutral",
-  error: "error",
-};
-
-function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
-  const borderColor = TEST_RESULT_BORDER[result.status];
-  const badgeTone = TEST_RESULT_TONE[result.status];
-
-  const conn = result.connection;
-
-  return (
-    <div
-      style={{
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderLeft: `var(--sp-0_75) solid ${borderColor}`,
-        borderRadius: "var(--radius-panel)",
-        padding: "var(--sp-3) var(--sp-3_5)",
-      }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <DenseBadge tone={badgeTone}>{STATUS_LABELS[result.status]}</DenseBadge>
-          </div>
-          {result.message && (
-            <p className="text-body" style={{ color: "var(--fg-3)" }}>
-              {result.message}
-            </p>
-          )}
-          {conn && (
-            <div
-              className="text-label"
-              style={{
-                color: "var(--fg-3)",
-                borderTop: "var(--hairline) solid var(--border-faint)",
-                paddingTop: 6,
-                marginTop: 2,
-              }}
-            >
-              <div>{conn.runtimeState && <span className="mono">runtime: {conn.runtimeState}</span>}</div>
-              {conn.client ? (
-                <div>
-                  Computer: {conn.client.hostname ?? conn.client.id}
-                  {conn.client.os && ` (${conn.client.os})`}
-                  {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
-                </div>
-              ) : (
-                <div>No computer bound</div>
-              )}
-              {conn.lastSeenAt && <div>Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>}
-            </div>
-          )}
-        </div>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
-    </div>
   );
 }

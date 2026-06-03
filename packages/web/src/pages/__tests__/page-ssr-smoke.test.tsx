@@ -925,7 +925,7 @@ describe("page SSR smoke coverage", () => {
 
     for (const [route, expected] of [
       ["/agents/agent-1/runtime", "Runtime"],
-      ["/agents/agent-1/prompt", "Additional instructions"],
+      ["/agents/agent-1/prompt", "Instructions"],
       ["/agents/agent-1/resources", "Environment variables"],
     ] as const) {
       expect(
