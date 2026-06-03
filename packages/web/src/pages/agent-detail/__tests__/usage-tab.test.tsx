@@ -246,12 +246,7 @@ describe("UsageTab", () => {
     const { UsageTab } = await import("../usage-tab.js");
 
     const { container, root } = await renderUsageTab(<UsageTab />);
-    expect(container.textContent).toContain("Usage overview");
-    expect(container.textContent).toContain("Token, chat, and turn totals for the last 30 days.");
-    expect(container.textContent).toContain("Total tokens");
-    expect(container.textContent).toContain("Turns");
-    expect(container.textContent).toContain("Chats");
-    expect(container.textContent).toContain("Last used");
+    expect(container.textContent).not.toContain("Usage overview");
     expect(container.textContent).toContain("Activity");
     expect(container.textContent).toContain("last 90 days");
     expect(container.querySelectorAll("span.usage-cal-cell[role='img']").length).toBe(90);
@@ -290,7 +285,6 @@ describe("UsageTab", () => {
     usageMocks.getAgentUsageSummary.mockImplementation(() => new Promise(() => undefined));
     usageMocks.getAgentUsageTurns.mockImplementation(() => new Promise(() => undefined));
     const loading = await renderUsageTab(<UsageTab />);
-    expect(loading.container.textContent).toContain("Loading usage overview");
     expect(loading.container.textContent).toContain("Loading activity");
     expect(loading.container.textContent).toContain("Loading recent turns");
     await act(async () => loading.root.unmount());
@@ -298,7 +292,6 @@ describe("UsageTab", () => {
     usageMocks.getAgentUsageSummary.mockRejectedValue(new Error("summary failed"));
     usageMocks.getAgentUsageTurns.mockRejectedValue(new Error("turns failed"));
     const errored = await renderUsageTab(<UsageTab />);
-    expect(errored.container.textContent).toContain("Failed to load usage overview.");
     expect(errored.container.textContent).toContain("Failed to load activity.");
     expect(errored.container.textContent).toContain("Failed to load recent turns.");
     await act(async () => errored.root.unmount());

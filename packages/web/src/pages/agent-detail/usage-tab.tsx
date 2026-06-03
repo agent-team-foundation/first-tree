@@ -59,7 +59,6 @@ export function UsageTab(): ReactElement {
 
   return (
     <>
-      <UsageOverviewBlock data={summaryQuery.data} isLoading={summaryQuery.isLoading} isError={summaryQuery.isError} />
       <ActivityBlock data={summaryQuery.data} isLoading={summaryQuery.isLoading} isError={summaryQuery.isError} />
       <RecentTurnsBlock
         rows={turnsQuery.data?.rows ?? []}
@@ -67,54 +66,6 @@ export function UsageTab(): ReactElement {
         isError={turnsQuery.isError}
       />
     </>
-  );
-}
-
-/* ============================================================================
-   Overview
-   ========================================================================== */
-
-function UsageOverviewBlock({
-  data,
-  isLoading,
-  isError,
-}: {
-  data: UsageAgentSummary | undefined;
-  isLoading: boolean;
-  isError: boolean;
-}): ReactElement {
-  return (
-    <Section title="Usage overview" description="Token, chat, and turn totals for the last 30 days.">
-      {isError ? (
-        <UsagePlaceholder tone="error">Failed to load usage overview.</UsagePlaceholder>
-      ) : isLoading ? (
-        <UsagePlaceholder>Loading usage overview…</UsagePlaceholder>
-      ) : (
-        <UsageOverviewGrid summary={data} />
-      )}
-    </Section>
-  );
-}
-
-function UsageOverviewGrid({ summary }: { summary: UsageAgentSummary | undefined }): ReactElement {
-  const totals = summary?.totals;
-  const totalTokens = (totals?.inputTokens ?? 0) + (totals?.cachedInputTokens ?? 0) + (totals?.outputTokens ?? 0);
-  return (
-    <div className="usage-overview-grid">
-      <UsageOverviewTile label="Total tokens" value={formatCompactCount(totalTokens)} mono />
-      <UsageOverviewTile label="Turns" value={formatCompactCount(totals?.turns ?? 0)} mono />
-      <UsageOverviewTile label="Chats" value={formatCompactCount(totals?.chats ?? 0)} mono />
-      <UsageOverviewTile label="Last used" value={formatRelative(totals?.lastUsageAt)} />
-    </div>
-  );
-}
-
-function UsageOverviewTile({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }): ReactElement {
-  return (
-    <div className="usage-overview-tile">
-      <div className="usage-overview-label text-caption">{label}</div>
-      <div className={`usage-overview-value text-title${mono ? " mono" : ""}`}>{value}</div>
-    </div>
   );
 }
 

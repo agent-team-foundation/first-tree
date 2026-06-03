@@ -1642,40 +1642,6 @@ tr[data-interactive]:hover {
   color: var(--state-error);
 }
 
-.usage-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--hairline);
-  padding-top: var(--sp-3);
-  background: var(--border-faint);
-  border-bottom: var(--hairline) solid var(--border-faint);
-}
-
-.usage-overview-tile {
-  min-width: 0;
-  background: var(--bg);
-  padding: var(--sp-3) var(--sp-3_5) var(--sp-3_5);
-}
-
-.usage-overview-label {
-  color: var(--fg-4);
-  text-transform: uppercase;
-}
-
-.usage-overview-value {
-  color: var(--fg);
-  margin-top: var(--sp-1_25);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-@media (max-width: 720px) {
-  .usage-overview-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 .usage-activity-row {
   display: grid;
   grid-template-columns: auto 1fr;
