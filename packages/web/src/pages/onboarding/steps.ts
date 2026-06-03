@@ -146,7 +146,7 @@ export type StepProgress = {
  */
 export function resolveStepProgress(path: OnboardingPath, step: StepId): StepProgress | null {
   const steps = getConfigSteps(path);
-  const index = steps.findIndex((s) => s === step);
+  const index = steps.indexOf(step);
   if (index < 0) return null;
   return { index, total: steps.length };
 }

@@ -22,11 +22,7 @@ export function ShowMeHow({
   children: ReactNode;
 }) {
   return (
-    <details
-      className="onboarding-show-me-how"
-      open={open}
-      onToggle={(e) => onToggle?.(e.currentTarget.open)}
-    >
+    <details className="onboarding-show-me-how" open={open} onToggle={(e) => onToggle?.(e.currentTarget.open)}>
       <summary
         className="inline-flex items-center text-label font-medium"
         style={{ gap: "var(--sp-1)", color: "var(--primary)" }}
@@ -242,6 +238,26 @@ export function InstallGuide() {
           "GitHub sends you straight back here to keep going.",
         ]}
       />
+    </div>
+  );
+}
+
+/**
+ * Troubleshooting block for the connect-code "Need help?" disclosure (paired
+ * with InstallGuide), mirroring ConnectTroubleshooting on connect-computer:
+ * a neutral-titled "if the install didn't go through" line. The disclosure
+ * auto-opens when the user returns from GitHub without an installation, so the
+ * two steps give the same "stuck → help opens" experience.
+ */
+export function InstallTroubleshooting() {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-4)" }}>
+      <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+        {COPY.connectCode.troubleshootTitle}
+      </p>
+      <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+        {COPY.connectCode.troubleshootBody}
+      </p>
     </div>
   );
 }

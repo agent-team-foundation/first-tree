@@ -6,8 +6,8 @@ import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowHint, FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
-import { InstallGuide, ShowMeHow } from "../guides.js";
+import { FlowHint, RepoPicker, StatusRow } from "../flow-ui.js";
+import { InstallGuide, InstallTroubleshooting, ShowMeHow } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -66,6 +66,14 @@ export function StepConnectCode() {
     const t = window.setTimeout(() => setPostAttemptStuck(true), 5000);
     return () => window.clearTimeout(t);
   }, [installed, installQuery.isLoading]);
+
+  // "Need help?" auto-opens when the user returns from GitHub without an
+  // install — same "stuck → help opens" behavior as connect-computer (just
+  // triggered by a failed return rather than a timer).
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    if (postAttemptStuck) setHelpOpen(true);
+  }, [postAttemptStuck]);
 
   const reposQuery = useQuery({
     queryKey: ["onboarding", "github-repos"],
@@ -143,33 +151,46 @@ export function StepConnectCode() {
             </div>
 
             {showSkipConfirm && (
-              <FlowNote tone="info">
-                <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-                  <p className="font-medium" style={{ margin: 0, color: "var(--fg)" }}>
-                    {COPY.connectCode.skipWarningTitle}
-                  </p>
-                  <ul style={{ margin: 0, paddingLeft: "var(--sp-4)" }}>
-                    {COPY.connectCode.skipWarningBullets.map((bullet) => (
-                      <li key={bullet} style={{ color: "var(--fg-3)" }}>
-                        {bullet}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex items-center" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-1)" }}>
-                    <Button type="button" variant="outline" onClick={handleSkipConfirmed}>
-                      {COPY.connectCode.skipAnyway}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="link"
-                      className="h-auto p-0 text-label"
-                      onClick={() => setShowSkipConfirm(false)}
-                    >
-                      {COPY.cancel}
-                    </Button>
-                  </div>
+              // Neutral contained panel — skipping is a legitimate choice, not
+              // an error/info, so no callout color. The consequences live in
+              // the bullets + button wording, not in alarming color. Button
+              // hierarchy: "Keep connecting" is primary (the encouraged path);
+              // "Skip anyway" is a quiet link, deliberately under-weighted.
+              <div
+                className="flex flex-col"
+                style={{
+                  gap: "var(--sp-2)",
+                  padding: "var(--sp-3)",
+                  borderRadius: "var(--radius-panel)",
+                  border: "var(--hairline) solid var(--border)",
+                  background: "color-mix(in oklch, var(--bg-sunken) 60%, transparent)",
+                }}
+              >
+                <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg)" }}>
+                  {COPY.connectCode.skipWarningTitle}
+                </p>
+                <ul className="text-label" style={{ margin: 0, paddingLeft: "var(--sp-4)" }}>
+                  {COPY.connectCode.skipWarningBullets.map((bullet) => (
+                    <li key={bullet} style={{ color: "var(--fg-3)" }}>
+                      {bullet}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex items-center" style={{ gap: "var(--sp-3)", marginTop: "var(--sp-1)" }}>
+                  <Button type="button" onClick={() => setShowSkipConfirm(false)}>
+                    {COPY.connectCode.keepConnecting}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-label"
+                    style={{ color: "var(--fg-3)" }}
+                    onClick={handleSkipConfirmed}
+                  >
+                    {COPY.connectCode.skipAnyway}
+                  </Button>
                 </div>
-              </FlowNote>
+              </div>
             )}
 
             {installError === "generic" && (
@@ -178,12 +199,6 @@ export function StepConnectCode() {
               </FlowHint>
             )}
             <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-
-            {postAttemptStuck && (
-              <FlowHint>
-                {COPY.connectCode.postAttemptStuckTitle} {COPY.connectCode.postAttemptStuckBody}
-              </FlowHint>
-            )}
 
             {/* Non-owner hint. We can't hand the user a shareable install
                 URL because the OAuth state JWT is paired with a per-browser
@@ -200,8 +215,9 @@ export function StepConnectCode() {
               {COPY.connectCode.notOwnerHint}
             </p>
 
-            <ShowMeHow>
+            <ShowMeHow open={helpOpen} onToggle={setHelpOpen}>
               <InstallGuide />
+              <InstallTroubleshooting />
             </ShowMeHow>
           </>
         )}
@@ -220,7 +236,8 @@ export function StepConnectCode() {
         </p>
 
         {scopeMissing ? (
-          <FlowNote tone="info">
+          <FlowHint>
+            {COPY.connectCode.scopeMissing}{" "}
             <a
               href="/api/v1/auth/github/start?next=/onboarding"
               className="font-medium"
@@ -228,7 +245,7 @@ export function StepConnectCode() {
             >
               {COPY.connectCode.reconnect}
             </a>
-          </FlowNote>
+          </FlowHint>
         ) : reposQuery.isLoading ? (
           <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
             Loading your projects…

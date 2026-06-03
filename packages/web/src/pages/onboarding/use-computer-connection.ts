@@ -108,6 +108,9 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
   }, [enabled]);
 
   // Mint / refresh the connect token while no computer is connected yet.
+  // retryNonce in the deps is an intentional re-run trigger (bumped by retry()
+  // after a failure); it isn't read inside, hence the suppression.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate trigger dep
   useEffect(() => {
     if (!enabled) return;
     if (connectedClient) return;

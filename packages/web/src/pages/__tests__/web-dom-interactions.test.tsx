@@ -1108,8 +1108,9 @@ describe("web DOM interaction coverage", () => {
     );
     await waitForText("Skip connecting code?", disconnected.container);
     await click(
-      [...disconnected.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Cancel")) ??
-        null,
+      [...disconnected.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Keep connecting"),
+      ) ?? null,
     );
     expect(disconnected.container.textContent).not.toContain("Skip connecting code?");
     await click(

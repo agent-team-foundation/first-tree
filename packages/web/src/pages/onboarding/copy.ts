@@ -139,10 +139,19 @@ export const COPY = {
      * advice is to click Install anyway and let GitHub handle the ask.
      */
     notOwnerHint: "Not a GitHub organization owner? Click Install anyway — GitHub will ask an owner to approve.",
-    /** Returned from the install dialog without a new installation. */
-    postAttemptStuckTitle: "Looks like the install didn't complete.",
-    postAttemptStuckBody:
-      "GitHub sent you back without adding First Tree. Try again — GitHub will ask an org owner to approve if you're not one.",
+    /** Connected but GitHub access lacks repo scope — explain + point at the action. */
+    scopeMissing:
+      "Couldn't see your projects — your GitHub access is missing project read permission. Reconnect to grant it.",
+    /**
+     * Troubleshooting shown inside the "Need help?" disclosure (alongside the
+     * InstallGuide how-to), mirroring connect-computer. The disclosure
+     * auto-opens when the user returns from GitHub without an installation, so
+     * the title is state-neutral (it can also be opened proactively).
+     */
+    troubleshootTitle: "If GitHub didn't add First Tree:",
+    troubleshootBody: "Click Install again — it'll ask an org owner to approve if you're not one.",
+    /** Skip-for-now confirm: primary action keeps the user on the connect path. */
+    keepConnecting: "Keep connecting",
     /** Skip-for-now warning. */
     skipWarningTitle: "Skip connecting code?",
     skipWarningBullets: [
