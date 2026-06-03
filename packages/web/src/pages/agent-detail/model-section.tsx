@@ -79,7 +79,7 @@ export function ModelSection({
   return (
     <ConfigRow
       label="Model"
-      helpText={MODEL_HELP_BY_PROVIDER[provider]}
+      description={MODEL_HELP_BY_PROVIDER[provider]}
       meta={dirty ? <DraftStatusChip status="modified" /> : null}
       action={
         dirty ? (
@@ -89,7 +89,15 @@ export function ModelSection({
         ) : null
       }
     >
-      <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
+      <Select
+        options={items}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        mono
+        aria-label="Model"
+        className="w-full max-w-none"
+      />
     </ConfigRow>
   );
 }

@@ -246,16 +246,19 @@ describe("UsageTab", () => {
     const { UsageTab } = await import("../usage-tab.js");
 
     const { container, root } = await renderUsageTab(<UsageTab />);
+    expect(container.textContent).not.toContain("Usage overview");
     expect(container.textContent).toContain("Activity");
     expect(container.textContent).toContain("last 90 days");
     expect(container.querySelectorAll("span.usage-cal-cell[role='img']").length).toBe(90);
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
-    expect(container.textContent).toContain("30d");
+    expect(container.textContent).toContain("Daily input tokens. Darker cells mean more usage.");
+    expect(container.textContent).toContain("Last 10 turns from the last 30 days.");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
     expect(container.textContent).toContain("claude-code/sonnet");
+    expect(container.textContent).toContain("46.2K");
     expect(usageMocks.getAgentUsageSummary).toHaveBeenCalledWith("agent-1", "30d");
     expect(usageMocks.getAgentUsageTurns).toHaveBeenCalledWith("agent-1", {
       window: "30d",
@@ -283,7 +286,8 @@ describe("UsageTab", () => {
     usageMocks.getAgentUsageSummary.mockImplementation(() => new Promise(() => undefined));
     usageMocks.getAgentUsageTurns.mockImplementation(() => new Promise(() => undefined));
     const loading = await renderUsageTab(<UsageTab />);
-    expect(loading.container.textContent).toContain("Loading");
+    expect(loading.container.textContent).toContain("Loading activity");
+    expect(loading.container.textContent).toContain("Loading recent turns");
     await act(async () => loading.root.unmount());
 
     usageMocks.getAgentUsageSummary.mockRejectedValue(new Error("summary failed"));
@@ -308,7 +312,7 @@ describe("UsageTab", () => {
     );
     usageMocks.getAgentUsageTurns.mockResolvedValue(turnsResponse({ rows: [], nextCursor: null }));
     const empty = await renderUsageTab(<UsageTab />);
-    expect(empty.container.textContent).toContain("No turns in the last 30 days.");
+    expect(empty.container.textContent).toContain("No turns recorded in the last 30 days.");
     expect(empty.container.textContent).not.toContain("Input 0");
     await act(async () => empty.root.unmount());
   });

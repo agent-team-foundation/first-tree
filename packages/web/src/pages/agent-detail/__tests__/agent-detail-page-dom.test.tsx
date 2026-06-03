@@ -4,7 +4,7 @@ import type { Agent, AgentRuntimeConfig } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import { ApiError } from "../../../api/client.js";
@@ -216,8 +216,10 @@ async function renderDom(route: string, child: ReactElement): Promise<{ containe
             <Route path="/agents/:uuid" element={<AgentDetailPage />}>
               <Route path="profile" element={child} />
               <Route path="prompt" element={child} />
-              <Route path="setup" element={child} />
+              <Route path="runtime" element={child} />
+              <Route path="setup" element={<Navigate to="../runtime" replace />} />
             </Route>
+            <Route path="/" element={<LocationEcho />} />
             <Route path="/team" element={<div>Team route</div>} />
           </Routes>
         </QueryClientProvider>
@@ -226,6 +228,11 @@ async function renderDom(route: string, child: ReactElement): Promise<{ containe
   });
   await flush();
   return { container, root };
+}
+
+function LocationEcho() {
+  const location = useLocation();
+  return <div>{location.pathname + location.search}</div>;
 }
 
 async function click(element: Element | null): Promise<void> {
@@ -318,17 +325,25 @@ describe("AgentDetailPage", () => {
       );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "System prompt append");
+    await waitForText(container, "Instructions");
     expect(container.textContent).toContain("Kael");
     expect(container.textContent).toContain("1 active");
+    expect(container.textContent).toContain("Chat");
+    expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
+      "Profile",
+      "Runtime",
+      "Prompt",
+      "Resources",
+      "Usage",
+    ]);
 
-    await click(exactButtonByText(container, "Edit"));
+    await click(exactButtonByText(container, "Edit instructions"));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Prompt textarea missing");
     await setValue(textarea, "New prompt");
     await click(exactButtonByText(container, "Done"));
 
-    expect(container.textContent).toContain("1 section with unsaved changes");
+    expect(container.textContent).toContain("Configuration changes in Prompt");
     expect(container.textContent).toContain("Prompt");
     await click(exactButtonByText(container, "Save"));
     expect(container.textContent).toContain("Someone else saved a newer version");
@@ -336,7 +351,7 @@ describe("AgentDetailPage", () => {
     await click(buttonByText(container, "Discard mine, load latest"));
     expect(agentConfigMocks.getAgentConfig).toHaveBeenCalledTimes(2);
 
-    await click(exactButtonByText(container, "Edit"));
+    await click(exactButtonByText(container, "Edit instructions"));
     const latestTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!latestTextarea) throw new Error("Prompt textarea missing after reload");
     await setValue(latestTextarea, "Throw this away");
@@ -350,8 +365,20 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
-  it("binds unclaimed agents, rebinds bound agents, and renders test results", async () => {
-    const { SetupTab } = await import("../setup-tab.js");
+  it("starts a draft chat with the current agent from the header", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Instructions");
+
+    await click(container.querySelector('button[aria-label="Start chat"]'));
+    await waitForText(container, "/?c=draft&with=agent-1");
+    expect(container.textContent).toContain("/?c=draft&with=agent-1");
+
+    await act(async () => root.unmount());
+  });
+
+  it("binds unclaimed agents and rebinds bound agents", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
     agentConfigMocks.getAgentClientStatus.mockResolvedValueOnce({
       online: false,
       clientId: null,
@@ -360,8 +387,10 @@ describe("AgentDetailPage", () => {
     const unclaimedAgent = agent({ clientId: null, runtimeState: null });
     agentMocks.getAgent.mockResolvedValueOnce(unclaimedAgent);
 
-    const first = await renderDom("/agents/agent-1/setup", <SetupTab />);
+    const first = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(first.container, "No computer bound");
+    expect(first.container.textContent).toContain("Execution");
+    expect(first.container.textContent).toContain("Model settings");
     expect(first.container.textContent).toContain("No computer bound");
     await click(buttonByText(first.container, "Bind computer"));
     await waitForText(document.body, "gandy-macbook");
@@ -372,17 +401,13 @@ describe("AgentDetailPage", () => {
     expect(agentMocks.updateAgent).toHaveBeenCalledWith("agent-1", { clientId: "client-1" });
     await act(async () => first.root.unmount());
 
-    const second = await renderDom("/agents/agent-1/setup", <SetupTab />);
-    await waitForText(second.container, "Runtime");
-    await click(second.container.querySelector('button[aria-label="Test connection"]'));
-    expect(agentMocks.testAgentConnection).toHaveBeenCalledWith("agent-1");
-    await waitForText(second.container, "Connected");
-    expect(second.container.textContent).toContain("Connected");
-    expect(second.container.textContent).toContain("runtime: idle");
-
+    const second = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(second.container, "Execution");
+    expect(second.container.textContent).toContain("Execution");
+    expect(second.container.textContent).toContain("Model settings");
     await click(exactButtonByText(second.container, "Re-bind"));
-    await waitForText(document.body, "Currently:");
-    expect(document.body.textContent).toContain("Currently:");
+    await waitForText(document.body, "Current binding:");
+    expect(document.body.textContent).toContain("Current binding:");
     await chooseSelectOption(document.body.querySelector('button[aria-label="Computer"]'), "alice-linux");
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Claude Code (TUI)")) ??
@@ -407,14 +432,25 @@ describe("AgentDetailPage", () => {
     const missing = await renderDom("/agents/agent-404/profile", <ProfileTab />);
     await waitForText(missing.container, "Agent not available");
     expect(missing.container.textContent).toContain("Agent not available");
-    await click(exactButtonByText(missing.container, "Back to Team"));
+    await click(exactButtonByText(missing.container, "Back to Agents"));
     expect(missing.container.textContent).toContain("Team route");
     await act(async () => missing.root.unmount());
 
     agentMocks.getAgent.mockResolvedValueOnce(agent());
     const active = await renderDom("/agents/agent-1/profile", <ProfileTab />);
-    await waitForText(active.container, "Danger zone");
-    expect(active.container.textContent).toContain("Danger zone");
+    await waitForText(active.container, "Agent lifecycle");
+    expect(active.container.textContent).toContain("Identity");
+    expect(active.container.textContent).toContain("@kael");
+    expect(active.container.textContent).toContain("Owner");
+    expect(active.container.textContent).toContain("Agent lifecycle");
+    expect(active.container.textContent).toContain("Lifecycle changes save immediately.");
+    expect(
+      [...active.container.querySelectorAll("section h2")].filter((heading) =>
+        heading.textContent?.includes("Agent lifecycle"),
+      ),
+    ).toHaveLength(1);
+    expect(active.container.textContent).toContain("Availability");
+    expect(active.container.textContent).toContain("Deletion");
     await click(exactButtonByText(active.container, "Suspend"));
     expect(document.body.textContent).toContain('Suspend "Kael"?');
     await click(exactButtonByText(document.body, "Suspend agent"));
@@ -432,7 +468,7 @@ describe("AgentDetailPage", () => {
 
     agentMocks.getAgent.mockResolvedValueOnce(agent({ status: "suspended", runtimeState: null }));
     const toDelete = await renderDom("/agents/agent-1/profile", <ProfileTab />);
-    await waitForText(toDelete.container, "Delete agent");
+    await waitForText(toDelete.container, "Deletion");
     await click(exactButtonByText(toDelete.container, "Delete"));
     await waitForText(document.body, 'Delete "Kael"?');
     const input = document.body.querySelector<HTMLInputElement>("input");

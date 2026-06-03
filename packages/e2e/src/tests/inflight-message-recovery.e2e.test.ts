@@ -86,7 +86,7 @@ async function postMessage(content: string): Promise<string> {
     creds.accessToken,
     "POST",
     `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
-    { format: "text", content },
+    { format: "text", content, metadata: { mentions: [testAgentId] } },
     201,
   );
   return sent.id;

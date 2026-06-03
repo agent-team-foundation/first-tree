@@ -8,9 +8,9 @@ import { cn } from "../../lib/utils.js";
  * effort, prompt). Replaces the per-call `ChangedChip` / inline status badges
  * that had drifted into three different shapes and two oranges.
  *
- * Color follows green-liveness: `added` = success green, `deleted` = error red,
- * `modified` = needs-you amber ("there's a change waiting for you to save"),
- * rendered with the AA-checked `--fg-needs-you-strong` on the amber soft fill.
+ * Color follows state semantics: `added` = success green, `deleted` = error red,
+ * `modified` = neutral pending change. It deliberately avoids blocked/error
+ * warm hues because draft edits are not operational incidents.
  * `unchanged` renders nothing so callers can pass status unconditionally.
  */
 export type DraftStatusChipStatus = "unchanged" | "added" | "modified" | "deleted";
@@ -27,7 +27,7 @@ const chipVariants = cva(
     variants: {
       status: {
         added: "bg-success-soft text-success",
-        modified: "bg-state-needs-you-soft text-state-needs-you-strong",
+        modified: "bg-muted text-muted-foreground",
         deleted: "bg-error-soft text-error",
       },
     },

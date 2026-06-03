@@ -18,13 +18,13 @@ export type AgentDetailContext = {
   canManageAgent: boolean;
   canEditConfig: boolean;
 
-  // Config + draft (shared across Setup / Prompt / Tools / Resources)
+  // Config + draft (shared across Runtime / Prompt / Resources)
   draft: UseConfigDraftResult;
   config: AgentRuntimeConfig | undefined;
   configLoading: boolean;
   configError: unknown;
 
-  // Computer binding (Setup tab "Bound computer" panel)
+  // Computer binding (Runtime tab "Computer" panel)
   clientStatus: ClientStatusInfo | undefined;
   clientStatusLoading: boolean;
   clientStatusError: string | null;

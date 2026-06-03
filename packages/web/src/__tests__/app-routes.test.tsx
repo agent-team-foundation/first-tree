@@ -69,9 +69,8 @@ vi.mock("../pages/agent-detail.js", async () => {
   };
 });
 vi.mock("../pages/agent-detail/profile-tab.js", () => ({ ProfileTab: () => <div>profile tab</div> }));
-vi.mock("../pages/agent-detail/setup-tab.js", () => ({ SetupTab: () => <div>setup tab</div> }));
+vi.mock("../pages/agent-detail/runtime-tab.js", () => ({ RuntimeTab: () => <div>runtime tab</div> }));
 vi.mock("../pages/agent-detail/prompt-tab.js", () => ({ PromptTab: () => <div>prompt tab</div> }));
-vi.mock("../pages/agent-detail/tools-tab.js", () => ({ ToolsTab: () => <div>tools tab</div> }));
 vi.mock("../pages/agent-detail/resources-tab.js", () => ({ ResourcesTab: () => <div>resources tab</div> }));
 vi.mock("../pages/styleguide-preview.js", () => ({ StyleguidePreviewPage: () => <div>styleguide preview</div> }));
 
@@ -123,7 +122,7 @@ describe("App routes", () => {
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/agents/agent-1/tools")).toContain("tools tab");
+    expect(await renderAppAt("/agents/agent-1/tools")).toContain("profile tab");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 

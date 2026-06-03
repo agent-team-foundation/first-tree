@@ -253,13 +253,14 @@ describe("ResourcesTab and SaveBar", () => {
     expect(container.querySelector(`#${sectionAnchorId("git")}`)).toBeTruthy();
     expect(container.textContent).toContain("OPENAI_API_KEY");
     expect(container.textContent).toContain("dry run diff");
-    expect(container.textContent).toContain("Preview server-side diff");
+    expect(container.textContent).toContain("Save preview");
+    expect(container.textContent).toContain("Preview diff");
     expect(container.textContent).toContain("web");
     expect(container.textContent).toContain("api");
     expect(container.textContent).not.toContain("Add");
 
     const preview = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Preview server-side diff"),
+      button.textContent?.includes("Preview diff"),
     );
     await click(preview ?? null);
     expect(ctx.onRunDryRun).toHaveBeenCalled();
@@ -289,7 +290,8 @@ describe("ResourcesTab and SaveBar", () => {
       />,
     );
 
-    expect(container.textContent).toContain("2 sections with unsaved changes");
+    expect(container.textContent).toContain("Configuration changes in Prompt, Env");
+    expect(container.textContent).not.toContain("sections with unsaved changes");
     expect(container.textContent).toContain("local draft");
     expect(container.textContent).toContain("remote changed");
     expect(container.textContent).toContain("save failed");

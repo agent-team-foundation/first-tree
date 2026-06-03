@@ -24,20 +24,19 @@ export function AgentSuspendConfirmDialog({
         </DialogHeader>
         <div className="space-y-3">
           <DialogDescription style={{ color: "var(--fg-2)" }}>
-            This disables the agent until it is reactivated. Its runtime will be stopped and unbound from the connected
-            computer.
+            This disables the agent until it is reactivated.
           </DialogDescription>
           <p className="text-body" style={{ color: "var(--fg-2)" }}>
-            New messages and mentions will not wake it while suspended. Existing configuration, workspace, chat history,
-            and saved sessions are kept.
+            Its runtime will be stopped and unbound from the connected computer. New messages and mentions will not wake
+            it while suspended. Existing configuration, workspace, chat history, and saved sessions are kept.
           </p>
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel
           </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={pending}>
-            {pending ? "Suspending..." : "Suspend agent"}
+          <Button type="button" onClick={onConfirm} disabled={pending}>
+            {pending ? "Suspending…" : "Suspend agent"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -77,8 +76,8 @@ export function AgentDeleteConfirmDialog({
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <DialogDescription>
-            This action cannot be undone. Type <span className="font-mono font-medium text-foreground">{expected}</span>{" "}
-            to confirm.
+            This cannot be undone. It permanently removes configuration, bindings, tokens, and sessions. Type{" "}
+            <span className="font-mono font-medium text-foreground">{expected}</span> to confirm.
           </DialogDescription>
           <Input
             value={typed}
@@ -92,7 +91,7 @@ export function AgentDeleteConfirmDialog({
               Cancel
             </Button>
             <Button type="submit" variant="destructive" disabled={typed !== expected || deleting}>
-              {deleting ? "Deleting..." : "Delete agent"}
+              {deleting ? "Deleting…" : "Delete agent"}
             </Button>
           </DialogFooter>
         </form>
