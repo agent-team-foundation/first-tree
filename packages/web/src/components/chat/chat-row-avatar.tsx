@@ -155,8 +155,9 @@ export function ChatRowAvatar({
    *  unread for the corner badge. */
   failed?: boolean;
   /** Caller has an unanswered open question (`format=request`) directed at
-   *  them here (`openRequestCount > 0`). Amber corner dot; ranks between
-   *  failed and unread. */
+   *  them here (`openRequestCount > 0`). Red `?` corner mark (same attention
+   *  red as failed/unread, told apart by glyph); ranks between failed and
+   *  unread. */
   needsYou?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
@@ -226,13 +227,19 @@ const CORNER_OFFSET = -2;
 
 /**
  * Conversation-list corner marker (mainstream-IM placement: avatar top-right).
- * Failed uses a semantic `!` glyph; `needs_you` (an unanswered open question
- * directed at you) is an amber dot; plain unread is a red dot.
- * Priority: failed > needs_you > unread; renders nothing otherwise.
+ *
+ * One single attention colour (red) for all three states — they are told
+ * apart by *form*, not hue (DESIGN.md pillar 3: "told apart by form, not
+ * hue"; §13: signals stay colour-independent). The glyph encodes which:
+ *   - failed    → `!` (an agent errored)
+ *   - needs_you → `?` (an unanswered open question directed at you)
+ *   - unread    → a plain dot (no glyph)
+ * Glyph-vs-plain-dot also mirrors the priority order failed > needs_you >
+ * unread; renders nothing otherwise.
  */
 function ListCornerMark({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: boolean }) {
   if (failed) return <CornerMark background="var(--state-error)" fg="var(--fg-on-vivid)" glyph="!" />;
-  if (needsYou) return <CornerMark background="var(--state-needs-you)" />;
+  if (needsYou) return <CornerMark background="var(--state-error)" fg="var(--fg-on-vivid)" glyph="?" />;
   if (unread) return <CornerMark background="var(--state-unread)" />;
   return null;
 }

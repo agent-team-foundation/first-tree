@@ -10,49 +10,49 @@
  * viewers get it collapsed by default. Answering sends a normal reply message
  * with `inReplyTo` pointing at the request (the server's −1 / red-dot clear
  * keys off exactly that) — no new endpoint. See proposals/group-chat-unified-send §D1.
+ *
+ * Design (DESIGN.md): `open` keeps card chrome because it is *interactive*
+ * (pillar 5). `resolved` / `closed` are read-only and render as plain labeled
+ * content — no filled/bordered card. Actions reuse the `Button` primitive
+ * (neutral, never green — pillar 2); single-select options reuse `OptionCard`
+ * (neutral dot + tint selection, never a colored border — §7); chips and
+ * affordances use lucide icons, never custom glyphs (§8).
  */
 import type { Message, OpenQuestionItem } from "@first-tree/shared";
 import { useMutation } from "@tanstack/react-query";
-import { type KeyboardEvent, type ReactNode, useMemo, useState } from "react";
+import { ArrowRight, Ban, ChevronRight, CircleCheck, MessageCircleQuestion } from "lucide-react";
+import { type ComponentType, type KeyboardEvent, type ReactNode, useMemo, useState } from "react";
 import { sendChatMessage } from "../../api/chats.js";
+import { Button } from "../ui/button.js";
+import { OptionCard } from "../ui/option-card.js";
 import {
   defaultExpanded,
   deriveRequestState,
   isRelatedViewer,
   isReplacedByNewRequest,
   parseAnswerSelections,
+  type RequestState,
   readMentions,
   readRequestPayload,
 } from "./request-state.js";
 
-const CHIP = {
+type ChipSpec = { label: string; Icon: ComponentType<{ size?: number }>; bg: string; fg: string };
+
+const CHIP: Record<RequestState, ChipSpec> = {
+  // amber needs-you — the open question's "your action needed" lifecycle state.
   open: {
     label: "REQUEST",
-    glyph: "◆",
+    Icon: MessageCircleQuestion,
     bg: "var(--state-needs-you-soft)",
     fg: "var(--fg-needs-you-strong)",
-    bd: "color-mix(in oklch, var(--state-needs-you) 30%, transparent)",
-    left: "var(--state-needs-you)",
   },
-  resolved: {
-    label: "RESOLVED",
-    glyph: "✓",
-    bg: "var(--brand-bg)",
-    fg: "var(--brand-dim)",
-    bd: "var(--brand-ring)",
-    left: "var(--brand)",
-  },
-  closed: {
-    label: "CLOSED",
-    glyph: "⊘",
-    bg: "var(--bg-sunken)",
-    fg: "var(--fg-3)",
-    bd: "var(--border-strong)",
-    left: "var(--border-strong)",
-  },
-} as const;
+  // success green — answered.
+  resolved: { label: "RESOLVED", Icon: CircleCheck, bg: "var(--bg-success-soft)", fg: "var(--fg-success-strong)" },
+  // neutral sunken — withdrawn / superseded.
+  closed: { label: "CLOSED", Icon: Ban, bg: "var(--bg-sunken)", fg: "var(--fg-3)" },
+};
 
-function Chip({ state, target }: { state: keyof typeof CHIP; target?: string }) {
+function Chip({ state, target }: { state: RequestState; target?: string }) {
   const c = CHIP[state];
   return (
     <span
@@ -60,16 +60,16 @@ function Chip({ state, target }: { state: keyof typeof CHIP; target?: string }) 
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
+        gap: "var(--sp-1)",
         padding: "var(--sp-px) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
         background: c.bg,
-        border: `var(--hairline) solid ${c.bd}`,
         color: c.fg,
         whiteSpace: "nowrap",
       }}
     >
-      {c.glyph} {c.label}
+      <c.Icon size={11} />
+      {c.label}
       {target ? ` · @${target}` : null}
     </span>
   );
@@ -108,8 +108,8 @@ export function RequestCard({
   const [free, setFree] = useState<Record<string, string>>({});
 
   // For a resolved request, recover the chosen answers from the resolving
-  // reply so the card can highlight them (keyed by prompt). Empty when the
-  // answer was a free-form composer reply that doesn't match the format.
+  // reply so the card can echo them (keyed by prompt). Empty when the answer
+  // was a free-form composer reply that doesn't match the format.
   const selections = useMemo<Record<string, string>>(() => {
     if (state !== "resolved" || !payload) return {};
     const reply = thread.find((m) => m.inReplyTo === message.id && targets.includes(m.senderId));
@@ -166,10 +166,10 @@ export function RequestCard({
         className="text-body"
         style={{
           display: "flex",
-          alignItems: "baseline",
-          gap: 7,
+          alignItems: "center",
+          gap: "var(--sp-1_5)",
           flexWrap: "wrap",
-          marginTop: 4,
+          marginTop: "var(--sp-1)",
           background: "none",
           border: "none",
           padding: 0,
@@ -178,7 +178,7 @@ export function RequestCard({
           width: "100%",
         }}
       >
-        <span style={{ color: "var(--fg-4)" }}>▸</span>
+        <ChevronRight size={13} className="shrink-0" style={{ color: "var(--fg-4)" }} />
         <Chip state={state} />
         <span className="font-semibold" style={{ color: state === "open" ? "var(--fg-2)" : "var(--fg-3)" }}>
           {subject}
@@ -186,16 +186,14 @@ export function RequestCard({
         <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
           {targetLabel ? `· @${targetLabel} ` : ""}· {summary}
         </span>
-        <span style={{ color: "var(--fg-4)" }}>· Expand</span>
       </button>
     );
   }
 
   // ── Expanded
-  const c = CHIP[state];
   return (
-    <div style={{ marginTop: 4 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+    <div style={{ marginTop: "var(--sp-1)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--sp-2)", flexWrap: "wrap" }}>
         <Chip state={state} target={targetLabel} />
         <span
           className="text-subtitle font-semibold"
@@ -203,7 +201,7 @@ export function RequestCard({
         >
           {subject}
         </span>
-        {state === "open" && isTarget ? (
+        {canAnswer ? (
           <span className="mono text-caption" style={{ marginLeft: "auto", color: "var(--fg-4)" }}>
             awaiting your answer
           </span>
@@ -214,7 +212,7 @@ export function RequestCard({
             onClick={() => setExpanded(false)}
             className="mono text-caption"
             style={{
-              marginLeft: state === "open" && isTarget ? 8 : "auto",
+              marginLeft: canAnswer ? "var(--sp-2)" : "auto",
               background: "none",
               border: "none",
               color: "var(--fg-4)",
@@ -227,75 +225,52 @@ export function RequestCard({
       </div>
 
       {/* long markdown body */}
-      <div style={{ marginTop: 6 }}>{body}</div>
+      <div style={{ marginTop: "var(--sp-1_5)" }}>{body}</div>
 
-      {/* answer block */}
-      {payload ? (
+      {/* state-specific block: `open` keeps interactive card chrome; `resolved`
+          / `closed` are read-only and render as plain labeled content — no
+          filled/bordered card (DESIGN.md pillar 5). */}
+      {state === "open" && payload ? (
         <div
           style={{
-            marginTop: 11,
+            marginTop: "var(--sp-3)",
             border: "var(--hairline) solid var(--border)",
-            borderLeft: `var(--hairline-bold) solid ${c.left}`,
             borderRadius: "var(--radius-panel)",
-            background:
-              state === "open"
-                ? "color-mix(in oklch, var(--state-needs-you) 4%, var(--bg-raised))"
-                : "var(--bg-sunken)",
+            background: "color-mix(in oklch, var(--state-needs-you) 4%, var(--bg-raised))",
             padding: "var(--sp-2_5) var(--sp-3)",
           }}
         >
           <div
             className="mono text-caption font-semibold"
-            style={{ color: c.fg, textTransform: "uppercase", marginBottom: 8 }}
+            style={{ color: "var(--fg-needs-you-strong)", textTransform: "uppercase", marginBottom: "var(--sp-2)" }}
           >
-            {state === "resolved"
-              ? "Answered"
-              : state === "closed"
-                ? superseded
-                  ? "Closed · superseded by an updated question"
-                  : "Closed · withdrawn by the asker"
-                : canAnswer
-                  ? `Your answer · ${questionCount} question${questionCount === 1 ? "" : "s"}`
-                  : `Questions · ${questionCount}`}
+            {canAnswer
+              ? `Your answer · ${questionCount} question${questionCount === 1 ? "" : "s"}`
+              : `Questions · ${questionCount}`}
           </div>
 
           {payload.questions.map((q, i) => (
-            <div key={q.id} style={{ margin: i === 0 ? "0" : "var(--sp-3) 0 0" }}>
+            <div key={q.id} style={{ marginTop: i === 0 ? 0 : "var(--sp-3)" }}>
               <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                <span
-                  className="mono text-caption"
-                  style={{ color: "var(--fg-4)", marginRight: 6 }}
-                >{`Q${i + 1}`}</span>
+                <span className="mono text-caption" style={{ color: "var(--fg-4)", marginRight: "var(--sp-1_5)" }}>
+                  {`Q${i + 1}`}
+                </span>
                 {q.prompt}
               </div>
               {q.kind === "single" ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                  {q.options.map((opt) => {
-                    const staged = canAnswer && choices[q.id] === opt;
-                    const isChosen = selections[q.prompt] === opt;
-                    const highlight = staged || isChosen;
-                    const dim = state === "resolved" && selections[q.prompt] !== undefined && !isChosen;
-                    return (
-                      <button
-                        key={opt}
-                        type="button"
-                        disabled={!canAnswer}
-                        onClick={() => setChoices((prev) => ({ ...prev, [q.id]: opt }))}
-                        className={highlight ? "text-body font-semibold" : "text-body"}
-                        style={{
-                          padding: "var(--sp-1) var(--sp-2_5)",
-                          borderRadius: "var(--radius-input)",
-                          border: `var(--hairline) solid ${highlight ? "var(--brand)" : "var(--border-strong)"}`,
-                          background: highlight ? "var(--brand-bg)" : "var(--bg-raised)",
-                          color: highlight ? "var(--brand-dim)" : "var(--fg)",
-                          cursor: canAnswer ? "pointer" : "default",
-                          opacity: dim ? 0.4 : canAnswer || highlight ? 1 : 0.6,
-                        }}
-                      >
-                        {opt}
-                      </button>
-                    );
-                  })}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-1_5)", marginTop: "var(--sp-1_5)" }}>
+                  {q.options.map((opt) => (
+                    <OptionCard
+                      key={opt}
+                      layout="pill"
+                      name={q.id}
+                      checked={choices[q.id] === opt}
+                      disabled={!canAnswer}
+                      onSelect={() => setChoices((prev) => ({ ...prev, [q.id]: opt }))}
+                    >
+                      <span className="text-body">{opt}</span>
+                    </OptionCard>
+                  ))}
                 </div>
               ) : canAnswer ? (
                 <textarea
@@ -306,30 +281,18 @@ export function RequestCard({
                   className="text-body"
                   style={{
                     width: "100%",
-                    marginTop: 6,
+                    marginTop: "var(--sp-1_5)",
                     border: "var(--hairline) solid var(--border-strong)",
                     borderRadius: "var(--radius-input)",
                     background: "var(--bg-raised)",
                     padding: "var(--sp-1_5) var(--sp-2)",
                     color: "var(--fg)",
-                    minHeight: 42,
+                    minHeight: "var(--sp-10)",
                     resize: "vertical",
                   }}
                 />
-              ) : selections[q.prompt] ? (
-                <div
-                  className="text-body"
-                  style={{
-                    marginTop: 6,
-                    color: "var(--fg-2)",
-                    borderLeft: "var(--hairline-bold) solid var(--border)",
-                    paddingLeft: "var(--sp-2)",
-                  }}
-                >
-                  {selections[q.prompt]}
-                </div>
               ) : (
-                <div className="text-caption mono" style={{ color: "var(--fg-4)", marginTop: 4 }}>
+                <div className="text-caption mono" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
                   (free-text answer)
                 </div>
               )}
@@ -339,31 +302,23 @@ export function RequestCard({
           {canAnswer ? (
             <div
               style={{
-                marginTop: 12,
+                marginTop: "var(--sp-3)",
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
+                gap: "var(--sp-2_5)",
                 borderTop: "var(--hairline) solid var(--border-faint)",
-                paddingTop: 10,
+                paddingTop: "var(--sp-2_5)",
               }}
             >
-              <button
+              <Button
                 type="button"
+                size="sm"
                 onClick={submit}
                 onKeyDown={onKeyDown}
                 disabled={!allRequiredAnswered || mut.isPending}
-                className="text-body font-semibold"
-                style={{
-                  padding: "var(--sp-1_25) var(--sp-4)",
-                  borderRadius: "var(--radius-input)",
-                  border: "none",
-                  cursor: !allRequiredAnswered || mut.isPending ? "not-allowed" : "pointer",
-                  background: !allRequiredAnswered || mut.isPending ? "var(--bg-active)" : "var(--brand)",
-                  color: !allRequiredAnswered || mut.isPending ? "var(--fg-4)" : "var(--primary-on)",
-                }}
               >
                 {mut.isPending ? "Sending…" : "Reply"}
-              </button>
+              </Button>
               <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                 Selections are staged — Reply to send (⌘↵)
               </span>
@@ -371,9 +326,53 @@ export function RequestCard({
           ) : null}
 
           {mut.isError ? (
-            <div className="text-caption mono" style={{ color: "var(--state-error)", marginTop: 6 }}>
+            <div className="text-caption mono" style={{ color: "var(--state-error)", marginTop: "var(--sp-1_5)" }}>
               Failed to send — try again.
             </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* resolved — read-only echo of the chosen answers, no card chrome */}
+      {state === "resolved" && payload ? (
+        <div
+          style={{
+            marginTop: "var(--sp-2)",
+            paddingTop: "var(--sp-2)",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          {payload.questions.map((q, i) => (
+            <div
+              key={q.id}
+              className="text-body"
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                flexWrap: "wrap",
+                gap: "var(--sp-2)",
+                marginTop: i === 0 ? 0 : "var(--sp-1)",
+              }}
+            >
+              <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>{`Q${i + 1}`}</span>
+              <span style={{ color: "var(--fg-3)" }}>{q.prompt}</span>
+              <ArrowRight size={13} className="shrink-0 self-center" style={{ color: "var(--fg-4)" }} />
+              <span className="font-medium" style={{ color: "var(--fg)" }}>
+                {selections[q.prompt] ?? "answered"}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* closed — read-only one-line status, no card chrome */}
+      {state === "closed" ? (
+        <div className="text-body" style={{ marginTop: "var(--sp-1_5)", color: "var(--fg-3)" }}>
+          {superseded ? "Superseded by an updated question." : "Withdrawn by the asker."}
+          {questionCount > 0 ? (
+            <span style={{ color: "var(--fg-4)" }}>
+              {` · ${questionCount} question${questionCount === 1 ? "" : "s"} unanswered`}
+            </span>
           ) : null}
         </div>
       ) : null}

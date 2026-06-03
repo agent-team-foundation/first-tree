@@ -97,6 +97,9 @@ describe("RequestCard rendering", () => {
     );
     expect(container.textContent).not.toContain(BODY);
     expect(container.textContent).not.toContain("Ship 5% or 20%?");
-    expect(container.textContent).toContain("Expand");
+    // Collapsed row is a single clickable button (chevron + chip + subject
+    // summary); the whole row expands on click — no separate "Expand" word.
+    expect(container.textContent).toContain("REQUEST");
+    expect(container.textContent).toContain("Rollout");
   });
 });

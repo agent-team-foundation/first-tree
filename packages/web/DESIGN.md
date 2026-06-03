@@ -34,8 +34,12 @@
    arrivals — the new-message pill + divider — are green). Working-green is told
    apart from success-green by **form** (pulsing dot + glow vs a static ✓
    glyph), not hue. The states that want your attention are **warm** so they pop
-   against the green/blue live baseline: blocked = orange,
-   error = red. Present-but-idle = blue; offline = gray.
+   against the green/blue live baseline: needs-you (your action / unsaved) =
+   amber, blocked = orange, error = red. Present-but-idle = blue; offline =
+   gray. Where several attention states share one dense surface — the
+   conversation-list corner mark — they collapse to a single attention red and
+   are told apart by *form* (failed `!` / needs-you `?` / unread plain dot),
+   because hue is unreliable at a 9–13px badge (form over hue again).
 4. **Mature collaboration craft, not borrowed color.** Borrow the *discipline*
    — a neutral gray token ramp, hairline borders, soft low-opacity elevation,
    thin line icons, search + underline tabs, rounded-square avatars,
@@ -58,6 +62,7 @@
 | live arrival (new-message pill + divider) | green |
 | selected conversation (liveness) | green (left-rail + tint — distinct from a selected *tab*, which stays neutral) |
 | idle / present | blue (`--state-idle`) |
+| needs you / unsaved (your action) | amber (`--state-needs-you`) |
 | blocked / stuck | orange (`--state-blocked`) |
 | error / failed | red (`--state-error`) |
 | offline | dim gray (`--state-offline`) |
@@ -145,10 +150,17 @@ for text sitting on a saturated colored surface (badges, avatars) and does
 |-------|-----|---------|
 | `--state-working` | green `150` | alive / working — pulses (+ glow on the chat chip); told apart from success by form, not hue |
 | `--state-idle` | blue `245` | present / idle (at rest) |
+| `--state-needs-you` | amber `75` | your action needed / unsaved — distinct from blocked orange; ships a `-soft` fill + `--fg-needs-you-strong` AA text companion (draft chip, tab unsaved dot, open-question REQUEST chip) |
 | `--state-blocked` | orange `58` | blocked / stuck — also the shared caution / warning hue |
 | `--state-error` | red `25` | error / failed |
 | `--state-offline` | dim gray | offline |
 | `--state-unread` | = error | notification/attention (kept separate identifier on purpose) |
+
+> **Conversation-list corner mark is the one place these don't carry their own
+> hue.** failed / needs-you / unread collapse to a single attention **red** and
+> are told apart by glyph (`!` / `?` / plain dot) — see [§7](#7-components) /
+> `chat-row-avatar.tsx`. Everywhere else (chips, dots, tints) each state keeps
+> its semantic hue.
 
 Each state also ships a **soft** companion fill — `--state-working-soft` …
 `--state-offline-soft` (one canonical 14% translucent mix). Use these for
