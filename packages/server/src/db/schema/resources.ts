@@ -5,7 +5,8 @@ import type {
   ResourceStatus,
   ResourceType,
 } from "@first-tree/shared";
-import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { organizations } from "./organizations.js";
 
@@ -33,5 +34,15 @@ export const resources = pgTable(
     index("idx_resources_org_type_scope").on(table.organizationId, table.type, table.scope),
     index("idx_resources_owner_agent").on(table.ownerAgentId),
     index("idx_resources_repo_key").on(table.organizationId, table.repoCanonicalKey),
+    uniqueIndex("uq_resources_team_repo_canonical_active")
+      .on(table.organizationId, table.repoCanonicalKey)
+      .where(
+        sql`${table.type} = 'repo' AND ${table.scope} = 'team' AND ${table.status} IN ('active', 'stale') AND ${table.repoCanonicalKey} IS NOT NULL`,
+      ),
+    uniqueIndex("uq_resources_agent_repo_canonical_active")
+      .on(table.organizationId, table.ownerAgentId, table.repoCanonicalKey)
+      .where(
+        sql`${table.type} = 'repo' AND ${table.scope} = 'agent' AND ${table.status} IN ('active', 'stale') AND ${table.repoCanonicalKey} IS NOT NULL`,
+      ),
   ],
 );

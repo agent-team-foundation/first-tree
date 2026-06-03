@@ -15,6 +15,17 @@ describe("resource schemas", () => {
     expect(canonicalizeResourceRepoUrl("git@github.com:agent-team-foundation/first-tree.git")).toBe(expected);
   });
 
+  it("canonicalizes repo URLs with repeated slashes without regex backtracking", () => {
+    const expected = "github.com/agent-team-foundation/first-tree";
+    const repeatedSlashes = "/".repeat(5_000);
+    expect(
+      canonicalizeResourceRepoUrl(`https://github.com/Agent-Team-Foundation/First-Tree.git${repeatedSlashes}`),
+    ).toBe(expected);
+    expect(canonicalizeResourceRepoUrl(`git@github.com:agent-team-foundation/first-tree.git${repeatedSlashes}`)).toBe(
+      expected,
+    );
+  });
+
   it("accepts inline prompt replace with no replacement resource id", () => {
     const parsed = agentResourceBindingInputSchema.parse({
       type: "prompt",

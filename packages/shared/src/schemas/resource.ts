@@ -367,10 +367,9 @@ export type ResourceImpactPreviewOutput = z.infer<typeof resourceImpactPreviewOu
 
 export function canonicalizeResourceRepoUrl(url: string): string {
   if (!url.includes("://")) {
-    const match = url.match(/^(?:[A-Za-z0-9_.-]+@)?([A-Za-z0-9.-]+):([^/@:\s][^@:\s]*)$/);
-    const host = match?.[1];
-    const rawPath = match?.[2];
-    if (host && rawPath && !/^\d+(?:\/|$)/.test(rawPath)) {
+    const scpLike = parseScpLikeRepoUrl(url);
+    if (scpLike) {
+      const { host, rawPath } = scpLike;
       return buildCanonicalRepoKey(host, "", rawPath);
     }
   }
@@ -384,13 +383,36 @@ export function canonicalizeResourceRepoUrl(url: string): string {
   return buildCanonicalRepoKey(parsed.hostname, port, parsed.pathname);
 }
 
+function parseScpLikeRepoUrl(url: string): { host: string; rawPath: string } | null {
+  const colonIndex = url.indexOf(":");
+  if (colonIndex <= 0 || colonIndex === url.length - 1) {
+    return null;
+  }
+
+  const hostPart = url.slice(0, colonIndex);
+  const rawPath = url.slice(colonIndex + 1);
+  const atIndex = hostPart.lastIndexOf("@");
+  const host = atIndex >= 0 ? hostPart.slice(atIndex + 1) : hostPart;
+  if (!host || !rawPath || rawPath.includes("@") || rawPath.includes(":") || containsWhitespace(rawPath)) {
+    return null;
+  }
+
+  const firstPathChar = rawPath[0];
+  if (!firstPathChar || firstPathChar === "/" || firstPathChar === " ") {
+    return null;
+  }
+  // Avoid treating URL strings like "http://..." fallback errors or "host:22/path" as scp-like repos.
+  if (isAsciiDigit(firstPathChar) && (rawPath.length === 1 || rawPath[1] === "/")) {
+    return null;
+  }
+
+  return { host, rawPath };
+}
+
 function buildCanonicalRepoKey(hostname: string, port: string, rawPath: string): string {
   const host = hostname.toLowerCase();
   const hostPort = port ? `${host}:${port}` : host;
-  const normalizedPath = rawPath
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "")
-    .replace(/\.git$/i, "");
+  const normalizedPath = stripGitSuffix(trimSlashes(rawPath));
   if (host === "github.com") {
     const segments = normalizedPath.split("/").filter(Boolean);
     if (segments.length >= 2) {
@@ -398,6 +420,35 @@ function buildCanonicalRepoKey(hostname: string, port: string, rawPath: string):
     }
   }
   return `${hostPort}/${normalizedPath}`;
+}
+
+function trimSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "/") {
+    start += 1;
+  }
+  while (end > start && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(start, end);
+}
+
+function stripGitSuffix(value: string): string {
+  return value.toLowerCase().endsWith(".git") ? value.slice(0, -4) : value;
+}
+
+function containsWhitespace(value: string): boolean {
+  for (const char of value) {
+    if (char.trim() === "") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isAsciiDigit(value: string): boolean {
+  return value >= "0" && value <= "9";
 }
 
 export function validateEffectivePromptLength(value: string): boolean {
