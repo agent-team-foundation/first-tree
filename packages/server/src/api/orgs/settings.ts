@@ -1,6 +1,6 @@
 import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError } from "../../errors.js";
+import { BadRequestError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
@@ -35,6 +35,9 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const scope = await requireOrgAdmin(request, app.db);
       const namespace = parseNamespace(request.params.namespace);
+      if (namespace === "source_repos") {
+        throw new GoneError("source_repos is read-only; use Team Resources instead");
+      }
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
         updatedBy: scope.userId,
       });
@@ -44,6 +47,9 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
     const namespace = parseNamespace(request.params.namespace);
+    if (namespace === "source_repos") {
+      throw new GoneError("source_repos is read-only; use Team Resources instead");
+    }
     await orgSettingsService.deleteOrgSetting(app.db, scope.organizationId, namespace);
     reply.status(204).send();
   });

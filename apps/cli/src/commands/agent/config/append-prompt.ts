@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Command } from "commander";
 import { fail, success } from "../../../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../../../core/bootstrap.js";
-import { getCurrent, patchConfig, resolveAgentRecord } from "./_shared/fetchers.js";
+import { getAgentResources, patchAgentResources, resolveAgentRecord } from "./_shared/fetchers.js";
 
 export function registerAgentConfigAppendPromptCommand(config: Command): void {
   config
@@ -26,10 +26,33 @@ export function registerAgentConfigAppendPromptCommand(config: Command): void {
       } else {
         fail("MISSING_INPUT", "Provide -f <file> or pipe prompt text via stdin", 2);
       }
-      const current = await getCurrent(serverUrl, adminToken, uuid);
-      const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, {
-        prompt: { append: text },
+      const current = await getAgentResources(serverUrl, adminToken, uuid);
+      const removedOrders: number[] = [];
+      const remaining = current.bindings.filter((binding) => {
+        const isLegacyAppend =
+          binding.type === "prompt" &&
+          binding.mode === "include" &&
+          !binding.resourceId &&
+          !binding.replacesResourceId &&
+          binding.inlinePromptBody !== null &&
+          binding.inlinePromptBody !== undefined;
+        if (isLegacyAppend && binding.order !== undefined) removedOrders.push(binding.order);
+        return !isLegacyAppend;
       });
-      success({ agentId: updated.agentId, version: updated.version, append_length: text.length });
+      const nextBindings = [...remaining];
+      if (text.length > 0) {
+        nextBindings.push({
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          inlinePromptBody: text,
+          order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+        });
+      }
+      const updated = await patchAgentResources(serverUrl, adminToken, uuid, {
+        expectedVersion: current.version,
+        bindings: nextBindings,
+      });
+      success({ agentId: uuid, version: updated.version, append_length: text.length });
     });
 }

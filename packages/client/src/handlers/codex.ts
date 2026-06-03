@@ -30,6 +30,7 @@ import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { buildResourceSkillsBriefing, materializeResourceSkills } from "../runtime/resource-skills.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
@@ -336,6 +337,11 @@ export function buildCodexAgentBriefing(
     lines.push(payload.prompt.append.trim());
     lines.push("");
   }
+  const skillsBriefing = buildResourceSkillsBriefing(workspaceCwd, payload).trim();
+  if (skillsBriefing.length > 0) {
+    lines.push(skillsBriefing);
+    lines.push("");
+  }
   // Per agent-session-cwd-redesign: the Claude Code handler injects the
   // working-directory convention + worktree list + chat context via the
   // SDK's `systemPrompt.append`. Codex has no equivalent option, so we
@@ -620,7 +626,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        ctx?.log(`codex git materialisation skipped (${repo.url}): ${msg}`);
+        throw new Error(`codex git materialisation failed for ${repo.url}: ${msg}`);
       }
     }
   }
@@ -1263,6 +1269,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          resourceSkills: [],
           reasoningEffort: "high",
         };
       }
@@ -1272,6 +1279,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // gitRepos first so the per-chat briefing can list the predeclared
       // worktree paths the agent should know about.
       await prepareSourceRepos(payload, cwd, sessionCtx);
+      await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildAgentBriefing(payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing);
@@ -1317,6 +1325,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           mcpServers: [],
           env: [],
           gitRepos: [],
+          resourceSkills: [],
           reasoningEffort: "high",
         };
       }
@@ -1327,6 +1336,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       await prepareSourceRepos(payload, cwd, sessionCtx);
+      await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildAgentBriefing(payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing);

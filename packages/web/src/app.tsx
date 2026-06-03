@@ -22,6 +22,7 @@ import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
+import { TeamResourcesPage } from "./pages/team/resources.js";
 import { TeamSettingsPage } from "./pages/team/settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
@@ -188,6 +189,7 @@ export function App() {
                       configuration lives under /settings/team (it's a Settings
                       surface, not a peer of the people-and-agents view). */}
                   <Route path="team" element={<TeamPage />} />
+                  <Route path="team/resources" element={<TeamResourcesPage />} />
 
                   {/* Settings master-detail. `team` is the org-scoped panel
                       collection (Identity / Context Tree / Source repos /

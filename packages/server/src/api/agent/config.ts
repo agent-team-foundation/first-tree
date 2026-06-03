@@ -13,6 +13,6 @@ export async function agentConfigRoutes(app: FastifyInstance): Promise<void> {
   app.get("/config", async (request) => {
     const identity = requireAgent(request);
     const cfg = await app.configService.getDecrypted(identity.uuid);
-    return cfg;
+    return app.resourcesService.resolveRuntimeConfig(cfg);
   });
 }

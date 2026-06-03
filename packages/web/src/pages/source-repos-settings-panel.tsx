@@ -1,6 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
-import { getSourceReposSetting, putSourceReposSetting } from "../api/org-settings.js";
+import { useQuery } from "@tanstack/react-query";
+import { getSourceReposSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Section } from "../components/ui/section.js";
 
@@ -8,39 +7,17 @@ import { Section } from "../components/ui/section.js";
  * Team Settings section showing the team-level list of source
  * repositories.
  *
- * Admins get full management — list + per-entry remove (hover-revealed
- * `×` icon). Members see the same list but read-only with a footer
- * explaining that only admins can edit. The `source_repos` namespace's
- * server-side `readPolicy: "member"` makes the GET succeed for non-admins;
- * PUT stays admin-only so the Remove control is hidden for members rather
- * than just disabled (avoids a 403 the UI can't recover from gracefully).
- *
- * Onboarding writes one entry on Step 3 (admin path). There is no
- * "Add repo" form here yet — picking a repo requires an OAuth-scoped
- * GitHub picker and that lives in the onboarding flow today. A second
- * pass will extract the picker into a reusable component.
+ * Legacy read-only view for pre-Resources `source_repos` rows. The
+ * namespace remains member-readable so old team setup is understandable
+ * during migration, but writes now go through Team Resources only.
  */
 export function SourceReposSettingsPanel() {
-  const { organizationId, role } = useAuth();
-  const isAdmin = role === "admin";
-  const queryClient = useQueryClient();
+  const { organizationId } = useAuth();
 
   const settingQuery = useQuery({
     queryKey: ["org-setting", organizationId, "source_repos"],
     queryFn: () => (organizationId ? getSourceReposSetting(organizationId) : Promise.reject(new Error("no org"))),
     enabled: !!organizationId,
-  });
-
-  const removeMutation = useMutation({
-    mutationFn: async (url: string) => {
-      if (!organizationId) throw new Error("organization not loaded");
-      const current = settingQuery.data?.repos ?? [];
-      const next = current.filter((r) => r.url !== url);
-      return putSourceReposSetting(organizationId, { repos: next });
-    },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["org-setting", organizationId, "source_repos"], next);
-    },
   });
 
   const repos = settingQuery.data?.repos ?? [];
@@ -55,11 +32,7 @@ export function SourceReposSettingsPanel() {
   return (
     <Section
       title="Source repos"
-      description={
-        isAdmin
-          ? "Repos your team's agents are bound to. New repos are added during agent onboarding."
-          : "Repos your team's agents are bound to. Read-only — only admins can edit."
-      }
+      description="Legacy source repo setting. Manage active repo resources from Team Resources."
       action={countBadge}
     >
       {settingQuery.isLoading ? (
@@ -85,39 +58,15 @@ export function SourceReposSettingsPanel() {
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {repos.map((repo) => (
-            <RepoRow
-              key={repo.url}
-              url={repo.url}
-              defaultBranch={repo.defaultBranch}
-              isAdmin={isAdmin}
-              isRemoving={removeMutation.isPending}
-              onRemove={() => removeMutation.mutate(repo.url)}
-            />
+            <RepoRow key={repo.url} url={repo.url} defaultBranch={repo.defaultBranch} />
           ))}
         </ul>
-      )}
-      {removeMutation.error instanceof Error && (
-        <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
-          {removeMutation.error.message}
-        </div>
       )}
     </Section>
   );
 }
 
-function RepoRow({
-  url,
-  defaultBranch,
-  isAdmin,
-  isRemoving,
-  onRemove,
-}: {
-  url: string;
-  defaultBranch?: string;
-  isAdmin: boolean;
-  isRemoving: boolean;
-  onRemove: () => void;
-}) {
+function RepoRow({ url, defaultBranch }: { url: string; defaultBranch?: string }) {
   return (
     <li
       className="group flex items-center"
@@ -137,38 +86,6 @@ function RepoRow({
           </div>
         )}
       </div>
-      {isAdmin && (
-        <button
-          type="button"
-          aria-label={`Remove ${url}`}
-          disabled={isRemoving}
-          onClick={onRemove}
-          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "var(--sp-6)",
-            height: "var(--sp-6)",
-            border: 0,
-            borderRadius: "var(--radius-input)",
-            background: "transparent",
-            color: "var(--fg-3)",
-            cursor: isRemoving ? "not-allowed" : "pointer",
-            flexShrink: 0,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--bg-hover)";
-            e.currentTarget.style.color = "var(--fg)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--fg-3)";
-          }}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
     </li>
   );
 }

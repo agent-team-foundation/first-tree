@@ -15,9 +15,9 @@ const HASH_TO_TAB: Record<string, string> = {
   "ad-setup": "runtime",
   "ad-prompt": "prompt",
   "agent-cfg-prompt": "prompt",
-  "agent-cfg-mcp": "profile",
+  "agent-cfg-mcp": "resources",
   "ad-advanced": "resources",
-  "agent-cfg-env": "resources",
+  "agent-cfg-env": "runtime",
   "agent-cfg-git": "resources",
   // Lifecycle lives at the bottom of Profile — keep the danger anchor alive.
   "ad-danger": "profile",

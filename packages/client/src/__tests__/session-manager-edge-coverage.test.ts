@@ -98,6 +98,7 @@ function runtimeConfig(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntim
       mcpServers: [],
       env: [],
       gitRepos: [],
+      resourceSkills: [],
       reasoningEffort: "",
     },
     ...overrides,
@@ -347,6 +348,7 @@ describe("SessionManager edge coverage", () => {
         mcpServers: [],
         env: [],
         gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "src/project" }],
+        resourceSkills: [],
         reasoningEffort: "",
       },
     });
@@ -835,6 +837,7 @@ describe("SessionManager edge coverage", () => {
           mcpServers: [],
           env: [],
           gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "project" }],
+          resourceSkills: [],
           reasoningEffort: "",
         },
       }),

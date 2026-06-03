@@ -1,18 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
-import {
-  getContextTreeSetting,
-  getSourceReposSetting,
-  putContextTreeSetting,
-  putSourceReposSetting,
-} from "../../../api/org-settings.js";
+import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
+import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
@@ -32,6 +27,16 @@ function repoLabel(url: string): string {
     .replace(/\.git$/, "");
 }
 
+function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
+  return resources
+    .filter((resource) => resource.type === "repo" && resource.defaultEnabled === "recommended")
+    .map((resource) => {
+      const payload = resource.payload as { url?: unknown };
+      return typeof payload.url === "string" ? payload.url : null;
+    })
+    .filter((url): url is string => Boolean(url));
+}
+
 /** Shared "create the chat + send the first task + finish" sequence. */
 async function runKickoff(args: {
   bootstrap: string;
@@ -43,26 +48,24 @@ async function runKickoff(args: {
 }): Promise<void> {
   const agent = await resolveOnboardingAgent();
 
-  if (args.gitRepoUrls.length > 0) {
-    const cfg = await getAgentConfig(agent.uuid);
-    await updateAgentConfig(agent.uuid, {
-      expectedVersion: cfg.version,
-      payload: { gitRepos: args.gitRepoUrls.map((url) => ({ url })) },
-    });
-  }
-
   // Org-level writes are a convenience cache for future teammates — never
   // let them block the user's first chat.
   if (args.orgWrites) {
-    if (args.orgWrites.sourceRepos.length > 0) {
-      await putSourceReposSetting(args.orgWrites.organizationId, {
-        repos: args.orgWrites.sourceRepos.map((url) => ({ url })),
-      }).catch(() => {});
-    }
-    if (args.orgWrites.contextTreeUrl) {
-      await putContextTreeSetting(args.orgWrites.organizationId, { repo: args.orgWrites.contextTreeUrl }).catch(
-        () => {},
+    const orgWrites = args.orgWrites;
+    if (orgWrites.sourceRepos.length > 0) {
+      await Promise.allSettled(
+        orgWrites.sourceRepos.map((url) =>
+          createTeamResourceForOrg(orgWrites.organizationId, {
+            type: "repo",
+            name: repoLabel(url),
+            defaultEnabled: "recommended",
+            payload: { url },
+          }),
+        ),
       );
+    }
+    if (orgWrites.contextTreeUrl) {
+      await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});
     }
   }
 
@@ -288,9 +291,9 @@ function InviteeKickoff() {
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos, installResult] = await Promise.all([
+      const [tree, resources, installResult] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
-        getSourceReposSetting(organizationId ?? ""),
+        listTeamResourcesForOrg(organizationId ?? ""),
         // Three-state result: true = installed, false = server confirmed
         // missing, null = probe failed (network blip, 5xx). The null
         // sentinel is distinct from `false` so refetchInterval below can
@@ -302,7 +305,7 @@ function InviteeKickoff() {
       ]);
       return {
         treeUrl: tree.repo ?? "",
-        teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
+        teamRepoUrls: teamRecommendedRepoUrls(resources),
         // Optimistic on uncertainty: don't bounce the user into
         // no-installation on a transient blip. The refetchInterval below
         // keeps polling until we have an authoritative answer; if that

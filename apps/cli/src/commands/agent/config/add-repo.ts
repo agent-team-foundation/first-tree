@@ -1,7 +1,8 @@
+import { canonicalizeResourceRepoUrl } from "@first-tree/shared";
 import type { Command } from "commander";
 import { success } from "../../../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../../../core/bootstrap.js";
-import { getCurrent, patchConfig, resolveAgentRecord } from "./_shared/fetchers.js";
+import { getAgentResources, patchAgentResources, resolveAgentRecord } from "./_shared/fetchers.js";
 
 export function registerAgentConfigAddRepoCommand(config: Command): void {
   config
@@ -13,11 +14,67 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
       const serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
-      const current = await getCurrent(serverUrl, adminToken, uuid);
-      const remaining = current.payload.gitRepos.filter((r) => r.url !== url);
-      const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, {
-        gitRepos: [...remaining, { url, ref: opts.ref, localPath: opts.path }],
+      const current = await getAgentResources(serverUrl, adminToken, uuid);
+      const targetCanonical = safeCanonicalRepoUrl(url);
+      const matchingResourceIds = new Set<string>();
+      let matchingTeamResourceId: string | null = null;
+      if (targetCanonical) {
+        for (const resource of current.availableTeamResources) {
+          const payload = resource.payload as { url?: unknown };
+          if (typeof payload.url === "string" && safeCanonicalRepoUrl(payload.url) === targetCanonical) {
+            matchingResourceIds.add(resource.id);
+            matchingTeamResourceId ??= resource.id;
+          }
+        }
+        for (const row of current.effective.repos) {
+          const repoUrl = row.repo?.url ?? ((row.payload as { url?: unknown } | null)?.url as string | undefined);
+          if (row.resourceId && typeof repoUrl === "string" && safeCanonicalRepoUrl(repoUrl) === targetCanonical) {
+            matchingResourceIds.add(row.resourceId);
+            if (row.scope === "team") matchingTeamResourceId ??= row.resourceId;
+          }
+        }
+      }
+      const removedOrders: number[] = [];
+      const remaining = current.bindings.filter((binding) => {
+        if (binding.type !== "repo") return true;
+        const agentRepoUrl = binding.agentExtraRepo?.url;
+        const matchesAgentRepo =
+          targetCanonical && typeof agentRepoUrl === "string" && safeCanonicalRepoUrl(agentRepoUrl) === targetCanonical;
+        const matchesResource = !!binding.resourceId && matchingResourceIds.has(binding.resourceId);
+        if ((matchesAgentRepo || matchesResource) && binding.order !== undefined) removedOrders.push(binding.order);
+        return !matchesAgentRepo && !matchesResource;
       });
-      success({ agentId: updated.agentId, version: updated.version, repo: url });
+      const updated = await patchAgentResources(serverUrl, adminToken, uuid, {
+        expectedVersion: current.version,
+        bindings: [
+          ...remaining,
+          matchingTeamResourceId
+            ? {
+                type: "repo",
+                mode: "include",
+                resourceId: matchingTeamResourceId,
+                repoRef: opts.ref,
+                repoLocalPath: opts.path,
+                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+              }
+            : {
+                type: "repo",
+                mode: "include",
+                agentExtraRepo: { url },
+                repoRef: opts.ref,
+                repoLocalPath: opts.path,
+                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+              },
+        ],
+      });
+      success({ agentId: uuid, version: updated.version, repo: url });
     });
+}
+
+function safeCanonicalRepoUrl(url: string): string | null {
+  try {
+    return canonicalizeResourceRepoUrl(url);
+  } catch {
+    return null;
+  }
 }

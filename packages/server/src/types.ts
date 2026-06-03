@@ -2,6 +2,7 @@ import type { Database } from "./db/connection.js";
 import type { UserScope } from "./scope/types.js";
 import type { ConfigService } from "./services/config-service.js";
 import type { Notifier } from "./services/notifier.js";
+import type { ResourcesService } from "./services/resources.js";
 
 export type AgentIdentity = {
   uuid: string;
@@ -16,6 +17,7 @@ declare module "fastify" {
     config: import("./config.js").Config;
     notifier: Notifier;
     configService: ConfigService;
+    resourcesService: ResourcesService;
     /**
      * Command-package version advertised via the `server:welcome` WS frame.
      * Exposed as a getter so the npm-registry poller can refresh the value

@@ -67,6 +67,13 @@ export class BadRequestError extends AppError {
   }
 }
 
+export class GoneError extends AppError {
+  constructor(message = "Gone", attrs?: AppErrorAttrs) {
+    super(410, message, attrs);
+    this.name = "GoneError";
+  }
+}
+
 /**
  * Thrown when an operation targets a client whose organization does not match
  * the caller's authenticated organization. Retained for wire compatibility:

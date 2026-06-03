@@ -1,4 +1,9 @@
-import type { AgentRuntimeConfig, AgentRuntimeConfigPatch } from "@first-tree/shared";
+import type {
+  AgentResourcesOutput,
+  AgentRuntimeConfig,
+  AgentRuntimeConfigPatch,
+  UpdateAgentResources,
+} from "@first-tree/shared";
 import { fail } from "../../../../cli/output.js";
 import { cliFetch } from "../../../../core/cli-fetch.js";
 import { type ResolvedAgent, resolveAgent } from "../../../_shared/resolve-agent.js";
@@ -60,6 +65,30 @@ export async function patchConfig(
     method: "PATCH",
     adminToken,
     body: JSON.stringify({ expectedVersion, payload: patch }),
+  });
+}
+
+export async function getAgentResources(
+  serverUrl: string,
+  adminToken: string,
+  agentId: string,
+): Promise<AgentResourcesOutput> {
+  return adminFetch<AgentResourcesOutput>(`${serverUrl}/api/v1/agents/${agentId}/resources`, {
+    method: "GET",
+    adminToken,
+  });
+}
+
+export async function patchAgentResources(
+  serverUrl: string,
+  adminToken: string,
+  agentId: string,
+  body: UpdateAgentResources,
+): Promise<AgentResourcesOutput> {
+  return adminFetch<AgentResourcesOutput>(`${serverUrl}/api/v1/agents/${agentId}/resources`, {
+    method: "PATCH",
+    adminToken,
+    body: JSON.stringify(body),
   });
 }
 

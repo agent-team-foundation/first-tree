@@ -2,6 +2,7 @@ export { adapterConfigs } from "./adapter-configs.js";
 export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";
+export { agentResourceBindings } from "./agent-resource-bindings.js";
 export { agents } from "./agents.js";
 export { attachments } from "./attachments.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
@@ -23,6 +24,7 @@ export { organizationSettings } from "./organization-settings.js";
 export { organizations } from "./organizations.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
 export { pendingQuestions } from "./pending-questions.js";
+export { resources } from "./resources.js";
 export { serverInstances } from "./server-instances.js";
 export { sessionEvents } from "./session-events.js";
 export { users } from "./users.js";

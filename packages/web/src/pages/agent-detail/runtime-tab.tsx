@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { Navigate } from "react-router";
+import { EnvSection } from "./env-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ModelSection } from "./model-section.js";
 import { ReasoningEffortSection } from "./reasoning-effort-section.js";
@@ -7,6 +9,11 @@ import { sectionAnchorId } from "./save-bar.js";
 
 export function RuntimeTab() {
   const ctx = useAgentDetailContext();
+  const envOtherKeys = useMemo(() => {
+    const active = ctx.draft.draft.env.filter((i) => i.status !== "deleted");
+    return (exceptKey: string | null): ReadonlySet<string> =>
+      new Set(active.filter((i) => i.key !== exceptKey).map((i) => i.value.key));
+  }, [ctx.draft.draft.env]);
   // Human agents (and any role without canEditConfig) have no runtime to
   // configure. The tab is hidden from buildTabs, but a stale deep link to
   // /agents/:uuid/runtime would otherwise render a blank page; redirect to
@@ -59,6 +66,19 @@ export function RuntimeTab() {
             </div>
           }
         />
+      )}
+      {ctx.config && (
+        <div id={sectionAnchorId("env")} style={{ marginTop: "var(--sp-8)" }}>
+          <EnvSection
+            items={ctx.draft.draft.env}
+            otherKeys={envOtherKeys}
+            onAdd={ctx.draft.addEnv}
+            onUpdate={ctx.draft.updateEnv}
+            onDelete={ctx.draft.deleteEnv}
+            onUndoDelete={ctx.draft.undoDeleteEnv}
+            disabled={ctx.agent.status !== "active"}
+          />
+        </div>
       )}
     </>
   );

@@ -18,6 +18,7 @@ function payload(gitRepos: AgentRuntimeConfigPayload["gitRepos"]): AgentRuntimeC
     mcpServers: [],
     env: [],
     gitRepos,
+    resourceSkills: [],
     reasoningEffort: "",
   };
 }

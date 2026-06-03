@@ -44,8 +44,8 @@ const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   prompt: "prompt",
   model: "runtime",
   effort: "runtime",
-  mcp: "profile",
-  env: "resources",
+  mcp: "resources",
+  env: "runtime",
   git: "resources",
 };
 
@@ -59,6 +59,8 @@ function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
       { key: "prompt", label: "Prompt", path: "prompt" },
       { key: "resources", label: "Resources", path: "resources" },
     );
+  } else if (!isHuman) {
+    tabs.push({ key: "resources", label: "Resources", path: "resources" });
   }
   // Usage is an observation surface, not part of the edit flow. Keep it at
   // the end so configuration tabs read left-to-right as the setup workflow.

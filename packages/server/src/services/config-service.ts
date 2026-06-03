@@ -21,6 +21,8 @@ import type { Notifier } from "./notifier.js";
 const DEBOUNCE_WINDOW_MS = 300;
 const LEGACY_MCP_WRITE_DISABLED_MESSAGE =
   "Legacy per-agent MCP config writes are disabled. MCP configuration will be managed by Team MCP Resources.";
+const RESOURCES_WRITE_DISABLED_MESSAGE =
+  "Legacy per-agent prompt, Git repo, and MCP config writes are disabled. Use Agent Resources or Team Resources.";
 
 type PendingWrite = {
   /** All callers waiting on the aggregated write. Each carries its own
@@ -134,6 +136,9 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
   function rejectLegacyMcpWrite(patch: AgentRuntimeConfigPatch): void {
     if (Object.hasOwn(patch, "mcpServers")) {
       throw new BadRequestError(LEGACY_MCP_WRITE_DISABLED_MESSAGE, { code: "legacy_mcp_config_disabled" });
+    }
+    if (Object.hasOwn(patch, "gitRepos") || Object.hasOwn(patch, "prompt")) {
+      throw new BadRequestError(RESOURCES_WRITE_DISABLED_MESSAGE, { code: "legacy_resource_config_disabled" });
     }
   }
 
