@@ -145,9 +145,9 @@ pnpm coverage                               # Local unit coverage
 pnpm coverage:summary                       # Summarize generated coverage
 ```
 
-See [AGENTS.md](AGENTS.md) for architecture, conventions, and the per-package
-development workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR
-workflow.
+See [docs/architecture.md](docs/architecture.md) for architecture, conventions,
+and the per-package development workflow. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the PR workflow.
 
 ## License
 

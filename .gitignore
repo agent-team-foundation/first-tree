@@ -44,11 +44,9 @@ drizzle/meta/
 # Logs
 *.log
 
-# Claude Code
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/first-tree
+# Claude Code (runtime injection from `first-tree tree skill install` lives
+# in the workspace cwd, not in this repo)
+.claude/
 .gstack/
 
 # Playwright MCP

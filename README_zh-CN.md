@@ -140,8 +140,8 @@ pnpm coverage                               # 本地单测覆盖率
 pnpm coverage:summary                       # 汇总覆盖率报告
 ```
 
-架构、约定、按 package 的开发流程详见 [AGENTS.md](AGENTS.md)。PR 流程详见
-[CONTRIBUTING.md](CONTRIBUTING.md)。
+架构、约定、按 package 的开发流程详见 [docs/architecture.md](docs/architecture.md)。
+PR 流程详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 

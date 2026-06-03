@@ -1,12 +1,12 @@
 # Contributing to first-tree
 
 Thanks for helping out. This is a brief contributor guide; the deeper
-architecture and per-package workflow live in [AGENTS.md](AGENTS.md).
+architecture and per-package workflow live in [docs/architecture.md](docs/architecture.md).
 
 ## Repo layout
 
-See [AGENTS.md](AGENTS.md) for the monorepo structure and architecture
-rules. Quick map:
+See [docs/architecture.md](docs/architecture.md) for the monorepo structure and
+architecture rules. Quick map:
 
 - `apps/cli/` — the published `first-tree` CLI.
 - `packages/server/` — Fastify API server.
@@ -46,8 +46,8 @@ update [docs/cli-reference.md](docs/cli-reference.md) in the same PR.
 
 ## Conventions
 
-See [AGENTS.md](AGENTS.md) "Coding Conventions" and "Git Conventions"
-sections — they are the source of truth.
+See [docs/architecture.md](docs/architecture.md) "Coding Conventions" and
+"Git Conventions" sections — they are the source of truth.
 
 Highlights:
 
