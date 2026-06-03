@@ -829,15 +829,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
         let retryDelay = 0;
         let retryReason = "";
 
-        // Per-attempt child AbortController (PR #600 review nit #4): the
-        // codex-sdk Thread exposes no explicit close/cancel beyond the
-        // AbortSignal passed to runStreamed. If we `break` out of the
-        // for-await on a transient `turn.failed` and reuse the parent
-        // signal, the SDK's background generator + child-process stdout
-        // reader can keep draining the dead stream until child exit.
-        // A fresh child controller per attempt lets us explicitly tear
-        // down the previous stream before starting the next, while
-        // suspend/shutdown still cascades down via the parent listener.
+        // Per-attempt child AbortController (PR #600 review nit #4): keep
+        // parent suspend/shutdown cancellation scoped to the active
+        // runStreamed() call without reusing the parent signal across retry
+        // attempts. Retry teardown itself is handled by closing the async
+        // iterator; aborting this signal after the SDK stream has closed can
+        // surface a late ChildProcess AbortError after SDK listeners are gone.
         const attemptAbort = new AbortController();
         const onParentAbort = (): void => attemptAbort.abort();
         abort.signal.addEventListener("abort", onParentAbort, { once: true });
@@ -923,16 +920,18 @@ export const createCodexHandler: HandlerFactory = (config) => {
         }
 
         if (!retryRequested) break;
-        // Explicit tear-down: kill the previous stream before the backoff
-        // sleep so its drain doesn't overlap the next attempt's child
-        // process. No-op if the parent already aborted (the listener
-        // above already cascaded).
-        attemptAbort.abort();
+        // Breaking out of the for-await has already closed the SDK event
+        // iterator for this attempt. Do not abort the per-attempt spawn
+        // signal here: in @openai/codex-sdk cleanup may already have removed
+        // child listeners, and a late abort can become an unhandled
+        // ChildProcess AbortError that crashes the client. The backoff still
+        // listens to the parent signal below, so suspend/shutdown can cut it
+        // short without starting another attempt.
         sessionCtx.log(`codex turn retry ${attempt + 1}/${MAX_TURN_RETRIES + 1} after ${retryDelay}ms; ${retryReason}`);
         try {
           // Sleep on PARENT signal: only suspend/shutdown should cut
-          // short the backoff window, not the retry-triggered abort we
-          // just fired on the per-attempt controller.
+          // short the backoff window. The per-attempt signal belongs to the
+          // already-closed SDK iterator and is intentionally left untouched.
           await sleepWithAbort(retryDelay, abort.signal);
         } catch {
           // AbortError — suspend/shutdown raced ahead; let the abort path
