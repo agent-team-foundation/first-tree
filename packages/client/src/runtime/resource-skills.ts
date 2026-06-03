@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload, RuntimeResourceSkill } from "@first-tree/shared";
@@ -18,6 +19,7 @@ export async function materializeResourceSkills(
 ): Promise<void> {
   const skills = payload?.resourceSkills ?? [];
   const root = resourceSkillsDir(workspace);
+  if (skills.length === 0 && !existsSync(root)) return;
   if (skills.length > 0) {
     await mkdir(root, { recursive: true });
   }
