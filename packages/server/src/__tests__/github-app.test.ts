@@ -7,6 +7,7 @@ import {
   exchangeCodeForAppUserProfile,
   fetchInstallation,
   GithubAppApiError,
+  listInstallationRepos,
   mintInstallationToken,
   refreshAppUserToken,
   verifyUserCanAdministerInstallation,
@@ -558,5 +559,109 @@ describe("services/github-app", () => {
       expect(err.status).toBe(500);
       expect(err.message).toContain("expires_in");
     });
+  });
+});
+
+describe("services/github-app › listInstallationRepos", () => {
+  type FetchInput = Parameters<typeof fetch>[0];
+  const urlOf = (input: FetchInput): string =>
+    typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+  function repo(name: string, pushedAt: string | null) {
+    return {
+      full_name: name,
+      clone_url: `https://github.com/${name}.git`,
+      html_url: `https://github.com/${name}`,
+      private: true,
+      default_branch: "main",
+      pushed_at: pushedAt,
+    };
+  }
+
+  it("maps the installation repo envelope and sorts most-recently-pushed first", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      expect(urlOf(input)).toContain("/installation/repositories");
+      return new Response(
+        JSON.stringify({
+          total_count: 2,
+          repositories: [repo("acme/old", "2024-01-01T00:00:00Z"), repo("acme/new", "2025-01-01T00:00:00Z")],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const repos = await listInstallationRepos("ghs_token", { fetcher });
+    expect(repos.map((r) => r.fullName)).toEqual(["acme/new", "acme/old"]);
+    expect(repos[0]).toMatchObject({
+      fullName: "acme/new",
+      cloneUrl: "https://github.com/acme/new.git",
+      htmlUrl: "https://github.com/acme/new",
+      private: true,
+      defaultBranch: "main",
+      pushedAt: "2025-01-01T00:00:00Z",
+    });
+  });
+
+  it("walks pages until a short page (and stops)", async () => {
+    const calls: number[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      const page = Number(new URL(urlOf(input)).searchParams.get("page"));
+      calls.push(page);
+      // Page 1 full (100), page 2 short (1) → stop after page 2.
+      const repositories =
+        page === 1
+          ? Array.from({ length: 100 }, (_, i) => repo(`acme/r${i}`, "2024-01-01T00:00:00Z"))
+          : [repo("acme/last", "2024-02-01T00:00:00Z")];
+      return new Response(JSON.stringify({ total_count: 101, repositories }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const repos = await listInstallationRepos("ghs_token", { fetcher });
+    expect(calls).toEqual([1, 2]);
+    expect(repos).toHaveLength(101);
+  });
+
+  it("throws GithubAppApiError on a non-2xx (e.g. suspended → 403)", async () => {
+    const fetcher: typeof fetch = async () => new Response("forbidden", { status: 403 });
+    await expect(listInstallationRepos("ghs_token", { fetcher })).rejects.toMatchObject({
+      name: "GithubAppApiError",
+      status: 403,
+    });
+  });
+
+  it("stops at the maxPages cap even when every page is full", async () => {
+    const calls: number[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      const page = Number(new URL(urlOf(input)).searchParams.get("page"));
+      calls.push(page);
+      // Always a full page (100) → only the maxPages cap can stop the walk.
+      return new Response(
+        JSON.stringify({
+          total_count: 1000,
+          repositories: Array.from({ length: 100 }, (_, i) => repo(`acme/p${page}-${i}`, "2024-01-01T00:00:00Z")),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const repos = await listInstallationRepos("ghs_token", { fetcher, maxPages: 3 });
+    expect(calls).toEqual([1, 2, 3]);
+    expect(repos).toHaveLength(300);
+  });
+
+  it("sorts repos with no pushedAt last", async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          total_count: 3,
+          repositories: [
+            repo("acme/null", null),
+            repo("acme/old", "2024-01-01T00:00:00Z"),
+            repo("acme/new", "2025-01-01T00:00:00Z"),
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const repos = await listInstallationRepos("ghs_token", { fetcher });
+    expect(repos.map((r) => r.fullName)).toEqual(["acme/new", "acme/old", "acme/null"]);
   });
 });

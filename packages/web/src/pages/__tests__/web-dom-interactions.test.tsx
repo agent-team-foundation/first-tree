@@ -50,6 +50,7 @@ const chatApiMocks = vi.hoisted(() => ({
 
 const githubMocks = vi.hoisted(() => ({
   listGithubRepos: vi.fn(),
+  listOrgGithubRepos: vi.fn(),
 }));
 
 const githubAppMocks = vi.hoisted(() => ({
@@ -650,6 +651,7 @@ beforeEach(() => {
   chatApiMocks.sendChatMessage.mockResolvedValue(undefined);
   chatApiMocks.sendFileMessageBatch.mockResolvedValue(undefined);
   githubMocks.listGithubRepos.mockResolvedValue(GITHUB_REPOS);
+  githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
   githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
   githubAppMocks.getGithubAppInstallationExists.mockResolvedValue(true);
   githubAppMocks.getGithubAppInstallUrl.mockResolvedValue("https://github.com/apps/first-tree/installations/new");
@@ -1399,10 +1401,31 @@ describe("web DOM interaction coverage", () => {
       createdAt: NOW,
       updatedAt: NOW,
     });
-    githubMocks.listGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
+    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
     const scopeMissing = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Reconnect GitHub with project access", scopeMissing.container);
     await unmountRoot(scopeMissing.root);
+
+    // A non-403 failure from the org repo endpoint (502 upstream / 503
+    // no_installation|suspended) must show an honest load-failed message, not
+    // fall through to the empty "no projects" state.
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
+      installationId: 42,
+      accountLogin: "acme",
+      accountType: "Organization",
+      accountGithubId: 123,
+      repositorySelection: "selected",
+      permissions: {},
+      events: [],
+      suspended: false,
+      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
+    const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Couldn't load your team's projects", loadFailed.container);
+    await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
