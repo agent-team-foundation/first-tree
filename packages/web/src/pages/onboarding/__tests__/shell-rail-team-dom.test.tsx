@@ -136,24 +136,22 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-describe("onboarding shell, rail, and team step", () => {
-  it("renders finish-later chrome, pauses setup, signs out, and lets users revisit completed rail steps", async () => {
+describe("onboarding shell and team step", () => {
+  it("renders progress + finish-later chrome, pauses setup, and signs out", async () => {
+    flowMock.value = { ...flowMock.value, activeStep: "connect-computer", path: "admin", hasAgent: true };
     const { OnboardingShell } = await import("../onboarding-shell.js");
-    const { ProgressRail } = await import("../progress-rail.js");
 
     const container = await renderDom(
-      <OnboardingShell rail={<ProgressRail />}>
+      <OnboardingShell>
         <div>Step body</div>
       </OnboardingShell>,
     );
 
     expect(container.textContent).toContain("First Tree");
-    expect(container.textContent).toContain("Step 2 of 3");
-    expect(container.textContent).toContain("Name your team");
-    expect(container.textContent).toContain("Connect computer");
-
-    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "Welcome") ?? null);
-    expect(flowMock.value.goTo).toHaveBeenCalledWith(0);
+    // config step → top segmented progress shows position (admin has 3)
+    expect(container.textContent).toContain("Step 1 of 3");
+    expect(container.textContent).toContain("Connect your computer");
+    expect(container.textContent).toContain("Step body");
 
     await click(
       [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("finish later")) ?? null,
@@ -169,27 +167,26 @@ describe("onboarding shell, rail, and team step", () => {
     expect(authMock.logout).toHaveBeenCalled();
   });
 
-  it("hides finish-later and optional shell copy when no agent exists", async () => {
+  it("hides finish-later when no agent exists and counts invitee config steps", async () => {
     flowMock.value = {
       ...flowMock.value,
-      activeStep: "welcome",
-      activeIndex: 0,
-      sequence: ["welcome", "connect-computer"],
+      activeStep: "connect-computer",
       path: "invitee",
       hasAgent: false,
     };
     const { OnboardingShell } = await import("../onboarding-shell.js");
 
-    const container = await renderDom(<OnboardingShell rail={<div />}>Body</OnboardingShell>);
+    const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
 
-    expect(container.textContent).not.toContain("Finish later");
+    expect(container.textContent).not.toContain("I'll finish later");
+    // invitee has 2 config steps → connect-computer is step 1 of 2
     expect(container.textContent).toContain("Step 1 of 2");
   });
 
   it("loads the team name, saves changes, and skips unchanged submissions", async () => {
     const { StepTeam } = await import("../steps/step-team.js");
     const container = await renderDom(<StepTeam />);
-    const input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    const input = container.querySelector<HTMLInputElement>("#onboarding-team-name");
     if (!input) throw new Error("Expected team input");
 
     expect(input.value).toBe("Acme");
@@ -220,7 +217,7 @@ describe("onboarding shell, rail, and team step", () => {
     apiMock.get.mockResolvedValueOnce([org()]);
     apiMock.patch.mockRejectedValueOnce(new Error("rename failed"));
     container = await renderDom(<StepTeam />);
-    const input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    const input = container.querySelector<HTMLInputElement>("#onboarding-team-name");
     if (!input) throw new Error("Expected team input");
     await setInputValue(input, "");
     await submit(container.querySelector("form"));
