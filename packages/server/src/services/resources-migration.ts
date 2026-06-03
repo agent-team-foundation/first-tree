@@ -29,8 +29,12 @@ export async function backfillResourcesPhase1(db: Database): Promise<ResourcesBa
     warnings: [],
   };
 
-  await backfillOrgSourceRepos(db, result);
-  await backfillAgentConfigs(db, result);
+  await db.transaction(async (tx) => {
+    const targetDb = tx as unknown as Database;
+    await targetDb.execute(sql`SELECT pg_advisory_xact_lock(20260603, 1)`);
+    await backfillOrgSourceRepos(targetDb, result);
+    await backfillAgentConfigs(targetDb, result);
+  });
   return result;
 }
 

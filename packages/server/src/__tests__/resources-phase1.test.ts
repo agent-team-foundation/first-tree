@@ -118,6 +118,47 @@ describe("Resources Phase 1", () => {
     expect(resolved.payload.prompt.append).not.toContain("Use the team baseline.");
   });
 
+  it("rejects concurrent agent resource writes with the same expected version", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    const results = await Promise.allSettled([
+      app.resourcesService.replaceAgentResources(
+        agent.uuid,
+        {
+          expectedVersion: 1,
+          bindings: [{ type: "prompt", mode: "include", resourceId: null, inlinePromptBody: "First write." }],
+        },
+        owner.memberId,
+      ),
+      app.resourcesService.replaceAgentResources(
+        agent.uuid,
+        {
+          expectedVersion: 1,
+          bindings: [{ type: "prompt", mode: "include", resourceId: null, inlinePromptBody: "Second write." }],
+        },
+        owner.memberId,
+      ),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { statusCode: 409 } });
+
+    const [config] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+    expect(config?.version).toBe(2);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, agent.uuid));
+    expect(bindings).toHaveLength(1);
+  });
+
   it("does not backfill canonical-equivalent HTTPS, ssh, and scp-like GitHub repos as duplicates", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");
@@ -261,6 +302,36 @@ describe("Resources Phase 1", () => {
     const baseConfig = await app.configService.get(agent.uuid);
     const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
     expect(resolved.payload.prompt.append.length).toBeLessThanOrEqual(PROMPT_APPEND_MAX_LENGTH);
+  });
+
+  it("returns 409 when updating a team repo resource to a duplicate canonical URL", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Web",
+        defaultEnabled: "available",
+        payload: { url: "https://github.com/acme/web.git" },
+      },
+      owner.memberId,
+    );
+    const api = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "API",
+        defaultEnabled: "available",
+        payload: { url: "https://github.com/acme/api.git" },
+      },
+      owner.memberId,
+    );
+
+    const duplicate = await inject(app, owner.accessToken, "PATCH", `/api/v1/resources/${api.id}`, {
+      payload: { url: "git@github.com:Acme/Web.git" },
+    });
+    expect(duplicate.statusCode).toBe(409);
   });
 
   it("uses Class C paths for team resource detail and usage routes", async () => {

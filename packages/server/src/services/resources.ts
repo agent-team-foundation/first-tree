@@ -611,6 +611,13 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     }
   }
 
+  function postgresErrorCode(err: unknown): string {
+    const direct = (err as { code?: unknown })?.code;
+    if (typeof direct === "string") return direct;
+    const cause = (err as { cause?: { code?: unknown } })?.cause?.code;
+    return typeof cause === "string" ? cause : "";
+  }
+
   return {
     async listTeamResources(organizationId) {
       const rows = await db
@@ -655,8 +662,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           }
         });
       } catch (err) {
-        const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
-        if (pgCode === "23505") throw new ConflictError("A matching resource already exists");
+        if (postgresErrorCode(err) === "23505") throw new ConflictError("A matching resource already exists");
         throw err;
       }
       await notifyAgents(impacted);
@@ -682,22 +688,27 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         for (const agentId of await listRuntimeAgentIds(current.organizationId)) impactedSet.add(agentId);
       }
       const impacted = Array.from(impactedSet);
-      await db.transaction(async (tx) => {
-        const targetDb = tx as unknown as Database;
-        await targetDb
-          .update(resources)
-          .set({
-            ...(input.name ? { name: input.name } : {}),
-            ...(input.defaultEnabled ? { defaultEnabled: input.defaultEnabled } : {}),
-            ...(input.status ? { status: input.status } : {}),
-            payload,
-            repoCanonicalKey,
-            updatedBy: actorId,
-            updatedAt: new Date(),
-          })
-          .where(eq(resources.id, resourceId));
-        await bumpAgentConfigVersions(targetDb, impacted, actorId);
-      });
+      try {
+        await db.transaction(async (tx) => {
+          const targetDb = tx as unknown as Database;
+          await targetDb
+            .update(resources)
+            .set({
+              ...(input.name ? { name: input.name } : {}),
+              ...(input.defaultEnabled ? { defaultEnabled: input.defaultEnabled } : {}),
+              ...(input.status ? { status: input.status } : {}),
+              payload,
+              repoCanonicalKey,
+              updatedBy: actorId,
+              updatedAt: new Date(),
+            })
+            .where(eq(resources.id, resourceId));
+          await bumpAgentConfigVersions(targetDb, impacted, actorId);
+        });
+      } catch (err) {
+        if (postgresErrorCode(err) === "23505") throw new ConflictError("A matching resource already exists");
+        throw err;
+      }
       await notifyAgents(impacted);
       return rowToResource(await loadResource(resourceId));
     },
@@ -848,15 +859,28 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
 
     async replaceAgentResources(agentId, input, actorId) {
       const agent = await loadAgent(agentId);
-      const currentVersion = await getConfigVersion(agentId);
-      if (currentVersion !== input.expectedVersion) {
-        throw new ConflictError(
-          `Agent resources "${agentId}" version mismatch: expected ${input.expectedVersion}, got ${currentVersion}`,
-        );
-      }
       validateInputRepoLocalPaths(input.bindings);
       await db.transaction(async (tx) => {
         const targetDb = tx as unknown as Database;
+        const [updatedConfig] = await targetDb
+          .update(agentConfigs)
+          .set({
+            version: sql`${agentConfigs.version} + 1`,
+            updatedAt: new Date(),
+            updatedBy: actorId,
+          })
+          .where(and(eq(agentConfigs.agentId, agentId), eq(agentConfigs.version, input.expectedVersion)))
+          .returning({ version: agentConfigs.version });
+        if (!updatedConfig) {
+          const [current] = await targetDb
+            .select({ version: agentConfigs.version })
+            .from(agentConfigs)
+            .where(eq(agentConfigs.agentId, agentId))
+            .limit(1);
+          throw new ConflictError(
+            `Agent resources "${agentId}" version mismatch: expected ${input.expectedVersion}, got ${current?.version ?? "missing"}`,
+          );
+        }
         await targetDb.delete(agentResourceBindings).where(eq(agentResourceBindings.agentId, agentId));
         for (let idx = 0; idx < input.bindings.length; idx++) {
           const binding = input.bindings[idx];
@@ -881,7 +905,6 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
             updatedBy: actorId,
           });
         }
-        await bumpAgentConfigVersions(targetDb, [agentId], actorId);
       });
       await notifyAgents([agentId]);
       const effective = await resolveEffectiveResources(agentId);

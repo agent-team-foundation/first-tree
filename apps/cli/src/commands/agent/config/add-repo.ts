@@ -1,3 +1,4 @@
+import { canonicalizeResourceRepoUrl } from "@first-tree/shared";
 import type { Command } from "commander";
 import { success } from "../../../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../../../core/bootstrap.js";
@@ -14,11 +15,31 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const current = await getAgentResources(serverUrl, adminToken, uuid);
+      const targetCanonical = safeCanonicalRepoUrl(url);
+      const matchingResourceIds = new Set<string>();
+      if (targetCanonical) {
+        for (const resource of current.availableTeamResources) {
+          const payload = resource.payload as { url?: unknown };
+          if (typeof payload.url === "string" && safeCanonicalRepoUrl(payload.url) === targetCanonical) {
+            matchingResourceIds.add(resource.id);
+          }
+        }
+        for (const row of current.effective.repos) {
+          const repoUrl = row.repo?.url ?? ((row.payload as { url?: unknown } | null)?.url as string | undefined);
+          if (row.resourceId && typeof repoUrl === "string" && safeCanonicalRepoUrl(repoUrl) === targetCanonical) {
+            matchingResourceIds.add(row.resourceId);
+          }
+        }
+      }
+      const removedOrders: number[] = [];
       const remaining = current.bindings.filter((binding) => {
         if (binding.type !== "repo") return true;
-        const resource = current.availableTeamResources.find((item) => item.id === binding.resourceId);
-        const payload = resource?.payload as { url?: unknown } | undefined;
-        return payload?.url !== url;
+        const agentRepoUrl = binding.agentExtraRepo?.url;
+        const matchesAgentRepo =
+          targetCanonical && typeof agentRepoUrl === "string" && safeCanonicalRepoUrl(agentRepoUrl) === targetCanonical;
+        const matchesResource = !!binding.resourceId && matchingResourceIds.has(binding.resourceId);
+        if ((matchesAgentRepo || matchesResource) && binding.order !== undefined) removedOrders.push(binding.order);
+        return !matchesAgentRepo && !matchesResource;
       });
       const updated = await patchAgentResources(serverUrl, adminToken, uuid, {
         expectedVersion: current.version,
@@ -30,10 +51,18 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
             agentExtraRepo: { url },
             repoRef: opts.ref,
             repoLocalPath: opts.path,
-            order: remaining.length + 1,
+            order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
           },
         ],
       });
       success({ agentId: uuid, version: updated.version, repo: url });
     });
+}
+
+function safeCanonicalRepoUrl(url: string): string | null {
+  try {
+    return canonicalizeResourceRepoUrl(url);
+  } catch {
+    return null;
+  }
 }

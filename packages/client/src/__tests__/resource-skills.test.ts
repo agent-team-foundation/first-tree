@@ -44,8 +44,8 @@ describe("resource skill materialization", () => {
 
     const target = resourceSkillPath(workspace, "res-skill-1");
     const body = await readFile(target, "utf-8");
-    expect(body).toContain("name: review");
-    expect(body).toContain("description: Review code risks first.");
+    expect(body).toContain('name: "review"');
+    expect(body).toContain('description: "Review code risks first."');
     expect(body).toContain("# Review");
     expect(log).toHaveBeenCalledWith(expect.stringContaining(`Resource skill materialized: review -> ${target}`));
 
@@ -53,5 +53,44 @@ describe("resource skill materialization", () => {
     expect(briefing).toContain("## Team Skills");
     expect(briefing).toContain("- review: Review code risks first.");
     expect(briefing).toContain(`Path: ${target}`);
+  });
+
+  it("prunes stale resource skill directories", async () => {
+    workspace = await mkdtemp(join(tmpdir(), "ft-resource-skills-"));
+    const log = vi.fn();
+    await materializeResourceSkills(workspace, payload, { log } as unknown as SessionContext);
+    const target = resourceSkillPath(workspace, "res-skill-1");
+    expect(await readFile(target, "utf-8")).toContain('name: "review"');
+
+    await materializeResourceSkills(workspace, { ...payload, resourceSkills: [] }, {
+      log,
+    } as unknown as SessionContext);
+
+    await expect(readFile(target, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Resource skill pruned:"));
+  });
+
+  it("quotes frontmatter scalars", async () => {
+    workspace = await mkdtemp(join(tmpdir(), "ft-resource-skills-"));
+    await materializeResourceSkills(
+      workspace,
+      {
+        ...payload,
+        resourceSkills: [
+          {
+            resourceId: "res-skill-quote",
+            name: "review:ops",
+            description: "Line one\n---\nline two",
+            body: "# Body",
+            metadata: {},
+          },
+        ],
+      },
+      { log: vi.fn() } as unknown as SessionContext,
+    );
+
+    const body = await readFile(resourceSkillPath(workspace, "res-skill-quote"), "utf-8");
+    expect(body).toContain('name: "review:ops"');
+    expect(body).toContain('description: "Line one\\n---\\nline two"');
   });
 });

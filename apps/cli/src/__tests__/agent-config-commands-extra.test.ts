@@ -197,6 +197,126 @@ describe("agent config command behavior", () => {
     expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-uuid", version: 2, append_length: 19 });
   });
 
+  it("replaces the existing inline append prompt binding", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 3,
+      bindings: [
+        {
+          id: "old-prompt",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Old prompt.",
+          order: 2,
+        },
+        {
+          id: "keep-repo",
+          type: "repo",
+          mode: "include",
+          resourceId: "team-repo",
+          order: 1,
+        },
+      ],
+      effective: { version: 3, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      availableTeamResources: [],
+    });
+
+    const promptFile = join(tempDir, "prompt-replacement.md");
+    writeFileSync(promptFile, "New prompt.");
+    await runConfig(["append-prompt", "kael", "--file", promptFile]);
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 3,
+        bindings: [
+          {
+            id: "keep-repo",
+            type: "repo",
+            mode: "include",
+            resourceId: "team-repo",
+            order: 1,
+          },
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "New prompt.",
+            order: 2,
+          },
+        ],
+      },
+    );
+  });
+
+  it("replaces an existing agent-scoped repo binding by canonical url", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 4,
+      bindings: [
+        {
+          id: "old-agent-repo",
+          type: "repo",
+          mode: "include",
+          resourceId: "agent-repo-resource",
+          repoRef: "old",
+          repoLocalPath: "web",
+          order: 3,
+        },
+      ],
+      effective: {
+        version: 4,
+        repos: [
+          {
+            id: "binding:old-agent-repo:enabled",
+            bindingId: "old-agent-repo",
+            resourceId: "agent-repo-resource",
+            replacesResourceId: null,
+            type: "repo",
+            name: "web",
+            scope: "agent",
+            source: "agent_extra",
+            mode: "enabled",
+            defaultEnabled: null,
+            payload: { url: "git@github.com:Acme/Web.git" },
+            repo: { url: "git@github.com:Acme/Web.git", localPath: "web" },
+            promptBody: null,
+            unavailableReason: null,
+            order: 3,
+          },
+        ],
+        prompts: [],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [],
+    });
+
+    await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 4,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url: "https://github.com/acme/web.git" },
+            repoRef: "main",
+            repoLocalPath: "web",
+            order: 3,
+          },
+        ],
+      },
+    );
+  });
+
   it("shows config and prints dry-run diffs", async () => {
     await runConfig(["show", "kael"]);
     expect(fetcherMocks.printConfig).toHaveBeenCalledWith(config());
