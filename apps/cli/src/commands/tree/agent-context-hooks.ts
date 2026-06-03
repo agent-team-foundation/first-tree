@@ -79,11 +79,16 @@ export function ensureAgentContextHooks(targetRoot: string): AgentContextHookSyn
  * repos) so previously-installed managed hooks don't sit there as dead
  * weight. Preserves user-added hooks / settings in the same files; only
  * removes entries that match `isClaudeManagedHook` / `isCodexManagedHook`.
+ *
+ * The `[features].codex_hooks = true` flag in `.codex/config.toml` is left
+ * alone: it is what enables Codex to load the user's own hooks too, so
+ * removing it would silently disable any user hook installations sharing
+ * the same `.codex/hooks.json`.
  */
 export function removeAgentContextHooks(targetRoot: string): AgentContextHookSyncResult {
   return {
     claudeSettings: stripManagedFromFile(join(targetRoot, CLAUDE_SETTINGS_PATH), stripClaudeManagedDocument),
-    codexConfig: stripCodexHooksFlagFromConfig(join(targetRoot, CODEX_CONFIG_PATH)),
+    codexConfig: "unchanged",
     codexHooks: stripManagedFromFile(join(targetRoot, CODEX_HOOKS_PATH), stripCodexManagedDocument),
   };
 }
@@ -118,51 +123,40 @@ function stripManagedFromFile(fullPath: string, stripper: (current: string) => s
 }
 
 function stripClaudeManagedDocument(current: string): string {
-  const root = readJsonObject(current);
-
-  if (!isObject(root.hooks)) {
-    return current;
-  }
-
-  const hooks = cloneObject(root.hooks);
-  const sessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : null;
-
-  if (sessionStart === null) {
-    return current;
-  }
-
-  const stripped = stripManagedHooks(sessionStart, isClaudeManagedHook);
-
-  if (stripped.length === 0) {
-    delete hooks.SessionStart;
-  } else {
-    hooks.SessionStart = stripped;
-  }
-
-  if (Object.keys(hooks).length === 0) {
-    delete root.hooks;
-  } else {
-    root.hooks = hooks;
-  }
-
-  return `${JSON.stringify(root, null, 2)}\n`;
+  return stripSessionStartManagedDocument(current, isClaudeManagedHook);
 }
 
 function stripCodexManagedDocument(current: string): string {
+  return stripSessionStartManagedDocument(current, isCodexManagedHook);
+}
+
+/**
+ * Strip first-tree managed entries from `hooks.SessionStart` while leaving
+ * the file untouched (down to byte equality) when nothing matched. Without
+ * this short-circuit, `JSON.stringify(root, null, 2)` would reformat a
+ * file that the user had hand-formatted differently — and the wrapping
+ * `stripManagedFromFile` would then flag a pure format change as
+ * "removed", violating the "no-op when no managed hooks are present"
+ * contract.
+ */
+function stripSessionStartManagedDocument(
+  current: string,
+  isManagedHook: (hook: Record<string, unknown>) => boolean,
+): string {
   const root = readJsonObject(current);
 
   if (!isObject(root.hooks)) {
     return current;
   }
 
-  const hooks = cloneObject(root.hooks);
-  const sessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : null;
+  const sessionStart = Array.isArray(root.hooks.SessionStart) ? root.hooks.SessionStart : null;
 
-  if (sessionStart === null) {
+  if (sessionStart === null || !sessionStartContainsManagedHook(sessionStart, isManagedHook)) {
     return current;
   }
 
-  const stripped = stripManagedHooks(sessionStart, isCodexManagedHook);
+  const hooks = cloneObject(root.hooks);
+  const stripped = stripManagedHooks(sessionStart, isManagedHook);
 
   if (stripped.length === 0) {
     delete hooks.SessionStart;
@@ -179,49 +173,21 @@ function stripCodexManagedDocument(current: string): string {
   return `${JSON.stringify(root, null, 2)}\n`;
 }
 
-function stripCodexHooksFlagFromConfig(fullPath: string): AgentConfigAction {
-  if (!existsSync(fullPath)) {
-    return "unchanged";
-  }
-
-  const current = normalizeText(readFileSync(fullPath, "utf-8"));
-  const lines = current.split("\n");
-  const featuresIndex = lines.findIndex((line) => line.trim() === "[features]");
-
-  if (featuresIndex < 0) {
-    return "unchanged";
-  }
-
-  let sectionEnd = lines.length;
-  for (let index = featuresIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
-    if (line.startsWith("[") && line.endsWith("]")) {
-      sectionEnd = index;
-      break;
-    }
-  }
-
-  const filtered: string[] = [];
-  let removed = false;
-  for (let index = 0; index < lines.length; index += 1) {
-    if (index > featuresIndex && index < sectionEnd && /^\s*codex_hooks\s*=/.test(lines[index] ?? "")) {
-      removed = true;
+function sessionStartContainsManagedHook(
+  sessionStart: unknown[],
+  isManagedHook: (hook: Record<string, unknown>) => boolean,
+): boolean {
+  for (const group of sessionStart) {
+    if (!isObject(group) || !Array.isArray(group.hooks)) {
       continue;
     }
-    filtered.push(lines[index] ?? "");
+    for (const hook of group.hooks) {
+      if (isObject(hook) && isManagedHook(hook)) {
+        return true;
+      }
+    }
   }
-
-  if (!removed) {
-    return "unchanged";
-  }
-
-  const next = normalizeText(filtered.join("\n"));
-  if (current === next) {
-    return "unchanged";
-  }
-
-  writeFileSync(fullPath, next);
-  return "removed";
+  return false;
 }
 
 function buildClaudeSettingsDocument(current: string | null): string {
@@ -366,15 +332,33 @@ function isClaudeManagedHook(hook: Record<string, unknown>): boolean {
     return false;
   }
 
-  return hook.command === INJECT_CONTEXT_COMMAND || matchesLegacyHookPattern(hook.command);
+  return (
+    hook.command === INJECT_CONTEXT_COMMAND ||
+    matchesStaleHelperPath(hook.command) ||
+    matchesV04xLegacyCommand(hook.command)
+  );
 }
 
 function isCodexManagedHook(hook: Record<string, unknown>): boolean {
-  return hook.type === "command" && hook.command === INJECT_CONTEXT_COMMAND;
+  if (hook.type !== "command" || typeof hook.command !== "string") {
+    return false;
+  }
+
+  return hook.command === INJECT_CONTEXT_COMMAND || matchesV04xLegacyCommand(hook.command);
 }
 
-function matchesLegacyHookPattern(command: string): boolean {
-  return STALE_INJECT_CONTEXT_PATTERNS.some((pattern) => pattern.test(command));
+function matchesStaleHelperPath(command: string): boolean {
+  return STALE_INJECT_CONTEXT_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(command);
+  });
+}
+
+function matchesV04xLegacyCommand(command: string): boolean {
+  return LEGACY_INJECT_CONTEXT_COMMAND_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(command);
+  });
 }
 
 function readJsonObject(text: string | null): Record<string, unknown> {
