@@ -57,6 +57,10 @@ export function ContextTreeSettingsPanel() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    // Read-only UI must not initiate a write: members have no Save button, but
+    // pressing Enter inside a read-only field would still submit the form. The
+    // server 403s a member PUT regardless, but the client shouldn't fire it.
+    if (!isAdmin) return;
     mutation.mutate();
   };
 
