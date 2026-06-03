@@ -58,6 +58,8 @@ describe("api wrapper paths", () => {
     const orgSettings = await import("../org-settings.js");
     const organizations = await import("../organizations.js");
     const overview = await import("../overview.js");
+    const agentResources = await import("../agent-resources.js");
+    const resources = await import("../resources.js");
 
     await activity.retireClient("client/id");
     await activity.getActivityOverview();
@@ -79,6 +81,22 @@ describe("api wrapper paths", () => {
     await organizations.getOrganization("org/id");
     await organizations.updateOrganization("org/id", { displayName: "Acme" });
     await overview.getOverview();
+    await resources.listTeamResources();
+    await resources.createTeamResource({
+      type: "repo",
+      name: "Web",
+      defaultEnabled: "available",
+      payload: { url: "https://github.com/acme/web.git" },
+    });
+    await resources.previewOrgResourceImpact({ type: "repo", defaultEnabled: "recommended" });
+    await resources.getResource("res/id");
+    await resources.updateResource("res/id", { name: "New" });
+    await resources.retireResource("res/id");
+    await resources.promoteResource("res/id");
+    await resources.getResourceUsage("res/id");
+    await resources.previewResourceImpact("res/id", {});
+    await agentResources.getAgentResources("agent/id");
+    await agentResources.updateAgentResources("agent/id", { expectedVersion: 3, bindings: [] });
 
     expect(apiMock.delete).toHaveBeenCalledWith("/clients/client%2Fid");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/activity");
@@ -98,6 +116,25 @@ describe("api wrapper paths", () => {
     });
     expect(apiMock.patch).toHaveBeenCalledWith("/orgs/org%2Fid", { displayName: "Acme" });
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/resources");
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/resources", {
+      type: "repo",
+      name: "Web",
+      defaultEnabled: "available",
+      payload: { url: "https://github.com/acme/web.git" },
+    });
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/resources/impact-preview", {
+      type: "repo",
+      defaultEnabled: "recommended",
+    });
+    expect(apiMock.get).toHaveBeenCalledWith("/resources/res%2Fid");
+    expect(apiMock.patch).toHaveBeenCalledWith("/resources/res%2Fid", { name: "New" });
+    expect(apiMock.delete).toHaveBeenCalledWith("/resources/res%2Fid");
+    expect(apiMock.post).toHaveBeenCalledWith("/resources/res%2Fid/promote");
+    expect(apiMock.get).toHaveBeenCalledWith("/resources/res%2Fid/usage");
+    expect(apiMock.post).toHaveBeenCalledWith("/resources/res%2Fid/impact-preview", {});
+    expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/resources");
+    expect(apiMock.patch).toHaveBeenCalledWith("/agents/agent%2Fid/resources", { expectedVersion: 3, bindings: [] });
   });
 
   it("formats agent, chat, member, and session requests", async () => {

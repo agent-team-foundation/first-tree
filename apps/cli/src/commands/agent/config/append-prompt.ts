@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Command } from "commander";
 import { fail, success } from "../../../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../../../core/bootstrap.js";
-import { getCurrent, patchConfig, resolveAgentRecord } from "./_shared/fetchers.js";
+import { getAgentResources, patchAgentResources, resolveAgentRecord } from "./_shared/fetchers.js";
 
 export function registerAgentConfigAppendPromptCommand(config: Command): void {
   config
@@ -26,10 +26,20 @@ export function registerAgentConfigAppendPromptCommand(config: Command): void {
       } else {
         fail("MISSING_INPUT", "Provide -f <file> or pipe prompt text via stdin", 2);
       }
-      const current = await getCurrent(serverUrl, adminToken, uuid);
-      const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, {
-        prompt: { append: text },
+      const current = await getAgentResources(serverUrl, adminToken, uuid);
+      const updated = await patchAgentResources(serverUrl, adminToken, uuid, {
+        expectedVersion: current.version,
+        bindings: [
+          ...current.bindings,
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: text,
+            order: current.bindings.length + 1,
+          },
+        ],
       });
-      success({ agentId: updated.agentId, version: updated.version, append_length: text.length });
+      success({ agentId: uuid, version: updated.version, append_length: text.length });
     });
 }

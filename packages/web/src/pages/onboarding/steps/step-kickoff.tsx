@@ -1,18 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
-import {
-  getContextTreeSetting,
-  getSourceReposSetting,
-  putContextTreeSetting,
-  putSourceReposSetting,
-} from "../../../api/org-settings.js";
+import { getContextTreeSetting, getSourceReposSetting, putContextTreeSetting } from "../../../api/org-settings.js";
+import { createTeamResource } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
@@ -43,21 +38,20 @@ async function runKickoff(args: {
 }): Promise<void> {
   const agent = await resolveOnboardingAgent();
 
-  if (args.gitRepoUrls.length > 0) {
-    const cfg = await getAgentConfig(agent.uuid);
-    await updateAgentConfig(agent.uuid, {
-      expectedVersion: cfg.version,
-      payload: { gitRepos: args.gitRepoUrls.map((url) => ({ url })) },
-    });
-  }
-
   // Org-level writes are a convenience cache for future teammates — never
   // let them block the user's first chat.
   if (args.orgWrites) {
     if (args.orgWrites.sourceRepos.length > 0) {
-      await putSourceReposSetting(args.orgWrites.organizationId, {
-        repos: args.orgWrites.sourceRepos.map((url) => ({ url })),
-      }).catch(() => {});
+      await Promise.allSettled(
+        args.orgWrites.sourceRepos.map((url) =>
+          createTeamResource({
+            type: "repo",
+            name: repoLabel(url),
+            defaultEnabled: "recommended",
+            payload: { url },
+          }),
+        ),
+      );
     }
     if (args.orgWrites.contextTreeUrl) {
       await putContextTreeSetting(args.orgWrites.organizationId, { repo: args.orgWrites.contextTreeUrl }).catch(

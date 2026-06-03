@@ -36,7 +36,7 @@ describe("Admin agent-config API (Step 2)", () => {
 
     const patch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
-      payload: { model: "claude-opus-4-6", prompt: { append: "你只会一句话" } },
+      payload: { model: "claude-opus-4-6" },
     });
     expect(patch.statusCode).toBe(200);
     expect(patch.json().version).toBe(2);
@@ -44,10 +44,19 @@ describe("Admin agent-config API (Step 2)", () => {
 
     // Wait for debounce window to clear so the next test isn't queued behind us.
     await app.configService.flush(agent.uuid);
+    const resources = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 2,
+        bindings: [{ type: "prompt", mode: "include", inlinePromptBody: "你只会一句话" }],
+      },
+      "test",
+    );
+    expect(resources.version).toBe(3);
 
     const after = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     expect(after.json().payload.model).toBe("claude-opus-4-6");
-    expect(after.json().payload.prompt.append).toBe("你只会一句话");
+    expect(after.json().payload.prompt.append).toContain("你只会一句话");
   });
 
   it("PATCH with a subset of fields leaves omitted fields untouched", async () => {
@@ -62,23 +71,39 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "agent",
     });
 
-    // Seed every field with a non-default value so a stray default is visible.
+    // Seed every config-owned field with a non-default value so a stray
+    // default is visible. Prompt/repo now live under Resources and are seeded
+    // through that service below.
     const seed = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: {
-        prompt: { append: "stay-put-prompt" },
         model: "claude-sonnet-4-6",
         env: [{ key: "FOO", value: "bar", sensitive: false }],
-        gitRepos: [{ url: "https://example.com/r.git" }],
       },
     });
     expect(seed.statusCode).toBe(200);
     await app.configService.flush(agent.uuid);
+    const resources = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 2,
+        bindings: [
+          { type: "prompt", mode: "include", inlinePromptBody: "stay-put-prompt" },
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url: "https://example.com/r.git" },
+          },
+        ],
+      },
+      "test",
+    );
+    expect(resources.version).toBe(3);
 
     // Touch only `reasoningEffort`. The service must preserve the list fields
     // and prompt/model values.
     const partial = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
-      expectedVersion: 2,
+      expectedVersion: 3,
       payload: {
         reasoningEffort: "high",
       },
@@ -88,7 +113,7 @@ describe("Admin agent-config API (Step 2)", () => {
 
     const after = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     const payload = after.json().payload;
-    expect(payload.prompt.append).toBe("stay-put-prompt");
+    expect(payload.prompt.append).toContain("stay-put-prompt");
     expect(payload.model).toBe("claude-sonnet-4-6");
     expect(payload.env).toEqual([{ key: "FOO", value: "bar", sensitive: false }]);
     expect(payload.gitRepos).toEqual([{ url: "https://example.com/r.git" }]);
@@ -96,7 +121,7 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(payload.reasoningEffort).toBe("high");
   });
 
-  it("rejects legacy MCP config writes in PATCH and dry-run", async () => {
+  it("rejects legacy MCP and Resource config writes in PATCH and dry-run", async () => {
     const app = getApp();
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
@@ -117,6 +142,25 @@ describe("Admin agent-config API (Step 2)", () => {
     const dry = await req("POST", `/api/v1/agents/${agent.uuid}/config/dry-run`, { payload });
     expect(dry.statusCode).toBe(400);
     expect(dry.json<{ error: string }>().error).toContain("Team MCP Resources");
+
+    const resourcePayloads = [
+      { prompt: { append: "legacy prompt" } },
+      { gitRepos: [{ url: "https://example.com/r.git" }] },
+    ];
+    for (const resourcePayload of resourcePayloads) {
+      const legacyPatch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+        expectedVersion: 1,
+        payload: resourcePayload,
+      });
+      expect(legacyPatch.statusCode).toBe(400);
+      expect(legacyPatch.json<{ error: string }>().error).toContain("Agent Resources");
+
+      const legacyDryRun = await req("POST", `/api/v1/agents/${agent.uuid}/config/dry-run`, {
+        payload: resourcePayload,
+      });
+      expect(legacyDryRun.statusCode).toBe(400);
+      expect(legacyDryRun.json<{ error: string }>().error).toContain("Agent Resources");
+    }
   });
 
   it("reasoning effort: defaults to '', persists a valid value, rejects a codex-only value with 400", async () => {
@@ -274,11 +318,11 @@ describe("Admin agent-config API (Step 2)", () => {
     // semantics (two admins editing `model` would both get 200 with one
     // winner's edit silently dropped).
     const settled = await Promise.allSettled([
-      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { prompt: { append: "v1" } } }, "test"),
-      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { prompt: { append: "v2" } } }, "test"),
-      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { prompt: { append: "v3" } } }, "test"),
-      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { prompt: { append: "v4" } } }, "test"),
-      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { prompt: { append: "v5" } } }, "test"),
+      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { model: "claude-opus-4-6" } }, "test"),
+      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { model: "claude-sonnet-4-6" } }, "test"),
+      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { model: "claude-haiku-4-5" } }, "test"),
+      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { model: "opus" } }, "test"),
+      app.configService.update(agent.uuid, { expectedVersion: 1, payload: { model: "sonnet" } }, "test"),
     ]);
     const fulfilled = settled.filter((r) => r.status === "fulfilled");
     const rejected = settled.filter((r) => r.status === "rejected");

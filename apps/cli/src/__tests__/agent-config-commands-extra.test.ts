@@ -17,7 +17,9 @@ const bootstrapMocks = vi.hoisted(() => ({
 
 const fetcherMocks = vi.hoisted(() => ({
   adminFetch: vi.fn(),
+  getAgentResources: vi.fn(),
   getCurrent: vi.fn(),
+  patchAgentResources: vi.fn(),
   patchConfig: vi.fn(),
   printConfig: vi.fn(),
   resolveAgentRecord: vi.fn(),
@@ -49,6 +51,7 @@ function config(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig
       mcpServers: [{ name: "existing", transport: "stdio", command: "node", args: ["server.js"] }],
       env: [{ key: "KEEP", value: "1", sensitive: false }],
       gitRepos: [{ url: "https://github.com/acme/old.git", localPath: "old" }],
+      resourceSkills: [],
     },
     updatedAt: overrides.updatedAt ?? NOW,
     updatedBy: overrides.updatedBy ?? "member-1",
@@ -72,6 +75,18 @@ beforeEach(() => {
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   fetcherMocks.resolveAgentRecord.mockResolvedValue({ uuid: "agent-uuid", name: "kael" });
   fetcherMocks.getCurrent.mockResolvedValue(config());
+  fetcherMocks.getAgentResources.mockResolvedValue({
+    version: 1,
+    bindings: [],
+    effective: { version: 1, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+    availableTeamResources: [],
+  });
+  fetcherMocks.patchAgentResources.mockResolvedValue({
+    version: 2,
+    bindings: [],
+    effective: { version: 2, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+    availableTeamResources: [],
+  });
   fetcherMocks.patchConfig.mockImplementation(
     async (
       _serverUrl: string,
@@ -114,12 +129,24 @@ describe("agent config command behavior", () => {
 
   it("updates git repos, env vars, model, reasoning effort, and prompt append", async () => {
     await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
-    expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
-      gitRepos: [
-        { url: "https://github.com/acme/old.git", localPath: "old" },
-        { url: "https://github.com/acme/web.git", ref: "main", localPath: "web" },
-      ],
-    });
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url: "https://github.com/acme/web.git" },
+            repoRef: "main",
+            repoLocalPath: "web",
+            order: 1,
+          },
+        ],
+      },
+    );
 
     await runConfig(["set-env", "kael", "OPENAI_API_KEY=secret", "--sensitive"]);
     expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
@@ -150,10 +177,24 @@ describe("agent config command behavior", () => {
     const promptFile = join(tempDir, "prompt.md");
     writeFileSync(promptFile, "Prefer small diffs.");
     await runConfig(["append-prompt", "kael", "--file", promptFile]);
-    expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
-      prompt: { append: "Prefer small diffs." },
-    });
-    expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-1", version: 2, append_length: 19 });
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "Prefer small diffs.",
+            order: 1,
+          },
+        ],
+      },
+    );
+    expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-uuid", version: 2, append_length: 19 });
   });
 
   it("shows config and prints dry-run diffs", async () => {

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { success } from "../../../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../../../core/bootstrap.js";
-import { getCurrent, patchConfig, resolveAgentRecord } from "./_shared/fetchers.js";
+import { getAgentResources, patchAgentResources, resolveAgentRecord } from "./_shared/fetchers.js";
 
 export function registerAgentConfigAddRepoCommand(config: Command): void {
   config
@@ -13,11 +13,27 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
       const serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
-      const current = await getCurrent(serverUrl, adminToken, uuid);
-      const remaining = current.payload.gitRepos.filter((r) => r.url !== url);
-      const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, {
-        gitRepos: [...remaining, { url, ref: opts.ref, localPath: opts.path }],
+      const current = await getAgentResources(serverUrl, adminToken, uuid);
+      const remaining = current.bindings.filter((binding) => {
+        if (binding.type !== "repo") return true;
+        const resource = current.availableTeamResources.find((item) => item.id === binding.resourceId);
+        const payload = resource?.payload as { url?: unknown } | undefined;
+        return payload?.url !== url;
       });
-      success({ agentId: updated.agentId, version: updated.version, repo: url });
+      const updated = await patchAgentResources(serverUrl, adminToken, uuid, {
+        expectedVersion: current.version,
+        bindings: [
+          ...remaining,
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url },
+            repoRef: opts.ref,
+            repoLocalPath: opts.path,
+            order: remaining.length + 1,
+          },
+        ],
+      });
+      success({ agentId: uuid, version: updated.version, repo: url });
     });
 }

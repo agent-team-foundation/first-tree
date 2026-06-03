@@ -12,6 +12,7 @@ function claudePayload(
     mcpServers: [],
     env: [],
     gitRepos: [],
+    resourceSkills: [],
     reasoningEffort: "",
     ...overrides,
   };

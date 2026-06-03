@@ -102,6 +102,7 @@ function config(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig
       mcpServers: [],
       env: [],
       gitRepos: [],
+      resourceSkills: [],
     },
     updatedAt: overrides.updatedAt ?? NOW,
     updatedBy: overrides.updatedBy ?? "member-self",
@@ -216,6 +217,7 @@ async function renderDom(route: string, child: ReactElement): Promise<{ containe
             <Route path="/agents/:uuid" element={<AgentDetailPage />}>
               <Route path="profile" element={child} />
               <Route path="prompt" element={child} />
+              <Route path="resources" element={<div>Resources route</div>} />
               <Route path="runtime" element={child} />
               <Route path="setup" element={<Navigate to="../runtime" replace />} />
             </Route>
@@ -314,18 +316,11 @@ afterEach(() => {
 });
 
 describe("AgentDetailPage", () => {
-  it("edits prompt draft, handles save conflict, reloads latest, and discards changes", async () => {
+  it("renders the effective prompt and links prompt editing to resources", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    const conflict = new ApiError(409, "conflict");
-    agentConfigMocks.updateAgentConfig.mockRejectedValueOnce(conflict).mockResolvedValueOnce(config({ version: 9 }));
-    agentConfigMocks.getAgentConfig
-      .mockResolvedValueOnce(config())
-      .mockResolvedValueOnce(
-        config({ version: 8, payload: { ...config().payload, prompt: { append: "Server latest" } } }),
-      );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Instructions");
+    await waitForText(container, "Effective prompt");
     expect(container.textContent).toContain("Kael");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
@@ -336,31 +331,10 @@ describe("AgentDetailPage", () => {
       "Resources",
       "Usage",
     ]);
+    expect(container.textContent).toContain("Always explain tradeoffs.");
 
-    await click(exactButtonByText(container, "Edit instructions"));
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) throw new Error("Prompt textarea missing");
-    await setValue(textarea, "New prompt");
-    await click(exactButtonByText(container, "Done"));
-
-    expect(container.textContent).toContain("Configuration changes in Prompt");
-    expect(container.textContent).toContain("Prompt");
-    await click(exactButtonByText(container, "Save"));
-    expect(container.textContent).toContain("Someone else saved a newer version");
-
-    await click(buttonByText(container, "Discard mine, load latest"));
-    expect(agentConfigMocks.getAgentConfig).toHaveBeenCalledTimes(2);
-
-    await click(exactButtonByText(container, "Edit instructions"));
-    const latestTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!latestTextarea) throw new Error("Prompt textarea missing after reload");
-    await setValue(latestTextarea, "Throw this away");
-    await click(exactButtonByText(container, "Done"));
-    await click(exactButtonByText(container, "Discard changes"));
-    expect(document.body.textContent).toContain("Discard unsaved changes?");
-    await click(lastExactButtonByText(document.body, "Discard changes"));
-    await waitForText(container, "Server latest");
-    expect(container.textContent).not.toContain("Throw this away");
+    await click(exactButtonByText(container, "Edit resources"));
+    await waitForText(container, "Resources route");
 
     await act(async () => root.unmount());
   });
@@ -368,7 +342,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Instructions");
+    await waitForText(container, "Effective prompt");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");

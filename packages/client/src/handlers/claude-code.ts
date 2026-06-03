@@ -27,6 +27,7 @@ import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
+import { buildResourceSkillsBriefing, materializeResourceSkills } from "../runtime/resource-skills.js";
 import { prepareSourceRepos as prepareSourceReposShared } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
@@ -951,7 +952,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           sourceRepos: sourceReposForPrompt,
         }).trim()
       : "";
-    const combinedAppend = [agentConfigAppend, perChatAppend].filter((s) => s.length > 0).join("\n\n");
+    const skillsAppend = cwd ? buildResourceSkillsBriefing(cwd, payload).trim() : "";
+    const combinedAppend = [agentConfigAppend, skillsAppend, perChatAppend].filter((s) => s.length > 0).join("\n\n");
 
     currentQuery = claudeQuery({
       prompt: inputController.iterable,
@@ -1496,6 +1498,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // child process starts. Failures here abort session creation (D10/D13).
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       await prepareSourceRepos(cwd, payload, sessionCtx);
+      await materializeResourceSkills(cwd, payload, sessionCtx);
 
       // Stage-2 sentinel: written once per agent home. Future starts short-
       // circuit the expensive integrate path on its presence.
@@ -1579,6 +1582,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       await prepareSourceRepos(cwd, payload, sessionCtx);
+      await materializeResourceSkills(cwd, payload, sessionCtx);
 
       markWorkspaceInitComplete(cwd);
 

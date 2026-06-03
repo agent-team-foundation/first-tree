@@ -69,6 +69,8 @@ const TRUNCATE_TABLES = [
   "chat_membership",
   "chats",
   "agent_chat_sessions",
+  "agent_resource_bindings",
+  "resources",
   "agent_configs",
   "agent_presence",
   "invitation_redemptions",

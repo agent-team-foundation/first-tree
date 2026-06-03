@@ -14,7 +14,7 @@ import type { runtimeProviderSchema } from "./runtime-provider.js";
  * is unrelated to the server-managed runtime config defined here.
  */
 
-const PROMPT_APPEND_MAX_LENGTH = 32_000;
+export const PROMPT_APPEND_MAX_LENGTH = 32_000;
 const MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:/;
@@ -54,6 +54,15 @@ export const mcpServerSchema = z.discriminatedUnion("transport", [
   mcpSseServerSchema,
 ]);
 export type McpServer = z.infer<typeof mcpServerSchema>;
+
+export const runtimeResourceSkillSchema = z.object({
+  resourceId: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().default(""),
+  body: z.string().default(""),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type RuntimeResourceSkill = z.infer<typeof runtimeResourceSkillSchema>;
 
 export const envEntrySchema = z.object({
   key: z.string().regex(ENV_KEY_PATTERN, "Env key must match /^[A-Z][A-Z0-9_]*$/"),
@@ -132,6 +141,7 @@ export const agentRuntimeConfigPayloadShape = z.object({
   mcpServers: z.array(mcpServerSchema).default([]),
   env: z.array(envEntrySchema).default([]),
   gitRepos: z.array(gitRepoSchema).default([]),
+  resourceSkills: z.array(runtimeResourceSkillSchema).default([]),
 });
 
 /**
@@ -247,6 +257,7 @@ export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   mcpServers: [],
   env: [],
   gitRepos: [],
+  resourceSkills: [],
   reasoningEffort: "",
 };
 
@@ -263,6 +274,7 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   mcpServers: [],
   env: [],
   gitRepos: [],
+  resourceSkills: [],
   reasoningEffort: "high",
 };
 
@@ -279,6 +291,7 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
   mcpServers: [],
   env: [],
   gitRepos: [],
+  resourceSkills: [],
   reasoningEffort: "",
 };
 

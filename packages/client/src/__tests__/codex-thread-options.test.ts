@@ -22,6 +22,7 @@ function basePayload(
     mcpServers: [],
     env: [],
     gitRepos: [],
+    resourceSkills: [],
     reasoningEffort: "high",
     ...overrides,
   };

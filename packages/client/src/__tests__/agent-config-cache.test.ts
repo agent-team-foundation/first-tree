@@ -14,6 +14,7 @@ function makeConfig(version: number, urls: string[] = []): AgentRuntimeConfig {
       mcpServers: [],
       env: [],
       gitRepos: urls.map((url) => ({ url })),
+      resourceSkills: [],
       reasoningEffort: "",
     },
     updatedAt: new Date().toISOString(),

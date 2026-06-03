@@ -11,13 +11,15 @@ import { requireAgentAccess } from "../scope/require-resource.js";
 export async function agentConfigRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { uuid: string } }>("/:uuid/config", async (request) => {
     await requireAgentAccess(request, app.db, "manage");
-    return app.configService.get(request.params.uuid);
+    const cfg = await app.configService.get(request.params.uuid);
+    return app.resourcesService.resolveRuntimeConfig(cfg);
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid/config", { config: { otelRecordBody: true } }, async (request) => {
     const { scope } = await requireAgentAccess(request, app.db, "manage");
     const body = updateAgentRuntimeConfigSchema.parse(request.body);
-    return app.configService.update(request.params.uuid, body, scope.memberId);
+    const cfg = await app.configService.update(request.params.uuid, body, scope.memberId);
+    return app.resourcesService.resolveRuntimeConfig(cfg);
   });
 
   app.post<{ Params: { uuid: string } }>(

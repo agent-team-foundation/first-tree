@@ -15,6 +15,7 @@ const config: AgentRuntimeConfig = {
     mcpServers: [{ name: "demo", transport: "stdio", command: "echo", args: ["ok"] }],
     env: [{ key: "FOO", value: "bar", sensitive: false }],
     gitRepos: [{ url: "https://github.com/acme/repo.git", localPath: "repo" }],
+    resourceSkills: [],
   },
 };
 

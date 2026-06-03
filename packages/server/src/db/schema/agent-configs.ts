@@ -17,7 +17,7 @@ export const agentConfigs = pgTable("agent_configs", {
   agentId: text("agent_id").primaryKey(),
   /** Optimistic-lock version. Starts at 1; never null. */
   version: integer("version").notNull().default(1),
-  /** Full encrypted-at-rest payload (5 field groups: prompt/model/mcpServers/env/gitRepos). */
+  /** Full encrypted-at-rest payload; resource-owned runtime fields are resolved at read time. */
   payload: jsonb("payload").$type<AgentRuntimeConfigPayload>().notNull(),
   /** Member id (or "system" for migration backfill / agent-create insert). */
   updatedBy: text("updated_by").notNull(),

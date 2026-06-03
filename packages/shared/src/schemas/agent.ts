@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { gitRepoSchema } from "./agent-runtime-config.js";
 import { paginationQuerySchema } from "./common.js";
 import { presenceStatusSchema, runtimeStateSchema } from "./presence.js";
 import { runtimeProviderSchema } from "./runtime-provider.js";
@@ -145,14 +144,6 @@ export const createAgentSchema = z.object({
    * pinned client's reported capabilities (or be force-overridden).
    */
   runtimeProvider: runtimeProviderSchema.optional(),
-  /**
-   * Initial gitRepos seed for the runtime config. When provided, the service
-   * layer writes them into the version=1 agent_configs row instead of the
-   * default empty payload — atomic with the agent insert, so first-chat
-   * `prepareGitWorktrees` always sees the bind. Used by onboarding Step 2
-   * to wire the picked GitHub repo without a follow-up PATCH race.
-   */
-  gitRepos: z.array(gitRepoSchema).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 

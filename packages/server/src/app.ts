@@ -24,6 +24,7 @@ import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
+import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -50,11 +51,13 @@ import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
+import { orgResourceRoutes } from "./api/orgs/resources.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgUsageRoutes } from "./api/orgs/usage.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { readyzRoutes } from "./api/readyz.js";
+import { resourceRoutes } from "./api/resources.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
@@ -85,6 +88,8 @@ import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js"
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
+import { createResourcesService } from "./services/resources.js";
+import { backfillResourcesPhase1 } from "./services/resources-migration.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -322,6 +327,16 @@ export async function buildApp(config: Config) {
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
   const notifier = createNotifier(listenClient);
 
+  // Per-agent runtime config service and Resources resolver.
+  const configService = createConfigService({
+    db,
+    notifier,
+    encryptionKey: config.secrets.encryptionKey,
+  });
+  app.decorate("configService", configService);
+  const resourcesService = createResourcesService({ db, notifier });
+  app.decorate("resourcesService", resourcesService);
+
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
   // or buggy client cannot OOM the server with one giant message. Frames in
   // this codebase are JSON envelopes; image content travels via HTTP.
@@ -523,6 +538,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
+          await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
@@ -538,12 +554,14 @@ export async function buildApp(config: Config) {
         userScope("resourcesScope", async (scope) => {
           await scope.register(agentRoutes, { prefix: "/agents" });
           await scope.register(agentConfigRoutes, { prefix: "/agents" });
+          await scope.register(agentResourcesRoutes, { prefix: "/agents" });
           await scope.register(agentActivityRoutes, { prefix: "/agents" });
           await scope.register(agentUsageRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(adapterRoutes, { prefix: "/adapters" });
           await scope.register(clientRoutes, { prefix: "/clients" });
+          await scope.register(resourceRoutes, { prefix: "/resources" });
         }),
         { prefix: "" },
       );
@@ -616,14 +634,6 @@ export async function buildApp(config: Config) {
   // Decorate notifier so routes can trigger PG NOTIFY
   app.decorate("notifier", notifier);
 
-  // Per-agent runtime config service (Step 2)
-  const configService = createConfigService({
-    db,
-    notifier,
-    encryptionKey: config.secrets.encryptionKey,
-  });
-  app.decorate("configService", configService);
-
   // Kael runtime — server-embedded forwarding to Kael API
   const contextTreeDir = join(defaultDataDir(), "context-tree");
   const kaelRuntime = config.kael?.endpoint
@@ -672,6 +682,9 @@ export async function buildApp(config: Config) {
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
+    await backfillResourcesPhase1(db).catch((err) => {
+      app.log.warn({ err }, "resources phase1 backfill failed");
+    });
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();

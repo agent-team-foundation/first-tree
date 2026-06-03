@@ -73,6 +73,7 @@ function buildCache(gitRepos: AgentRuntimeConfig["payload"]["gitRepos"]) {
           mcpServers: [],
           env: [],
           gitRepos,
+          resourceSkills: [],
         },
         updatedAt: new Date().toISOString(),
         updatedBy: "test",

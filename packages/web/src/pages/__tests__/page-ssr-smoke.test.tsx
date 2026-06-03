@@ -503,6 +503,7 @@ const AGENT_CONFIG: AgentRuntimeConfig = {
       { url: "https://github.com/acme/web.git", localPath: "web", ref: "main" },
       { url: "git@github.com:acme/api.git", localPath: "api" },
     ],
+    resourceSkills: [],
   },
   updatedAt: NOW,
   updatedBy: "member-self",
@@ -542,6 +543,37 @@ function createClient(): QueryClient {
   queryClient.setQueryData(["managed-agents", "name-map"], agents);
   queryClient.setQueryData(["agent", "agent-1"], agents[0]);
   queryClient.setQueryData(["agent-config", "agent-1"], AGENT_CONFIG);
+  queryClient.setQueryData(["agent-resources", "agent-1"], {
+    version: 7,
+    effective: {
+      version: 7,
+      repos: [
+        {
+          id: "resource:repo-1",
+          bindingId: null,
+          resourceId: "repo-1",
+          replacesResourceId: null,
+          type: "repo",
+          name: "Team web",
+          scope: "team",
+          source: "team_recommended",
+          mode: "enabled",
+          defaultEnabled: "recommended",
+          payload: { url: "https://github.com/acme/web.git" },
+          repo: { url: "https://github.com/acme/web.git", localPath: "web" },
+          promptBody: null,
+          unavailableReason: null,
+          order: 0,
+        },
+      ],
+      prompts: [],
+      skills: [],
+      mcp: [],
+      unavailable: [],
+    },
+    bindings: [],
+    availableTeamResources: [],
+  });
   queryClient.setQueryData(["agent-client-status", "agent-1"], {
     clientId: "client-1",
     clientStatus: "connected",
@@ -926,8 +958,8 @@ describe("page SSR smoke coverage", () => {
 
     for (const [route, expected] of [
       ["/agents/agent-1/runtime", "Runtime"],
-      ["/agents/agent-1/prompt", "Instructions"],
-      ["/agents/agent-1/resources", "Environment variables"],
+      ["/agents/agent-1/prompt", "Effective prompt"],
+      ["/agents/agent-1/resources", "Team web"],
     ] as const) {
       expect(
         renderPage(

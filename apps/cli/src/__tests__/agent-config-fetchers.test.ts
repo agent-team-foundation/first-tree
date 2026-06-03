@@ -45,6 +45,7 @@ function config(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig
         { key: "OPENAI_API_KEY", value: "***", sensitive: true },
       ],
       gitRepos: [{ url: "https://github.com/acme/web.git", localPath: "web", ref: "main" }],
+      resourceSkills: [],
     },
     updatedAt: overrides.updatedAt ?? "2026-05-28T12:00:00.000Z",
     updatedBy: overrides.updatedBy ?? "member-1",

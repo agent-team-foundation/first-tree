@@ -470,10 +470,7 @@ export async function createAgent(
 
   try {
     // Wrap both inserts in a transaction so the agent row is never visible
-    // without its companion `agent_configs` row. Onboarding Step 2 relies
-    // on the gitRepos seed being present at the moment the agent's first
-    // chat session starts; a partial insert would land the user in an
-    // empty workspace.
+    // without its companion `agent_configs` row.
     const agent = await db.transaction(async (tx) => {
       const [row] = await tx
         .insert(agents)
@@ -496,13 +493,7 @@ export async function createAgent(
 
       if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
-      // Seed the version=1 config with any caller-provided overrides
-      // (today only `gitRepos`, used by onboarding Step 2 to atomically
-      // bind the picked repo).
       const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
-      if (data.gitRepos && data.gitRepos.length > 0) {
-        initialPayload.gitRepos = data.gitRepos;
-      }
       await tx
         .insert(agentConfigs)
         .values({
