@@ -395,12 +395,13 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Always explain tradeoffs.");
 
     await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(document.body, "Save prompt");
-    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    await waitForText(container, "Save prompt");
+    const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Always explain tradeoffs.");
+    expect(textarea?.style.minHeight).toBe("16rem");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Prefer concise answers.");
-    await click(exactButtonByText(document.body, "Save prompt"));
+    await click(exactButtonByText(container, "Save prompt"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -455,12 +456,12 @@ describe("AgentDetailPage", () => {
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective prompt");
     await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(document.body, "Save prompt");
-    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    await waitForText(container, "Save prompt");
+    const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Use the agent-specific style guide.");
-    await click(exactButtonByText(document.body, "Save prompt"));
+    await click(exactButtonByText(container, "Save prompt"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -523,12 +524,12 @@ describe("AgentDetailPage", () => {
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective prompt");
     await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(document.body, "Save prompt");
-    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    await waitForText(container, "Save prompt");
+    const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Use the agent-specific style guide.");
-    await click(exactButtonByText(document.body, "Save prompt"));
+    await click(exactButtonByText(container, "Save prompt"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -567,23 +568,23 @@ describe("AgentDetailPage", () => {
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "No prompt resources enabled.");
     await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(document.body, "Save prompt");
-    await click(exactButtonByText(document.body, "Save prompt"));
-    await waitForText(document.body, "Prompt body is required.");
-    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForText(container, "Save prompt");
+    await click(exactButtonByText(container, "Save prompt"));
+    await waitForText(container, "Prompt body is required.");
+    await click(exactButtonByText(container, "Cancel"));
     await waitForCondition(
-      () => !document.body.textContent?.includes("Prompt body is required."),
+      () => !container.textContent?.includes("Prompt body is required."),
       "Expected prompt body validation error to clear",
     );
 
     await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(document.body, "Save prompt");
-    expect(document.body.textContent).not.toContain("Prompt body is required.");
-    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    await waitForText(container, "Save prompt");
+    expect(container.textContent).not.toContain("Prompt body is required.");
+    const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Prefer concise answers.");
-    await click(exactButtonByText(document.body, "Save prompt"));
+    await click(exactButtonByText(container, "Save prompt"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
