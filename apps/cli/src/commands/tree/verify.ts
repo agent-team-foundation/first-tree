@@ -133,7 +133,11 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok: readTreeIdentityContract(targetRoot) !== undefined,
         ...(readTreeIdentityContract(targetRoot) !== undefined
           ? {}
-          : { errors: ["Managed tree identity is missing from .first-tree/tree.json."] }),
+          : {
+              errors: [
+                "Managed tree identity is missing — expected .first-tree/tree.json (or a legacy AGENTS.md / CLAUDE.md identity block).",
+              ],
+            }),
       },
     },
     ok: false,
