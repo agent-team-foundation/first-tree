@@ -263,7 +263,11 @@ export function RequestCard({
                     <OptionCard
                       key={opt}
                       layout="pill"
-                      name={q.id}
+                      // Namespace the radio group by message id: question ids
+                      // are only request-local (`q1`, …), so two open requests
+                      // in one chat would otherwise share a real radio group and
+                      // selecting in one card would clear the other's DOM state.
+                      name={`${message.id}:${q.id}`}
                       checked={choices[q.id] === opt}
                       disabled={!canAnswer}
                       onSelect={() => setChoices((prev) => ({ ...prev, [q.id]: opt }))}
