@@ -7,7 +7,6 @@ Local unit-test coverage is available for the main source packages:
 - `packages/client`
 - `packages/shared`
 - `packages/web`
-- `packages/github-scan`
 
 Run the full local coverage pass from the repository root:
 

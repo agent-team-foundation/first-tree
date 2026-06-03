@@ -98,9 +98,6 @@ first-tree login "$TOKEN"          # rewrites the original service unit
 
 - `~/.first-tree/hub-dev/` — dev workspace data. `scripts/dev-install.sh`
   on first run auto-`mv`s this to `~/.first-tree-dev/`. Don't pre-move it.
-- `~/.first-tree/github-scan/` — github-scan daemon, independent
-  subsystem. Stays on the original path; its daemon auto-recreates the
-  directory on first run.
 - `~/.first-tree/hub.broken-snapshot-*` — historical backups, untouched.
 - `~/.first-tree/version-check.json` — CLI cache, rebuilt on next start.
 

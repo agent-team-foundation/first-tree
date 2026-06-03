@@ -65,9 +65,8 @@ For each drift routed to needs-human:
 
 1. Open a PR or issue on the tree repo with the drift evidence.
 2. Apply a label that describes the request type (e.g. `tree-drift`,
-   `ownership-review`, `superseded-decision`). Tags are coordinated through
-   `first-tree-github-scan`'s tag table; check there before inventing new
-   ones.
+   `ownership-review`, `superseded-decision`). Prefer existing repository
+   labels before inventing new ones.
 3. Tag the listed `owners` of the affected node.
 4. Stop. Do not edit the tree until the human responds.
 

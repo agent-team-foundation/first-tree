@@ -233,32 +233,7 @@ grep -E '^\s*industry:\s*""' $TREE/.first-tree/org.yaml
 
 Do not check `$TREE/.first-tree/progress.md` — that file is the CLI's bootstrap checklist; `tree verify` fails when any line in it is unchecked, so it must remain fully ticked.
 
-## Phase D — Daemon
-
-```bash
-gh auth status                                        # must succeed
-first-tree github scan install --allow-repo <owner>/<repo>
-first-tree github scan doctor
-```
-
-`install` performs first-run setup AND starts the daemon (launchd on macOS, systemd unit on Linux). `start` is only used to relaunch after `stop`.
-
-Pull each `<owner>/<repo>` from `boundSources[].remoteUrl` in the status output. Start narrow — onboarding's job is to bind one repo, not configure org-wide policy.
-
-If `gh auth status` fails:
-
-```text
-Stop here. Tell user:
-  "GitHub Scan needs `gh` authenticated. Run:
-     gh auth login
-   Then re-run /first-tree-onboarding to resume."
-```
-
-Do not store credentials, do not bypass with PATs typed in chat.
-
-`--allow-repo` accepts comma-separated values and glob patterns (`owner/*`).
-
-## Phase D.5 — GitHub automation rule layer
+## Phase D — GitHub automation rule layer
 
 ```bash
 TREE=<workspaceRoot>/<manifest.tree>
@@ -298,13 +273,13 @@ This phase is mostly a confirmation step. The only reason to write/edit YAML her
 
 ```bash
 first-tree tree skill doctor                  # from workspace root
-first-tree github scan doctor                 # only if Phase D ran
 first-tree tree status --json                 # final confirmation
+first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>
 ```
 
 If any doctor exits non-zero, **do not** print the success summary. Print the failures and stop.
 
-The success summary template is in SKILL.md Phase F. Fill it from `tree status` output and the recorded daemon state.
+The success summary template is in SKILL.md Phase F. Fill it from `tree status` output and the recorded automation state.
 
 GitHub automation lines are mandatory:
 
@@ -316,7 +291,7 @@ Owners gate:   <skipped | pending via `first-tree tree automation install --tier
 
 ## What this skill never runs
 
-- `first-tree github scan run` / `daemon` / `run-once` — foreground/debug loops. Use `install` (which starts the launchd service) and `doctor` instead.
+- `first-tree tree publish` — release flow, not onboarding. Tree publish is a separate user-driven action when they're ready to share.
 - The `gh api` commands printed by `first-tree tree automation install --tier 2` — those are user-run only.
 - Direct edits to the workspace root's managed First Tree framework block in `AGENTS.md` / `CLAUDE.md`. Re-run `tree init` if the block looks wrong.
 - `migrate-to-w1 --yes` without first reviewing `--dry-run` output. The promote step is destructive.

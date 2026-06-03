@@ -117,8 +117,6 @@ first-tree-staging login <staging-token>
   upgrading either (e.g. via `first-tree-staging upgrade`) goes through
   npm and affects your machine-wide install. Dev is immune because its
   source-checkout install mode short-circuits the upgrade path.
-- `~/.first-tree/github-scan/` — independent subsystem, unrelated to
-  channel home.
 
 ## Tearing down a dev install
 

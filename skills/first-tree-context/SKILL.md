@@ -3,7 +3,7 @@ name: first-tree-context
 version: 0.5.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree concepts and routing sub-entry. Explains what a Context Tree is, the ownership model, what belongs in a node vs. a source system, and how to navigate domains and soft_links. Use whenever you need shared Context Tree concepts, are unsure whether your task is onboarding / sync / write / github-scan, or need the structural primer before acting on the tree. For binding a repo, use `first-tree-onboarding`; for drift audit, `first-tree-sync`; for writing from a specific source, `first-tree-write`; for daemon-spawned GitHub notifications, `first-tree-github-scan`.
+description: Context Tree concepts and routing sub-entry. Explains what a Context Tree is, the ownership model, what belongs in a node vs. a source system, and how to navigate domains and soft_links. Use whenever you need shared Context Tree concepts, are unsure whether your task is onboarding / sync / write, or need the structural primer before acting on the tree. For binding a repo, use `first-tree-onboarding`; for drift audit, `first-tree-sync`; for writing from a specific source, `first-tree-write`.
 ---
 
 # First Tree — Context Management
@@ -36,14 +36,12 @@ Use the skill that matches the job:
 - `first-tree-onboarding` — connect a repo or workspace to a Context Tree (one-shot)
 - `first-tree-sync` — audit drift between merged code and tree content (no specific source material)
 - `first-tree-write` — write tree updates from one specific source (PR / doc / note)
-- `first-tree-github-scan` — agent behaviour spec for a single GitHub notification spawned by the daemon
 
 If you are unsure which one applies, stay here and read `references/cli-manual.md`.
 
 ## CLI Map (Context arm)
 
-- `first-tree tree` — tree lifecycle, bindings, validation, publish, and skill maintenance
-- `first-tree github scan` — GitHub inbox runtime and daemon operations
+- `first-tree tree` — tree lifecycle, bindings, validation, publish, automation, and skill maintenance
 
 Do not invent new top-level CLI groups when acting on the current repo. If a
 workflow needs more automation than the CLI already offers, keep the
@@ -55,8 +53,6 @@ orchestration inside the skill until the shared logic is worth extracting.
 - Prefer `first-tree-onboarding` when the repo is not yet bound.
 - Prefer `first-tree-sync` for broad drift audits and `first-tree-write` for
   tasks tied to one specific source artifact.
-- Treat `first-tree-github-scan` as an agent behavior spec; use `github-scan`
-  for human/operator daemon work.
 
 ## References
 

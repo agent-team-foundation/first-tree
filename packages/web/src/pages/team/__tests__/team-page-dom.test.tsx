@@ -325,6 +325,9 @@ const MEMBERS = [
 ];
 
 function installBrowserStubs(): void {
+  const storage = createStorage();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: (query: string) => ({
@@ -338,6 +341,24 @@ function installBrowserStubs(): void {
       dispatchEvent: () => false,
     }),
   });
+}
+
+function createStorage(): Storage {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => data.clear(),
+    getItem: (key: string) => data.get(key) ?? null,
+    key: (index: number) => [...data.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  };
 }
 
 function createClient(): QueryClient {
@@ -453,8 +474,8 @@ function seedDefaultMocks(): void {
 
 beforeEach(() => {
   document.body.innerHTML = "";
-  window.localStorage.clear();
   installBrowserStubs();
+  window.localStorage.clear();
   vi.clearAllMocks();
   routerMocks.navigate.mockClear();
   seedDefaultMocks();

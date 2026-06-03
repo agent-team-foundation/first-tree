@@ -19,10 +19,8 @@ about this?" Sync starts from the tree and asks "is anything stale?"
 | User pastes a PR link and says "reflect this in the tree"                           | write                                   |
 | User pastes a meeting note about a decision                                         | write                                   |
 | User pastes raw text and asks for the tree implication                              | write                                   |
-| GitHub Scan agent classifies a notification as `route=write`                        | write                                   |
 | User asks "is the tree up to date?"                                                 | sync                                    |
 | User asks "audit drift since last release"                                          | sync                                    |
-| GitHub Scan agent classifies a notification as `route=sync`                         | sync                                    |
 | Write notices the same domain has unrelated drift                                   | finish write; suggest sync as follow-up |
 | Sync finds a `code-not-synced` drift the user wants captured from a specific source | hand off to write                       |
 

@@ -24,7 +24,7 @@ arms — pick the right one before acting:
 | Arm | What it does | Sub-skills |
 |---|---|---|
 | **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
-| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (concepts) · `first-tree-onboarding` · `first-tree-sync` · `first-tree-write` · `first-tree-github-scan` |
+| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (concepts) · `first-tree-onboarding` · `first-tree-sync` · `first-tree-write` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
 another agent or the human in chat), then the context ops.
@@ -140,7 +140,6 @@ map of which commands live where:
 | `chat …` | workspace | messaging (`send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
 | `config …` | workspace | local `client.yaml` (operator-edited) | `docs/cli-reference.md` |
 | `tree …` | context | Context Tree lifecycle, binding, publish, verify | `first-tree-context` + relevant sub-skills |
-| `github scan …` | context | GitHub notification daemon | `first-tree-github-scan` |
 | `org …` | both | workspace-tree binding metadata | `first-tree-onboarding` |
 
 For exhaustive flags / env vars / behavior of each command, see
@@ -227,7 +226,6 @@ Once hygiene checks pass, drop into the right sub-skill:
 - Bind an unbound repo to a tree, or migrate a legacy multi-mode workspace to W1 → **`first-tree-onboarding`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
 - "Reflect this PR / doc / note into the tree" (specific source given) → **`first-tree-write`**
-- Daemon spawned an agent for a GitHub notification → **`first-tree-github-scan`**
 
 Operator tasks — `login`, `daemon install / uninstall`, `agent create`,
 `agent bind`, decommissioning a machine — are not done from inside a

@@ -18,5 +18,5 @@ When reporting a problem, include:
 - whether you are on the published package or a source checkout
 - the relevant version or commit
 - the exact output or failure mode
-- which surface the issue is about (`tree`, `github scan`, agent / chat
-  collaboration, web console, or docs)
+- which surface the issue is about (`tree`, agent / chat collaboration,
+  web console, or docs)

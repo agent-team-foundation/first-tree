@@ -84,24 +84,24 @@ describe("tree skill library", () => {
   });
 
   it("collects installed status with version and compatibility metadata", () => {
-    installSkill("first-tree-github-scan", { cliCompat: ">=0.0.0 <999.0.0" });
-    linkClaudeSkill("first-tree-github-scan");
+    installSkill("first-tree-write", { cliCompat: ">=0.0.0 <999.0.0" });
+    linkClaudeSkill("first-tree-write");
 
     const rows = collectSkillStatus(root);
-    const ghScan = rows.find((row) => row.name === "first-tree-github-scan");
+    const writeSkill = rows.find((row) => row.name === "first-tree-write");
     const firstTree = rows.find((row) => row.name === "first-tree");
 
     expect(rows).toHaveLength(SKILL_NAMES.length);
-    expect(ghScan).toMatchObject({
+    expect(writeSkill).toMatchObject({
       agentsKind: "directory",
       claudeKind: "symlink",
       cliCompat: ">=0.0.0 <999.0.0",
       compatible: true,
       installed: true,
-      name: "first-tree-github-scan",
+      name: "first-tree-write",
       version: "1.2.3",
     });
-    expect(ghScan?.claudeTarget).toBe("../../.agents/skills/first-tree-github-scan");
+    expect(writeSkill?.claudeTarget).toBe("../../.agents/skills/first-tree-write");
     expect(firstTree).toMatchObject({
       installed: false,
       compatible: null,
@@ -110,46 +110,43 @@ describe("tree skill library", () => {
   });
 
   it("diagnoses missing files, bad frontmatter, bad symlinks, and incompatible CLI ranges", () => {
-    installSkill("first-tree-github-scan", { includeOpenAiConfig: false });
-    linkClaudeSkill("first-tree-github-scan", "wrong-target");
+    installSkill("first-tree-write", { includeOpenAiConfig: false });
+    linkClaudeSkill("first-tree-write", "wrong-target");
 
-    installSkill("github-scan", { includeFrontmatter: false });
-    linkClaudeSkill("github-scan");
+    installSkill("first-tree", { includeFrontmatter: false });
+    linkClaudeSkill("first-tree");
 
     installSkill("first-tree-sync", { version: "2.0.0", frontmatterVersion: "3.0.0" });
     linkClaudeSkill("first-tree-sync");
 
-    installSkill("first-tree-write", { cliCompat: ">999.0.0" });
-    linkClaudeSkill("first-tree-write");
-
-    installSkill("first-tree-onboarding", { cliCompat: "not-a-range" });
+    installSkill("first-tree-onboarding", { cliCompat: ">999.0.0" });
     linkClaudeSkill("first-tree-onboarding");
 
     const rows = collectSkillDiagnosis(root);
     const byName = new Map(rows.map((row) => [row.name, row]));
 
-    expect(byName.get("first-tree-github-scan")?.problems).toEqual(
+    expect(byName.get("first-tree-write")?.problems).toEqual(
       expect.arrayContaining([
-        ".agents/skills/first-tree-github-scan/agents/openai.yaml does not exist",
-        ".claude/skills/first-tree-github-scan -> wrong-target, expected ../../.agents/skills/first-tree-github-scan",
+        ".agents/skills/first-tree-write/agents/openai.yaml does not exist",
+        ".claude/skills/first-tree-write -> wrong-target, expected ../../.agents/skills/first-tree-write",
       ]),
     );
-    expect(byName.get("github-scan")?.problems).toEqual(
+    expect(byName.get("first-tree")?.problems).toEqual(
       expect.arrayContaining([
-        ".agents/skills/github-scan/SKILL.md frontmatter is missing version",
-        ".agents/skills/github-scan/SKILL.md frontmatter is missing cliCompat.first-tree",
+        ".agents/skills/first-tree/SKILL.md frontmatter is missing version",
+        ".agents/skills/first-tree/SKILL.md frontmatter is missing cliCompat.first-tree",
       ]),
     );
     expect(byName.get("first-tree-sync")?.problems).toContain(
       ".agents/skills/first-tree-sync/SKILL.md version 3.0.0 does not match VERSION 2.0.0",
     );
-    expect(byName.get("first-tree-write")?.incompatibleCliCompat).toBe(">999.0.0");
-    expect(byName.get("first-tree-write")?.problems.join("\n")).toContain("requires first-tree >999.0.0");
-    expect(byName.get("first-tree-onboarding")?.problems).toContain(
-      "first-tree-onboarding has an unreadable cliCompat range: not-a-range",
-    );
-    expect(byName.get("first-tree")?.problems).toEqual(
-      expect.arrayContaining(["missing: .agents/skills/first-tree", "missing: .claude/skills/first-tree"]),
+    expect(byName.get("first-tree-onboarding")?.incompatibleCliCompat).toBe(">999.0.0");
+    expect(byName.get("first-tree-onboarding")?.problems.join("\n")).toContain("requires first-tree >999.0.0");
+    expect(byName.get("first-tree-context")?.problems).toEqual(
+      expect.arrayContaining([
+        "missing: .agents/skills/first-tree-context",
+        "missing: .claude/skills/first-tree-context",
+      ]),
     );
   });
 
@@ -187,9 +184,9 @@ describe("tree skill library", () => {
   });
 
   it("repairs Claude skill links for installed agent skills and skips missing installs", () => {
-    installSkill("first-tree-github-scan");
-    installSkill("github-scan");
-    mkdirSync(join(root, ".claude", "skills", "first-tree-github-scan"), { recursive: true });
+    installSkill("first-tree-sync");
+    installSkill("first-tree-write");
+    mkdirSync(join(root, ".claude", "skills", "first-tree-sync"), { recursive: true });
 
     const result = repairClaudeSkillLinks(root);
 
@@ -197,19 +194,21 @@ describe("tree skill library", () => {
     expect(result.skipped).toBe(SKILL_NAMES.length - 2);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        "linked .claude/skills/first-tree-github-scan -> ../../.agents/skills/first-tree-github-scan",
-        "linked .claude/skills/github-scan -> ../../.agents/skills/github-scan",
+        "linked .claude/skills/first-tree-sync -> ../../.agents/skills/first-tree-sync",
+        "linked .claude/skills/first-tree-write -> ../../.agents/skills/first-tree-write",
       ]),
     );
-    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-github-scan"))).toBe(
-      "../../.agents/skills/first-tree-github-scan",
+    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-sync"))).toBe(
+      "../../.agents/skills/first-tree-sync",
     );
-    expect(readlinkSync(join(root, ".claude", "skills", "github-scan"))).toBe("../../.agents/skills/github-scan");
+    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-write"))).toBe(
+      "../../.agents/skills/first-tree-write",
+    );
   });
 
   it("leaves already-correct Claude skill links unchanged", () => {
-    installSkill("first-tree-github-scan");
-    linkClaudeSkill("first-tree-github-scan");
+    installSkill("first-tree-write");
+    linkClaudeSkill("first-tree-write");
 
     expect(repairClaudeSkillLinks(root)).toEqual({ linked: 0, skipped: SKILL_NAMES.length - 1, messages: [] });
   });
@@ -243,29 +242,29 @@ describe("tree skill library", () => {
       "Could not locate bundled `skills/` payloads",
     );
 
-    const staleClaudeDir = join(root, ".claude", "skills", "github-scan");
+    const staleClaudeDir = join(root, ".claude", "skills", "first-tree-write");
     mkdirSync(staleClaudeDir, { recursive: true });
     writeFileSync(join(staleClaudeDir, "stale.txt"), "old\n");
 
     copyCoreSkills(root);
 
-    expect(existsSync(join(root, ".agents", "skills", "github-scan", "SKILL.md"))).toBe(false);
-    expect(existsSync(join(root, ".claude", "skills", "github-scan", "stale.txt"))).toBe(true);
+    expect(existsSync(join(root, ".agents", "skills", "first-tree-write", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(root, ".claude", "skills", "first-tree-write", "stale.txt"))).toBe(true);
     expect(existsSync(join(root, ".agents", "skills", "first-tree"))).toBe(false);
   });
 
   it("handles unreadable metadata and missing CLI package versions", () => {
     const isolated = mkdtempSync(join(tmpdir(), "ft-tree-skill-no-package-"));
     try {
-      installSkill("github-scan", { version: "" });
-      linkClaudeSkill("github-scan");
+      installSkill("first-tree-write", { version: "" });
+      linkClaudeSkill("first-tree-write");
       const skillRoot = join(root, ".agents", "skills", "first-tree-onboarding");
       mkdirSync(skillRoot, { recursive: true });
       writeFileSync(join(skillRoot, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: "=not-semver"\n---\n');
       writeFileSync(join(skillRoot, "VERSION"), "\n");
       linkClaudeSkill("first-tree-onboarding");
 
-      expect(collectSkillStatus(root).find((row) => row.name === "github-scan")).toMatchObject({
+      expect(collectSkillStatus(root).find((row) => row.name === "first-tree-write")).toMatchObject({
         compatible: true,
         version: null,
       });
@@ -274,17 +273,19 @@ describe("tree skill library", () => {
       );
 
       writeFileSync(join(isolated, "package.json"), "{ invalid json");
-      const localSkill = join(isolated, ".agents", "skills", "github-scan");
+      const localSkill = join(isolated, ".agents", "skills", "first-tree-write");
       mkdirSync(join(localSkill, "agents"), { recursive: true });
       writeFileSync(join(localSkill, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: ">0.0.0"\n---\n');
       writeFileSync(join(localSkill, "VERSION"), "1.0.0\n");
       writeFileSync(join(localSkill, "agents", "openai.yaml"), "name: test\n");
       mkdirSync(join(isolated, ".claude", "skills"), { recursive: true });
       symlinkSync(
-        join("..", "..", ".agents", "skills", "github-scan"),
-        join(isolated, ".claude", "skills", "github-scan"),
+        join("..", "..", ".agents", "skills", "first-tree-write"),
+        join(isolated, ".claude", "skills", "first-tree-write"),
       );
-      expect(collectSkillStatus(isolated).find((row) => row.name === "github-scan")?.cliVersion).toBeTypeOf("string");
+      expect(collectSkillStatus(isolated).find((row) => row.name === "first-tree-write")?.cliVersion).toBeTypeOf(
+        "string",
+      );
     } finally {
       rmSync(isolated, { recursive: true, force: true });
     }

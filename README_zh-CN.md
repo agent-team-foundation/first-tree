@@ -102,8 +102,7 @@ first-tree
 ├── org ...                 组织级操作
 ├── daemon ...              后台 daemon 生命周期
 ├── config ...              查看 / 修改本机 client.yaml
-├── tree ...                Context Tree 接入、校验、自动化
-└── github scan ...         GitHub Scan daemon 与 inbox 运行时
+└── tree ...                Context Tree 接入、校验、自动化
 ```
 
 每个命名空间跑 `first-tree <namespace> --help` 看完整子命令。
@@ -115,7 +114,6 @@ first-tree
 - `packages/server/` — Fastify API 服务（`@first-tree/server`）
 - `packages/client/` — Agent SDK + Runtime（`@first-tree/client`）
 - `packages/web/` — React Web 工作空间（`@first-tree/web`）
-- `packages/github-scan/` — GitHub Scan daemon（`@first-tree/github-scan`）
 - `packages/e2e/` — 黑盒 e2e 测试框架（`@first-tree/e2e`）
 - `skills/` — First Tree Agent 使用的仓库内技能内容
 

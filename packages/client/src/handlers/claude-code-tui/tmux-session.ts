@@ -19,7 +19,7 @@ function runTmux(args: string[], timeoutMs = DEFAULT_TMUX_TIMEOUT_MS): Promise<T
       if (!settled) {
         settled = true;
         child.kill("SIGKILL");
-        resolve({ ok: false, stdout, stderr: stderr + "\n[timeout]", code: null });
+        resolve({ ok: false, stdout, stderr: `${stderr}\n[timeout]`, code: null });
       }
     }, timeoutMs);
     child.stdout.on("data", (b: Buffer) => {

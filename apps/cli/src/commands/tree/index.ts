@@ -23,8 +23,6 @@ const TREE_ONBOARDING_GUIDE = `first-tree tree help onboarding
 2. Run \`first-tree tree init --scope workspace ...\` to onboard a repo or workspace.
 3. For pre-W1 layouts, follow with \`first-tree tree migrate-to-w1\`.
 4. Use \`first-tree tree verify\` to validate the resulting tree.
-5. Before starting \`first-tree github scan\`, make sure the managed First Tree
-   integration block exists in \`AGENTS.md\` or \`CLAUDE.md\`.
 `;
 
 const treeSubcommands: SubcommandModule[] = [

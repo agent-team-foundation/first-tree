@@ -1,37 +1,22 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCommandContext } from "../src/commands/context.js";
-import {
-  isGitHubScanHelpRequest,
-  readTreeRepoArg,
-  requiresGitHubScanBinding,
-  resolveGitHubScanBinding,
-  stripTreeRepoArg,
-} from "../src/commands/github/scan-binding.js";
 import { registerSubcommands } from "../src/commands/groups.js";
-import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 import { runStatusCommand } from "../src/commands/tree/status.js";
 import type { CommandContext, SubcommandModule } from "../src/commands/types.js";
 
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
-const testFileDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(testFileDir, "..", "..", "..");
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "first-tree-helpers-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 afterEach(() => {
@@ -107,19 +92,6 @@ describe("createCommandContext", () => {
   });
 });
 
-describe("shipped github-scan skill payloads", () => {
-  it("keeps the repo-root and package-local copies in sync", () => {
-    const repoSkillRoot = resolve(repoRoot, "skills", "github-scan");
-    const packageSkillRoot = resolve(repoRoot, "packages", "github-scan", "skills", "github-scan");
-
-    for (const relativePath of ["SKILL.md", "VERSION", join("agents", "openai.yaml")]) {
-      expect(readFileSync(join(repoSkillRoot, relativePath), "utf8")).toBe(
-        readFileSync(join(packageSkillRoot, relativePath), "utf8"),
-      );
-    }
-  });
-});
-
 describe("runStatusCommand", () => {
   const baseContext: CommandContext = {
     command: new Command("status"),
@@ -147,129 +119,5 @@ describe("runStatusCommand", () => {
     expect(stderr).toContain("migrate-to-w1");
 
     process.exitCode = undefined;
-  });
-});
-
-describe("github scan binding helpers", () => {
-  it("detects help requests in both root and subcommand position", () => {
-    expect(isGitHubScanHelpRequest([])).toBe(true);
-    expect(isGitHubScanHelpRequest(["--help"])).toBe(true);
-    expect(isGitHubScanHelpRequest(["poll", "--help"])).toBe(true);
-    expect(isGitHubScanHelpRequest(["poll"])).toBe(false);
-  });
-
-  it("knows which github scan subcommands require a tree binding", () => {
-    expect(requiresGitHubScanBinding("poll")).toBe(true);
-    expect(requiresGitHubScanBinding("start")).toBe(true);
-    expect(requiresGitHubScanBinding("status")).toBe(false);
-    expect(requiresGitHubScanBinding(undefined)).toBe(false);
-  });
-
-  it("reads and strips --tree-repo in both supported forms", () => {
-    expect(readTreeRepoArg(["poll", "--tree-repo", "acme/context"])).toBe("acme/context");
-    expect(readTreeRepoArg(["poll", "--tree-repo=acme/context"])).toBe("acme/context");
-    expect(stripTreeRepoArg(["poll", "--tree-repo", "acme/context", "--allow-repo", "acme/*"])).toEqual([
-      "poll",
-      "--allow-repo",
-      "acme/*",
-    ]);
-    expect(stripTreeRepoArg(["poll", "--tree-repo=acme/context"])).toEqual(["poll"]);
-  });
-
-  it("rejects an invalid explicit tree repo override", () => {
-    const result = resolveGitHubScanBinding(["poll", "--tree-repo", "not a repo"]);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("Invalid `--tree-repo` value");
-  });
-
-  it("resolves binding data from source.json", () => {
-    const root = makeTempDir();
-    writeFileSync(
-      join(root, "AGENTS.md"),
-      `${buildSourceIntegrationBlock("context", {
-        bindingMode: "shared-source",
-        entrypoint: "/repos/app",
-        treeMode: "shared",
-        treeRepoName: "context",
-        treeRepoUrl: "https://github.com/acme/context.git",
-      })}\n`,
-    );
-    process.chdir(root);
-
-    const result = resolveGitHubScanBinding(["poll"]);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.source).toBe("managed-file");
-      expect(result.treeRepo).toBe("acme/context");
-      expect(result.treeRepoName).toBe("context");
-      expect(result.managedBindingPath?.endsWith("/AGENTS.md")).toBe(true);
-    }
-  });
-
-  it("falls back to source.json when managed binding files are absent", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    writeJson(join(root, ".first-tree", "source.json"), {
-      tree: {
-        treeRepo: "acme/context",
-        treeRepoName: "context",
-      },
-    });
-    process.chdir(root);
-
-    const result = resolveGitHubScanBinding(["poll"]);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.source).toBe("source-state");
-      expect(result.treeRepo).toBe("acme/context");
-      expect(result.sourceStatePath?.endsWith("/.first-tree/source.json")).toBe(true);
-    }
-  });
-
-  it("accepts remote URLs and tree_repo legacy fields from source.json", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    writeJson(join(root, ".first-tree", "source.json"), {
-      tree_repo: "acme/context",
-      tree: {
-        remoteUrl: "https://github.com/acme/context.git",
-      },
-    });
-    process.chdir(root);
-
-    const result = resolveGitHubScanBinding(["start"]);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.treeRepo).toBe("acme/context");
-    }
-  });
-
-  it("fails closed when source.json exists but does not contain tree binding data", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    writeJson(join(root, ".first-tree", "source.json"), {
-      bindingMode: "shared-source",
-    });
-    process.chdir(root);
-
-    const result = resolveGitHubScanBinding(["poll"]);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("workspace.json");
-  });
-
-  it("returns an actionable error when no binding metadata exists", () => {
-    const root = makeTempDir();
-    process.chdir(root);
-
-    const result = resolveGitHubScanBinding(["run"]);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("first-tree github scan requires a bound tree repo");
-    expect(result.error).toContain("first-tree tree init --scope workspace");
   });
 });

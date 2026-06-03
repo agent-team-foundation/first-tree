@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree — Context"
   short_description: "Context Tree concepts and sub-entry routing"
-  default_prompt: "Use $first-tree-context to orient me on Context Tree concepts (nodes, ownership, soft_links), and route me to onboarding / sync / write / github-scan as appropriate."
+  default_prompt: "Use $first-tree-context to orient me on Context Tree concepts (nodes, ownership, soft_links), and route me to onboarding / sync / write as appropriate."

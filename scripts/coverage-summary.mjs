@@ -10,7 +10,6 @@ const packages = [
   { name: "packages/client", dir: "packages/client" },
   { name: "packages/shared", dir: "packages/shared" },
   { name: "packages/web", dir: "packages/web" },
-  { name: "packages/github-scan", dir: "packages/github-scan" },
 ];
 
 const metrics = ["statements", "branches", "functions", "lines"];

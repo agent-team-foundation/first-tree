@@ -6,8 +6,8 @@
 - `developer.yaml` — handles code-related PRs and issues
 - `code-reviewer.yaml` — focuses on PR review
 
-These are the bodies the GitHub Scan daemon (and any future First Tree Cloud daemon) reads
-when spawning a per-task agent. They are not skill payloads; they are agent
+These are the bodies future First Tree Cloud automation can read when
+spawning a per-task agent. They are not skill payloads; they are agent
 _instances_.
 
 ## Schema
@@ -21,7 +21,6 @@ skills: # list of skill paths to load
   - .agents/skills/first-tree
   - .agents/skills/first-tree-sync
   - .agents/skills/first-tree-write
-  - .agents/skills/first-tree-github-scan
 runtime: codex # claude-code | codex | other
 workspace:
   kind: worktree # worktree | persistent | container
@@ -61,11 +60,11 @@ If the user wants to change the system prompt or skill set:
 Pick a one-word role id. Create `.first-tree/agent-templates/<role>.yaml`
 with the schema above. Reference the right skills for that role:
 
-- code-related work → keep `first-tree`, `first-tree-sync`, `first-tree-write`,
-  `first-tree-github-scan`.
+- code-related work → keep `first-tree`, `first-tree-sync`, and
+  `first-tree-write`.
 - read-only triage → drop `first-tree-write`.
 - pure code review → drop `first-tree-write` and `first-tree-sync`; keep
-  `first-tree` and `first-tree-github-scan`.
+  `first-tree`.
 
 Do not invent skills that do not exist on disk under
 `.agents/skills/<name>/`. The daemon resolves these paths verbatim and will
@@ -73,9 +72,8 @@ fail to start the agent if any path is missing.
 
 ## What This Step Does NOT Do
 
-- It does not start an agent. The daemon spawns agents when notifications
-  arrive.
-- It does not validate the YAML. If you want a smoke test, ask the user to
-  run a `github scan` poll once the daemon is up.
-- It does not register the templates anywhere. The daemon discovers them by
+- It does not start an agent. Templates are only configuration.
+- It does not validate the YAML. YAML parse errors surface only when an
+  automation runtime reads the template.
+- It does not register the templates anywhere. Automation discovers them by
   reading `.first-tree/agent-templates/` at dispatch time.

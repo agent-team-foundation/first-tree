@@ -5,7 +5,6 @@ import { registerChatCommands } from "../commands/chat/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { registerDoctorCommand } from "../commands/doctor.js";
-import { registerGithubCommands } from "../commands/github/index.js";
 import { registerLoginCommand } from "../commands/login.js";
 import { registerLogoutCommand } from "../commands/logout.js";
 import { registerOrgCommands } from "../commands/org/index.js";
@@ -40,7 +39,6 @@ describe("CLI command registration", () => {
     registerDaemonCommands(root);
     registerConfigCommands(root);
     registerTreeCommands(root);
-    registerGithubCommands(root);
 
     expect(root.commands.map((entry) => entry.name()).sort()).toEqual([
       "agent",
@@ -48,7 +46,6 @@ describe("CLI command registration", () => {
       "config",
       "daemon",
       "doctor",
-      "github",
       "login",
       "logout",
       "org",
@@ -99,7 +96,6 @@ describe("CLI command registration", () => {
     const root = new Command();
     registerAgentCommands(root);
     registerTreeCommands(root);
-    registerGithubCommands(root);
 
     const agent = command(root, "agent");
     expect(subcommands(agent, "bind")).toEqual(["client"]);
@@ -122,7 +118,6 @@ describe("CLI command registration", () => {
       "verify",
     ]);
     expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "install-core", "link", "list", "upgrade"]);
-    expect(subcommands(root, "github")).toEqual(["scan"]);
   });
 
   it("keeps important options on high-risk commands", () => {

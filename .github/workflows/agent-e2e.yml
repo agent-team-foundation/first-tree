@@ -1,7 +1,7 @@
 name: Agent E2E
 
 # LLM-behavior evaluation jobs imported from first-tree (Phase 1B):
-# first-tree-sync drift audit, GitHub-scan agent flows, onboarding smoke.
+# first-tree-sync drift audit and onboarding smoke.
 # Kept on cron + manual dispatch so they don't block PR merges; the
 # primary `CI` workflow stays the gate for code merges.
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   github-validate:
-    name: github-scan e2e (legacy shell harness)
+    name: context tree e2e (legacy shell harness)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

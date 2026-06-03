@@ -273,7 +273,6 @@ run_codex_prompt_smoke() {
   assert_contains "$(cat "$output_file")" "validate.yml"
   assert_contains "$(cat "$output_file")" "Owners gate:"
   assert_contains "$(cat "$output_file")" "tree automation install --tier 2"
-  assert_contains "$(cat "$output_file")" "github scan install --allow-repo"
 }
 
 run_claude_prompt_smoke() {
@@ -324,7 +323,6 @@ run_claude_prompt_smoke() {
   assert_contains "$(cat "$output_file")" "validate.yml"
   assert_contains "$(cat "$output_file")" "Owners gate:"
   assert_contains "$(cat "$output_file")" "tree automation install --tier 2"
-  assert_contains "$(cat "$output_file")" "github scan install --allow-repo"
 }
 
 run_direct_cli_smoke
