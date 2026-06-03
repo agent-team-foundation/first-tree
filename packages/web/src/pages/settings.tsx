@@ -30,7 +30,13 @@ import { cn } from "../lib/utils.js";
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
- *   Team          — org-scoped Identity / Context Tree
+ *   Team profile  — org-scoped team identity (display name). Admin-only:
+ *                   nothing here for a member to read, so the entry is hidden
+ *                   and the page redirects members out.
+ *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
+ *                   to all members (read-only); only admins can edit.
+ *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
+ *                   Visible to all members (read-only); only admins can manage.
  *   GitHub        — admin-only platform integration
  *   Onboarding    — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
@@ -44,7 +50,9 @@ type Item = {
 
 const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
-  { to: "/settings/team", label: "Team" },
+  { to: "/settings/team", label: "Team profile", adminOnly: true },
+  { to: "/settings/context", label: "Context tree" },
+  { to: "/settings/resources", label: "Resources" },
   { to: "/settings/github", label: "GitHub", adminOnly: true },
   { to: "/settings/onboarding", label: "Onboarding" },
 ];
@@ -80,7 +88,7 @@ export function SettingsLayout() {
           // between sub-pages). Letting the row scroll away with the content
           // gives the sub-page itself the full vertical space below the
           // Layout's already-permanent top nav. Horizontal scroll inside
-          // keeps the row one line even when all 5 items wouldn't fit on
+          // keeps the row one line even when all the items wouldn't fit on
           // the narrowest phone.
           className="flex shrink-0"
           style={{

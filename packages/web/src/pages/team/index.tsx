@@ -312,9 +312,6 @@ export function TeamPage() {
               <Plus className="h-3.5 w-3.5" />
               New agent
             </Button>
-            <Button size="sm" variant="outline" onClick={() => navigate("/team/resources")}>
-              Resources
-            </Button>
             {/* Secondary, admin-only — neutral outline, never green. */}
             {isAdmin && (
               <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)}>

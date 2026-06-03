@@ -275,30 +275,18 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("renders legacy source repos as a read-only compatibility panel", async () => {
-    const { SourceReposSettingsPanel } = await import("../source-repos-settings-panel.js");
-    const { container, root } = await renderPanel(<SourceReposSettingsPanel />);
-    await waitForText(container, "https://github.com/acme/web");
-    expect(container.textContent).toContain("branch: main");
-    expect(container.textContent).toContain("2");
-    expect(container.textContent).toContain("Manage active repo resources from Team Resources");
-    expect(container.querySelector("button")).toBeNull();
-    await act(async () => root.unmount());
-
+  it("renders the context tree binding read-only for members", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
-    const member = await renderPanel(<SourceReposSettingsPanel />);
-    await waitForText(member.container, "Team Resources");
-    expect(member.container.querySelector("button")).toBeNull();
-    await act(async () => member.root.unmount());
-
-    settingsMocks.getSourceReposSetting.mockResolvedValueOnce(sourceRepos({ repos: [] }));
-    const empty = await renderPanel(<SourceReposSettingsPanel />);
-    await waitForText(empty.container, "No source repos bound yet.");
-    await act(async () => empty.root.unmount());
-
-    settingsMocks.getSourceReposSetting.mockRejectedValueOnce(new Error("source load failed"));
-    const failed = await renderPanel(<SourceReposSettingsPanel />);
-    await waitForText(failed.container, "source load failed");
-    await act(async () => failed.root.unmount());
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Context tree");
+    const inputs = container.querySelectorAll("input");
+    expect(inputs.length).toBeGreaterThan(0);
+    for (const input of inputs) {
+      expect(input.hasAttribute("readonly")).toBe(true);
+    }
+    // No Save affordance for members.
+    expect(container.querySelector('button[type="submit"]')).toBeNull();
+    await act(async () => root.unmount());
   });
 });

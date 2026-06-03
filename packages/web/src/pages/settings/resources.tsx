@@ -1,7 +1,7 @@
 import type { CreateTeamResource, ResourceRow, ResourceType } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import {
   createTeamResource,
   listTeamResources,
@@ -9,16 +9,46 @@ import {
   retireResource,
 } from "../../api/resources.js";
 import { useAuth } from "../../auth/auth-context.js";
+import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { Section } from "../../components/ui/section.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
+import { Textarea } from "../../components/ui/textarea.js";
 
 const RESOURCE_TYPES: ResourceType[] = ["repo", "prompt", "skill", "mcp"];
+const DEFAULT_MODES = ["available", "recommended"] as const;
+const TRANSPORTS = ["stdio", "http", "sse"] as const;
+type DefaultMode = (typeof DEFAULT_MODES)[number];
+type Transport = (typeof TRANSPORTS)[number];
 
-export function TeamResourcesPage() {
+// Narrow a raw Select value back to its union without an `as` assertion: the
+// control can only emit one of the provided option values, so the fallback is
+// never hit at runtime — it just keeps the return type honest.
+const asResourceType = (v: string): ResourceType => RESOURCE_TYPES.find((t) => t === v) ?? "repo";
+const asDefaultMode = (v: string): DefaultMode => DEFAULT_MODES.find((d) => d === v) ?? "available";
+const asTransport = (v: string): Transport => TRANSPORTS.find((t) => t === v) ?? "stdio";
+
+const TYPE_OPTIONS: SelectOption[] = RESOURCE_TYPES.map((t) => ({ value: t, label: typeLabelSingular(t) }));
+const DEFAULT_OPTIONS: SelectOption[] = [
+  { value: "available", label: "Available", hint: "Agents opt in" },
+  { value: "recommended", label: "Recommended", hint: "On by default" },
+];
+const TRANSPORT_OPTIONS: SelectOption[] = TRANSPORTS.map((t) => ({ value: t, label: t }));
+
+/**
+ * Settings → Resources. Org-scoped runtime resources (repo / prompt / skill /
+ * mcp) the team's agents consume. Lives under Settings (an org-admin config
+ * surface), not on the Team roster — see the Settings IA in settings.tsx.
+ *
+ * Visible to all members (read-only); only admins see create / retire
+ * affordances. The chrome (PageHeader + padded wrapper) matches the sibling
+ * Settings pages so it slots cleanly into the master-detail layout.
+ */
+export function SettingsResourcesPage() {
   const { role } = useAuth();
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
@@ -39,9 +69,9 @@ export function TeamResourcesPage() {
   }, [resourcesQuery.data]);
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+    <>
       <PageHeader
-        title="Team Resources"
+        title="Resources"
         subtitle="Team defaults and available resources used by agents at runtime."
         right={
           isAdmin ? (
@@ -51,37 +81,39 @@ export function TeamResourcesPage() {
           ) : null
         }
       />
-      {resourcesQuery.isLoading ? (
-        <p className="text-body" style={{ color: "var(--fg-3)" }}>
-          Loading...
-        </p>
-      ) : resourcesQuery.error ? (
-        <p className="text-body" style={{ color: "var(--state-error)" }}>
-          {resourcesQuery.error instanceof Error ? resourcesQuery.error.message : "Failed to load resources"}
-        </p>
-      ) : (
-        RESOURCE_TYPES.map((type) => (
-          <Section key={type} title={typeLabel(type)} count={grouped.get(type)?.length ?? 0}>
-            <div>
-              {(grouped.get(type) ?? []).length === 0 ? (
-                <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-                  No {typeLabel(type).toLowerCase()} configured.
-                </p>
-              ) : (
-                (grouped.get(type) ?? []).map((resource) => (
-                  <ResourceListRow
-                    key={resource.id}
-                    resource={resource}
-                    canEdit={isAdmin}
-                    retiring={retireMut.isPending}
-                    onRetire={() => retireMut.mutate(resource.id)}
-                  />
-                ))
-              )}
-            </div>
-          </Section>
-        ))
-      )}
+      <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+        {resourcesQuery.isLoading ? (
+          <p className="text-body" style={{ color: "var(--fg-3)" }}>
+            Loading...
+          </p>
+        ) : resourcesQuery.error ? (
+          <p className="text-body" style={{ color: "var(--state-error)" }}>
+            {resourcesQuery.error instanceof Error ? resourcesQuery.error.message : "Failed to load resources"}
+          </p>
+        ) : (
+          RESOURCE_TYPES.map((type) => (
+            <Section key={type} title={typeLabel(type)} count={grouped.get(type)?.length ?? 0}>
+              <div>
+                {(grouped.get(type) ?? []).length === 0 ? (
+                  <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
+                    No {typeLabel(type).toLowerCase()} configured.
+                  </p>
+                ) : (
+                  (grouped.get(type) ?? []).map((resource) => (
+                    <ResourceListRow
+                      key={resource.id}
+                      resource={resource}
+                      canEdit={isAdmin}
+                      retiring={retireMut.isPending}
+                      onRetire={() => retireMut.mutate(resource.id)}
+                    />
+                  ))
+                )}
+              </div>
+            </Section>
+          ))
+        )}
+      </div>
       <CreateResourceDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
@@ -90,7 +122,7 @@ export function TeamResourcesPage() {
           queryClient.invalidateQueries({ queryKey: ["team-resources"] });
         }}
       />
-    </div>
+    </>
   );
 }
 
@@ -114,9 +146,9 @@ function ResourceListRow(props: { resource: ResourceRow; canEdit: boolean; retir
           <p className="m-0 text-body font-medium truncate" style={{ color: "var(--fg)" }}>
             {props.resource.name}
           </p>
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+          <Badge variant={props.resource.defaultEnabled === "recommended" ? "secondary" : "outline"}>
             {props.resource.defaultEnabled}
-          </span>
+          </Badge>
         </div>
         {detail ? (
           <p className="m-0 text-caption truncate mono" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
@@ -214,33 +246,24 @@ function CreateResourceDialog(props: { open: boolean; onOpenChange: (open: boole
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="resource-type">Type</Label>
-              <select
+            <SelectField id="resource-type" label="Type">
+              <Select
                 id="resource-type"
-                className="h-9 w-full rounded border bg-background px-2"
+                aria-label="Resource type"
                 value={type}
-                onChange={(e) => setType(e.target.value as ResourceType)}
-              >
-                {RESOURCE_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {typeLabel(t)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="resource-default">Default</Label>
-              <select
+                onChange={(v) => setType(asResourceType(v))}
+                options={TYPE_OPTIONS}
+              />
+            </SelectField>
+            <SelectField id="resource-default" label="Default">
+              <Select
                 id="resource-default"
-                className="h-9 w-full rounded border bg-background px-2"
+                aria-label="Default mode"
                 value={defaultEnabled}
-                onChange={(e) => setDefaultEnabled(e.target.value as "recommended" | "available")}
-              >
-                <option value="available">Available</option>
-                <option value="recommended">Recommended</option>
-              </select>
-            </div>
+                onChange={(v) => setDefaultEnabled(asDefaultMode(v))}
+                options={DEFAULT_OPTIONS}
+              />
+            </SelectField>
           </div>
           <Field id="resource-name" label="Name" value={name} onChange={setName} placeholder="Resource name" />
           {type === "mcp" && transport !== "stdio" ? (
@@ -265,19 +288,16 @@ function CreateResourceDialog(props: { open: boolean; onOpenChange: (open: boole
           ) : null}
           {type === "mcp" ? (
             <>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-transport">Transport</Label>
-                <select
+              <SelectField id="mcp-transport" label="Transport">
+                <Select
                   id="mcp-transport"
-                  className="h-9 w-full rounded border bg-background px-2"
+                  aria-label="MCP transport"
                   value={transport}
-                  onChange={(e) => setTransport(e.target.value as "stdio" | "http" | "sse")}
-                >
-                  <option value="stdio">stdio</option>
-                  <option value="http">http</option>
-                  <option value="sse">sse</option>
-                </select>
-              </div>
+                  onChange={(v) => setTransport(asTransport(v))}
+                  options={TRANSPORT_OPTIONS}
+                  mono
+                />
+              </SelectField>
               {transport === "stdio" ? (
                 <Field id="mcp-command" label="Command" value={command} onChange={setCommand} placeholder="npx" mono />
               ) : null}
@@ -294,11 +314,11 @@ function CreateResourceDialog(props: { open: boolean; onOpenChange: (open: boole
               />
               <div className="space-y-2">
                 <Label htmlFor="resource-body">Body</Label>
-                <textarea
+                <Textarea
                   id="resource-body"
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  className="min-h-32 w-full rounded border bg-background p-2 text-body"
+                  className="min-h-32 resize-y"
                 />
               </div>
             </>
@@ -356,9 +376,28 @@ function Field(props: {
   );
 }
 
+/** Label + control wrapper for the design-system `Select` (mirrors `Field`). */
+function SelectField(props: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={props.id}>{props.label}</Label>
+      {props.children}
+    </div>
+  );
+}
+
+/** Plural for the list section headers (a group of resources). */
 function typeLabel(type: ResourceType): string {
   if (type === "repo") return "Repos";
   if (type === "prompt") return "Prompts";
   if (type === "skill") return "Skills";
+  return "MCP";
+}
+
+/** Singular for the create-dialog type picker (choosing one resource). */
+function typeLabelSingular(type: ResourceType): string {
+  if (type === "repo") return "Repo";
+  if (type === "prompt") return "Prompt";
+  if (type === "skill") return "Skill";
   return "MCP";
 }

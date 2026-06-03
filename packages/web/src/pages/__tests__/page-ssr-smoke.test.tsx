@@ -911,9 +911,10 @@ describe("page SSR smoke coverage", () => {
   it("renders public and settings pages with seeded query data", async () => {
     const { ClientsPage } = await import("../clients.js");
     const { LandingPage } = await import("../landing/index.js");
-    const { OrgSettingsPage } = await import("../org-settings.js");
     const { SettingsComputersPage } = await import("../settings/computers.js");
+    const { SettingsContextTreePage } = await import("../settings/context-tree.js");
     const { SettingsGithubPage } = await import("../settings/github.js");
+    const { SettingsResourcesPage } = await import("../settings/resources.js");
     const { TeamPage } = await import("../team/index.js");
     const { TeamSettingsPage } = await import("../team/settings.js");
 
@@ -922,14 +923,17 @@ describe("page SSR smoke coverage", () => {
     expect(renderPage(<TeamPage />)).toContain("Team");
     expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<TeamSettingsPage />)).toContain("Identity");
-    expect(renderPage(<OrgSettingsPage />)).toContain("Context tree");
+    expect(renderPage(<TeamSettingsPage />)).toContain("Team profile");
+    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
     authMock.value = { ...authMock.value, role: "member" };
+    // Admin-only surfaces redirect members out (empty render); Context tree
+    // and Resources stay visible (read-only) for members.
     expect(renderPage(<SettingsGithubPage />)).toBe("");
-    expect(renderPage(<TeamSettingsPage />)).toContain("Repos your team");
-    expect(renderPage(<OrgSettingsPage />)).not.toContain("Identity");
-    expect(renderPage(<OrgSettingsPage />)).not.toContain("Source repos");
+    expect(renderPage(<TeamSettingsPage />)).toBe("");
+    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
     authMock.value = { ...authMock.value, role: null };
     expect(renderPage(<SettingsGithubPage />)).toContain("Loading");
@@ -1265,7 +1269,6 @@ describe("page SSR smoke coverage", () => {
     );
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
-    const { SourceReposSettingsPanel } = await import("../source-repos-settings-panel.js");
     const { SettingsLayout } = await import("../settings.js");
 
     const preview = {
@@ -1298,7 +1301,6 @@ describe("page SSR smoke coverage", () => {
     ).toContain("Join Acme");
     expect(renderPage(<GithubAppInstallationPanel />)).toContain("GitHub App");
     expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Context tree");
-    expect(renderPage(<SourceReposSettingsPanel />)).toContain("Source repos");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();
     expect(renderPage(<SettingsLayout />)).toContain("Settings");
