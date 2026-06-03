@@ -332,6 +332,17 @@ export function writeAgentBriefing(workspacePath: string, content: string): void
  * atomic, and the rename overwrites any existing file or symlink in place.
  * The temp file is cleaned up on any failure so a crashed write does not
  * leak siblings.
+ *
+ * ⚠️ SDK assumption (regression-watch on `@anthropic-ai/claude-agent-sdk`
+ * version bumps): this layout relies on the Claude Code SDK enumerating
+ * ONLY `<cwd>/CLAUDE.md` as a Project memory file — the SDK does not look
+ * for `<cwd>/AGENTS.md` separately, so the symlink is resolved
+ * transparently with no double-load. Verified on 0.2.84 (`grep -c
+ * '"AGENTS.md"' cli.js` → 0; `grep -c '"CLAUDE.md"' cli.js` → 13, all on
+ * Project / User / Local / Managed memory paths). If a future SDK adds
+ * AGENTS.md as a sibling Project memory entry, the briefing would
+ * double-load — re-run the manual probes documented in tree-context PR
+ * #397 before upgrading the SDK major version.
  */
 export function ensureClaudeMdSymlink(workspacePath: string): void {
   const claudeMd = join(workspacePath, "CLAUDE.md");
