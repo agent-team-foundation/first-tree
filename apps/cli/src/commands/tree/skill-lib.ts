@@ -15,24 +15,23 @@ import { fileURLToPath } from "node:url";
 /**
  * Skills that every agent needs regardless of Context Tree binding. These
  * are deployed by `bootstrapWorkspace` (packages/client) on every session
- * start, so the on-disk `SKILL.md` is reachable even for agents that never
- * run `tree integrate`. Currently empty.
+ * start, so the on-disk `SKILL.md` is reachable for every agent.
+ * Currently empty.
  */
 export const CORE_SKILL_NAMES = [] as const;
 
 /**
- * Skills that ship with a Context Tree binding. These are deployed by the
- * tree-related CLI commands (`tree integrate`, `tree bind`, `tree bootstrap`,
- * `tree skill install/upgrade`, `tree upgrade`) and are only useful for
- * agents that operate on a Context Tree.
+ * Skills that ship with a Context Tree binding. These are deployed by
+ * `tree init`, `tree skill install/upgrade`, and `tree upgrade`, and are
+ * only useful for agents that operate on a Context Tree.
  */
 export const TREE_SKILL_NAMES = [
   "first-tree",
+  "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
   "first-tree-write",
   "first-tree-github-scan",
-  "first-tree-cloud",
   "github-scan",
 ] as const;
 
@@ -88,7 +87,14 @@ const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
 
 export type ManagedFileAction = "created" | "updated" | "unchanged" | "skipped";
 
-const FIRST_TREE_REFERENCE_FILES = [
+/**
+ * Files required for `first-tree-context`. The Context Tree concept and
+ * principle references migrated from `first-tree/` to `first-tree-context/`
+ * in the skill-topology restructure (proposal: skill-restructure.20260602);
+ * the top-level `first-tree` skill no longer carries references — it is a
+ * routing/hygiene entry point only.
+ */
+const FIRST_TREE_CONTEXT_REFERENCE_FILES = [
   "SKILL.md",
   "VERSION",
   join("agents", "openai.yaml"),
@@ -103,7 +109,12 @@ const FIRST_TREE_REFERENCE_FILES = [
 const STANDARD_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION", join("agents", "openai.yaml")] as const;
 
 const WHITEPAPER_FILE = "WHITEPAPER.md";
-const WHITEPAPER_SYMLINK_TARGET = join(".agents", "skills", "first-tree", "SKILL.md");
+// Whitepaper content (Context Tree concepts, principles, ownership, methodology)
+// lives in `first-tree-context/SKILL.md` after the skill-topology restructure
+// (proposal: skill-restructure.20260602). The top-level `first-tree/SKILL.md` is
+// now a routing + pre-task hygiene dispatcher, not methodology — so pointing the
+// installed `<repo>/WHITEPAPER.md` symlink at it would make name and content drift.
+const WHITEPAPER_SYMLINK_TARGET = join(".agents", "skills", "first-tree-context", "SKILL.md");
 
 function layoutForSkill(name: SkillName): SkillLayout {
   return {
@@ -123,7 +134,7 @@ function coreSkillLayouts(): readonly SkillLayout[] {
 }
 
 function requiredFilesForSkill(name: SkillName): readonly string[] {
-  return name === "first-tree" ? FIRST_TREE_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
+  return name === "first-tree-context" ? FIRST_TREE_CONTEXT_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
 }
 
 export function bundledSkillsRootFrom(startDir: string): string {

@@ -74,6 +74,26 @@ type AgentLifecycleTarget = {
 
 const AGENT_PAGE_SIZE = 100;
 const MAX_AGENT_PAGES = 100;
+const AGENT_FILTER_STORAGE_KEY = "first-tree:team-agent-filter:v1";
+
+function readAgentFilterPreference(): AgentFilter {
+  if (typeof window === "undefined") return "all";
+  try {
+    const stored = window.localStorage?.getItem?.(AGENT_FILTER_STORAGE_KEY);
+    return stored === "mine" ? "mine" : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function writeAgentFilterPreference(next: AgentFilter): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage?.setItem?.(AGENT_FILTER_STORAGE_KEY, next);
+  } catch {
+    // Preference storage is best-effort; the current in-memory filter still works.
+  }
+}
 
 export async function fetchAllAgents(
   fetchPage: (params: { limit: number; cursor?: string }) => Promise<{ items: Agent[]; nextCursor: string | null }>,
@@ -99,7 +119,7 @@ export function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<MemberEditTarget | null>(null);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>(() => readAgentFilterPreference());
   const [suspendTarget, setSuspendTarget] = useState<AgentLifecycleTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentLifecycleTarget | null>(null);
   const [query, setQuery] = useState("");
@@ -208,6 +228,10 @@ export function TeamPage() {
   });
 
   const search = query.trim().toLowerCase();
+  const handleAgentFilterChange = (next: AgentFilter) => {
+    setAgentFilter(next);
+    writeAgentFilterPreference(next);
+  };
   const { publicAgents, privateAgents, humans, agentCount } = useMemo(
     () =>
       buildTeamData({
@@ -338,7 +362,7 @@ export function TeamPage() {
             }
             searchActive={search.length > 0}
             agentFilter={agentFilter}
-            onAgentFilter={setAgentFilter}
+            onAgentFilter={handleAgentFilterChange}
           />
         )}
       </div>

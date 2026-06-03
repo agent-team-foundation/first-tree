@@ -36,6 +36,21 @@ export {
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
 export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
+// Workspace migration to W1
+export type {
+  MigrateOptions,
+  MigrationArtifactKind,
+  MigrationDetection,
+  MigrationResult,
+  PromoteOptions,
+  PromoteResult,
+} from "./migrate-workspace.js";
+export {
+  detectMigrationState,
+  migrateWorkspaceToW1,
+  planPromotableDryRun,
+  promoteToWorkspace,
+} from "./migrate-workspace.js";
 // Onboard
 export {
   formatCheckReport,
@@ -90,3 +105,13 @@ export {
 } from "./update-state.js";
 // Command package version (bundle self-identification)
 export { CLI_USER_AGENT, COMMAND_VERSION } from "./version.js";
+// Workspace-rooted layout (workspace-layout-simplification.md)
+export type { WorkspaceBoundSource, WorkspaceStatus, WorkspaceUnboundSibling } from "./workspace.js";
+export {
+  computeWorkspaceStatus,
+  discoverWorkspaceRoot,
+  pickImmediateWorkspaceSources,
+  readGitRemoteUrl,
+  readWorkspaceManifest,
+  writeWorkspaceManifest,
+} from "./workspace.js";

@@ -48,6 +48,19 @@ vi.mock("../core/index.js", () => ({
   COMMAND_VERSION: "0.0.0-test",
 }));
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: vi.fn((path: Parameters<typeof actual.readFileSync>[0], ...args: unknown[]) => {
+      if (path === "/proc/version") {
+        return "Linux version 5.15.90.1-microsoft-standard-WSL2";
+      }
+      return (actual.readFileSync as (...readArgs: unknown[]) => unknown)(path, ...args);
+    }),
+  };
+});
+
 vi.mock("../cli/output.js", () => ({
   fail: failMock,
 }));
@@ -186,6 +199,7 @@ describe("daemon start command", () => {
   });
 
   it("prints WSL repair guidance when service startup fails", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus.mockReturnValueOnce({
       platform: "systemd",
@@ -200,6 +214,8 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("Failed to start service");
+    expect(output()).toContain("WSL2 detected");
+    expect(output()).toContain("sudo umount -l /run/user/$(id -u)");
     expect(output()).toContain("Try `--foreground` to run inline instead.");
   });
 
@@ -302,5 +318,30 @@ describe("daemon start command", () => {
     expect(text).toContain("runtime-provider reconcile skipped: runtime probe failed");
     expect(text).toContain("capabilities upload skipped: capabilities failed");
     expect(text).toContain("skills upload skipped: skill scan failed");
+  });
+
+  it("handles user and org mismatch errors from inline runtime startup", async () => {
+    const client = await import("@first-tree/client");
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientUserMismatchError("wrong user"));
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("client.yaml is owned by a different user");
+    expect(output()).toContain("login <token> --override");
+
+    stderrSpy.mockClear();
+    coreMocks.ClientRuntime.mockClear();
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientOrgMismatchError("wrong org"));
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+    expect(coreMocks.handleClientOrgMismatch).toHaveBeenCalledWith(
+      expect.any(client.ClientOrgMismatchError),
+      expect.objectContaining({ managed: false, rerunCommand: "first-tree daemon start" }),
+    );
+  });
+
+  it("continues when per-agent skill upload fails", async () => {
+    coreMocks.uploadAgentSkills.mockRejectedValueOnce(new Error("agent skill upload failed"));
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(output()).toContain("skills upload for kael skipped: agent skill upload failed");
   });
 });

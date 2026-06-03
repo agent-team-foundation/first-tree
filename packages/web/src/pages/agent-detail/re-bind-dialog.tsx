@@ -11,8 +11,16 @@ import { type HubClient, listClients } from "../../api/activity.js";
 import { rebindAgent } from "../../api/agents.js";
 import { ApiError } from "../../api/client.js";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
 
 const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
@@ -54,6 +62,7 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
   });
 
   const candidateClients = clientsQuery.data ?? [];
+  const clientOptions: SelectOption[] = candidateClients.map((c) => ({ value: c.id, label: clientLabel(c) }));
 
   // Capability snapshots ride along on every list row now (`/me/clients`
   // includes the `metadata.capabilities` blob), so the runtime picker
@@ -117,26 +126,25 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Re-bind agent</DialogTitle>
+          <DialogDescription>
+            Move this agent to another computer or runtime. Re-bind applies immediately and is not part of draft save.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-            Currently:{" "}
+            Current binding:{" "}
             <span className="mono">{describeCurrent(currentClientId, candidateClients, currentProvider)}</span>
           </p>
 
           <div className="space-y-2">
             <Label>Computer</Label>
-            <select
+            <Select
               value={selectedClientId ?? ""}
-              onChange={(e) => setSelectedClientId(e.target.value || null)}
-              className="w-full rounded-[var(--radius-input)] border border-input bg-background px-3 py-2 text-body"
-            >
-              {candidateClients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {clientLabel(c)}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setSelectedClientId(v || null)}
+              options={clientOptions}
+              placeholder="Select a computer"
+              aria-label="Computer"
+            />
           </div>
 
           <div className="space-y-2">
@@ -179,15 +187,10 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
           {(clientChanged || providerChanged) && (
             <div className="rounded-[var(--radius-panel)] border border-border bg-muted/30 px-3 py-2 text-caption space-y-1">
               <p>
-                <span className="font-medium">Heads up:</span> active sessions on the previous computer are suspended at
-                re-bind. Chat history is preserved.
+                <span className="font-medium">Impact:</span> the active runtime on the previous computer will be
+                stopped. Chat history is preserved.
               </p>
-              {providerChanged && (
-                <p>
-                  Some configuration fields don't transfer between providers (e.g. claude permission_mode is dropped;
-                  codex sandboxMode resets to default).
-                </p>
-              )}
+              {providerChanged && <p>Provider-specific settings may reset when switching runtimes.</p>}
             </div>
           )}
 
@@ -195,8 +198,7 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
             <label className="flex items-start gap-2 text-caption" style={{ color: "var(--fg-2)" }}>
               <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="mt-0.5" />
               <span>
-                Override capability check — pick this if the destination computer is offline or the SDK was just
-                installed and capabilities haven't refreshed yet.
+                Override capability check if the destination computer is offline or capabilities have not refreshed yet.
               </span>
             </label>
           )}

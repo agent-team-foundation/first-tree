@@ -127,10 +127,17 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
     expect(briefing).toContain("# First Tree Agent Runtime");
+    // The long-form Sending Messages CLI usage lives in the top-level
+    // first-tree skill; the Communication Rules decision guide + the
+    // Fallback paragraph stay inline because first-tree is not in
+    // CORE_SKILL_NAMES (tree-less agents would otherwise lose them).
     expect(briefing).toContain("## Communication Rules");
-    expect(briefing).toContain("first-tree-staging chat invite");
+    expect(briefing).toContain("## Workspace Collaboration");
+    expect(briefing).toContain("`first-tree` skill");
     expect(briefing).toContain("first-tree-staging chat send");
     expect(briefing).toContain("does NOT wake other agents");
     expect(briefing).not.toContain("`.agent/tools.md` for the");
+    // Stale pointer at the retired first-tree-cloud skill must stay gone.
+    expect(briefing).not.toContain("first-tree-cloud");
   });
 });

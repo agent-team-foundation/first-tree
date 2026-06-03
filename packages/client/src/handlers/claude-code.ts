@@ -11,7 +11,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
+import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime, ToolFileRef } from "@first-tree/shared";
 import {
   isImageBatchRefContent,
   isImageRefContent,
@@ -21,6 +21,7 @@ import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/a
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { buildChatSystemPrompt, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -306,12 +307,12 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
- * View tools whose `file_path` argument names a single file the model is
- * reading. A read of a file under the Context Tree root is the honest
- * "agent consulted the tree" signal (see `treeNodePathOf`). Search tools
- * (Grep/Glob) are excluded — they scan, they don't read a specific node.
+ * Tools whose `file_path` argument names a single file. Search tools
+ * (Grep/Glob) are excluded because they need server-side command/query
+ * semantics before they can be treated as an explicit file IO fact.
  */
 const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
+const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
 
 /** Extract a string `file_path` argument from a tool_use input, if present. */
 function readFilePathArg(input: unknown): string | null {
@@ -339,29 +340,62 @@ export function treeNodePathOf(filePath: string, contextTreePath: string): strin
   return rel.length > 0 ? rel : null;
 }
 
-/**
- * If a tool with this name + input is a tree-file read, return the node path
- * it read; else null.
- */
-function treeReadNodePath(toolName: string, input: unknown, contextTreePath: string): string | null {
-  if (!TREE_READ_TOOL_NAMES.has(toolName)) return null;
+/** Local Context Tree repo mapping available to the tool-call processor. */
+export type ContextTreeBinding = { path: string | null; repoUrl: string | null; branch?: string | null };
+
+function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTreeBinding): ToolFileRef | null {
+  if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  return treeNodePathOf(filePath, contextTreePath);
+  const repoRelativePath = contextTree?.path ? treeNodePathOf(filePath, contextTree.path) : null;
+  return {
+    origin: "tool_arg",
+    localPath: filePath,
+    pathKind: "file",
+    ...(contextTree?.repoUrl && repoRelativePath !== null
+      ? {
+          repoUrl: contextTree.repoUrl,
+          ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
+          repoRelativePath,
+        }
+      : {}),
+  };
 }
 
-/** Context Tree binding the tool-call processor needs to emit usage signals. */
-export type ContextTreeBinding = { path: string | null; repoUrl: string | null };
+function readCommandArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const command = (input as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function toolFileRefs(
+  toolName: string,
+  input: unknown,
+  contextTree: ContextTreeBinding | undefined,
+  cwd: string | null | undefined,
+): ToolFileRef[] {
+  const directRef = toolFileRef(toolName, input, contextTree);
+  if (directRef) return [directRef];
+  if (toolName !== "Bash" || !cwd) return [];
+  const command = readCommandArg(input);
+  if (command === null) return [];
+  return toolFileRefsFromShellCommand({
+    command,
+    cwd,
+    contextTreePath: contextTree?.path ?? null,
+    contextTreeRepoUrl: contextTree?.repoUrl ?? null,
+    contextTreeBranch: contextTree?.branch ?? null,
+  });
+}
 
 /**
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
  * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
  *
- * When a `contextTree` binding is supplied, a view tool whose read of a file
- * under the tree root SUCCEEDS ALSO emits a `context_tree_usage` event carrying
- * the node path — the honest replacement for the old per-inbound-message emit.
- * Emitting on the successful tool_result (not the tool_use request) means
- * failed/aborted reads never inflate the signal.
+ * Successful single-file read/write tools carry generic `toolFileRefs`
+ * evidence. When the local path can be mapped to a known repo checkout, the ref
+ * includes repo evidence. The server derives Context Tree IO from that evidence
+ * and the actual runtime/tool.
  */
 export type ToolCallProcessor = {
   onMessage(message: unknown): void;
@@ -371,6 +405,7 @@ export type ToolCallProcessor = {
 export function createToolCallProcessor(
   emit: (event: SessionEvent) => void,
   contextTree?: ContextTreeBinding,
+  options: { cwd?: string | null } = {},
 ): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
@@ -382,6 +417,8 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
+
     emit({
       kind: "tool_call",
       payload: {
@@ -391,24 +428,9 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(refs.length > 0 ? { toolFileRefs: refs } : {}),
       },
     });
-
-    // Honest Context Tree usage: a view tool that successfully read a file
-    // under the tree root means the agent actually consulted that node. Emit
-    // here (on the successful tool_result), not on the tool_use request, so
-    // failed reads (is_error) and aborted/unanswered reads never count.
-    // Carries the node path so the web feed can show which node was read.
-    // Replaces the old unconditional per-inbound-message emit (the vanity metric).
-    if (status === "ok" && contextTree?.path) {
-      const nodePath = treeReadNodePath(entry.name, entry.args, contextTree.path);
-      if (nodePath !== null) {
-        emit({
-          kind: "context_tree_usage",
-          payload: { purpose: "design_decision", treeRepoUrl: contextTree.repoUrl, nodePath },
-        });
-      }
-    }
 
     pending.delete(block.tool_use_id);
   }
@@ -1016,10 +1038,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event), {
-      path: contextTreePath,
-      repoUrl: contextTreeRepoUrl,
-    });
+    const toolCallProcessor = createToolCallProcessor(
+      (event) => sessionCtx.emitEvent(event),
+      {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      { cwd },
+    );
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted
     // in the result-error branch so we don't double-emit (once as a hint,
@@ -1317,10 +1344,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
-  // `agents.<name>` key). Used as `--workspace-id` for first-tree integrate
-  // so a single agent's multi-chat workspaces all bind to the same skill
-  // workspace identity instead of churning a new id per chat.
+  // `agents.<name>` key). Carried through to the per-session bootstrap so a
+  // single agent's multi-chat workspaces share the same workspace identity
+  // instead of churning a new id per chat.
   const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
@@ -1433,7 +1461,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree integrate` shell-out). Gated by the stage-2 sentinel + Context-Tree
+   * tree skill install` shell-out). Gated by the stage-2 sentinel + Context-Tree
    * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
    *
    *   - Sentinel absent → full bootstrap.

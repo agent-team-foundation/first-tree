@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 // NOTE: The old `ConfigSection` was removed in favour of the unified
 // `Section` component at `components/ui/section.tsx` (shared with Settings).
 // This file now hosts only the row primitives — ConfigRow, the help-icon
-// tooltip, and the dense table header used by Tools / Resources tabs.
+// tooltip, and the dense table header used by resource-style tables.
 
 type ConfigRowProps = {
   label: ReactNode;
@@ -37,7 +37,7 @@ export function ConfigRow({
 }: ConfigRowProps) {
   return (
     <div
-      className="grid grid-cols-1 gap-2 text-body md:gap-3 md:[grid-template-columns:minmax(10rem,0.7fr)_minmax(0,1.7fr)_auto_auto] md:items-start"
+      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[8.25rem_minmax(0,1fr)_auto_auto] md:items-start md:gap-4"
       style={{
         padding: "var(--sp-2_5) 0",
         borderBottom: "var(--hairline) solid var(--border-faint)",
@@ -51,10 +51,17 @@ export function ConfigRow({
       </div>
       <div className="min-w-0 break-words">
         {children ? (
-          <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
-            {helpText && <HelpIconTooltip text={helpText} />}
-          </div>
+          <>
+            <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+              {helpText && <HelpIconTooltip text={helpText} />}
+            </div>
+            {description && (
+              <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
+                {description}
+              </div>
+            )}
+          </>
         ) : (
           <>
             {value != null && (

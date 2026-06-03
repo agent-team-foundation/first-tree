@@ -1,8 +1,9 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMemo } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
 import { ConfigRow } from "./flat-section.js";
-import { ChangedChip, OptionDropdown, type SelectOption } from "./option-dropdown.js";
 
 /**
  * Model — an inline dropdown with a "changed" hint and Revert. No inline save:
@@ -78,8 +79,8 @@ export function ModelSection({
   return (
     <ConfigRow
       label="Model"
-      helpText={MODEL_HELP_BY_PROVIDER[provider]}
-      meta={dirty ? <ChangedChip /> : null}
+      description={MODEL_HELP_BY_PROVIDER[provider]}
+      meta={dirty ? <DraftStatusChip status="modified" /> : null}
       action={
         dirty ? (
           <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
@@ -88,7 +89,15 @@ export function ModelSection({
         ) : null
       }
     >
-      <OptionDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
+      <Select
+        options={items}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        mono
+        aria-label="Model"
+        className="w-full max-w-none"
+      />
     </ConfigRow>
   );
 }

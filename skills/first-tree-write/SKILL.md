@@ -1,18 +1,18 @@
 ---
 name: first-tree-write
-version: 0.5.0
+version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Write Context Tree updates from explicit source material — code PRs, design docs, meeting notes, raw text. Use when the user gives you a concrete source and wants the right durable tree change drafted, linked, and reviewed. This skill is source-driven and targeted; use `first-tree-sync` instead for broad drift audits with no specific source.
+description: Write Context Tree updates from explicit source material — code PRs, design docs, meeting notes, raw text. Use when the user gives you a concrete source (link, paste, file) and wants the right durable tree change drafted, linked, and reviewed. This skill is source-driven and targeted. Use `first-tree-sync` instead — not this skill — when the user is asking "is the tree up to date?" with no specific source attached.
 ---
 
 # First Tree Write
 
 Read these first:
 
-- `../first-tree/SKILL.md`
-- `../first-tree/references/anti-patterns.md`
-- `../first-tree/references/maintenance.md`
+- `../first-tree-context/SKILL.md`
+- `../first-tree-context/references/anti-patterns.md`
+- `../first-tree-context/references/maintenance.md`
 
 ## What This Skill Does
 
@@ -47,9 +47,12 @@ cross-domain relationship, write nothing and tell the user why.
 
 The CLI surface this skill uses today:
 
-- `first-tree tree inspect --json` — confirm the binding
-- `first-tree tree verify --tree-path <path>` — gate the final commit
-- `gh pr create` — open the tree-repo PR
+- `first-tree tree status --json` — confirm the workspace binding and
+  resolve `manifest.tree` to `<workspaceRoot>/<manifest.tree>` as the
+  path you will edit.
+- `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`
+  — gate the final commit.
+- `gh pr create` — open the tree-repo PR.
 
 There is no `first-tree tree write-node` or `tree open-tree-pr` command
 yet — write builds the file edits + commit + PR with `gh` and standard

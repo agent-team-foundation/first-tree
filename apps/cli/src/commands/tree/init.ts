@@ -1,17 +1,20 @@
-import { dirname, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
+import { pickImmediateWorkspaceSources, writeWorkspaceManifest } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { bindSourceRoot } from "./bind.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
-import { inspectCurrentWorkingTree } from "./inspect.js";
-import { discoverWorkspaceRepos, repoNameForRoot } from "./shared.js";
-import { readTreeIdentityContract } from "./tree-identity.js";
-import { syncWorkspaceMembersFromRoot } from "./workspace-sync.js";
+import { isGitRepoRoot, parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot, runCommand } from "./shared.js";
+import { copyCanonicalSkills } from "./skill-lib.js";
+import { upsertLocalTreeGitIgnore, upsertSourceIntegrationFiles } from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
+import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
+import { upsertTreeCodeRepoRegistry } from "./tree-repo-registry.js";
 
 type InitOptions = {
-  recursive?: boolean;
   scope?: "repo" | "workspace";
   treeMode?: "dedicated" | "shared";
   treeName?: string;
@@ -20,36 +23,38 @@ type InitOptions = {
   workspaceId?: string;
 };
 
-type CascadedRepo = {
-  bindingMode: string;
-  relativePath: string;
-  root: string;
-};
-
 type InitSummary = {
-  bindingMode: string;
-  cascadedRepos?: CascadedRepo[];
-  recursive: boolean;
+  bindingMode: "workspace-root";
   sourceRoot: string;
   treeRoot: string;
   treeMode: "dedicated" | "shared";
   workspaceId?: string;
+  workspaceManifest: {
+    tree: string;
+    sources: string[];
+  };
 };
 
-export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--tree-name NAME] [--tree-mode dedicated|shared] [--scope repo|workspace] [--workspace-id ID] [--no-recursive]
+export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--tree-name NAME] [--tree-mode dedicated|shared] [--scope workspace] [--workspace-id ID]
 
-Onboard a repo or workspace to a Context Tree.
+Onboard a workspace root to a Context Tree.
 
 Options:
   --tree-path PATH    use an explicit local tree repo path
   --tree-url URL      bind to an existing remote tree repo
   --tree-name NAME    override the default sibling tree repo name
   --tree-mode MODE    dedicated or shared
-  --scope MODE        repo or workspace
+  --scope MODE        workspace (the only supported value under W1)
   --workspace-id ID   workspace identifier for shared workspace onboarding
-  --recursive         cascade onboarding into nested git repos (default)
-  --no-recursive      onboard only the current root; skip nested git repos
   --help              show this help message`;
+
+const REPO_SCOPE_GUIDANCE = [
+  "`tree init --scope repo` is removed under W1. Use the workspace-scope recipe:",
+  "  1. From the source repo's parent: `mkdir <workspace>` and `mv <source> <workspace>/`.",
+  "  2. `cd <workspace>`.",
+  "  3. `first-tree tree init --scope workspace --tree-path ./<tree> --tree-mode dedicated --workspace-id <slug>`.",
+  "See the `first-tree-onboarding` skill (Phase B) for the full recipe.",
+].join("\n");
 
 function configureInitCommand(command: Command): void {
   command
@@ -57,156 +62,165 @@ function configureInitCommand(command: Command): void {
     .option("--tree-url <url>", "bind to an existing remote tree repo")
     .option("--tree-name <name>", "override the default sibling tree repo name")
     .option("--tree-mode <mode>", "dedicated or shared")
-    .option("--scope <scope>", "repo or workspace")
-    .option("--workspace-id <id>", "workspace identifier for shared workspace onboarding")
-    .option("--recursive", "cascade onboarding into nested git repos (default)")
-    .option("--no-recursive", "onboard only the current root; skip nested git repos");
+    .option("--scope <scope>", "workspace (the only supported value under W1)")
+    .option("--workspace-id <id>", "workspace identifier for shared workspace onboarding");
+}
+
+function readScopeOption(value: unknown): "repo" | "workspace" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "repo" || value === "workspace") return value;
+  throw new Error(`Unsupported value for --scope: ${String(value)} (expected "workspace")`);
+}
+
+function readTreeModeOption(value: unknown): "dedicated" | "shared" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "dedicated" || value === "shared") return value;
+  throw new Error(`Unsupported value for --tree-mode: ${String(value)} (expected "dedicated" or "shared")`);
+}
+
+function readStringOption(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function readInitOptions(command: Command): InitOptions {
-  const options = command.opts() as Record<string, string | boolean | undefined>;
+  const options: Record<string, unknown> = command.opts();
   return {
-    recursive: typeof options.recursive === "boolean" ? options.recursive : undefined,
-    scope: options.scope as "repo" | "workspace" | undefined,
-    treeMode: options.treeMode as "dedicated" | "shared" | undefined,
-    treeName: typeof options.treeName === "string" ? options.treeName : undefined,
-    treePath: typeof options.treePath === "string" ? options.treePath : undefined,
-    treeUrl: typeof options.treeUrl === "string" ? options.treeUrl : undefined,
-    workspaceId: typeof options.workspaceId === "string" ? options.workspaceId : undefined,
+    scope: readScopeOption(options.scope),
+    treeMode: readTreeModeOption(options.treeMode),
+    treeName: readStringOption(options.treeName),
+    treePath: readStringOption(options.treePath),
+    treeUrl: readStringOption(options.treeUrl),
+    workspaceId: readStringOption(options.workspaceId),
   };
 }
 
-function resolveScope(options: InitOptions, role: string): "repo" | "workspace" {
-  if (options.scope !== undefined) {
-    return options.scope;
-  }
-
-  return role.includes("workspace") ? "workspace" : "repo";
+function resolveTreeMode(options: InitOptions): "dedicated" | "shared" {
+  return options.treeMode ?? "shared";
 }
 
-function resolveTreeMode(options: InitOptions, scope: "repo" | "workspace"): "dedicated" | "shared" {
-  if (options.treeMode !== undefined) {
-    return options.treeMode;
-  }
-
-  return scope === "workspace" ? "shared" : "dedicated";
-}
-
-function resolveTreeRoot(
-  sourceRoot: string,
-  options: InitOptions,
-  _treeMode: "dedicated" | "shared",
-): string | undefined {
+function resolveTreeRoot(workspaceRoot: string, options: InitOptions): string {
   if (options.treePath) {
-    return resolve(process.cwd(), options.treePath);
+    return resolve(workspaceRoot, options.treePath);
   }
 
   if (options.treeUrl) {
-    return undefined;
+    const parsed = parseGitHubRemoteUrl(options.treeUrl);
+    const defaultName = options.treeName ?? parsed?.repo ?? basename(options.treeUrl).replace(/\.git$/u, "");
+    return join(workspaceRoot, defaultName);
   }
 
-  const defaultName = options.treeName ?? `${repoNameForRoot(sourceRoot)}-tree`;
-  return join(dirname(sourceRoot), defaultName);
+  const defaultName = options.treeName ?? `${repoNameForRoot(workspaceRoot)}-tree`;
+  return join(workspaceRoot, defaultName);
 }
 
-export function initializeSourceRoot(sourceRoot: string, role: string, options: InitOptions = {}): InitSummary {
-  const scope = resolveScope(options, role);
-  const treeMode = resolveTreeMode(options, scope);
-  const treeRoot = resolveTreeRoot(sourceRoot, options, treeMode);
-  const recursive = options.recursive ?? true;
-
-  if (treeRoot !== undefined && readTreeIdentityContract(treeRoot) === undefined) {
-    bootstrapTreeRoot(treeRoot, {
-      treeMode,
-    });
-  }
-
-  const bindingSummary = bindSourceRoot(
-    sourceRoot,
-    {
-      mode: scope === "workspace" ? "workspace-root" : "source",
-      treeMode,
-      ...(treeRoot ? { treePath: treeRoot } : {}),
-      ...(options.treeUrl ? { treeUrl: options.treeUrl } : {}),
-      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
-    },
-    process.cwd(),
-  );
-
-  const resolvedTreeRoot = treeRoot ?? bindingSummary.treeRoot;
-  const cascadedRepos: CascadedRepo[] = [];
-
-  if (recursive && resolvedTreeRoot) {
-    if (scope === "workspace") {
-      if (
-        syncWorkspaceMembersFromRoot({
-          treePath: resolvedTreeRoot,
-          workspaceId: options.workspaceId,
-          workspaceRoot: sourceRoot,
-        })
-      ) {
-        process.exitCode = 1;
-      }
-    } else {
-      cascadedRepos.push(...cascadeRepoScopeOnboarding(sourceRoot, resolvedTreeRoot, options.treeUrl));
+function ensureTreeCheckout(treeRoot: string, options: { treeUrl?: string; treeMode: "dedicated" | "shared" }): void {
+  if (existsSync(treeRoot)) {
+    if (!isGitRepoRoot(treeRoot)) {
+      throw new Error(
+        `Tree path exists but is not a git repository: ${treeRoot}. Point --tree-path at an existing tree checkout, or remove the directory and let init scaffold it.`,
+      );
     }
+    return;
   }
+
+  if (options.treeUrl) {
+    runCommand("git", ["clone", options.treeUrl, treeRoot], dirname(treeRoot));
+    return;
+  }
+
+  bootstrapTreeRoot(treeRoot, { treeMode: options.treeMode });
+}
+
+function resolveWorkspaceId(workspaceRoot: string, options: InitOptions): string {
+  return options.workspaceId?.trim() || repoNameForRoot(workspaceRoot);
+}
+
+export function initializeWorkspaceRoot(workspaceRoot: string, options: InitOptions = {}): InitSummary {
+  if (options.scope !== undefined && options.scope !== "workspace") {
+    throw new Error(REPO_SCOPE_GUIDANCE);
+  }
+
+  const treeMode = resolveTreeMode(options);
+  const treeRoot = resolveTreeRoot(workspaceRoot, options);
+
+  if (resolve(treeRoot) === resolve(workspaceRoot)) {
+    throw new Error("The workspace root and tree repo resolved to the same path.");
+  }
+
+  if (dirname(resolve(treeRoot)) !== resolve(workspaceRoot)) {
+    throw new Error(
+      `Tree must live as an immediate subdirectory of the workspace root. Got tree=${treeRoot}, workspace=${workspaceRoot}.`,
+    );
+  }
+
+  ensureTreeCheckout(treeRoot, {
+    ...(options.treeUrl ? { treeUrl: options.treeUrl } : {}),
+    treeMode,
+  });
+
+  if (readTreeIdentityContract(treeRoot) === undefined) {
+    bootstrapTreeRoot(treeRoot, { treeMode });
+  }
+
+  const workspaceId = resolveWorkspaceId(workspaceRoot, options);
+  const treeRepoName = repoNameForRoot(treeRoot);
+  const treeUrl =
+    options.treeUrl?.trim() || readGitRemoteUrl(treeRoot) || readTreeIdentityContract(treeRoot)?.publishedTreeUrl;
+
+  syncTreeIdentityFiles(treeRoot, {
+    ...(treeUrl ? { publishedTreeUrl: treeUrl } : {}),
+    treeMode,
+    treeRepoName,
+  });
+
+  copyCanonicalSkills(workspaceRoot);
+  upsertLocalTreeGitIgnore(workspaceRoot);
+  upsertSourceIntegrationFiles(workspaceRoot, treeRepoName, {
+    binName: channelConfig.binName,
+    bindingMode: "workspace-root",
+    entrypoint: "/",
+    treeMode,
+    ...(treeUrl ? { treeRepoUrl: treeUrl } : {}),
+    workspaceId,
+  });
+
+  const workspaceRemoteUrl = readGitRemoteUrl(workspaceRoot);
+  if (workspaceRemoteUrl && parseGitHubRemoteUrl(workspaceRemoteUrl) !== null) {
+    upsertTreeCodeRepoRegistry(treeRoot, workspaceRemoteUrl);
+  }
+  syncTreeSourceRepoIndex(treeRoot);
+
+  const manifest = writeWorkspaceManifestFromState(workspaceRoot, treeRoot);
 
   return {
-    bindingMode: bindingSummary.bindingMode,
-    ...(cascadedRepos.length > 0 ? { cascadedRepos } : {}),
-    recursive,
-    sourceRoot,
-    treeRoot: resolvedTreeRoot,
+    bindingMode: "workspace-root",
+    sourceRoot: workspaceRoot,
+    treeRoot,
     treeMode,
-    ...(bindingSummary.workspaceId ? { workspaceId: bindingSummary.workspaceId } : {}),
+    workspaceId,
+    workspaceManifest: manifest,
   };
 }
 
-function cascadeRepoScopeOnboarding(sourceRoot: string, treeRoot: string, treeUrl: string | undefined): CascadedRepo[] {
-  const resolvedTreeRoot = resolve(treeRoot);
-  const resolvedSourceRoot = resolve(sourceRoot);
-  const candidates = discoverWorkspaceRepos(sourceRoot).filter(
-    (candidate) => resolve(candidate.root) !== resolvedTreeRoot && resolve(candidate.root) !== resolvedSourceRoot,
-  );
-
-  const cascaded: CascadedRepo[] = [];
-
-  for (const candidate of candidates) {
-    try {
-      const summary = bindSourceRoot(
-        candidate.root,
-        {
-          mode: "source",
-          treeMode: "shared",
-          treePath: treeRoot,
-          ...(treeUrl ? { treeUrl } : {}),
-        },
-        sourceRoot,
-      );
-      cascaded.push({
-        bindingMode: summary.bindingMode,
-        relativePath: candidate.relativePath,
-        root: candidate.root,
-      });
-    } catch (error) {
-      process.exitCode = 1;
-      console.error(
-        `  Failed to onboard nested repo ${candidate.relativePath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  return cascaded;
+function writeWorkspaceManifestFromState(workspaceRoot: string, treeRoot: string): { tree: string; sources: string[] } {
+  const workspaceResolved = resolve(workspaceRoot);
+  const treeResolved = resolve(treeRoot);
+  const treeName = basename(treeResolved);
+  const sources = pickImmediateWorkspaceSources(workspaceResolved, treeName);
+  const manifest = { tree: treeName, sources };
+  writeWorkspaceManifest(workspaceResolved, manifest);
+  return manifest;
 }
 
 function runInitCommand(context: CommandContext): void {
   try {
-    const inspection = inspectCurrentWorkingTree();
+    const workspaceRoot = resolve(process.cwd());
+    if (!existsSync(workspaceRoot)) {
+      throw new Error(`Workspace root does not exist: ${workspaceRoot}`);
+    }
+
     const options = readInitOptions(context.command);
-    const summary = initializeSourceRoot(inspection.rootPath, inspection.role, options);
+    const summary = initializeWorkspaceRoot(workspaceRoot, options);
 
     if (context.options.json) {
       console.log(JSON.stringify(summary, null, 2));
@@ -214,20 +228,16 @@ function runInitCommand(context: CommandContext): void {
     }
 
     console.log("Context Tree Init\n");
-    console.log(`  Source/workspace root: ${summary.sourceRoot}`);
+    console.log(`  Workspace root:        ${summary.sourceRoot}`);
     console.log(`  Tree root:             ${summary.treeRoot}`);
     console.log(`  Binding mode:          ${summary.bindingMode}`);
     console.log(`  Tree mode:             ${summary.treeMode}`);
     if (summary.workspaceId) {
       console.log(`  Workspace id:          ${summary.workspaceId}`);
     }
-    console.log(`  Recursive cascade:     ${summary.recursive ? "yes" : "no"}`);
-    if (summary.cascadedRepos && summary.cascadedRepos.length > 0) {
-      console.log(`  Cascaded nested repos:`);
-      for (const repo of summary.cascadedRepos) {
-        console.log(`    - ${repo.relativePath} (${repo.bindingMode})`);
-      }
-    }
+    console.log(
+      `  Workspace manifest:    .first-tree/workspace.json (tree=${summary.workspaceManifest.tree}, ${summary.workspaceManifest.sources.length} sources)`,
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -238,7 +248,7 @@ export const initCommand: SubcommandModule = {
   name: "init",
   alias: "",
   summary: "",
-  description: "Onboard a repo or workspace to a Context Tree.",
+  description: "Onboard a workspace root to a Context Tree.",
   action: runInitCommand,
   configure: configureInitCommand,
 };

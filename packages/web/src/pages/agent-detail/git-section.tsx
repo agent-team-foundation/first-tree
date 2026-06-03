@@ -2,11 +2,19 @@ import { deriveRepoLocalPath, type GitRepo } from "@first-tree/shared";
 import { Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
+import { ResourceEmptyState } from "./resource-empty-state.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
 /**
@@ -30,17 +38,20 @@ export function GitSection(props: GitSectionProps) {
 
   const action = !props.disabled ? (
     <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-      <Plus className="h-3 w-3" /> Add
+      <Plus className="h-3 w-3" /> Add repository
     </Button>
   ) : null;
 
   return (
-    <Section title="Git repositories" count={activeCount} action={action}>
+    <Section
+      title="Git repositories"
+      count={activeCount}
+      description="Cloned into the session workspace before the agent starts work."
+      action={action}
+    >
       <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
-            No Git repositories.
-          </p>
+          <ResourceEmptyState>No Git repositories configured.</ResourceEmptyState>
         ) : (
           props.items.map((item) => {
             const path = item.value.localPath ?? deriveRepoLocalPath(item.value.url);
@@ -137,6 +148,9 @@ function GitDialog({ open, onOpenChange, initial, forbiddenPaths, onSubmit }: Gi
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{initial ? "Edit Git repository" : "Add Git repository"}</DialogTitle>
+          <DialogDescription>
+            Git repositories are saved with the rest of this agent's resource draft.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">

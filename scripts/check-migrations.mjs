@@ -36,10 +36,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const drizzleDir = resolve(repoRoot, "packages/server/drizzle");
+const metaDir = resolve(drizzleDir, "meta");
 const journalPath = resolve(drizzleDir, "meta/_journal.json");
 const journalRelPath = "packages/server/drizzle/meta/_journal.json";
 const latestPath = resolve(drizzleDir, "LATEST");
 const latestRelPath = "packages/server/drizzle/LATEST";
+const zeroUuid = "00000000-0000-0000-0000-000000000000";
 
 const errors = [];
 const fail = (msg) => errors.push(msg);
@@ -141,6 +143,67 @@ function validateFilesMatchJournal(entries) {
   }
 }
 
+function validateSnapshotLinearity(entries) {
+  const snapshotFiles = readdirSync(metaDir)
+    .filter((name) => /^\d{4}_snapshot\.json$/.test(name))
+    .sort();
+  const ids = new Map();
+  const prevRefs = new Map();
+  const snapshots = [];
+
+  for (const file of snapshotFiles) {
+    const relPath = `packages/server/drizzle/meta/${file}`;
+    let snapshot;
+    try {
+      snapshot = JSON.parse(readFileSync(resolve(metaDir, file), "utf8"));
+    } catch (err) {
+      fail(`${relPath}: snapshot JSON is invalid (${err.message})`);
+      continue;
+    }
+
+    const { id, prevId } = snapshot;
+    if (typeof id !== "string" || id.length === 0) {
+      fail(`${relPath}: snapshot id must be a non-empty string`);
+    } else if (ids.has(id)) {
+      fail(`${relPath}: duplicate snapshot id ${id} also used by ${ids.get(id)}`);
+    } else {
+      ids.set(id, relPath);
+    }
+    if (typeof prevId !== "string" || prevId.length === 0) {
+      fail(`${relPath}: snapshot prevId must be a non-empty string`);
+    } else {
+      const refs = prevRefs.get(prevId) ?? [];
+      refs.push(relPath);
+      prevRefs.set(prevId, refs);
+    }
+    snapshots.push({ file, relPath, id, prevId });
+  }
+
+  for (const { relPath, prevId } of snapshots) {
+    if (typeof prevId !== "string" || prevId === zeroUuid) continue;
+    if (!ids.has(prevId)) {
+      fail(`${relPath}: prevId ${prevId} does not match any snapshot id`);
+    }
+  }
+
+  for (const [prevId, refs] of prevRefs.entries()) {
+    if (refs.length <= 1) continue;
+    const parent = ids.get(prevId) ?? prevId;
+    fail(`${refs.join(", ")} share parent snapshot ${parent}; drizzle-kit treats this as a collision`);
+  }
+
+  const latestEntry = entries.at(-1);
+  if (latestEntry) {
+    const latestSnapshot = `${latestEntry.tag.slice(0, 4)}_snapshot.json`;
+    if (!snapshotFiles.includes(latestSnapshot)) {
+      fail(
+        `packages/server/drizzle/meta/${latestSnapshot} is missing for latest migration ${latestEntry.tag}; ` +
+          "without a current snapshot, `db:generate` diffs from stale history.",
+      );
+    }
+  }
+}
+
 function readMainJournal() {
   const base = process.env.MIGRATION_CHECK_BASE_REF ?? "origin/main";
   const headSha = (() => {
@@ -181,6 +244,7 @@ if (headEntries) {
   validateContiguous(headEntries, journalRelPath);
   validateFilesMatchJournal(headEntries);
   validateLatestSentinel(headEntries);
+  validateSnapshotLinearity(headEntries);
 
   const mainSource = readMainJournal();
   if (!mainSource.skipped) {

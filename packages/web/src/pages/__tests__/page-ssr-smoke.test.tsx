@@ -281,6 +281,7 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     lastMessageAt: overrides.lastMessageAt ?? NOW,
     lastMessagePreview: overrides.lastMessagePreview ?? "Please review the launch checklist.",
     unreadMentionCount: overrides.unreadMentionCount ?? 1,
+    openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
     liveActivity:
@@ -580,7 +581,10 @@ function createClient(): QueryClient {
     ],
     nextCursor: null,
   });
-  queryClient.setQueryData(["me", "chats", "unread", "active", true, "manual", "agent-1"], {
+  // The triad is single-select: rendering with both `unread` + `watching`
+  // canonicalizes to Unread, so the component requests watchingParam=false
+  // (the 5th key slot) even though the smoke render passes both.
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], {
     rows: [chatRow()],
     nextCursor: null,
   });
@@ -858,14 +862,18 @@ describe("page SSR smoke coverage", () => {
 
   it("renders the large preview pages", async () => {
     const { ChatRowAvatarPreviewPage } = await import("../chat-row-avatar-preview.js");
+    const { ComposeStatusBarPreviewPage } = await import("../compose-status-bar-preview.js");
     const { ContextPreviewPage } = await import("../context-preview.js");
     const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
     const { StyleguidePreviewPage } = await import("../styleguide-preview.js");
+    const { TeamPreviewPage } = await import("../team-preview.js");
 
     expect(renderPage(<StyleguidePreviewPage />)).toContain("First Tree");
     expect(renderPage(<OnboardingPreviewPage />)).toContain("Onboarding");
     expect(renderPage(<ChatRowAvatarPreviewPage />)).toContain("Chat Row Avatar");
-    expect(renderPage(<ContextPreviewPage />)).toContain("Context tree");
+    expect(renderPage(<ContextPreviewPage />)).toContain("Context Tree");
+    expect(renderPage(<ComposeStatusBarPreviewPage />)).toContain("ComposeStatusBar");
+    expect(renderPage(<TeamPreviewPage />)).toContain("Agent teammates");
   });
 
   it("renders public and settings pages with seeded query data", async () => {
@@ -900,16 +908,14 @@ describe("page SSR smoke coverage", () => {
     const { ProfileTab } = await import("../agent-detail/profile-tab.js");
     const { PromptTab } = await import("../agent-detail/prompt-tab.js");
     const { ResourcesTab } = await import("../agent-detail/resources-tab.js");
-    const { SetupTab } = await import("../agent-detail/setup-tab.js");
-    const { ToolsTab } = await import("../agent-detail/tools-tab.js");
+    const { RuntimeTab } = await import("../agent-detail/runtime-tab.js");
 
     const html = renderPage(
       <Routes>
         <Route path="/agents/:uuid" element={<AgentDetailPage />}>
           <Route path="profile" element={<ProfileTab />} />
-          <Route path="setup" element={<SetupTab />} />
+          <Route path="runtime" element={<RuntimeTab />} />
           <Route path="prompt" element={<PromptTab />} />
-          <Route path="tools" element={<ToolsTab />} />
           <Route path="resources" element={<ResourcesTab />} />
         </Route>
       </Routes>,
@@ -920,9 +926,8 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Profile");
 
     for (const [route, expected] of [
-      ["/agents/agent-1/setup", "Runtime"],
-      ["/agents/agent-1/prompt", "System prompt append"],
-      ["/agents/agent-1/tools", "MCP servers"],
+      ["/agents/agent-1/runtime", "Runtime"],
+      ["/agents/agent-1/prompt", "Instructions"],
       ["/agents/agent-1/resources", "Environment variables"],
     ] as const) {
       expect(
@@ -930,9 +935,8 @@ describe("page SSR smoke coverage", () => {
           <Routes>
             <Route path="/agents/:uuid" element={<AgentDetailPage />}>
               <Route path="profile" element={<ProfileTab />} />
-              <Route path="setup" element={<SetupTab />} />
+              <Route path="runtime" element={<RuntimeTab />} />
               <Route path="prompt" element={<PromptTab />} />
-              <Route path="tools" element={<ToolsTab />} />
               <Route path="resources" element={<ResourcesTab />} />
             </Route>
           </Routes>,
@@ -940,16 +944,6 @@ describe("page SSR smoke coverage", () => {
         ),
       ).toContain(expected);
     }
-    expect(
-      renderPage(
-        <Routes>
-          <Route path="/agents/:uuid" element={<AgentDetailPage />}>
-            <Route path="tools" element={<ToolsTab />} />
-          </Route>
-        </Routes>,
-        "/agents/agent-1/tools",
-      ),
-    ).toContain("Legacy per-agent MCP editing is disabled");
   });
 
   it("renders agent detail sections with populated draft rows", async () => {
@@ -961,7 +955,7 @@ describe("page SSR smoke coverage", () => {
     const { ModelSection } = await import("../agent-detail/model-section.js");
     const { PromptSection } = await import("../agent-detail/prompt-section.js");
     const { ReasoningEffortSection } = await import("../agent-detail/reasoning-effort-section.js");
-    const { SetupSection } = await import("../agent-detail/setup-section.js");
+    const { RuntimeSection } = await import("../agent-detail/runtime-section.js");
 
     const noop = () => undefined;
     const asyncNoop = async () => undefined;
@@ -970,7 +964,7 @@ describe("page SSR smoke coverage", () => {
       <>
         <IdentitySection agent={agent()} onSave={asyncNoop} />
         <AppearanceSection agent={agent()} onSave={asyncNoop} onRefresh={asyncNoop} />
-        <SetupSection
+        <RuntimeSection
           runtimeProvider="claude-code"
           computerLabel="gandy-macbook"
           canBindComputer={false}
@@ -1038,9 +1032,8 @@ describe("page SSR smoke coverage", () => {
           engagement="active"
           onEngagementChange={noop}
           unread
-          onUnreadChange={noop}
           watching
-          onWatchingChange={noop}
+          onRailFilterChange={noop}
           origin={["manual"]}
           onOriginChange={noop}
           participants={["agent-1"]}

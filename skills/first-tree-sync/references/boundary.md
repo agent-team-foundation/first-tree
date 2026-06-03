@@ -73,5 +73,5 @@ When write wants sync to follow up on adjacent drift:
   `decisionLocksCode: true` is set on the node.
 - They both must use `tree verify` before a final commit.
 
-The shared parts let `first-tree` whitepaper own the methodology; sync and
+The shared parts let `first-tree-context` own the methodology; sync and
 write own the _when_ and _what_ of applying it.

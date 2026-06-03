@@ -264,4 +264,33 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
 
     expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(1);
   });
+
+  it("broadcast bypasses enforceMention: no @ enters the stream but wakes no one", async () => {
+    // proposal §D6 — explicit no-mention broadcast. Under enforceMention a
+    // no-recipient send is rejected; `broadcast: true` is the opt-in that
+    // lets it through, and it must still wake nobody.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { sender, obsA, chat } = await setupGroup(app, uid);
+
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        { source: "api", format: "text", content: "no recipient" },
+        { enforceMention: true },
+      ),
+    ).rejects.toThrow(/recipient/i);
+
+    const { message } = await sendMessage(
+      app.db,
+      chat.id,
+      sender.agent.uuid,
+      { source: "api", format: "text", content: "we shipped", broadcast: true },
+      { enforceMention: true },
+    );
+    expect(message.id).toBeTruthy();
+    expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(0);
+  });
 });

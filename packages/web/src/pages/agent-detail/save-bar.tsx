@@ -1,6 +1,5 @@
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/button.js";
-import { StateDot } from "../../components/ui/state-dot.js";
 import type { DraftSectionName, DraftSummary } from "./use-config-draft.js";
 
 /**
@@ -39,8 +38,8 @@ const SECTION_LABELS: Record<DraftSectionName, string> = {
 export function SaveBar(props: SaveBarProps) {
   if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage && !props.justSaved) return null;
 
-  const dirtyCount = props.summary.dirtySections.length;
   const showDraftActions = props.summary.anyDirty || props.saving;
+  const dirtyListLabel = props.summary.dirtySections.map((s) => SECTION_LABELS[s]).join(", ");
 
   return (
     <div
@@ -55,10 +54,18 @@ export function SaveBar(props: SaveBarProps) {
         <div className="flex flex-col gap-1 text-body min-w-0">
           {props.summary.anyDirty && (
             <div className="flex items-center gap-2 flex-wrap">
-              <StateDot state="blocked" size={8} />
-              <span className="font-medium">
-                {dirtyCount} section{dirtyCount === 1 ? "" : "s"} with unsaved changes
-              </span>
+              {/* Pending-configuration dot. Keep it neutral so it does not read as blocked or error. */}
+              <span
+                aria-hidden
+                style={{
+                  width: "var(--sp-2)",
+                  height: "var(--sp-2)",
+                  borderRadius: "50%",
+                  background: "var(--fg-4)",
+                  flexShrink: 0,
+                }}
+              />
+              <span className="font-medium">Configuration changes in {dirtyListLabel}</span>
               <span style={{ color: "var(--fg-4)" }} aria-hidden>
                 ·
               </span>
@@ -68,12 +75,10 @@ export function SaveBar(props: SaveBarProps) {
                     key={s}
                     type="button"
                     onClick={() => props.onJumpTo(s)}
-                    className="text-caption transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="text-caption transition-colors hover:bg-accent border border-border rounded-[var(--radius-chip)] focus-visible:outline-none focus-visible:border-ring"
                     style={{
                       padding: "var(--sp-0_5) var(--sp-1_5)",
-                      borderRadius: "var(--radius-chip)",
                       background: "var(--bg-raised)",
-                      border: "var(--hairline) solid var(--border)",
                       color: "var(--fg-2)",
                       cursor: "pointer",
                     }}

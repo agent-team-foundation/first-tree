@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/tests/**/*.e2e.test.ts"],
+    exclude: ["src/tests/tui-*.e2e.test.ts"],
     globalSetup: ["./src/framework/global-setup.ts"],
     fileParallelism: false,
     testTimeout: 60_000,

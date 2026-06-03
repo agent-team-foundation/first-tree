@@ -239,6 +239,13 @@ export {
   type ContextTreeChangeType,
   type ContextTreeEdge,
   type ContextTreeEdgeKind,
+  type ContextTreeIoAction,
+  type ContextTreeIoAgentSummary,
+  type ContextTreeIoBucket,
+  type ContextTreeIoEvent,
+  type ContextTreeIoSource,
+  type ContextTreeIoSummary,
+  type ContextTreeIoTargetKind,
   type ContextTreeNode,
   type ContextTreeNodeKind,
   type ContextTreeRiskLevel,
@@ -254,6 +261,13 @@ export {
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
   contextTreeEdgeSchema,
+  contextTreeIoActionSchema,
+  contextTreeIoAgentSummarySchema,
+  contextTreeIoBucketSchema,
+  contextTreeIoEventSchema,
+  contextTreeIoSourceSchema,
+  contextTreeIoSummarySchema,
+  contextTreeIoTargetKindSchema,
   contextTreeNodeKindSchema,
   contextTreeNodeSchema,
   contextTreeRiskLevelSchema,
@@ -445,6 +459,10 @@ export {
   messagePurposeSchema,
   messageSchema,
   messageSourceSchema,
+  type OpenQuestionItem,
+  type OpenQuestionRequest,
+  openQuestionItemSchema,
+  openQuestionRequestSchema,
   type ParticipantMode,
   type PrecedingMessage,
   participantModeSchema,
@@ -579,10 +597,16 @@ export {
   type ThinkingEventPayload,
   type TokenUsageEventPayload,
   type ToolCallEventPayload,
+  type ToolFileRef,
+  type ToolFileRefOrigin,
+  type ToolFileRefPathKind,
   type TurnEndEventPayload,
   thinkingEventPayload,
   tokenUsageEventPayload,
   toolCallEventPayload,
+  toolFileRefOriginSchema,
+  toolFileRefPathKindSchema,
+  toolFileRefSchema,
   turnEndEventPayload,
 } from "./schemas/session-event.js";
 export {
@@ -639,11 +663,24 @@ export {
   userStatusSchema,
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
-export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
+export {
+  WORKSPACE_MANIFEST_FILENAME,
+  WORKSPACE_STATE_DIRNAME,
+  type WorkspaceManifest,
+  workspaceManifestSchema,
+} from "./schemas/workspace-manifest.js";
 // -- WebSocket handshake frames --
+export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
 export {
   serverCapabilitiesSchema,
   serverWelcomeFrameSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "./schemas/ws-auth.js";
+export {
+  classifyShellCommandIo,
+  type ShellIoClassification,
+  type ShellIoPathArg,
+  type ShellIoPathKindHint,
+  type ShellIoUnsupportedReason,
+} from "./shell-command-io.js";

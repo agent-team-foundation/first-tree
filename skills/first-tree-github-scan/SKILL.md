@@ -1,6 +1,6 @@
 ---
 name: first-tree-github-scan
-version: 0.5.0
+version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Agent skill for handling a single GitHub notification spawned by the First Tree github-scan daemon. Use when an agent needs to decide how to tag, comment on, escalate, or hand off a PR, issue, review request, mention, or CI event, and when it needs to choose between handling on GitHub or routing to `first-tree-sync` / `first-tree-write`. This is the agent behavior spec, not the human CLI operations guide for the daemon — for that, run `first-tree github scan --help`.
@@ -10,9 +10,9 @@ description: Agent skill for handling a single GitHub notification spawned by th
 
 Read these first:
 
-- `../first-tree/SKILL.md`
-- `../first-tree/references/functions.md`
-- `../first-tree/references/anti-patterns.md`
+- `../first-tree-context/SKILL.md`
+- `../first-tree-context/references/functions.md`
+- `../first-tree-context/references/anti-patterns.md`
 
 ## What This Skill Does
 

@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { discoverWorkspaceRoot, readWorkspaceManifest } from "../../core/workspace.js";
 import { findUpwardsManagedSourceBinding, parseGitHubRepoReference } from "../tree/binding-contract.js";
+import { readGitRemoteUrl } from "../tree/shared.js";
+import { readTreeIdentityContract } from "../tree/tree-identity.js";
 
 const TREE_REPO_FLAG = "--tree-repo";
 const TREE_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
@@ -17,8 +20,9 @@ type SourceStateBinding = {
 type BindingResolution =
   | {
       ok: true;
-      source: "flag" | "managed-file" | "source-state";
+      source: "flag" | "workspace-manifest" | "managed-file" | "source-state";
       managedBindingPath?: string;
+      workspaceManifestPath?: string;
       treeRepo?: string;
       treeRepoName?: string;
       sourceStatePath?: string;
@@ -27,6 +31,12 @@ type BindingResolution =
       ok: false;
       error: string;
     };
+
+type WorkspaceManifestBinding = {
+  workspaceManifestPath: string;
+  treeRepo?: string;
+  treeRepoName: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -150,6 +160,31 @@ export function stripTreeRepoArg(args: readonly string[]): string[] {
   return stripped;
 }
 
+function resolveWorkspaceManifestBinding(startDir: string): WorkspaceManifestBinding | undefined {
+  const workspaceRoot = discoverWorkspaceRoot(startDir);
+
+  if (workspaceRoot === undefined) {
+    return undefined;
+  }
+
+  let manifest: { tree: string; sources: string[] };
+  try {
+    manifest = readWorkspaceManifest(workspaceRoot);
+  } catch {
+    return undefined;
+  }
+
+  const treeRoot = join(workspaceRoot, manifest.tree);
+  const remoteUrl = readGitRemoteUrl(treeRoot) ?? readTreeIdentityContract(treeRoot)?.publishedTreeUrl ?? undefined;
+  const treeRepo = remoteUrl ? parseGitHubRepoReference(remoteUrl) : undefined;
+
+  return {
+    workspaceManifestPath: join(workspaceRoot, ".first-tree", "workspace.json"),
+    treeRepoName: manifest.tree,
+    ...(treeRepo ? { treeRepo } : {}),
+  };
+}
+
 export function resolveGitHubScanBinding(args: readonly string[]): BindingResolution {
   const explicitTreeRepo = readTreeRepoArg(args);
 
@@ -166,6 +201,18 @@ export function resolveGitHubScanBinding(args: readonly string[]): BindingResolu
       ok: true,
       source: "flag",
       treeRepo: explicitTreeRepo,
+    };
+  }
+
+  const workspaceBinding = resolveWorkspaceManifestBinding(process.cwd());
+
+  if (workspaceBinding !== undefined) {
+    return {
+      ok: true,
+      source: "workspace-manifest",
+      workspaceManifestPath: workspaceBinding.workspaceManifestPath,
+      treeRepoName: workspaceBinding.treeRepoName,
+      ...(workspaceBinding.treeRepo ? { treeRepo: workspaceBinding.treeRepo } : {}),
     };
   }
 
@@ -201,8 +248,8 @@ export function resolveGitHubScanBinding(args: readonly string[]): BindingResolu
     ok: false,
     error: [
       "first-tree github scan requires a bound tree repo before it can start scanning.",
-      "Bind this repo first with `first-tree tree bind ...`, or retry with `--tree-repo <owner/repo>`.",
-      "Expected binding metadata in the managed First Tree integration block in `AGENTS.md` or `CLAUDE.md`.",
+      "Bind this repo first with `first-tree tree init --scope workspace ...`, or retry with `--tree-repo <owner/repo>`.",
+      "Expected binding metadata in `<workspaceRoot>/.first-tree/workspace.json`.",
       "Legacy `.first-tree/source.json` metadata is still accepted during migration.",
     ].join("\n"),
   };

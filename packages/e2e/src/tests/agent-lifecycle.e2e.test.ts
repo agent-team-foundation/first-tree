@@ -26,11 +26,23 @@ import { authedFetch, authedJson } from "../framework/server-driver/http.js";
 
 let handle: CurrentRunHandle;
 let agentId: string;
-let pg: PgClient;
+let pg: PgClient | null = null;
 
 beforeAll(async () => {
   handle = readCurrentHandle();
   const creds = readCredentialsOrThrow(handle);
+
+  // Use a suite-owned client row instead of the shared fixture client. Other
+  // e2e suites intentionally mutate ownership of `creds.clientId` (client
+  // claim), so reusing it here makes this suite order-dependent.
+  const lifecycleClientId = `client_life_${randomBytes(4).toString("hex")}`;
+  pg = new PgClient({ connectionString: handle.databaseUrl });
+  await pg.connect();
+  await pg.query("INSERT INTO clients (id, user_id, organization_id) VALUES ($1, $2, $3)", [
+    lifecycleClientId,
+    creds.userId,
+    creds.organizationId,
+  ]);
 
   const created = await authedJson<{ uuid: string; displayName: string }>(
     handle.serverBaseUrl,
@@ -41,24 +53,28 @@ beforeAll(async () => {
       name: `e2e-life-${randomBytes(3).toString("hex")}`,
       type: "agent",
       displayName: "Lifecycle target",
-      clientId: creds.clientId,
+      clientId: lifecycleClientId,
     },
     201,
   );
   agentId = created.uuid;
-
-  // Reuse one PG connection across the whole describe — we use it only for
-  // direct `status` reads where the API doesn't return the field today.
-  pg = new PgClient({ connectionString: handle.databaseUrl });
-  await pg.connect();
 });
 
 afterAll(async () => {
-  await pg.end().catch(() => undefined);
+  const client = pg;
+  if (client) {
+    await client.end().catch(() => undefined);
+  }
 });
 
 async function readAgentStatus(uuid: string): Promise<string | null> {
-  const res = await pg.query<{ status: string | null }>("SELECT status FROM agents WHERE uuid = $1 LIMIT 1", [uuid]);
+  const client = pg;
+  if (!client) {
+    throw new Error("PG client was not initialized before reading agent status");
+  }
+  const res = await client.query<{ status: string | null }>("SELECT status FROM agents WHERE uuid = $1 LIMIT 1", [
+    uuid,
+  ]);
   return res.rows[0]?.status ?? null;
 }
 

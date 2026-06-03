@@ -16,26 +16,44 @@ This makes the phase idempotent — the agent can re-run the skill at any time a
 
 ## Tree-on-disk resolution
 
-Before writing anything, resolve `tree_root` to a real local path. Order of preference:
+Under W1, the tree path is computed directly from the workspace
+manifest. Read `tree status --json` once and derive everything from
+the response:
 
-1. **Sibling dir (dedicated mode):** `<dirname(source_root)>/<treeRepoName>/`. If that exists and contains `.first-tree/`, use it.
-2. **Existing local checkout (shared mode):** the path from `binding.treeMode == "shared"` plus `treeRepoName` — try sibling first, then ask the user if not found.
-3. **Temp clone (URL only):** if `binding.treeRemoteUrl` is set but no local checkout exists, `git clone <url> <source_root>/.first-tree/tmp/<treeRepoName>/`. Mark this for cleanup at the end of Phase C.
+```bash
+STATUS=$(first-tree tree status --json)
+WORKSPACE_ROOT=$(echo "$STATUS" | jq -r '.workspaceRoot')
+TREE_ROOT="$WORKSPACE_ROOT/$(echo "$STATUS" | jq -r '.manifest.tree')"
+```
 
-Use absolute paths. Never `cd` — always pass `git -C <tree_root>`.
+`TREE_ROOT` is always the immediate child of `WORKSPACE_ROOT` named
+by `manifest.tree`. There is no sibling-vs-child branch under W1; the
+sibling layout was consolidated by `migrate-to-w1` before Phase C
+runs (Phase A.5 in `SKILL.md`).
+
+If `tree status` exits non-zero (no `workspace.json` present),
+onboarding never bound this workspace. Stop and go back to Phase B
+(or Phase A.5 if legacy markers exist on disk). Phase C must not run
+against an unbound workspace.
+
+Use absolute paths. Never `cd` — always pass `git -C $TREE_ROOT`.
 
 ## Source signals (what to read)
 
 Read **only** these. Do not browse arbitrarily.
 
-| Signal                                   | Command / path                                                                                                                                                                                                      |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Project description                      | `<source_root>/README.md` (or `Readme.md` / `README` — first match) — first H1 + first paragraph                                                                                                                    |
-| Top-level layout                         | `ls -1 <source_root>` filtered to dirs, excluding `.git`, `node_modules`, `.venv`, `dist`, `build`, `target`, `.next`, `.turbo`                                                                                     |
-| Manifest tech stack                      | First-found of: `package.json` (deps + devDeps top-level keys), `pyproject.toml` (`[project.dependencies]`), `Cargo.toml` (`[dependencies]`), `go.mod` (`require` block), `Gemfile`, `pom.xml`, `requirements*.txt` |
-| Recent contributors                      | `git -C <source_root> log --since='6 months ago' --format='%aN <%aE>' \| sort \| uniq -c \| sort -rn \| head -20`                                                                                                   |
-| Repo metadata                            | `gh repo view --json description,topics,homepageUrl,defaultBranchRef` (skip if `gh auth status` failed)                                                                                                             |
-| Workspace children (workspace-root only) | `<source_root>/source-repos.md` if present, else discovered child repos from inspect                                                                                                                                |
+For each bound source repo `SOURCE_ROOT = $WORKSPACE_ROOT/$NAME`
+(iterate `manifest.sources` or `boundSources[].name`), read **only**
+these signals. Do not browse arbitrarily.
+
+| Signal              | Command / path                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project description | `$SOURCE_ROOT/README.md` (or `Readme.md` / `README` — first match) — first H1 + first paragraph                                                                                                                     |
+| Top-level layout    | `ls -1 $SOURCE_ROOT` filtered to dirs, excluding `.git`, `node_modules`, `.venv`, `dist`, `build`, `target`, `.next`, `.turbo`                                                                                      |
+| Manifest tech stack | First-found of: `package.json` (deps + devDeps top-level keys), `pyproject.toml` (`[project.dependencies]`), `Cargo.toml` (`[dependencies]`), `go.mod` (`require` block), `Gemfile`, `pom.xml`, `requirements*.txt` |
+| Recent contributors | `git -C $SOURCE_ROOT log --since='6 months ago' --format='%aN <%aE>' \| sort \| uniq -c \| sort -rn \| head -20`                                                                                                    |
+| Repo metadata       | `gh repo view --json description,topics,homepageUrl,defaultBranchRef` from `$SOURCE_ROOT` (skip if `gh auth status` failed)                                                                                         |
+| Workspace children  | `manifest.sources` from `tree status --json` is the canonical list. Each bound source `$NAME` is a sibling of `$TREE_ROOT` at `$WORKSPACE_ROOT/$NAME`.                                                              |
 
 If any signal is missing or empty, that's fine — record "unavailable" and lower confidence on dependent fields.
 
@@ -76,7 +94,12 @@ Do **not** create new `members/<name>/` nodes for other contributors in the init
 
 ### `<tree_root>/source-repos.md`
 
-This file is regenerated by the CLI from the managed code-repo registry block. **Do not write it by hand in Phase C.** If it's missing or stale, run `first-tree tree integrate --tree-path <tree_root>` (or whichever CLI command syncs it for the current binding mode).
+Legacy index. Under W1 the canonical bound-source list lives in
+`<workspaceRoot>/.first-tree/workspace.json`'s `sources` field, and
+agents read that directly via `first-tree tree status --json`. **Do
+not write `source-repos.md` by hand in Phase C.** If it still exists
+in a pre-migration tree, the next `first-tree tree migrate-to-w1` run
+removes it as part of cleanup.
 
 ### `<tree_root>/AGENTS.md` and `<tree_root>/CLAUDE.md`
 
@@ -119,7 +142,7 @@ If the tree is not yet published to a remote (Phase B happened on a fresh local-
 
 ## Cleanup
 
-If `tree_root` was a temp clone in `<source_root>/.first-tree/tmp/<treeRepoName>/`, remove it after the push completes. The managed `AGENTS.md` block in the source repo says clones in `tmp/` are local-only state — never commit them.
+Under W1 the tree is always a real sibling of the source(s) at `$WORKSPACE_ROOT/$(manifest.tree)`, not a temporary clone. No tmp-clone cleanup is needed at the end of Phase C.
 
 ## Idempotency
 
@@ -134,6 +157,6 @@ Never overwrite content that has already been edited (signal: the placeholder st
 
 - Does not start the daemon (Phase D).
 - Does not modify agent templates (Phase E).
-- Does not register source repos (handled by `tree integrate` / `tree workspace sync`).
+- Does not register source repos. Source binding lives in `<workspaceRoot>/.first-tree/workspace.json`'s `sources` field and is edited as a direct JSON change (or by the runtime / human adding a sibling).
 - Does not run any LLM call beyond what the agent itself does. There is no separate LLM service the skill calls.
 - Does not deduce facts not present in the source signals listed above. If something can't be inferred, leave it empty with `# unverified`.

@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../components/ui/dialog.js";
+import { DraftStatusChip } from "../components/ui/draft-status-chip.js";
 import { FilterPill } from "../components/ui/filter-pill.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
@@ -23,11 +24,13 @@ import { Popover } from "../components/ui/popover.js";
 import { PresenceChip } from "../components/ui/presence-chip.js";
 import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
 import { SegmentedControl } from "../components/ui/segmented-control.js";
+import { Select } from "../components/ui/select.js";
 import { StateChip } from "../components/ui/state-chip.js";
 import { StateDot } from "../components/ui/state-dot.js";
 import { StatusGlyph } from "../components/ui/status-glyph.js";
 import { Tab, TabBadge, TabBar } from "../components/ui/tab-bar.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { Textarea } from "../components/ui/textarea.js";
 import { Tile } from "../components/ui/tile.js";
 import { useToast } from "../components/ui/toast.js";
 
@@ -300,10 +303,60 @@ function TabsDemo() {
       <Tab active={tab === "activity"} onClick={() => setTab("activity")}>
         Activity <TabBadge>3</TabBadge>
       </Tab>
-      <Tab active={tab === "settings"} onClick={() => setTab("settings")}>
+      <Tab active={tab === "settings"} onClick={() => setTab("settings")} dirty>
         Settings
       </Tab>
     </TabBar>
+  );
+}
+
+function SelectDemo() {
+  const [model, setModel] = useState("claude-opus-4-8");
+  const [agent, setAgent] = useState("");
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)", maxWidth: "22rem" }}>
+      <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+        <Label>Model (mono)</Label>
+        <Select
+          aria-label="Model"
+          mono
+          value={model}
+          onChange={setModel}
+          options={[
+            { value: "claude-opus-4-8", label: "claude-opus-4-8", hint: "default" },
+            { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6" },
+            { value: "claude-haiku-4-5", label: "claude-haiku-4-5", hint: "fastest" },
+            { value: "gpt-5.1-codex", label: "gpt-5.1-codex", disabled: true },
+          ]}
+        />
+      </div>
+      <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+        <Label>Delegate (searchable)</Label>
+        <Select
+          aria-label="Delegate"
+          searchable
+          placeholder="Pick an agent"
+          value={agent}
+          onChange={setAgent}
+          options={[
+            { value: "", label: "Remove delegate" },
+            { value: "a1", label: "Aria (@aria)" },
+            { value: "a2", label: "Bo (@bo)" },
+            { value: "a3", label: "Cleo (@cleo)" },
+          ]}
+        />
+      </div>
+      <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+        <Label>Disabled</Label>
+        <Select
+          aria-label="Disabled select"
+          disabled
+          value="x"
+          onChange={() => undefined}
+          options={[{ value: "x", label: "Locked" }]}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -596,8 +649,28 @@ export function StyleguidePreviewPage() {
             <Input id="sg-name" placeholder="e.g. kael" defaultValue="kael" />
             <Input placeholder="Disabled" disabled />
           </div>
+          <Subhead>Textarea</Subhead>
+          <div style={{ maxWidth: "22rem", marginBottom: "var(--sp-5)" }}>
+            <Textarea placeholder="Appended to the system prompt…" rows={3} className="font-mono" />
+          </div>
+          <Subhead>Select</Subhead>
+          <div style={{ marginBottom: "var(--sp-5)" }}>
+            <SelectDemo />
+          </div>
           <Subhead>SegmentedControl</Subhead>
           <SegmentedDemo />
+        </Section>
+
+        {/* ─── Draft status ──────────────────────────────────────────────── */}
+        <Section
+          title="Draft status"
+          subtitle="DraftStatusChip — new (green), changed (needs-you amber), removed (red)."
+        >
+          <div className="flex items-center" style={{ gap: "var(--sp-3)" }}>
+            <DraftStatusChip status="added" />
+            <DraftStatusChip status="modified" />
+            <DraftStatusChip status="deleted" />
+          </div>
         </Section>
 
         {/* ─── Navigation ────────────────────────────────────────────────── */}

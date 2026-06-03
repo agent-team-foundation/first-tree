@@ -2,21 +2,16 @@ import type { Command } from "commander";
 import { registerCommandGroup, registerSubcommands } from "../groups.js";
 import type { CommandModule, SubcommandModule } from "../types.js";
 import { automationSubcommands } from "./automation.js";
-import { bindCommand } from "./bind.js";
-import { bootstrapCommand } from "./bootstrap.js";
 import { claudeHookCommand } from "./claude-hook.js";
 import { codeownersCommand } from "./codeowners.js";
 import { initCommand } from "./init.js";
 import { injectCommand } from "./inject.js";
-import { inspectCommand } from "./inspect.js";
-import { integrateCommand } from "./integrate.js";
-import { publishCommand } from "./publish.js";
+import { migrateCommand } from "./migrate.js";
 import { reviewCommand } from "./review.js";
 import { skillSubcommands } from "./skill.js";
 import { statusCommand } from "./status.js";
 import { upgradeCommand } from "./upgrade.js";
 import { verifyCommand } from "./verify.js";
-import { workspaceSyncCommand } from "./workspace-sync.js";
 
 type CommandWithUnknownCommand = Command & {
   unknownCommand(): void;
@@ -24,25 +19,20 @@ type CommandWithUnknownCommand = Command & {
 
 const TREE_ONBOARDING_GUIDE = `first-tree tree help onboarding
 
-1. Run \`first-tree tree inspect --json\` to classify the current folder.
-2. Decide whether you need a new dedicated tree repo or an existing shared tree.
-3. Use \`first-tree tree init\` for the high-level onboarding flow.
-4. If this root is a workspace, follow with \`first-tree tree workspace sync\`.
-5. Before starting \`first-tree github scan\`, make sure a binding exists in
-   the managed First Tree integration block in \`AGENTS.md\` or \`CLAUDE.md\`,
-   or pass \`--tree-repo <owner/repo>\`.
+1. Run \`first-tree tree status\` to see the current binding (if any).
+2. Run \`first-tree tree init --scope workspace ...\` to onboard a repo or workspace.
+3. For pre-W1 layouts, follow with \`first-tree tree migrate-to-w1\`.
+4. Use \`first-tree tree verify\` to validate the resulting tree.
+5. Before starting \`first-tree github scan\`, make sure the managed First Tree
+   integration block exists in \`AGENTS.md\` or \`CLAUDE.md\`.
 `;
 
 const treeSubcommands: SubcommandModule[] = [
-  inspectCommand,
   statusCommand,
   initCommand,
-  bootstrapCommand,
-  bindCommand,
-  integrateCommand,
+  migrateCommand,
   verifyCommand,
   upgradeCommand,
-  publishCommand,
   codeownersCommand,
   claudeHookCommand,
   injectCommand,
@@ -72,8 +62,6 @@ export const treeCommand: CommandModule = {
       });
 
     registerSubcommands(command, treeSubcommands);
-
-    registerCommandGroup(command, "workspace", "Run workspace tree helpers.", [workspaceSyncCommand]);
 
     registerCommandGroup(command, "automation", "Install or inspect tree GitHub automation.", [
       ...automationSubcommands,

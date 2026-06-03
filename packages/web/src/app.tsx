@@ -9,8 +9,7 @@ import { PulseProvider } from "./hooks/pulse-context.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
-import { SetupTab } from "./pages/agent-detail/setup-tab.js";
-import { ToolsTab } from "./pages/agent-detail/tools-tab.js";
+import { RuntimeTab } from "./pages/agent-detail/runtime-tab.js";
 import { UsageTab } from "./pages/agent-detail/usage-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
@@ -42,6 +41,14 @@ const ContextPreviewPage = import.meta.env.DEV
 const ChatRowAvatarPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/chat-row-avatar-preview.js").then((module) => ({ default: module.ChatRowAvatarPreviewPage })),
+    )
+  : null;
+
+const ConversationListPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/conversation-list-preview.js").then((module) => ({
+        default: module.ConversationListPreviewPage,
+      })),
     )
   : null;
 
@@ -97,6 +104,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatRowAvatarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ConversationListPreviewPage ? (
+                <Route
+                  path="/preview/conversation-list"
+                  element={
+                    <Suspense fallback={null}>
+                      <ConversationListPreviewPage />
                     </Suspense>
                   }
                 />
@@ -160,9 +177,10 @@ export function App() {
                     <Route index element={<Navigate to="profile" replace />} />
                     <Route path="profile" element={<ProfileTab />} />
                     <Route path="usage" element={<UsageTab />} />
-                    <Route path="setup" element={<SetupTab />} />
+                    <Route path="runtime" element={<RuntimeTab />} />
+                    <Route path="setup" element={<Navigate to="../runtime" replace />} />
                     <Route path="prompt" element={<PromptTab />} />
-                    <Route path="tools" element={<ToolsTab />} />
+                    <Route path="tools" element={<Navigate to="../profile" replace />} />
                     <Route path="resources" element={<ResourcesTab />} />
                   </Route>
 

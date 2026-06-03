@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type SessionEvent } from "@first-tree/shared";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  type AgentRuntimeConfigPayload,
+  deriveRepoLocalPath,
+  type SessionEvent,
+  type ToolFileRef,
+} from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
@@ -21,6 +26,7 @@ import {
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -353,6 +359,74 @@ export function buildCodexAgentBriefing(
   return lines.join("\n").concat("\n");
 }
 
+function contextTreeTargetPathOf(
+  filePath: string,
+  contextTreePath: string | null,
+  workspaceCwd: string,
+): string | null {
+  if (!contextTreePath) return null;
+  const absolutePath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceCwd, filePath);
+  const root = resolve(contextTreePath);
+  const rel = relative(root, absolutePath);
+  if (!rel || rel === "." || rel.startsWith("..") || isAbsolute(rel)) return null;
+  return rel.replaceAll("\\", "/");
+}
+
+export function collectCodexFileChangePaths(changes: unknown): string[] {
+  const paths: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      paths.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    for (const key of ["path", "file_path", "filePath", "filename"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string") paths.push(candidate);
+    }
+    for (const key of Object.keys(record)) {
+      if (key.includes("/") || key.includes("\\")) paths.push(key);
+    }
+  };
+  visit(changes);
+  return paths;
+}
+
+export function toolFileRefsFromCodexFileChange(input: {
+  changes: unknown;
+  workspaceCwd: string;
+  contextTreePath: string | null;
+  contextTreeRepoUrl: string | null;
+  contextTreeBranch?: string | null;
+}): ToolFileRef[] {
+  const refs: ToolFileRef[] = [];
+  const seen = new Set<string>();
+  for (const filePath of collectCodexFileChangePaths(input.changes)) {
+    const fileKey = isAbsolute(filePath) ? filePath : resolve(input.workspaceCwd, filePath);
+    if (seen.has(fileKey)) continue;
+    seen.add(fileKey);
+    const repoRelativePath = contextTreeTargetPathOf(filePath, input.contextTreePath, input.workspaceCwd);
+    refs.push({
+      origin: "file_change",
+      localPath: filePath,
+      pathKind: "file",
+      ...(input.contextTreeRepoUrl && repoRelativePath
+        ? {
+            repoUrl: input.contextTreeRepoUrl,
+            ...(input.contextTreeBranch ? { repoBranch: input.contextTreeBranch } : {}),
+            repoRelativePath,
+          }
+        : {}),
+    });
+  }
+  return refs;
+}
+
 /**
  * Codex Handler — session-oriented handler using `@openai/codex-sdk`.
  *
@@ -377,6 +451,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
@@ -481,13 +556,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  // NOTE: codex's stream exposes only `command_execution` (shell) items — it
-  // cannot cleanly tell which Context Tree node a turn read without parsing
-  // shell commands. Rather than emit a fake per-turn signal (the old
-  // `emitContextTreeUsage` did), codex produces NO `context_tree_usage` events.
-  // Precise codex tree-read tracking is a known gap (P1). See the claude-code
-  // handler's tool-call processor for the real per-read signal.
-
   async function prepareSourceRepos(
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
@@ -565,6 +633,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       args: unknown;
       status: "ok" | "error" | "pending";
       resultPreview?: string;
+      toolFileRefs?: ToolFileRef[];
     },
   ): void {
     const event: SessionEvent = {
@@ -575,6 +644,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         args: payload.args,
         status: payload.status,
         ...(payload.resultPreview ? { resultPreview: payload.resultPreview.slice(0, RESULT_PREVIEW_LIMIT) } : {}),
+        ...(payload.toolFileRefs && payload.toolFileRefs.length > 0 ? { toolFileRefs: payload.toolFileRefs } : {}),
       },
     };
     sessionCtx.emitEvent(event);
@@ -582,8 +652,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
   /**
    * Translate one terminal `item.completed` payload into the runtime's event
-   * stream and, when the item is the assistant's final message, return the
-   * raw text so `runTurn` can stitch the per-turn reply together.
+   * stream and, when the item is assistant text, return the raw text so
+   * `runTurn` can track the SDK-style final response.
    */
   function processItem(item: ThreadItem, sessionCtx: SessionContext): string {
     switch (item.type) {
@@ -605,22 +675,44 @@ export const createCodexHandler: HandlerFactory = (config) => {
             : item.status === "failed"
               ? ("error" as const)
               : ("pending" as const);
+        const toolFileRefs =
+          status === "ok" && cwd
+            ? toolFileRefsFromShellCommand({
+                command: item.command,
+                cwd,
+                contextTreePath,
+                contextTreeRepoUrl,
+                contextTreeBranch,
+              })
+            : undefined;
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "command",
-          args: { command: item.command },
+          args: { command: item.command, ...(cwd ? { cwd } : {}) },
           status,
           resultPreview: item.aggregated_output,
+          toolFileRefs,
         });
         return "";
       }
       case "file_change": {
         const status = item.status === "completed" ? ("ok" as const) : ("error" as const);
+        const toolFileRefs =
+          status === "ok" && cwd
+            ? toolFileRefsFromCodexFileChange({
+                changes: item.changes,
+                workspaceCwd: cwd,
+                contextTreePath,
+                contextTreeRepoUrl,
+                contextTreeBranch,
+              })
+            : undefined;
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "file_change",
           args: { changes: item.changes },
           status,
+          toolFileRefs,
         });
         return "";
       }
@@ -719,7 +811,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // assistant_text / tool_call to the chat, re-running the turn would
     // double-render those items, so we stop retrying even if the SDK
     // surfaces a transient `turn.failed`.
-    const assistantTexts: string[] = [];
+    let finalResponse = "";
     let turnFailed = false;
     let userVisibleEmitted = false;
     // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
@@ -729,9 +821,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
     const turnStartedAt = Date.now();
     const promise = (async () => {
       for (let attempt = 0; attempt <= MAX_TURN_RETRIES; attempt++) {
-        // Reset per-attempt; assistantTexts intentionally persists across
+        // Reset per-attempt; finalResponse intentionally persists across
         // attempts only because we abort retries the moment any user-visible
-        // item is emitted, so the array is empty whenever a retry runs.
+        // item is emitted, so it is empty whenever a retry runs.
         turnFailed = false;
         let retryRequested = false;
         let retryDelay = 0;
@@ -762,7 +854,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 // No-op — runtime state already "working".
               } else if (event.type === "item.completed") {
                 const text = processItem(event.item, sessionCtx);
-                if (text) assistantTexts.push(text);
+                if (text) finalResponse = text;
                 if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
               } else if (event.type === "item.started" || event.type === "item.updated") {
                 // Stream-only intermediate states — claude-code likewise emits
@@ -792,6 +884,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   payload: { source: "sdk", message },
                 });
               } else if (event.type === "error") {
+                if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(event.message)) {
+                  retryRequested = true;
+                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+                  retryReason = `stream error (transient): ${event.message}`;
+                  break;
+                }
+                turnFailed = true;
                 const message = isCodexAuthError(event.message)
                   ? formatAuthHint("codex", event.message)
                   : event.message;
@@ -856,12 +955,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       return;
     }
 
-    // `\n\n` between assistant messages so multi-message turns aren't fused
-    // into one blob (Codex can emit several `agent_message` items in a turn).
-    const accumulated = assistantTexts.join("\n\n");
+    // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
+    // emits several non-empty agent_message items, finalResponse is the latest
+    // one. Earlier agent_message items remain live assistant_text progress
+    // events only. If the turn failed, do not forward partial text as a final
+    // chat message.
+    const accumulated = finalResponse;
 
     let forwardFailed = false;
-    if (accumulated.trim()) {
+    if (!turnFailed && accumulated.trim()) {
       try {
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
@@ -1020,7 +1122,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
   /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree integrate` shell-out + briefing write) or — when the sentinel and
+   * tree skill install` shell-out + briefing write) or — when the sentinel and
    * Context-Tree HEAD match the cached state — only refresh the per-chat
    * briefing (AGENTS.md). Mirrors the claude-code handler's
    * `ensureAgentBootstrap` so both handlers converge on identical per-agent-
@@ -1222,7 +1324,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       // Re-fetch chat-context every resume so newly-joined participants
       // surface in AGENTS.md. The sentinel still gates the expensive
-      // `first-tree tree integrate` shell-out.
+      // `first-tree tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       await prepareSourceRepos(payload, cwd, sessionCtx);

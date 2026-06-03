@@ -115,7 +115,6 @@ describe("low coverage UI components", () => {
     const { NewMessagesPill } = await import("../new-messages-pill.js");
     const { UnreadDivider } = await import("../unread-divider.js");
     const { FlatSectionHeader } = await import("../ui/flat-section-header.js");
-    const { SectionDivider, SectionShell } = await import("../../pages/agent-detail/section-shell.js");
     const onPillClick = vi.fn();
 
     const { container, root } = await renderDom(
@@ -132,10 +131,6 @@ describe("low coverage UI components", () => {
         <FlatSectionHeader count={2} right={<button type="button">Action</button>}>
           Section title
         </FlatSectionHeader>
-        <SectionShell anchorId="runtime" title="Runtime" caption="Provider details" right={<span>Right slot</span>}>
-          <div>Section body</div>
-        </SectionShell>
-        <SectionDivider />
       </>,
     );
 
@@ -146,7 +141,6 @@ describe("low coverage UI components", () => {
     expect(container.textContent).toContain("New Messages");
     expect(container.textContent).toContain("1 new message");
     expect(container.textContent).toContain("3 new messages");
-    expect(container.querySelector("#runtime")).toBeTruthy();
     await click(container.querySelector('button[aria-label="1 new message"]'));
     expect(onPillClick).toHaveBeenCalled();
     await act(async () => root.unmount());

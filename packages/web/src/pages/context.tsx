@@ -1,8 +1,8 @@
 import type {
   ContextTreeChangeType,
+  ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
-  ContextTreeUsageEvent,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 
 const CONTEXT_WINDOW = "7d";
@@ -50,66 +51,79 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
+  const liveStatusReady = snapshot && (preview || !query.isLoading) && snapshot.snapshotStatus !== "unavailable";
+
   return (
-    <div
-      className="context-live-page"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--sp-10)",
-      }}
-    >
-      {!preview && query.isLoading ? <LoadingState /> : null}
-      {!preview && query.error ? (
-        <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
-      ) : null}
-      {snapshot && (preview || !query.isLoading) ? (
-        snapshot.snapshotStatus === "unavailable" ? (
-          <UnavailableState snapshot={snapshot} />
-        ) : (
-          <>
-            <LiveContextHero snapshot={snapshot} />
-            <ChangeMap
-              snapshot={snapshot}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={(nodeId) => {
-                const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
-                setSelectedUpdateId(matchingUpdate?.id ?? null);
-              }}
-            />
-            <ContextSignal snapshot={snapshot} />
-            <ContextUsageFeed snapshot={snapshot} />
-          </>
-        )
-      ) : null}
-    </div>
+    <>
+      <PageHeader
+        title="Context"
+        subtitle="Your team's Context Tree."
+        right={liveStatusReady ? <LiveStatus snapshot={snapshot} /> : null}
+      />
+      <div className="context-live-page">
+        {!preview && query.isLoading ? <LoadingState /> : null}
+        {!preview && query.error ? (
+          <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
+        ) : null}
+        {snapshot && (preview || !query.isLoading) ? (
+          snapshot.snapshotStatus === "unavailable" ? (
+            <UnavailableState snapshot={snapshot} />
+          ) : (
+            <>
+              <ContextStatusNote snapshot={snapshot} />
+              <ChangeMap
+                snapshot={snapshot}
+                selectedNodeId={selectedNodeId}
+                onSelectNode={(nodeId) => {
+                  const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
+                  setSelectedUpdateId(matchingUpdate?.id ?? null);
+                }}
+              />
+              <ContextSignal snapshot={snapshot} />
+              <ContextUsageFeed snapshot={snapshot} />
+            </>
+          )
+        ) : null}
+      </div>
+    </>
   );
 }
 
-function LiveContextHero({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const lastUpdated = exactTimeLabel(snapshot.syncedAt) ?? "sync time unknown";
+/**
+ * Live-sync chip for the page header's right slot. A severity-toned dot pulses
+ * with a glow (DESIGN: green = the living system, working-form = pulse + glow),
+ * next to a "LIVE" eyebrow and the exact last-synced time. The always-present
+ * liveness signal in dense, left-of-the-page-edge chrome — no marketing hero.
+ */
+function LiveStatus({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const lastUpdated = exactTimeLabel(snapshot.syncedAt);
   const statusTone = severityColor(snapshot.contextStatus.severity);
-  const statusDetail =
-    snapshot.contextStatus.severity === "ok" ? null : (snapshot.contextStatus.detail ?? snapshot.contextStatus.label);
-
   return (
-    <section className="context-live-hero" aria-label={snapshot.contextStatus.label}>
-      <div className="context-live-title-row">
-        <span
-          aria-hidden="true"
-          className="context-live-dot"
-          style={{
-            background: statusTone,
-            ["--context-live-dot-color" as string]: statusTone,
-          }}
-        />
-        <h2 className="m-0 context-live-title">Context tree is live</h2>
-      </div>
-      <div className="text-lead context-live-subtitle">
-        Last updated at <strong>{lastUpdated}</strong>
-      </div>
-      {statusDetail ? <div className="text-body context-live-status-detail">{statusDetail}</div> : null}
-    </section>
+    <span className="context-live-status" title={snapshot.contextStatus.label}>
+      <span
+        aria-hidden="true"
+        className="context-live-dot"
+        style={{ background: statusTone, ["--context-live-dot-color" as string]: statusTone }}
+      />
+      <span className="text-eyebrow context-live-label" style={{ color: statusTone }}>
+        LIVE
+      </span>
+      {lastUpdated ? <span className="text-label context-live-time">· synced {lastUpdated}</span> : null}
+    </span>
+  );
+}
+
+/** Inline notice shown only when the tree sync is not healthy (warning/danger);
+ *  the ok path stays chrome-free per the read-only / informational rule. */
+function ContextStatusNote({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  if (snapshot.contextStatus.severity === "ok") return null;
+  const detail = snapshot.contextStatus.detail ?? snapshot.contextStatus.label;
+  const tone = severityColor(snapshot.contextStatus.severity);
+  return (
+    <div className="flex items-center text-label" style={{ gap: "var(--sp-2)", color: tone }}>
+      <AlertTriangle size={14} aria-hidden="true" />
+      <span>{detail}</span>
+    </div>
   );
 }
 
@@ -163,12 +177,12 @@ function ChangeMap({
                 <span className="context-network-summary-icon" aria-hidden="true">
                   <Network size={30} strokeWidth={2.3} />
                 </span>
-                <span className="context-network-summary-title">Context Tree</span>
-                <span className="context-network-summary-scale">
+                <span className="text-eyebrow context-network-summary-title">Context Tree</span>
+                <span className="text-title context-network-summary-scale">
                   {formatNumber(snapshot.nodes.length)}
-                  <span>total nodes</span>
+                  <span className="text-caption context-network-summary-unit">total nodes</span>
                 </span>
-                <span className="text-body context-network-summary-badge">
+                <span className="text-caption font-semibold context-network-summary-badge">
                   +{formatNumber(summaryUpdateCount)} updates
                 </span>
               </div>
@@ -207,29 +221,31 @@ function ChangeMap({
 }
 
 function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const windowText = snapshot.usage.windowDays === 1 ? "1 day" : `${snapshot.usage.windowDays} days`;
-  const agentText = snapshot.usage.agentCount === 1 ? "1 agent" : `${snapshot.usage.agentCount} agents`;
-  const usageText = snapshot.usage.usageCount === 1 ? "once" : `${snapshot.usage.usageCount} times`;
+  const windowText = snapshot.io.windowDays === 1 ? "1 day" : `${snapshot.io.windowDays} days`;
+  const readAgentText =
+    snapshot.io.summary.read.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.read.agentCount} agents`;
+  const writeAgentText =
+    snapshot.io.summary.write.agentCount === 1 ? "1 agent" : `${snapshot.io.summary.write.agentCount} agents`;
+  const readTimesText =
+    snapshot.io.summary.read.eventCount === 1 ? "1 time" : `${snapshot.io.summary.read.eventCount} times`;
+  const writeTimesText =
+    snapshot.io.summary.write.eventCount === 1 ? "1 time" : `${snapshot.io.summary.write.eventCount} times`;
 
-  // Honest copy: each usage event is now a real Read of a Context Tree file
-  // (the agent runtime emits one per tree-file read, with the node path). The
-  // signal knows the tree was read — not why — so it makes no "design
-  // decision" claim. See packages/client/src/handlers/claude-code.ts.
-  if (snapshot.usage.usageCount === 0) {
+  if (snapshot.io.summary.read.eventCount === 0 && snapshot.io.summary.write.eventCount === 0) {
     return (
-      <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
-        <span>No agent has read the context tree in the last {windowText}.</span>
+      <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
+        <span>No Context Tree reads or writes in the past {windowText}.</span>
       </div>
     );
   }
 
   return (
-    <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
+    <div className="text-body context-signal" style={{ color: "var(--fg-3)" }}>
       <span>
-        In the last {windowText}, <mark>{agentText}</mark>
+        In the past {windowText}, <mark>{readAgentText}</mark> read the tree <mark>{readTimesText}</mark>
       </span>
       <span>
-        read the context tree <mark>{usageText}</mark>.
+        and <mark>{writeAgentText}</mark> wrote <mark>{writeTimesText}</mark>.
       </span>
     </div>
   );
@@ -253,7 +269,7 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   // Tracks the previous event-id set across renders so we can diff for
   // arrivals on each snapshot refresh without re-flashing on every render.
   const seenIdsRef = useRef<Set<string>>(new Set());
-  const events = snapshot.usage.recentEvents;
+  const events = snapshot.io.recentEvents;
 
   // Tick the displayed `Xm ago` labels every 30s. Cheap — only forces a
   // re-render of this subtree.
@@ -298,11 +314,11 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const remaining = events.length - visible.length;
 
   return (
-    <section className="context-usage-feed" aria-label="Recent agent usage of the Context Tree">
+    <section className="context-usage-feed" aria-label="Recent Context Tree IO">
       <div className="context-usage-feed-header">
         <span className="context-usage-feed-live-dot" aria-hidden="true" />
         <span className="context-usage-feed-live-label">LIVE</span>
-        <span className="context-usage-feed-live-sublabel">· streaming agent activity</span>
+        <span className="context-usage-feed-live-sublabel">· explicit read/write activity</span>
       </div>
       <ul className="context-usage-feed-list">
         {visible.map((event) => {
@@ -320,13 +336,13 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
               </span>
               <span className="context-usage-feed-text">
                 <span className="context-usage-feed-agent">{event.agentName}</span>
-                <span className="context-usage-feed-action"> read </span>
-                {event.nodePath ? (
-                  <span className="context-usage-feed-node" title={event.nodePath}>
-                    {event.nodePath}
+                <span className="context-usage-feed-action">{event.action === "write" ? " wrote " : " read "}</span>
+                {event.targetPath !== "/" ? (
+                  <span className="context-usage-feed-node" title={event.targetPath}>
+                    {event.targetPath}
                   </span>
                 ) : (
-                  <span className="context-usage-feed-action">the context tree</span>
+                  <span className="context-usage-feed-action">the Context Tree</span>
                 )}
                 {chatId ? (
                   <>
@@ -365,7 +381,7 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   );
 }
 
-function chatLabel(event: ContextTreeUsageEvent): string {
+function chatLabel(event: ContextTreeIoEvent): string {
   const trimmed = event.chatTitle?.trim();
   if (trimmed && trimmed.length > 0) return `#${trimmed}`;
   if (event.chatId) return `#${event.chatId.slice(-6)}`;

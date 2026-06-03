@@ -37,6 +37,10 @@ const agentConfigMocks = vi.hoisted(() => ({
   updateAgentConfig: vi.fn(),
 }));
 
+const attachmentMocks = vi.hoisted(() => ({
+  uploadImageAttachment: vi.fn(),
+}));
+
 const chatApiMocks = vi.hoisted(() => ({
   createAgentChat: vi.fn(),
   readFileAsBase64: vi.fn(),
@@ -122,6 +126,7 @@ vi.mock("../../api/agents.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/agents.js")>()),
   ...agentApiMocks,
 }));
+vi.mock("../../api/attachments.js", () => attachmentMocks);
 vi.mock("../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/chats.js")>()),
   ...chatApiMocks,
@@ -347,6 +352,10 @@ function setupDom(): void {
     configurable: true,
     value: { randomUUID: () => "00000000-0000-4000-8000-000000000000" },
   });
+  Object.defineProperty(globalThis, "requestAnimationFrame", {
+    configurable: true,
+    value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
+  });
 }
 
 function createStorage(): Storage {
@@ -492,6 +501,39 @@ async function setValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
   await flush();
 }
 
+async function changeFiles(el: HTMLInputElement, files: File[]): Promise<void> {
+  Object.defineProperty(el, "files", { configurable: true, value: files });
+  await act(async () => {
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+}
+
+async function pasteFiles(el: Element, files: File[]): Promise<void> {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", { configurable: true, value: { files } });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  await flush();
+}
+
+async function dropFiles(el: Element, files: File[]): Promise<void> {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { configurable: true, value: { files } });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  await flush();
+}
+
+async function keyDown(el: Element, key: string): Promise<void> {
+  await act(async () => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
 async function click(el: Element | null): Promise<void> {
   if (!el) throw new Error("Expected element to click");
   await act(async () => {
@@ -507,6 +549,15 @@ async function waitForText(text: string, container: HTMLElement = document.body)
     await flush();
   } while (Date.now() < deadline);
   throw new Error(`Missing text: ${text}\n${container.textContent ?? ""}`);
+}
+
+async function waitForCondition(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + WAIT_FOR_TEXT_TIMEOUT_MS;
+  do {
+    if (predicate()) return;
+    await flush();
+  } while (Date.now() < deadline);
+  throw new Error(message);
 }
 
 beforeEach(() => {
@@ -587,6 +638,7 @@ beforeEach(() => {
     updatedAt: NOW,
     updatedBy: "member-self",
   });
+  attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 3 });
   chatApiMocks.createAgentChat.mockResolvedValue({ id: "chat-onboarding" });
   chatApiMocks.readFileAsBase64.mockResolvedValue("base64");
   chatApiMocks.sendChatMessage.mockResolvedValue(undefined);
@@ -765,6 +817,136 @@ describe("web DOM interaction coverage", () => {
 
     expect(meChatMocks.createMeChat).toHaveBeenCalledWith({ participantIds: ["agent-1", "agent-2"] });
     expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-created", "please review @design", ["agent-2"]);
+  });
+
+  it("drives NewChatDraft participants, mention autocomplete, image send, and error paths", async () => {
+    const { NewChatDraft } = await import("../workspace/conversations/new-chat-draft.js");
+    agentApiMocks.listAgents.mockImplementation(async (params?: { query?: string }) => {
+      const query = params?.query?.trim().toLowerCase() ?? "";
+      const items =
+        query.length === 0
+          ? ORG_AGENTS
+          : ORG_AGENTS.filter(
+              (item) =>
+                item.displayName.toLowerCase().includes(query) || (item.name?.toLowerCase().includes(query) ?? false),
+            );
+      return { items, nextCursor: null };
+    });
+    const onCreated = vi.fn();
+    const onShowConversations = vi.fn();
+    const rendered = await renderDom(
+      <NewChatDraft
+        onCreated={onCreated}
+        onShowConversations={onShowConversations}
+        initialParticipantIds={["agent-2"]}
+      />,
+    );
+
+    await waitForText("Design Critique", rendered.container);
+    await click(rendered.container.querySelector('button[aria-label="Show conversations"]'));
+    expect(onShowConversations).toHaveBeenCalledTimes(1);
+
+    await click(rendered.container.querySelector('button[title="Remove participant"]'));
+    expect(rendered.container.textContent).not.toContain("Design Critique");
+    expect(rendered.container.querySelector('button[aria-label="Send"]')?.getAttribute("title")).toBe(
+      "Add at least one participant",
+    );
+
+    await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
+    await waitForText("Kael", rendered.container);
+    const search = rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
+    if (!search) throw new Error("Participant search missing");
+    await setValue(search, "nobody");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    await flush();
+    await waitForText("No agents match", rendered.container);
+    await setValue(search, "Kael");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    await flush();
+    await keyDown(search, "ArrowDown");
+    await keyDown(search, "ArrowUp");
+    await keyDown(search, "Enter");
+    await waitForText("Kael", rendered.container);
+
+    await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
+    await waitForText("Design Critique", rendered.container);
+    const designButton = [...rendered.container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Design Critique"),
+    );
+    await act(async () => {
+      designButton?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    });
+    await click(designButton ?? null);
+    await waitForText("Design Critique", rendered.container);
+    await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
+    expect(rendered.container.querySelector('[title*="already in this draft"]')).toBeTruthy();
+    expect(rendered.container.querySelector('[aria-label="Already in draft"]')).toBeTruthy();
+    await keyDown(
+      rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]') ?? search,
+      "Escape",
+    );
+
+    const textarea = rendered.container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Draft textarea missing");
+    await setValue(textarea, "group caption");
+    expect(rendered.container.textContent).toContain("@ a group member to send");
+    expect(rendered.container.querySelector('button[aria-label="Send"]')?.getAttribute("title")).toBe(
+      "Group chats need an @ to wake at least one participant",
+    );
+
+    const pasted = new File(["abc"], "pasted.png", { type: "image/png" });
+    await pasteFiles(textarea, [pasted]);
+    expect(rendered.container.querySelector('img[alt="pasted.png"]')).toBeTruthy();
+    await click(rendered.container.querySelector('button[title="Remove image"]'));
+    expect(rendered.container.querySelector('img[alt="pasted.png"]')).toBeNull();
+
+    const dropped = new File(["def"], "dropped.png", { type: "image/png" });
+    await dropFiles(rendered.container.querySelector('[style*="box-shadow"]') ?? rendered.container, [dropped]);
+    expect(rendered.container.querySelector('img[alt="dropped.png"]')).toBeTruthy();
+    await setValue(textarea, "@design image attached");
+    await keyDown(textarea, "Enter");
+    await waitForCondition(() => chatApiMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image batch send");
+    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(dropped);
+    expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
+      imageId: "uploaded-image",
+      base64: "base64",
+      mimeType: "image/png",
+    });
+    expect(chatApiMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+      "chat-created",
+      {
+        caption: "@design image attached",
+        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "dropped.png", size: 3 }],
+      },
+      { mentions: ["agent-2"] },
+    );
+    expect(onCreated).toHaveBeenCalledWith("chat-created");
+
+    await unmountRoot(rendered.root);
+
+    chatApiMocks.sendFileMessageBatch.mockClear();
+    chatApiMocks.sendChatMessage.mockClear();
+    meChatMocks.createMeChat.mockResolvedValueOnce({ chatId: "image-only-chat" });
+    const imageOnly = await renderDom(<NewChatDraft onCreated={onCreated} initialParticipantIds={["agent-1"]} />);
+    await waitForText("Kael", imageOnly.container);
+    const imageOnlyInput = imageOnly.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!imageOnlyInput) throw new Error("Image-only file input missing");
+    const imageOnlyFile = new File(["ghi"], "only.png", { type: "image/png" });
+    await changeFiles(imageOnlyInput, [imageOnlyFile]);
+    await click(imageOnly.container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatApiMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image-only send");
+    expect(chatApiMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+      "image-only-chat",
+      {
+        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "only.png", size: 3 }],
+      },
+      { mentions: ["agent-1"] },
+    );
+    await unmountRoot(imageOnly.root);
   });
 
   it("searches, keyboard-selects, and closes AddParticipantDropdown", async () => {
@@ -1425,12 +1607,14 @@ describe("web DOM interaction coverage", () => {
 
     await click(container.querySelector('button[title="Edit"]'));
     await waitForText("Edit MCP server", document.body);
-    const transport = document.body.querySelector<HTMLSelectElement>("#mcp-transport");
-    if (!transport) throw new Error("MCP transport select missing");
-    await act(async () => {
-      transport.value = "http";
-      transport.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    // Transport is the custom Select primitive (button trigger + portal listbox),
+    // not a native <select>: open it, then click the "http" option.
+    const transportTrigger = document.body.querySelector<HTMLButtonElement>("#mcp-transport");
+    if (!transportTrigger) throw new Error("MCP transport trigger missing");
+    await click(transportTrigger);
+    const httpOption = [...document.body.querySelectorAll('[role="option"]')].find((el) => el.textContent === "http");
+    if (!httpOption) throw new Error("MCP transport http option missing");
+    await click(httpOption);
     await flush();
 
     const url = document.body.querySelector<HTMLInputElement>("#mcp-url");

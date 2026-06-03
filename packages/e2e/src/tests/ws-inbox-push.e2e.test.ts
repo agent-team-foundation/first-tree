@@ -107,7 +107,7 @@ describe("ws inbox push — chat-send → PG NOTIFY → inbox:deliver frame", ()
     const sendRes = await fetch(`${handle.serverBaseUrl}/api/v1/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
-      body: JSON.stringify({ format: "text", content: text }),
+      body: JSON.stringify({ format: "text", content: text, metadata: { mentions: [testAgentId] } }),
     });
     expect(sendRes.status).toBe(201);
     const sent = (await sendRes.json()) as { id: string };
@@ -140,7 +140,7 @@ describe("ws inbox push — chat-send → PG NOTIFY → inbox:deliver frame", ()
     const sendRes = await fetch(`${handle.serverBaseUrl}/api/v1/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
-      body: JSON.stringify({ format: "text", content: text }),
+      body: JSON.stringify({ format: "text", content: text, metadata: { mentions: [testAgentId] } }),
     });
     expect(sendRes.status).toBe(201);
     const sent = (await sendRes.json()) as { id: string };

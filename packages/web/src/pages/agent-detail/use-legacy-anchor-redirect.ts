@@ -12,15 +12,15 @@ import { useLocation, useNavigate, useParams } from "react-router";
 const HASH_TO_TAB: Record<string, string> = {
   "ad-overview": "profile",
   "ad-appearance": "profile",
-  "ad-setup": "setup",
+  "ad-setup": "runtime",
   "ad-prompt": "prompt",
   "agent-cfg-prompt": "prompt",
-  "agent-cfg-mcp": "tools",
+  "agent-cfg-mcp": "profile",
   "ad-advanced": "resources",
   "agent-cfg-env": "resources",
   "agent-cfg-git": "resources",
-  // Lifecycle moved into Setup bottom — keep the danger anchor alive.
-  "ad-danger": "setup",
+  // Lifecycle lives at the bottom of Profile — keep the danger anchor alive.
+  "ad-danger": "profile",
 };
 
 export function useLegacyAnchorRedirect(): void {

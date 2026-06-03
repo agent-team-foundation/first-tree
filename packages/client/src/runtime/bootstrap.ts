@@ -212,8 +212,8 @@ async function syncContextTreeRepo(
         log("Context Tree cloned via SSH fallback");
         // Report the SSH URL as ground truth — `git remote get-url origin`
         // on this checkout will be the SSH form, and downstream consumers
-        // (`first-tree tree integrate --tree-url`, telemetry) should match
-        // the actual remote rather than the configured-but-unusable HTTPS.
+        // (telemetry, future tree wiring) should match the actual remote
+        // rather than the configured-but-unusable HTTPS.
         return { path: cloneDir, repoUrl: sshRepo, branch };
       } catch (sshErr) {
         const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);
@@ -626,8 +626,8 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 }
 
 /**
- * Install the first-tree skill and FIRST-TREE-SOURCE-INTEGRATION block into
- * the workspace by shelling out to the channel-resolved CLI's `tree integrate`.
+ * Install the shipped first-tree skill payloads into the workspace by shelling
+ * out to the channel-resolved CLI's `tree skill install --root <workspacePath>`.
  *
  * Resolution order for the CLI binary (binName/packageName are channel-aware,
  * see {@link getCliBinding}):
@@ -636,32 +636,23 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
  *      Skipped for the dev channel (`packageName === null`) because dev
  *      binaries are not published to npm.
  *
+ * Framework files (workspace.json, AGENTS.md / CLAUDE.md) are written once at
+ * onboarding by `tree init`, not re-emitted per session — this hook only
+ * refreshes the on-disk skill payloads under `.agents/skills/` and
+ * `.claude/skills/` so each session picks up the latest shipped versions.
+ *
  * Graceful degradation: returns false on failure and logs. The session still
  * starts; the agent just doesn't have the first-tree skill wired up.
  */
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
-  const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
+  const { workspacePath, log } = options;
   const exec = options.exec ?? defaultInstallExec;
   const { binName, packageName } = getCliBinding();
 
-  // `<binName> tree integrate` resolves the source/workspace path from the
-  // process cwd — it does NOT accept a `--source-path` flag. We set
-  // `cwd: workspacePath` below; passing a flag the CLI doesn't recognise
-  // makes every invocation exit 1 with "unknown option '--source-path'".
-  const integrateArgs = [
-    "tree",
-    "integrate",
-    "--tree-path",
-    contextTreePath,
-    "--mode",
-    "workspace-root",
-    "--workspace-id",
-    workspaceId,
-    ...(treeRepoUrl ? ["--tree-url", treeRepoUrl] : []),
-  ];
+  const installArgs = ["tree", "skill", "install", "--root", workspacePath];
 
   const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: binName, args: integrateArgs, label: `${binName} (PATH)` },
+    { command: binName, args: installArgs, label: `${binName} (PATH)` },
     // Dev channel publishes no npm tarball, so skip the npx fallback entirely
     // — there is nothing to fetch. Falls through to "PATH attempt failed →
     // graceful degradation" which is the right behaviour for dev anyway:
@@ -671,7 +662,7 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
       ? [
           {
             command: "npx",
-            args: ["-y", `${packageName}@latest`, ...integrateArgs],
+            args: ["-y", `${packageName}@latest`, ...installArgs],
             label: `npx ${packageName}@latest`,
           },
         ]
@@ -964,6 +955,25 @@ export function generateToolsDoc(): string {
   // invocations actually find the CLI on PATH —
   // hardcoding "first-tree" used to leave staging/dev agents calling a
   // binary that wasn't installed on the host.
+  //
+  // The long-form Sending Messages CLI usage (chat send / chat invite
+  // syntax, markdown / stdin, mention-resolution mechanics) lives in the
+  // top-level `first-tree` skill (SKILL.md + references/agent-
+  // communication.md) — the dedicated `first-tree-cloud` skill it used
+  // to live in was deleted because almost all of its content was
+  // operator-facing (login, daemon install, agent create, etc.) and
+  // never used by an in-chat agent at runtime. What stays here:
+  //   - runtime safety invariants the result-sink + silent-turn guard
+  //     depend on (final-text contract, silent-turn, Issue #389);
+  //   - the short behavioural directives (Decision guide table + Fallback
+  //     paragraph) that every agent needs regardless of whether the
+  //     `first-tree` skill is installed in its workspace.
+  // Why the second group stays inline: `first-tree` is in
+  // `TREE_SKILL_NAMES` (only installed alongside a Context Tree binding),
+  // not `CORE_SKILL_NAMES`. A tree-less agent (contextTreePath: null —
+  // explicitly supported per CLAUDE.md "Context Tree integration is
+  // optional") would otherwise be pointed at a skill that doesn't exist
+  // on its disk and silently lose the decision guide.
   const bin = getCliBinding().binName;
   return `# First Tree Agent Runtime
 
@@ -972,79 +982,43 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message has a
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
 - **Your final response text is delivered to the chat for human observers to read.
-  It does NOT wake other agents.** To make another agent take action, use
-  \`${bin} chat send <name>\` explicitly (see "Communication Rules" below).
+  It does NOT wake other agents.** To make another agent take action, run
+  \`${bin} chat send <name>\` explicitly.
 - **Stay silent when you have nothing to add.** Not every message needs a reply.
   If you have nothing new for the recipient, output nothing and the runtime ends the turn.
-- For **proactive communication** (other agents, other chats, or different format),
-  use the \`${bin}\` CLI below.
+- **Content rules (Issue #389):** pass content as a **raw string** — never
+  \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes produces a
+  literal \`"@x ...\\n..."\` row that the UI cannot render as markdown.
 
 ## Communication Rules
-
-Your final response text is delivered to the chat for **human observers**
-to read. It does NOT wake other agents.
-
-To make another agent take action, you MUST explicitly call:
-
-    ${bin} chat send <name> "..."
 
 Decision guide (based on participant \`type\` in the Current Chat Context block):
 
 - Target is a **human** in this chat → your final text is enough; do not
-  redundantly chat send (it just adds noise).
+  redundantly \`chat send\` (it just adds noise).
 - Target is an **agent** in this chat → they will NOT see your final text
-  as a wake signal. You MUST chat send <name> if you need them to act.
+  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them to act.
 - No specific target (just narrating progress / thinking aloud) → final
   text only; no send needed.
 
-**Fallback** (if Current Chat Context block is missing — context injection
-may have failed): use conservative mode — all cross-agent collaboration
-goes through explicit \`chat send\`; do not rely on final text to wake
-anyone.
+**Fallback** (if the Current Chat Context block is missing — context
+injection may have failed): use conservative mode — all cross-agent
+collaboration goes through explicit \`chat send\`; do not rely on final
+text to wake anyone.
 
-## Sending Messages
+## Workspace Collaboration
 
-The CLI auto-reads its config from env — no setup needed.
+For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
+stdin, reaching non-members, mention resolution — load the top-level
+**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
+The skill's \`description\` triggers progressive disclosure whenever the user
+mentions chat, daemon, agent config, or anything related to First Tree.
 
-\`\`\`bash
-# Send to an agent by NAME (uuids are NOT accepted — run \`${bin} agent list\` for names).
-# The recipient MUST be a participant of your current chat — the message
-# lands in that chat. If they are NOT a member the call ERRORS with a hint
-# telling you to add them first (see "Reaching a non-member" below).
-${bin} chat send <agentName> "your message"
-
-# Pull a non-member into your current chat first, then send normally.
-${bin} chat invite <agentName>
-${bin} chat send <agentName> "your message"
-
-# Markdown format (default is text)
-${bin} chat send <agentName> -f markdown "**bold**"
-
-# Pipe long / multiline content via stdin
-echo "long body" | ${bin} chat send <agentName>
-\`\`\`
-
-**Reaching another agent**:
-
-- **Already a member of this chat** → \`chat send <agentName> "..."\`. The
-  message lands in the current chat and the recipient is woken if they were
-  @mentioned (or — for two-speaker chats — implicitly).
-- **Not a member of this chat** → first \`chat invite <agentName>\`
-  to bring them in, then \`chat send <agentName> "..."\` like normal. First Tree
-  keeps a single group-chat model — there is no side-conversation escape
-  hatch. \`@<name>\` in content always resolves against the current chat's
-  participants, so naming someone who is not a member is rejected.
-
-The CLI **only addresses agents by name**. You cannot route by chat-id from
-this command.
-
-**Content rules (important):**
-
-- Pass content as a **raw string** — never \`JSON.stringify\` it first. Wrapping in
-  outer quotes + \`\\n\` escapes produces a literal \`"@x ...\\n..."\` that the UI
-  cannot render as markdown.
-- For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
-  use **stdin** with real newlines, plus \`-f markdown\`.
+Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
+there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less agents**
+(no Context Tree binding) won't have \`first-tree\` installed on disk;
+the Communication Rules above are inline here for exactly that reason — the
+sunk content is the long CLI mechanics, not the routing rules.
 
 ## When You Need a Human
 

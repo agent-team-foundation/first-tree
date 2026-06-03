@@ -37,10 +37,51 @@ export const MESSAGE_FORMATS = {
   CARD: "card",
   REFERENCE: "reference",
   FILE: "file",
+  /**
+   * Open question — an "ask" directed at a single human (the sole entry in
+   * `metadata.mentions`). The narrative/context lives in the message body
+   * (`content`); the specific question + optional subject live in
+   * `metadata.request`. No lifecycle state is stored on the message: it is
+   * "answered" when the target replies with `inReplyTo` pointing back at it
+   * (which drives `chat_user_state.open_request_count` down). See
+   * proposals/group-chat-unified-send §D1.
+   */
+  REQUEST: "request",
 } as const;
 
-export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file"]);
+export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file", "request"]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
+
+/**
+ * One question inside a `format="request"` message. A request can carry
+ * several questions answered together in one reply.
+ *   - `kind="single"` — pick exactly one of `options`.
+ *   - `kind="free"`   — free-text answer (options ignored).
+ */
+export const openQuestionItemSchema = z.object({
+  id: z.string().min(1),
+  prompt: z.string().min(1),
+  kind: z.enum(["single", "free"]).default("single"),
+  options: z.array(z.string().min(1)).default([]),
+  required: z.boolean().default(true),
+});
+export type OpenQuestionItem = z.infer<typeof openQuestionItemSchema>;
+
+/**
+ * Shape of `metadata.request` on a `format="request"` message: the long
+ * narrative/decision context lives in the message body (`content`); this
+ * carries the structured ask. Server-opaque (the send path validates only
+ * the single-human-target rule, not this payload) — the web parses it with
+ * `safeParse` to render the answer block, mirroring how `githubEventCardSchema`
+ * gates card rendering. See proposals/group-chat-unified-send §D1.
+ */
+export const openQuestionRequestSchema = z.object({
+  subject: z.string().optional(),
+  questions: z.array(openQuestionItemSchema).min(1),
+  /** Allow a free-text addition alongside option questions. */
+  allowExtra: z.boolean().default(false),
+});
+export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
 
 /**
  * Optional intent tag set by the client when posting through
@@ -77,6 +118,15 @@ export const sendMessageSchema = z.object({
    */
   source: messageSourceSchema.default("api"),
   purpose: messagePurposeSchema.optional(),
+  /**
+   * Explicit broadcast intent: enter the chat stream but wake no one and
+   * skip the group-chat `@mention required` guard. Opt-in — set by the CLI
+   * `chat send --broadcast` and the web composer's no-`@` send. Distinct from
+   * `purpose: "agent-final-text"` (which is a runtime-internal forward); this
+   * is a deliberate human/agent broadcast ("我搞完了 / 立场宣布"). See
+   * proposals/group-chat-unified-send §D6.
+   */
+  broadcast: z.boolean().optional(),
   /**
    * Recipient agent names that the server should resolve to uuids against
    * the chat's participant list and add to the message's `mentions`. Lets

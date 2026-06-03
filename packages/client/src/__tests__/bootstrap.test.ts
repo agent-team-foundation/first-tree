@@ -194,7 +194,7 @@ describe("bootstrapWorkspace", () => {
     expect("chatContext" in data).toBe(false);
   });
 
-  it("writes tools.md with SDK reference", () => {
+  it("writes tools.md with the runtime invariants the result-sink + silence-turn rely on", () => {
     const workspace = join(tmpBase, "ws-tools");
     mkdirSync(workspace, { recursive: true });
 
@@ -215,19 +215,21 @@ describe("bootstrapWorkspace", () => {
     // L4 silent-turn protocol: the prompt directive that pairs with the
     // result-sink empty-output guard. Tells the agent that silence is the
     // correct response when it has nothing new — drops courtesy fillers
-    // that would otherwise sustain agent↔agent loops.
+    // that would otherwise sustain agent↔agent loops. MUST stay in
+    // tools.md (not progressive-disclosure) — see proposal P3.
     expect(content).toContain("Stay silent when you have nothing to add");
     expect(content).toContain("If you have nothing new for the recipient, output nothing");
     expect(content).toContain("the runtime ends the turn");
     // Issue #389: pin the anti-double-encode directive so future prompt edits
     // don't accidentally drop it. The CLI passes content as-is; agents that
     // JSON.stringify before sending produce a literal `"@x ...\n..."` row
-    // that the UI cannot render as markdown.
+    // that the UI cannot render as markdown. Stays in tools.md — runtime
+    // safety invariant.
     expect(content).toContain("Content rules");
     expect(content).toContain("JSON.stringify");
   });
 
-  it("tools.md contains the Communication Rules section with Decision guide + Fallback (v1 §四 改造 4)", () => {
+  it("tools.md pins the final-text contract, Decision guide + Fallback, and points the long-form CLI usage at the first-tree skill", () => {
     const workspace = join(tmpBase, "ws-tools-rules");
     mkdirSync(workspace, { recursive: true });
 
@@ -239,22 +241,31 @@ describe("bootstrapWorkspace", () => {
     });
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    expect(content).toContain("## Communication Rules");
-    // New final-text contract — "human observers" + "does NOT wake other agents"
+    // Final-text contract still pinned in tools.md (load-bearing for
+    // result-sink + agent↔agent echo-loop prevention; see v1 §四 改造 4).
     expect(content).toContain("human observers");
     expect(content).toContain("does NOT wake other agents");
-    // Decision guide section anchors
+    // The Decision guide table and the Fallback paragraph stay inline
+    // because `first-tree` is in TREE_SKILL_NAMES, not CORE_SKILL_NAMES —
+    // a tree-less agent (contextTreePath: null) would otherwise lose them
+    // entirely. Only the long-form CLI mechanics (chat invite / markdown /
+    // stdin / mention resolution) sink into the skill.
+    expect(content).toContain("## Communication Rules");
     expect(content).toContain("Decision guide");
     expect(content).toMatch(/Target is a \*\*human\*\* in this chat/);
     expect(content).toMatch(/Target is an \*\*agent\*\* in this chat/);
-    // Fallback paragraph for chat-context-missing degradation
     expect(content).toContain("**Fallback**");
     expect(content).toContain("conservative mode");
-
-    // Old contract text must be gone — these are the lines the v1.5 spec
-    // requires改造 4 to overwrite.
+    // tools.md still carries the pointer at the first-tree skill for the
+    // long-form CLI usage (and explicitly notes the tree-less case).
+    expect(content).toContain("## Workspace Collaboration");
+    expect(content).toContain("`first-tree` skill");
+    // Old contract text must stay gone — these are the lines the v1.5 spec
+    // requires 改造 4 to overwrite.
     expect(content).not.toContain("Your final text response is automatically delivered");
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+    // Stale pointer at the retired first-tree-cloud skill must stay gone.
+    expect(content).not.toContain("first-tree-cloud");
   });
 
   it("tools.md is generated from the shared tools doc helper", () => {
@@ -272,12 +283,19 @@ describe("bootstrapWorkspace", () => {
     expect(content).toBe(generateToolsDoc());
   });
 
-  it("tools.md uses the channel-resolved binary name when the CLI binding points at staging", () => {
-    // Regression for the multi-env follow-up: the agent-facing tools.md
-    // used to hardcode `first-tree chat send`, which on staging hosts asks
-    // the agent to call a binary that doesn't exist (only
-    // `first-tree-staging` is installed). The binding must thread through
-    // to every CLI invocation in the docs (chat send/invite, agent list).
+  it("tools.md uses the channel-resolved binary name in the surviving chat-send invariant (post-P3 sink)", () => {
+    // Regression for the multi-env follow-up: the agent-facing tools.md used
+    // to hardcode `first-tree chat send`, which on staging hosts asks the
+    // agent to call a binary that doesn't exist (only `first-tree-staging`
+    // is installed). After the long-form CLI usage was sunk into the
+    // top-level `first-tree` skill, tools.md no longer carries `chat invite`
+    // / `agent list` examples — but the load-bearing `chat send <name>`
+    // directive (and the pointer's binary substitution note) still go
+    // through `${bin}`, so the channel binding must thread through.
+    // The full chat-send/invite/agent-list usage now lives in
+    // `skills/first-tree/references/agent-communication.md`; that file's
+    // channel-correctness is covered by the skill-content tests in
+    // `apps/cli/src/__tests__/skill-artifacts.test.ts`.
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     const workspace = join(tmpBase, "ws-tools-staging");
     mkdirSync(workspace, { recursive: true });
@@ -291,41 +309,12 @@ describe("bootstrapWorkspace", () => {
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
     expect(content).toContain("first-tree-staging chat send");
-    expect(content).toContain("first-tree-staging chat invite");
-    expect(content).toContain("first-tree-staging agent list");
     // The hardcoded prod name must NOT leak through — the literal
     // `first-tree chat` would mis-direct staging agents to the prod binary.
+    // (The pointer text mentioning `first-tree` as a literal-to-substitute
+    // does so inside backticks and is not followed by `chat ` — the regex
+    // anchors on the literal CLI form `first-tree chat ` only.)
     expect(content).not.toMatch(/\bfirst-tree chat /);
-  });
-
-  it("tools.md teaches `chat invite` instead of the retired --direct escape hatch", () => {
-    const workspace = join(tmpBase, "ws-tools-direct");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity(),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-    });
-
-    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    // Sending Messages section must teach the add-participant flow as the
-    // canonical way to reach a non-member of the current chat.
-    expect(content).toContain("first-tree chat invite");
-    // Member-default routing description (the recipient must be in this chat).
-    expect(content).toMatch(/recipient MUST be a participant/);
-    // The retired escape hatches must NOT be taught — agents that try them
-    // would hit `unknown option` and loop. (First Tree keeps a single group-chat
-    // model; non-members must be added first.)
-    expect(content).not.toMatch(/--direct/);
-    expect(content).not.toMatch(/auto-mentions the recipient/);
-    // v1.7: agent surface is narrowed to "address an agent by name". The
-    // `--chat <chatId>` foot-gun is gone from the CLI and from this prompt.
-    expect(content).not.toMatch(/--chat <chatId>/);
-    expect(content).not.toMatch(/--chat <directChatId>/);
-    expect(content).toMatch(/Reaching another agent/);
-    expect(content).toMatch(/only addresses agents by name/);
   });
 
   it("tools.md notes the ask-a-human flow is pending redesign", () => {
@@ -494,7 +483,7 @@ function makeRecordingExec(impl: (call: ExecCall) => void = () => {}): {
 }
 
 describe("installFirstTreeIntegration", () => {
-  it("shells out to `first-tree tree integrate` with the expected arguments", () => {
+  it("shells out to `first-tree tree skill install --root <workspace>` with the expected arguments", () => {
     const workspace = join(tmpBase, "integrate-happy");
     const treePath = join(tmpBase, "ctx-tree");
     mkdirSync(workspace, { recursive: true });
@@ -515,21 +504,7 @@ describe("installFirstTreeIntegration", () => {
     expect(result).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe("first-tree");
-    // No `--source-path` flag: the first-tree CLI resolves the source from
-    // the process cwd (set via options.cwd below). Passing a flag the CLI
-    // doesn't recognise made every invocation exit 1.
-    expect(calls[0]?.args).toEqual([
-      "tree",
-      "integrate",
-      "--tree-path",
-      treePath,
-      "--mode",
-      "workspace-root",
-      "--workspace-id",
-      "chat-xyz",
-      "--tree-url",
-      "https://github.com/org/tree",
-    ]);
+    expect(calls[0]?.args).toEqual(["tree", "skill", "install", "--root", workspace]);
     expect(calls[0]?.options.cwd).toBe(workspace);
     expect(logs.join("\n")).toContain("first-tree (PATH)");
   });

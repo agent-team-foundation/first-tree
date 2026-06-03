@@ -188,7 +188,7 @@ function formatTreeRepoUrlDisplay(treeRepoUrl: string | null): string {
 
 function buildFallbackInstruction(treeRepoName: string, treeRepoUrl: string | null): string {
   if (treeRepoUrl === null) {
-    return "- If the tree has not been published yet, work from the local checkout you just bound (or pass `--tree-path` explicitly) until `first-tree tree publish` records the GitHub repo URL.";
+    return "- If the tree has not been pushed to GitHub yet, work from the local checkout (or pass `--tree-path` explicitly) until the tree repo has a remote URL.";
   }
 
   return `- If you do not already have that tree repo cloned locally, clone a temporary working copy from \`${treeRepoUrl}\` into \`${join(LOCAL_TREE_TEMP_ROOT, treeRepoName)}/\`, use it for the current task, and delete it before you finish.`;

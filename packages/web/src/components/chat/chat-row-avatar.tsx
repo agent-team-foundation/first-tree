@@ -17,7 +17,7 @@
  * in the right sidebar instead.
  *
  * A11y: this span's `aria-label` carries the dynamic *state* only
- * (`"needs you"`, `"3 unread"`). The enclosing chat-row button already
+ * (`"failed"`, `"3 unread"`). The enclosing chat-row button already
  * renders the chat title as visible text — repeating it here would
  * make screen readers announce the title twice. When the avatar has
  * no state to surface, it goes fully `aria-hidden` so the row's
@@ -44,7 +44,13 @@ function initial(s: string): string {
  */
 const AVATAR_HUE_COUNT = 8;
 
-const FALLBACK_HUE = "var(--avatar-hue-0)";
+/** Suffix appended to a hue token when the muted (low-chroma) companion
+ *  is wanted — see the `--avatar-hue-*-muted` block in `index.css`. The
+ *  conversation list passes `muted` so a dense rail stays near-monochrome;
+ *  every other surface keeps the vivid hue. */
+function hueSuffix(muted: boolean): string {
+  return muted ? "-muted" : "";
+}
 
 /**
  * Hash a stable seed (usually an agent's UUID; falls back to display
@@ -53,29 +59,33 @@ const FALLBACK_HUE = "var(--avatar-hue-0)";
  * group composites, and page reloads. Cheap djb2 variant; no
  * allocations.
  *
+ * `muted` selects the low-chroma companion token (same hue family,
+ * desaturated) for dense contexts like the conversation list.
+ *
  * Empty seed lands on `--avatar-hue-0` deterministically. Exported
  * for unit testing the deterministic-mapping contract.
  */
-export function pickAvatarHue(seed: string): string {
-  if (seed.length === 0) return FALLBACK_HUE;
+export function pickAvatarHue(seed: string, muted = false): string {
+  if (seed.length === 0) return `var(--avatar-hue-0${hueSuffix(muted)})`;
   let hash = 5381;
   for (let i = 0; i < seed.length; i++) {
     hash = (hash * 33) ^ seed.charCodeAt(i);
   }
   const idx = Math.abs(hash) % AVATAR_HUE_COUNT;
-  return `var(--avatar-hue-${idx})`;
+  return `var(--avatar-hue-${idx}${hueSuffix(muted)})`;
 }
 
 /**
  * Manager override → hue. Accepts the loose `string | null` shape that
  * flows in from the API so unrecognised values quietly fall back to the
  * deterministic hash on `seed`. Valid tokens are "hue-0".."hue-7".
+ * `muted` selects the desaturated companion (see `pickAvatarHue`).
  */
-export function resolveAvatarHue(colorToken: string | null | undefined, seed: string): string {
+export function resolveAvatarHue(colorToken: string | null | undefined, seed: string, muted = false): string {
   if (typeof colorToken === "string" && /^hue-[0-7]$/.test(colorToken)) {
-    return `var(--avatar-${colorToken})`;
+    return `var(--avatar-${colorToken}${hueSuffix(muted)})`;
   }
-  return pickAvatarHue(seed);
+  return pickAvatarHue(seed, muted);
 }
 
 /**
@@ -110,9 +120,10 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { failed: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou?: boolean; unread: number }): string | null {
   const parts: string[] = [];
   if (opts.failed) parts.push("failed");
+  if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -124,7 +135,11 @@ export function ChatRowAvatar({
   selfAgentId,
   unreadCount,
   failed = false,
+  needsYou = false,
   size = 36,
+  muted = false,
+  badge = true,
+  statusDot = false,
 }: {
   /** Resolved chat title — used as a fallback initial when no peer exists. */
   title: string;
@@ -139,8 +154,27 @@ export function ChatRowAvatar({
   /** Any speaker in this chat is in the composite `failed` state. Outranks
    *  unread for the corner badge. */
   failed?: boolean;
+  /** Caller has an unanswered open question (`format=request`) directed at
+   *  them here (`openRequestCount > 0`). Amber corner dot; ranks between
+   *  failed and unread. */
+  needsYou?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
+  /** Use the desaturated companion hues — set by the conversation list so a
+   *  dense rail of avatars stays near-monochrome (identity by hue family,
+   *  not saturation). Defaults to the vivid hues everywhere else. */
+  muted?: boolean;
+  /** Render the corner attention badge (`!` / unread count). The
+   *  conversation list disables it (`badge={false}`) because attention and
+   *  unread are carried by the avatar status dot instead; the avatar stays a
+   *  clean identity disc. The state still feeds
+   *  the avatar's `aria-label` regardless, so screen readers are unaffected. */
+  badge?: boolean;
+  /** Mainstream-IM status marker: a plain coloured dot on the avatar's
+   *  TOP-right corner (no count). Failed uses a red `!`; unread uses a red
+   *  dot. Used by the conversation list (with `badge={false}`) so the avatar
+   *  carries the WeChat / iMessage / Telegram corner mark. */
+  statusDot?: boolean;
 }) {
   const isDirect = type === "direct";
   // Defensive: older server builds may omit `participants` from the me/chats
@@ -150,7 +184,7 @@ export function ChatRowAvatar({
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
   const peer = peers[0];
 
-  const ariaLabel = buildAvatarAriaLabel({ failed, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -172,11 +206,64 @@ export function ChatRowAvatar({
           hueSeed={peer?.agentId ?? title}
           colorToken={peer?.avatarColorToken ?? null}
           imageUrl={peer?.avatarImageUrl ?? null}
+          muted={muted}
         />
       ) : (
-        <CompositeAvatar size={size} peers={peers} />
+        <CompositeAvatar size={size} peers={peers} muted={muted} />
       )}
-      <AttentionBadge failed={failed} unread={unreadCount} />
+      {badge && <AttentionBadge failed={failed} unread={unreadCount} />}
+      {statusDot && <ListCornerMark failed={failed} needsYou={needsYou} unread={unreadCount > 0} />}
+    </span>
+  );
+}
+
+/** Avatar top-right corner marker geometry (no design token covers a one-off
+ *  badge; named here for self-documentation, matching `CORNER_BADGE_SIZE`).
+ *  `DOT` = plain unread dot; `MARK` = the slightly larger failed glyph badge. */
+const CORNER_DOT_SIZE = 9;
+const CORNER_MARK_SIZE = 13;
+const CORNER_OFFSET = -2;
+
+/**
+ * Conversation-list corner marker (mainstream-IM placement: avatar top-right).
+ * Failed uses a semantic `!` glyph; `needs_you` (an unanswered open question
+ * directed at you) is an amber dot; plain unread is a red dot.
+ * Priority: failed > needs_you > unread; renders nothing otherwise.
+ */
+function ListCornerMark({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: boolean }) {
+  if (failed) return <CornerMark background="var(--state-error)" fg="var(--fg-on-vivid)" glyph="!" />;
+  if (needsYou) return <CornerMark background="var(--state-needs-you)" />;
+  if (unread) return <CornerMark background="var(--state-unread)" />;
+  return null;
+}
+
+function CornerMark({ background, fg, glyph }: { background: string; fg?: string; glyph?: string }) {
+  const size = glyph ? CORNER_MARK_SIZE : CORNER_DOT_SIZE;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        top: CORNER_OFFSET,
+        right: CORNER_OFFSET,
+        minWidth: size,
+        height: size,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "50%",
+        background,
+        color: fg,
+        fontSize: "var(--text-caption)",
+        fontWeight: 700,
+        lineHeight: 1,
+        border: "var(--hairline-bold) solid var(--bg-raised)",
+        boxSizing: "content-box",
+        zIndex: 3,
+        userSelect: "none",
+      }}
+    >
+      {glyph}
     </span>
   );
 }
@@ -187,12 +274,14 @@ function SingleAvatar({
   hueSeed,
   colorToken,
   imageUrl,
+  muted = false,
 }: {
   size: number;
   name: string;
   hueSeed: string;
   colorToken?: string | null;
   imageUrl?: string | null;
+  muted?: boolean;
 }) {
   if (imageUrl) {
     return (
@@ -212,7 +301,7 @@ function SingleAvatar({
         width: size,
         height: size,
         borderRadius: "50%",
-        background: resolveAvatarHue(colorToken, hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed, muted),
         color: "var(--fg-on-vivid)",
         display: "flex",
         alignItems: "center",
@@ -229,7 +318,15 @@ function SingleAvatar({
   );
 }
 
-function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<Participant> }) {
+function CompositeAvatar({
+  size,
+  peers,
+  muted = false,
+}: {
+  size: number;
+  peers: ReadonlyArray<Participant>;
+  muted?: boolean;
+}) {
   // Layout decision keyed off `pickCompositeShape` (see header docstring):
   //   n2  → vertical bisection
   //   n3  → T-split (top spans full width, bottom is 2 cells)
@@ -269,12 +366,14 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -286,18 +385,21 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSizeTop}
             fullWidth
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -308,24 +410,28 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[3]?.displayName ?? "?"}
             hueSeed={peers[3]?.agentId ?? "3"}
             colorToken={peers[3]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
         </>
       )}
@@ -336,18 +442,21 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
             hueSeed={peers[0]?.agentId ?? "0"}
             colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[1]?.displayName ?? "?"}
             hueSeed={peers[1]?.agentId ?? "1"}
             colorToken={peers[1]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <Seg
             name={peers[2]?.displayName ?? "?"}
             hueSeed={peers[2]?.agentId ?? "2"}
             colorToken={peers[2]?.avatarColorToken ?? null}
             fontSize={fontSize}
+            muted={muted}
           />
           <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
@@ -362,12 +471,14 @@ function Seg({
   colorToken,
   fontSize,
   fullWidth,
+  muted = false,
 }: {
   name: string;
   hueSeed: string;
   colorToken?: string | null;
   fontSize: number;
   fullWidth?: boolean;
+  muted?: boolean;
 }) {
   return (
     <span
@@ -375,7 +486,7 @@ function Seg({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: resolveAvatarHue(colorToken, hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed, muted),
         color: "var(--fg-on-vivid)",
         fontSize,
         fontWeight: 700,

@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
+import { Select } from "../../components/ui/select.js";
+import { Textarea } from "../../components/ui/textarea.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -272,16 +274,18 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="mcp-transport">Transport</Label>
-            <select
+            <Select
               id="mcp-transport"
+              aria-label="Transport"
               value={transport}
-              onChange={(e) => setTransport(e.target.value as "stdio" | "http" | "sse")}
-              className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value="stdio">stdio (local subprocess)</option>
-              <option value="http">http</option>
-              <option value="sse">sse</option>
-            </select>
+              onChange={(v) => setTransport(v as "stdio" | "http" | "sse")}
+              options={[
+                { value: "stdio", label: "stdio (local subprocess)" },
+                { value: "http", label: "http" },
+                { value: "sse", label: "sse" },
+              ]}
+              mono
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="mcp-name">Name</Label>
@@ -310,12 +314,12 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
                 <p className="text-caption text-muted-foreground">
                   Each arg as a separate JSON string. Use this when an arg contains spaces or quotes.
                 </p>
-                <textarea
+                <Textarea
                   id="mcp-args"
                   value={argsText}
                   onChange={(e) => setArgsText(e.target.value)}
                   placeholder={'["--port", "3000"]'}
-                  className="flex min-h-24 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-2 text-body font-mono shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-h-24 font-mono"
                 />
               </div>
             </>
@@ -336,12 +340,12 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
                 <p className="text-caption text-muted-foreground">
                   JSON object of request headers, for example auth headers required by the MCP server.
                 </p>
-                <textarea
+                <Textarea
                   id="mcp-headers"
                   value={headersText}
                   onChange={(e) => setHeadersText(e.target.value)}
                   placeholder={'{"Authorization": "Bearer ..."}'}
-                  className="flex min-h-24 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-2 text-body font-mono shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-h-24 font-mono"
                 />
               </div>
             </>

@@ -39,6 +39,19 @@ export const chatUserState = pgTable(
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
     unreadMentionCount: integer("unread_mention_count").notNull().default(0),
     /**
+     * Count of open questions (`messages.format = 'request'`) directed at
+     * this (chat, human) — incremented on RAISE, decremented when the human
+     * answers (replies with `inReplyTo` pointing at the question). Drives the
+     * re-introduced `needs_you` red-dot.
+     *
+     * Mirrors `unread_mention_count`'s storage shape, but with the OPPOSITE
+     * clear semantics: this is **answer-cleared, NOT read-cleared** — it is
+     * deliberately NOT reset by `markMeChatRead`. "Has an unanswered question
+     * directed at me", not "has unread mentions". See
+     * proposals/group-chat-unified-send §D1.
+     */
+    openRequestCount: integer("open_request_count").notNull().default(0),
+    /**
      * Per-(chat, user) view state. See `CHAT_ENGAGEMENT_STATUSES` in
      * shared for the legal values and semantics. Lazy default `'active'`
      * matches what `COALESCE(..., 'active')` returns for missing rows.
@@ -55,5 +68,10 @@ export const chatUserState = pgTable(
      * than the full table.
      */
     index("idx_user_state_unread").on(table.agentId).where(sql`unread_mention_count > 0`),
+    /**
+     * Partial index for the `needs_you` / "my open questions" lookup —
+     * bounded by the (small) set of rows with an unanswered question.
+     */
+    index("idx_user_state_open_req").on(table.agentId).where(sql`open_request_count > 0`),
   ],
 );

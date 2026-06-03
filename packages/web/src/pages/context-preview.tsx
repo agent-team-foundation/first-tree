@@ -17,8 +17,10 @@ const PREVIEW_NAV_TABS = [
  *
  *  - PreviewHeader  — static, non-interactive copy of the Layout top bar so
  *                     the preview matches production framing.
- *  - main wrapper   — same `p-6 max-w-[1280] mx-auto` content geometry as
- *                     Layout, so width/padding stay aligned with the Team tab.
+ *  - main wrapper   — same `p-6 max-w-[960] mx-auto` content geometry as
+ *                     Layout, so width/padding stay aligned with the Team tab
+ *                     (960 is the shared content canvas; the old 1280 here
+ *                     overstated the real width).
  *
  * The header is presentational only — none of its buttons / tabs do anything.
  * That's intentional: this route is for visual review, not navigation.
@@ -28,7 +30,7 @@ export function ContextPreviewPage() {
     <div className="flex flex-col overflow-hidden" style={{ height: "100vh", background: "var(--bg)" }}>
       <PreviewHeader />
       <main className="flex-1 overflow-auto">
-        <div className="p-6 mx-auto" style={{ maxWidth: 1280 }}>
+        <div className="p-4 lg:p-6 mx-auto" style={{ maxWidth: 960 }}>
           <ContextPage previewSnapshot={MOCK_CONTEXT_SNAPSHOT} />
         </div>
       </main>

@@ -1,0 +1,660 @@
+import { posix } from "node:path";
+import {
+  type ContextTreeIoAction,
+  type ContextTreeIoBucket,
+  type ContextTreeIoEvent,
+  type ContextTreeIoSource,
+  type ContextTreeIoSummary,
+  type ContextTreeIoTargetKind,
+  classifyShellCommandIo,
+  contextTreeIoSourceSchema,
+  type SessionEvent,
+  sessionEventSchema,
+  type ToolFileRef,
+  toolFileRefSchema,
+} from "@first-tree/shared";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
+import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
+import { sessionEvents } from "../db/schema/session-events.js";
+import { createLogger } from "../observability/index.js";
+import { getOrgContextTree } from "./org-settings.js";
+
+const CONTEXT_TREE_IO_FEED_LIMIT = 50;
+const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead"]);
+const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+const log = createLogger("ContextTreeIo");
+
+export type ContextTreeIoViewer = {
+  humanAgentId: string;
+  memberId: string;
+};
+
+export type RecordContextTreeIoInput = {
+  organizationId: string;
+  agentId: string;
+  chatId: string;
+  runtimeProvider: string;
+  sessionEvent: {
+    id: string;
+    kind: string;
+    payload: unknown;
+    createdAt: string;
+  };
+};
+
+type FileRefRecord = {
+  ref: ToolFileRef;
+  sourceIndex: number;
+};
+
+type EventIoDerivation = {
+  action: ContextTreeIoAction;
+  source: ContextTreeIoSource;
+};
+
+type NormalizedFileRef = {
+  treeRepoUrl: string;
+  treeBranch: string;
+  targetKind: ContextTreeIoTargetKind;
+  targetPath: string;
+  metadata: Record<string, unknown>;
+};
+
+type NormalizedFileRefRecord = {
+  normalized: NormalizedFileRef;
+  sourceIndex: number;
+};
+
+export type ContextTreeIoSkipReason =
+  | "no_org_context_tree_binding"
+  | "event_kind_not_io"
+  | "status_not_ok"
+  | "unsupported_tool"
+  | "unsupported_shell_command"
+  | "no_tool_file_refs"
+  | "ref_schema_invalid"
+  | "ref_repo_mismatch"
+  | "ref_path_invalid"
+  | "chat_not_in_org";
+
+export type ContextTreeIoDecision =
+  | {
+      recordable: true;
+    }
+  | {
+      recordable: false;
+      reason: ContextTreeIoSkipReason;
+    };
+
+export type ExplainContextTreeIoDecisionInput = {
+  runtimeProvider: string;
+  sessionEvent: {
+    kind: string;
+    payload: unknown;
+  };
+  bindingRepo: string | null | undefined;
+  bindingBranch?: string | null;
+  chatInOrg?: boolean;
+};
+
+type InternalContextTreeIoDecision =
+  | {
+      recordable: true;
+      derivation: EventIoDerivation;
+      refs: NormalizedFileRefRecord[];
+    }
+  | {
+      recordable: false;
+      reason: ContextTreeIoSkipReason;
+    };
+
+function canonicalRepoUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  const scpLike = /^(?:[^@/\s]+@)?([^:]+):(.+)$/.exec(trimmed);
+  if (scpLike && !trimmed.includes("://")) {
+    const host = scpLike[1];
+    const rawPath = scpLike[2];
+    if (!host || !rawPath) return null;
+    const path = normalizeRepoPath(rawPath);
+    return path ? `${host.toLowerCase()}/${path}` : null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const path = normalizeRepoPath(url.pathname);
+    return path ? `${url.hostname.toLowerCase()}/${path}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRepoPath(rawPath: string): string | null {
+  let path = rawPath.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (path.endsWith(".git")) path = path.slice(0, -4);
+  return path.length > 0 ? path : null;
+}
+
+function normalizeTargetPath(rawPath: string, targetKind: ContextTreeIoTargetKind): string | null {
+  const trimmed = rawPath.trim().replaceAll("\\", "/");
+  if (trimmed.length === 0 || trimmed.includes("\0")) return null;
+  if (targetKind === "repo" && (trimmed === "/" || trimmed === ".")) return "/";
+  if (trimmed.startsWith("/")) return null;
+
+  const normalized = posix.normalize(trimmed);
+  if (normalized === "." || normalized === ".." || normalized.startsWith("../")) return null;
+  if (normalized.length === 0) return null;
+  return normalized;
+}
+
+function isClaudeRuntime(runtimeProvider: string): boolean {
+  return runtimeProvider === "claude-code" || runtimeProvider === "claude-code-tui";
+}
+
+function shellCommandArg(event: SessionEvent): string | null {
+  if (event.kind !== "tool_call") return null;
+  const args = event.payload.args;
+  if (!args || typeof args !== "object") return null;
+  const command = (args as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function shellToolCanRead(event: SessionEvent): boolean {
+  const command = shellCommandArg(event);
+  if (command === null) return false;
+  const classification = classifyShellCommandIo(command);
+  return classification.supported && classification.action === "read";
+}
+
+function isShellTool(runtimeProvider: string, toolName: string): boolean {
+  return (
+    (runtimeProvider === "codex" && toolName === "command") || (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
+  );
+}
+
+function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDerivation | ContextTreeIoSkipReason {
+  if (event.kind === "context_tree_usage") return { action: "read", source: "legacy_context_tree_usage" };
+  if (event.kind !== "tool_call") return "event_kind_not_io";
+  if (event.payload.status !== "ok") return "status_not_ok";
+
+  const toolName = event.payload.name;
+  if (runtimeProvider === "codex" && toolName === "file_change") {
+    return { action: "write", source: "codex_file_change" };
+  }
+  if (isClaudeRuntime(runtimeProvider) && CLAUDE_READ_TOOLS.has(toolName)) {
+    return { action: "read", source: "claude_read_tool" };
+  }
+  if (isClaudeRuntime(runtimeProvider) && CLAUDE_WRITE_TOOLS.has(toolName)) {
+    return { action: "write", source: "claude_write_tool" };
+  }
+  if (isShellTool(runtimeProvider, toolName)) {
+    return shellToolCanRead(event) ? { action: "read", source: "shell_command" } : "unsupported_shell_command";
+  }
+
+  return "unsupported_tool";
+}
+
+function legacyFileRef(event: SessionEvent, bindingRepo: string, bindingBranch: string): ToolFileRef | null {
+  if (event.kind !== "context_tree_usage") return null;
+  const nodePath = event.payload.nodePath;
+  return {
+    origin: "runtime_metadata",
+    repoUrl: event.payload.treeRepoUrl ?? bindingRepo,
+    repoBranch: bindingBranch,
+    repoRelativePath: nodePath ?? "/",
+    pathKind: nodePath ? "file" : "repo",
+  };
+}
+
+function extractFileRefs(event: SessionEvent, bindingRepo: string, bindingBranch: string): FileRefRecord[] {
+  const legacy = legacyFileRef(event, bindingRepo, bindingBranch);
+  if (legacy) return [{ ref: legacy, sourceIndex: 0 }];
+
+  if (event.kind !== "tool_call" || event.payload.status !== "ok") return [];
+  const refs = event.payload.toolFileRefs ?? [];
+  const records: FileRefRecord[] = [];
+  for (let index = 0; index < refs.length; index++) {
+    const ref = refs[index];
+    if (ref) records.push({ ref, sourceIndex: index });
+  }
+  return records;
+}
+
+function normalizeFileRef(
+  ref: ToolFileRef,
+  bindingRepo: string,
+  bindingBranch: string,
+): { ok: true; normalized: NormalizedFileRef } | { ok: false; reason: ContextTreeIoSkipReason } {
+  const parsed = toolFileRefSchema.safeParse(ref);
+  if (!parsed.success) return { ok: false, reason: "ref_schema_invalid" };
+
+  const expectedRepo = canonicalRepoUrl(bindingRepo);
+  const reportedRepo = canonicalRepoUrl(parsed.data.repoUrl);
+  if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) {
+    return { ok: false, reason: "ref_repo_mismatch" };
+  }
+
+  const targetKind = parsed.data.pathKind ?? "file";
+  if (!parsed.data.repoRelativePath) return { ok: false, reason: "ref_path_invalid" };
+  const targetPath = normalizeTargetPath(parsed.data.repoRelativePath, targetKind);
+  if (!targetPath) return { ok: false, reason: "ref_path_invalid" };
+
+  return {
+    ok: true,
+    normalized: {
+      treeRepoUrl: bindingRepo,
+      treeBranch: parsed.data.repoBranch ?? bindingBranch,
+      targetKind,
+      targetPath,
+      metadata: {
+        origin: parsed.data.origin,
+        ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
+      },
+    },
+  };
+}
+
+function buildContextTreeIoDecision(input: {
+  event: SessionEvent;
+  runtimeProvider: string;
+  bindingRepo: string | null | undefined;
+  bindingBranch: string;
+  chatInOrg?: boolean;
+}): InternalContextTreeIoDecision {
+  if (!input.bindingRepo) return { recordable: false, reason: "no_org_context_tree_binding" };
+
+  const derivation = deriveEventIo(input.event, input.runtimeProvider);
+  if (typeof derivation === "string") return { recordable: false, reason: derivation };
+
+  const refs = extractFileRefs(input.event, input.bindingRepo, input.bindingBranch);
+  if (refs.length === 0) return { recordable: false, reason: "no_tool_file_refs" };
+
+  const normalizedRefs: NormalizedFileRefRecord[] = [];
+  let firstRejectedReason: ContextTreeIoSkipReason | null = null;
+  for (const { ref, sourceIndex } of refs) {
+    const normalized = normalizeFileRef(ref, input.bindingRepo, input.bindingBranch);
+    if (!normalized.ok) {
+      firstRejectedReason ??= normalized.reason;
+      continue;
+    }
+    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex });
+  }
+
+  if (normalizedRefs.length === 0) {
+    return { recordable: false, reason: firstRejectedReason ?? "ref_schema_invalid" };
+  }
+  if (input.chatInOrg === false) return { recordable: false, reason: "chat_not_in_org" };
+
+  return { recordable: true, derivation, refs: normalizedRefs };
+}
+
+function toolNameOf(event: SessionEvent): string | null {
+  return event.kind === "tool_call" ? event.payload.name : null;
+}
+
+export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecisionInput): ContextTreeIoDecision {
+  const parsed = sessionEventSchema.safeParse({
+    kind: input.sessionEvent.kind,
+    payload: input.sessionEvent.payload,
+  });
+  if (!parsed.success) return { recordable: false, reason: "event_kind_not_io" };
+
+  const decision = buildContextTreeIoDecision({
+    event: parsed.data,
+    runtimeProvider: input.runtimeProvider,
+    bindingRepo: input.bindingRepo,
+    bindingBranch: input.bindingBranch ?? "main",
+    chatInOrg: input.chatInOrg,
+  });
+  return decision.recordable ? { recordable: true } : { recordable: false, reason: decision.reason };
+}
+
+export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
+  const binding = await getOrgContextTree(db, input.organizationId);
+  const bindingBranch = binding.branch ?? "main";
+
+  const event = sessionEventSchema.parse({ kind: input.sessionEvent.kind, payload: input.sessionEvent.payload });
+  const decision = buildContextTreeIoDecision({
+    event,
+    runtimeProvider: input.runtimeProvider,
+    bindingRepo: binding.repo,
+    bindingBranch,
+  });
+  if (!decision.recordable) {
+    log.debug(
+      {
+        reason: decision.reason,
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        chatId: input.chatId,
+        sessionEventId: input.sessionEvent.id,
+        runtimeProvider: input.runtimeProvider,
+        eventKind: event.kind,
+        toolName: toolNameOf(event),
+      },
+      "context tree io event skipped",
+    );
+    return;
+  }
+
+  const [chat] = await db
+    .select({ id: chats.id })
+    .from(chats)
+    .where(and(eq(chats.id, input.chatId), eq(chats.organizationId, input.organizationId)))
+    .limit(1);
+  if (!chat) {
+    log.debug(
+      {
+        reason: "chat_not_in_org",
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        chatId: input.chatId,
+        sessionEventId: input.sessionEvent.id,
+        runtimeProvider: input.runtimeProvider,
+        eventKind: event.kind,
+        toolName: toolNameOf(event),
+      },
+      "context tree io event skipped",
+    );
+    return;
+  }
+
+  const createdAt = new Date(input.sessionEvent.createdAt);
+  const rows = [];
+  for (const { normalized, sourceIndex } of decision.refs) {
+    rows.push({
+      id: `${input.sessionEvent.id}:${sourceIndex}`,
+      organizationId: input.organizationId,
+      agentId: input.agentId,
+      chatId: input.chatId,
+      sourceSessionEventId: input.sessionEvent.id,
+      sourceIndex,
+      runtimeProvider: input.runtimeProvider,
+      action: decision.derivation.action,
+      source: decision.derivation.source,
+      treeRepoUrl: normalized.treeRepoUrl,
+      treeBranch: normalized.treeBranch,
+      targetKind: normalized.targetKind,
+      targetPath: normalized.targetPath,
+      metadata: normalized.metadata,
+      createdAt,
+    });
+  }
+
+  if (rows.length === 0) return;
+  await db
+    .insert(contextTreeIoEvents)
+    .values(rows)
+    .onConflictDoNothing({
+      target: [contextTreeIoEvents.sourceSessionEventId, contextTreeIoEvents.sourceIndex],
+    });
+}
+
+async function backfillContextTreeIoSessionEvents(db: Database, organizationId: string, since: Date): Promise<void> {
+  const rows = await db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      createdAt: sessionEvents.createdAt,
+      runtimeProvider: agents.runtimeProvider,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        or(
+          eq(sessionEvents.kind, "context_tree_usage"),
+          and(
+            eq(sessionEvents.kind, "tool_call"),
+            sql`${sessionEvents.payload}->>'status' = 'ok'`,
+            sql`EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(${sessionEvents.payload}->'toolFileRefs') = 'array'
+                  THEN ${sessionEvents.payload}->'toolFileRefs'
+                  ELSE '[]'::jsonb
+                END
+              ) AS ref
+              WHERE ref ? 'repoUrl' AND ref ? 'repoRelativePath'
+            )`,
+          ),
+        ),
+        gte(sessionEvents.createdAt, since),
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM context_tree_io_events existing
+          WHERE existing.source_session_event_id = ${sessionEvents.id}
+        )`,
+      ),
+    );
+
+  for (const row of rows) {
+    await recordFromSessionEvent(db, {
+      organizationId,
+      agentId: row.agentId,
+      chatId: row.chatId,
+      runtimeProvider: row.runtimeProvider,
+      sessionEvent: {
+        id: row.id,
+        kind: row.kind,
+        payload: row.payload,
+        createdAt: isoOrNull(row.createdAt) ?? new Date().toISOString(),
+      },
+    });
+  }
+}
+
+function allEventsSql(organizationId: string, sinceIso: string) {
+  return sql`
+    WITH all_events AS (
+      SELECT
+        e.id,
+        e.agent_id,
+        a.display_name AS agent_name,
+        a.avatar_color_token AS agent_avatar_color_token,
+        e.runtime_provider,
+        e.action,
+        e.source,
+        e.target_kind,
+        e.target_path,
+        e.chat_id,
+        e.created_at
+      FROM context_tree_io_events e
+      INNER JOIN agents a ON a.uuid = e.agent_id
+      WHERE e.organization_id = ${organizationId}
+        AND e.created_at >= ${sinceIso}::timestamptz
+    )
+  `;
+}
+
+function emptyBucket(): ContextTreeIoBucket {
+  return { agentCount: 0, eventCount: 0, targetCount: 0 };
+}
+
+function numberFrom(value: unknown): number {
+  return typeof value === "number" ? value : Number(value ?? 0);
+}
+
+function isoOrNull(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+async function accessibleChatIdSet(db: Database, viewer: ContextTreeIoViewer, chatIds: string[]): Promise<Set<string>> {
+  const accessible = new Set<string>();
+  if (chatIds.length === 0) return accessible;
+
+  const directRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
+  for (const row of directRows) accessible.add(row.chatId);
+
+  const supervisedRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.managerId, viewer.memberId),
+      ),
+    );
+  for (const row of supervisedRows) accessible.add(row.chatId);
+
+  return accessible;
+}
+
+export async function summarizeContextTreeIo(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  viewer?: ContextTreeIoViewer,
+): Promise<ContextTreeIoSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const sinceIso = since.toISOString();
+  await backfillContextTreeIoSessionEvents(db, organizationId, since);
+
+  const countRows = await db.execute<{
+    action: string;
+    agent_count: number;
+    event_count: number;
+    target_count: number;
+  }>(sql`
+    ${allEventsSql(organizationId, sinceIso)}
+    SELECT
+      action,
+      count(DISTINCT agent_id)::int AS agent_count,
+      count(*)::int AS event_count,
+      count(DISTINCT target_path)::int AS target_count
+    FROM all_events
+    GROUP BY action
+  `);
+
+  const summary = {
+    read: emptyBucket(),
+    write: emptyBucket(),
+  };
+  for (const row of countRows) {
+    if (row.action !== "read" && row.action !== "write") continue;
+    summary[row.action] = {
+      agentCount: numberFrom(row.agent_count),
+      eventCount: numberFrom(row.event_count),
+      targetCount: numberFrom(row.target_count),
+    };
+  }
+
+  const agentRows = await db.execute<{
+    agent_id: string;
+    agent_name: string;
+    agent_avatar_color_token: string | null;
+    runtime_provider: string;
+    read_count: number;
+    write_count: number;
+    last_read_at: Date | string | null;
+    last_write_at: Date | string | null;
+    last_event_at: Date | string;
+  }>(sql`
+    ${allEventsSql(organizationId, sinceIso)}
+    SELECT
+      agent_id,
+      agent_name,
+      agent_avatar_color_token,
+      runtime_provider,
+      count(*) FILTER (WHERE action = 'read')::int AS read_count,
+      count(*) FILTER (WHERE action = 'write')::int AS write_count,
+      max(created_at) FILTER (WHERE action = 'read') AS last_read_at,
+      max(created_at) FILTER (WHERE action = 'write') AS last_write_at,
+      max(created_at) AS last_event_at
+    FROM all_events
+    GROUP BY agent_id, agent_name, agent_avatar_color_token, runtime_provider
+    ORDER BY last_event_at DESC
+  `);
+
+  const recentRows = await db.execute<{
+    id: string;
+    agent_id: string;
+    agent_name: string;
+    agent_avatar_color_token: string | null;
+    runtime_provider: string;
+    action: string;
+    source: string;
+    target_kind: string;
+    target_path: string;
+    raw_chat_id: string;
+    joined_chat_id: string | null;
+    chat_topic: string | null;
+    created_at: Date | string;
+  }>(sql`
+    ${allEventsSql(organizationId, sinceIso)}
+    SELECT
+      all_events.id,
+      all_events.agent_id,
+      all_events.agent_name,
+      all_events.agent_avatar_color_token,
+      all_events.runtime_provider,
+      all_events.action,
+      all_events.source,
+      all_events.target_kind,
+      all_events.target_path,
+      all_events.chat_id AS raw_chat_id,
+      c.id AS joined_chat_id,
+      c.topic AS chat_topic,
+      all_events.created_at
+    FROM all_events
+    LEFT JOIN chats c ON c.id = all_events.chat_id AND c.organization_id = ${organizationId}
+    ORDER BY all_events.created_at DESC
+    LIMIT ${CONTEXT_TREE_IO_FEED_LIMIT}
+  `);
+
+  const inOrgChatIds = [
+    ...new Set(recentRows.filter((row) => row.joined_chat_id !== null).map((row) => row.raw_chat_id)),
+  ];
+  const accessibleChatIds = viewer ? await accessibleChatIdSet(db, viewer, inOrgChatIds) : new Set<string>();
+
+  const recentEvents: ContextTreeIoEvent[] = recentRows.map((row) => {
+    const sameOrgChat = row.joined_chat_id !== null;
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      agentName: row.agent_name,
+      agentAvatarColorToken: row.agent_avatar_color_token,
+      runtimeProvider: row.runtime_provider,
+      action: row.action === "write" ? "write" : "read",
+      source: contextTreeIoSourceSchema.parse(row.source),
+      targetKind: row.target_kind === "directory" || row.target_kind === "repo" ? row.target_kind : "file",
+      targetPath: row.target_path,
+      chatId: sameOrgChat ? row.raw_chat_id : null,
+      chatTitle: sameOrgChat ? row.chat_topic : null,
+      viewerCanAccess: sameOrgChat && accessibleChatIds.has(row.raw_chat_id),
+      createdAt: isoOrNull(row.created_at) ?? new Date().toISOString(),
+    };
+  });
+
+  return {
+    windowDays,
+    summary,
+    agents: agentRows.map((row) => ({
+      agentId: row.agent_id,
+      agentName: row.agent_name,
+      agentAvatarColorToken: row.agent_avatar_color_token,
+      runtimeProvider: row.runtime_provider,
+      readCount: numberFrom(row.read_count),
+      writeCount: numberFrom(row.write_count),
+      lastReadAt: isoOrNull(row.last_read_at),
+      lastWriteAt: isoOrNull(row.last_write_at),
+    })),
+    recentEvents,
+  };
+}

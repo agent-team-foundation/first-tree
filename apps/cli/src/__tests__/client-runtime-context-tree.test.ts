@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { watch as importedWatch, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ClientPausedReason } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,40 @@ const slotInstances: Array<{
   getQuietGateSnapshot: ReturnType<typeof vi.fn>;
 }> = [];
 const connectionListeners = new Map<string, (...args: unknown[]) => void>();
+const fsWatchMocks = vi.hoisted(() => {
+  function missingCallback(_eventType: string, _filename: string | Buffer | null): void {
+    throw new Error("credentials watcher callback missing");
+  }
+
+  type Listener = (...args: unknown[]) => void;
+  const state = {
+    callback: missingCallback,
+    registered: false,
+  };
+  const on = vi.fn((_event: string, _listener: Listener) => watcher);
+  const close = vi.fn();
+  const watcher = { close, on };
+  const watch = vi.fn((...args: unknown[]) => {
+    const listener = args.find((arg): arg is (eventType: string, filename: string | Buffer | null) => void => {
+      return typeof arg === "function";
+    });
+    if (listener) {
+      state.callback = listener;
+      state.registered = true;
+    }
+    return watcher;
+  });
+  const reset = () => {
+    state.callback = missingCallback;
+    state.registered = false;
+    close.mockClear();
+    on.mockClear();
+    watch.mockClear();
+  };
+
+  return { close, on, reset, state, watch };
+});
+const watchMockProbe = importedWatch;
 const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
@@ -40,6 +74,14 @@ const connectionMock = {
     connectionMaxListeners = n;
   }),
 };
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    default: actual,
+    watch: fsWatchMocks.watch,
+  };
+});
 vi.mock("@first-tree/client", () => {
   class FakeAgentSlot {
     public readonly agentId: string;
@@ -116,13 +158,6 @@ vi.mock("../core/version.js", () => ({
   CLI_USER_AGENT: "first-tree-test/0.0.0",
 }));
 
-// Keep real fs behaviour but wrap `watch` so a single test can swap in a fake
-// FSWatcher and drive its runtime 'error' event deterministically.
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return { ...actual, default: actual, watch: vi.fn(actual.watch) };
-});
-
 describe("ClientRuntime context-tree wiring", () => {
   const originalHome = process.env.FIRST_TREE_HOME;
   let home: string;
@@ -145,6 +180,7 @@ describe("ClientRuntime context-tree wiring", () => {
     connectionMaxListeners = 10;
     connectionMock.getMaxListeners.mockClear();
     connectionMock.setMaxListeners.mockClear();
+    fsWatchMocks.reset();
     disposeMock.mockClear();
     killAllMock.mockClear();
     sweepMock.mockReset();
@@ -270,6 +306,11 @@ describe("ClientRuntime context-tree wiring", () => {
       expect.anything(),
       expect.objectContaining({ currentVersion: "0.0.1", updateConfig: { policy: "prompt" } }),
     );
+    slotInstances[0]?.getQuietGateSnapshot.mockReturnValue({ activeCount: 2, lastActivityMs: 400 });
+    const updateOptions = vi.mocked(client.UpdateManager.attach).mock.calls[0]?.[1] as {
+      getQuietGateSnapshot: () => { activeCount: number; lastActivityMs: number };
+    };
+    expect(updateOptions.getQuietGateSnapshot()).toEqual({ activeCount: 2, lastActivityMs: 400 });
     expect(print.status).toHaveBeenCalledWith(
       "[git-mirror]",
       "swept orphan session branches — scanned=3 deleted=2 failed=1",
@@ -295,6 +336,53 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(slotInstances[0]?.stop).toHaveBeenCalled();
     expect(connectionMock.disconnect).toHaveBeenCalled();
     expect(killAllMock).toHaveBeenCalledWith("client-runtime-stop");
+  });
+
+  it("reports empty runtimes and git mirror sweep failures", async () => {
+    const { print } = await import("../core/output.js");
+    sweepMock.mockRejectedValueOnce(new Error("gc failed"));
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+
+    await rt.start();
+
+    expect(print.status).toHaveBeenCalledWith("⚠️", "git-mirror orphan sweep failed: gc failed");
+    expect(print.status).toHaveBeenCalledWith("", "no agents configured yet.");
+    expect(print.status).toHaveBeenCalledWith(
+      "",
+      "add one with: first-tree agent create <name> --type claude-code --client-id <id>",
+    );
+    await rt.stop();
+  });
+
+  it("reports generic agent start failures and ignores already-starting entries", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+    rt.addAgent("broken", {
+      agentId: "agent-broken",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+    slotInstances[0]?.start.mockRejectedValueOnce(new Error("bind failed"));
+
+    await rt.start();
+
+    expect(print.check).toHaveBeenCalledWith(false, "broken: connection failed", "bind failed");
+    const runtimeProbe = rt as unknown as {
+      agents: Array<{ state: "idle" | "starting" | "running" | "suspended-skipped" | "failed" }>;
+      startAgentEntry(entry: unknown): Promise<"connected" | "skipped" | "failed">;
+      startAgent(name: string): void;
+    };
+    const entry = runtimeProbe.agents[0];
+    if (!entry) throw new Error("missing agent entry");
+    entry.state = "running";
+    await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("connected");
+    entry.state = "starting";
+    await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("skipped");
+    runtimeProbe.startAgent("missing");
+    await rt.stop();
   });
 
   it("auto-adds server-pinned agents and skips duplicates", async () => {
@@ -332,6 +420,51 @@ describe("ClientRuntime context-tree wiring", () => {
     });
     expect(readFileSync(join(agentsDir, "agent-019e70b300007000", "agent.yaml"), "utf8")).toContain("codex");
     expect(slotInstances.map((slot) => slot.name)).toEqual(["kael", "agent-019e70b300007000"]);
+    await rt.stop();
+  });
+
+  it("chooses suffixed pinned-agent names and reports auto-add write failures", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const runtimeProbe = rt as unknown as {
+      agentNames: Set<string>;
+      agentsDir: string | null;
+      pickLocalName(message: { agentId: string; name?: string | null; runtimeProvider: string }): string;
+    };
+    runtimeProbe.agentNames.add("agent-abcdefabcdefabcd");
+    expect(
+      runtimeProbe.pickLocalName({
+        agentId: "abcdefab-cdef-abcd-0000-000000000000",
+        runtimeProvider: "claude-code",
+      }),
+    ).toBe("agent-abcdefabcdefabcd-2");
+    for (let suffix = 2; suffix < 1000; suffix += 1) {
+      runtimeProbe.agentNames.add(`agent-abcdefabcdefabcd-${suffix}`);
+    }
+    expect(
+      runtimeProbe.pickLocalName({
+        agentId: "abcdefab-cdef-abcd-0000-000000000000",
+        runtimeProvider: "claude-code",
+      }),
+    ).toBe("agent-abcdefabcdefabcd0000000000000000");
+
+    const agentsDirFile = join(home, "config", "agents-file");
+    mkdirSync(dirname(agentsDirFile), { recursive: true });
+    writeFileSync(agentsDirFile, "not a directory\n");
+    runtimeProbe.agentsDir = agentsDirFile;
+    const pinned = connectionListeners.get("agent:pinned");
+    if (!pinned) throw new Error("agent:pinned listener missing");
+    pinned({
+      agentId: "agent-write-fail",
+      name: "write-fail",
+      runtimeProvider: "claude-code",
+    });
+    expect(print.check).toHaveBeenCalledWith(
+      false,
+      'failed to auto-add agent "write-fail"',
+      expect.stringContaining("ENOTDIR"),
+    );
     await rt.stop();
   });
 
@@ -403,6 +536,35 @@ describe("ClientRuntime context-tree wiring", () => {
     error(new Error("socket reset"));
     expect(print.status).toHaveBeenCalledWith("⚠️", "client connection error: socket reset");
     await rt.stop();
+  });
+
+  it("clears paused mode after credentials.json content changes", async () => {
+    const { print } = await import("../core/output.js");
+    expect(watchMockProbe).toBe(fsWatchMocks.watch);
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(join(home, "config", "credentials.json"), JSON.stringify({ refreshToken: "old" }));
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+    connectionMock.isPaused.mockReturnValue(true);
+
+    const paused = connectionListeners.get("auth:paused");
+    if (!paused) throw new Error("auth:paused listener missing");
+    paused("auth_refresh_failed", new Error("refresh rejected"));
+    writeFileSync(join(home, "config", "credentials.json"), JSON.stringify({ refreshToken: "new" }));
+    if (!fsWatchMocks.state.registered) throw new Error("credentials watcher callback missing");
+    fsWatchMocks.state.callback("change", "credentials.json");
+
+    await vi.waitFor(() => expect(connectionMock.clearPaused).toHaveBeenCalled(), { timeout: 2000 });
+    expect(print.status).toHaveBeenCalledWith("", "credentials.json updated — clearing paused mode");
+
+    const runtimeProbe = rt as unknown as {
+      credentialsDebounce: ReturnType<typeof setTimeout> | null;
+      readCredentialsSnapshot(path: string): string | null;
+    };
+    runtimeProbe.credentialsDebounce = setTimeout(() => undefined, 10_000);
+    expect(runtimeProbe.readCredentialsSnapshot(join(home, "config", "missing.json"))).toBeNull();
+    await rt.stop();
+    expect(fsWatchMocks.close).toHaveBeenCalled();
   });
 
   it(

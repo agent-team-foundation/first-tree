@@ -117,9 +117,9 @@ function shouldRequireBinding(args: readonly string[]): boolean {
 function missingBindingMessage(): string {
   return [
     "first-tree github scan: this command requires a bound tree repo.",
-    "Run it from a source/workspace repo that already has `.first-tree/source.json`,",
+    "Run it from a source/workspace repo whose workspace root has `.first-tree/workspace.json`,",
     "or pass `--tree-repo <owner/repo>` explicitly.",
-    "If this repo is not bound yet, start with `first-tree tree bind ...`.",
+    "If this repo is not bound yet, run `first-tree tree init --scope workspace ...` (see the first-tree-onboarding skill).",
   ].join("\n");
 }
 

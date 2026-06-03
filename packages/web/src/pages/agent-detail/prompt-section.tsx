@@ -1,8 +1,10 @@
 import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Section } from "../../components/ui/section.js";
+import { Textarea } from "../../components/ui/textarea.js";
 
 /**
  * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
@@ -18,10 +20,13 @@ export type PromptSectionProps = {
   disabled?: boolean;
 };
 
+const MAX_PROMPT_APPEND_LENGTH = 32_000;
+
 export function PromptSection({ value, baseline, onChange, onRevert, disabled }: PromptSectionProps) {
   const [editing, setEditing] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const dirty = value !== baseline;
+  const countLabel = `${value.length.toLocaleString()} / ${MAX_PROMPT_APPEND_LENGTH.toLocaleString()}`;
 
   useEffect(() => {
     if (!editing) return;
@@ -35,7 +40,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
   const action =
     !editing && !disabled ? (
       <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
-        <Pencil className="h-3 w-3" /> Edit
+        <Pencil className="h-3 w-3" /> Edit instructions
       </Button>
     ) : null;
 
@@ -43,16 +48,17 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
     <Section
       title={
         <span className="inline-flex items-center gap-2">
-          System prompt append
-          {dirty && <ChangedChip />}
+          Instructions
+          {dirty && <DraftStatusChip status="modified" />}
         </span>
       }
+      description="Guidance this agent follows during runtime. Changes remain drafts until saved from the Save bar."
       action={action}
     >
-      <div style={{ padding: "var(--sp-3) 0" }}>
+      <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         {editing ? (
           <div className="space-y-2">
-            <textarea
+            <Textarea
               ref={taRef}
               value={value}
               onChange={(e) => {
@@ -66,56 +72,49 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                   setEditing(false);
                 }
               }}
-              className="w-full resize-none overflow-hidden rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              style={{ minHeight: "10rem" }}
-              placeholder="Appended to Claude Code's default system prompt."
-              maxLength={32_000}
+              className="resize-none overflow-hidden font-mono"
+              style={{ minHeight: "16rem" }}
+              placeholder="Add persistent instructions for how this agent should behave."
+              maxLength={MAX_PROMPT_APPEND_LENGTH}
               spellCheck={false}
             />
-            <div className="flex justify-end gap-2">
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => {
-                  onRevert();
-                  setEditing(false);
-                }}
-                disabled={!dirty}
-              >
-                Revert
-              </Button>
-              <Button size="xs" onClick={() => setEditing(false)}>
-                Done
-              </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-caption m-0" style={{ color: "var(--fg-4)" }}>
+                {countLabel}
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => {
+                    onRevert();
+                    setEditing(false);
+                  }}
+                  disabled={!dirty}
+                >
+                  Revert
+                </Button>
+                <Button size="xs" variant="outline" onClick={() => setEditing(false)}>
+                  Done
+                </Button>
+              </div>
             </div>
-            <p className="text-caption text-muted-foreground">Use Save below to apply this prompt change.</p>
           </div>
         ) : (
-          <div className="text-body min-h-8">
-            {value ? (
-              <Markdown>{value}</Markdown>
-            ) : (
-              <span className="text-muted-foreground italic">No prompt append.</span>
-            )}
+          <div
+            className="text-body"
+            style={{
+              minHeight: value ? "10rem" : undefined,
+              border: "var(--hairline) solid var(--border-faint)",
+              borderRadius: "var(--radius-panel)",
+              background: value ? "var(--bg)" : "var(--bg-sunken)",
+              padding: "var(--sp-3)",
+            }}
+          >
+            {value ? <Markdown>{value}</Markdown> : <span className="text-muted-foreground">No instructions yet.</span>}
           </div>
         )}
       </div>
     </Section>
-  );
-}
-
-function ChangedChip() {
-  return (
-    <span
-      className="mono uppercase text-caption"
-      style={{
-        padding: "var(--hairline) var(--sp-1_5)",
-        borderRadius: "var(--radius-chip)",
-        background: "var(--state-blocked-soft)",
-        color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
-      }}
-    >
-      changed
-    </span>
   );
 }
