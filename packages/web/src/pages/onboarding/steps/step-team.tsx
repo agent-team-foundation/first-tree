@@ -106,7 +106,7 @@ export function StepTeam() {
 
       <div className="flex">
         <Button type="submit" disabled={!canSubmit}>
-          <span>{COPY.continue}</span>
+          <span>{COPY.getStarted}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

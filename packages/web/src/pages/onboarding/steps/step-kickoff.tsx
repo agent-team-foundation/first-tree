@@ -190,7 +190,7 @@ function AdminKickoff() {
           )}
           <div className="flex">
             <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-              <span>{COPY.kickoff.start}</span>
+              <span>{COPY.kickoff.startChatting}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -269,7 +269,7 @@ function AdminKickoff() {
         )}
         <div className="flex">
           <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-            <span>{COPY.kickoff.start}</span>
+            <span>{COPY.kickoff.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -457,7 +457,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
             soft-lock themselves. */}
         <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
           <Button type="button" variant="cta" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
-            <span>{COPY.kickoff.start}</span>
+            <span>{COPY.kickoff.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
           <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
@@ -548,7 +548,7 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
             onClick={() => void handleStart(selected)}
             disabled={!hasRepos || selected.length === 0}
           >
-            <span>{COPY.kickoff.start}</span>
+            <span>{COPY.kickoff.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
           {/* Always visible — covers empty, scope-missing, network, AND

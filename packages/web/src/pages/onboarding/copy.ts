@@ -39,7 +39,7 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
   "connect-code": {
     title: "Connect your code",
-    why: "Connect your projects so your agent can read the code. Every change comes back as a request you review.",
+    why: "Connect your GitHub projects so your agent can work on them.",
   },
   "connect-computer": {
     title: "Connect your computer",
@@ -72,6 +72,8 @@ export const COPY = {
   /** Title shown across the flow's top chrome. */
   productName: "First Tree",
   continue: "Continue",
+  /** Opening-step advance (team / invitee welcome) — warmer than "Continue". */
+  getStarted: "Get started",
   back: "Back",
   cancel: "Cancel",
   skipForNow: "Skip for now",
@@ -112,7 +114,8 @@ export const COPY = {
      * non-owner installs through an owner-approval flow, so the right
      * advice is to click Install anyway and let GitHub handle the ask.
      */
-    notOwnerHint: "Not a GitHub organization owner? Click Install anyway — GitHub will ask an owner to approve.",
+    notOwnerHint:
+      "Only a GitHub org owner can connect your team's code. Not one? Installing sends them a request — continue now and connect it later.",
     /** Connected but GitHub access lacks repo scope — explain; the link carries the verb. */
     scopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
     /**
@@ -205,7 +208,12 @@ export const COPY = {
     inviteeContinueNoProject: "Continue without a project",
     /** Shown atop confirm / picker so invitee knows where the work lands. */
     treeLabel: "Context Tree",
-    start: "Start",
+    // Launch CTA — per-substate so it names what's actually starting:
+    //   admin + tree → building the Context Tree; admin no-project → just a
+    //   first chat; invitee → getting to work. (Green `cta` everywhere.)
+    startBuilding: "Start building",
+    startChatting: "Start chatting",
+    startWorking: "Start working",
     starting: "Starting your agent…",
     invalidUrl:
       "That doesn't look like a web link — paste the full address, e.g. https://github.com/your-team/context-tree",

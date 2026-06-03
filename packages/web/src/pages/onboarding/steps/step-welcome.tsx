@@ -22,7 +22,7 @@ export function StepWelcome() {
       </p>
       <div className="flex">
         <Button type="button" onClick={goNext}>
-          <span>{COPY.continue}</span>
+          <span>{COPY.getStarted}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
