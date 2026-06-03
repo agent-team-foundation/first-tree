@@ -98,7 +98,16 @@ export const COPY = {
     waiting: "Waiting for GitHub…",
     connected: "Connected",
     pickProject: "Which projects should your agent work on?",
-    noRepos: "No projects found on your GitHub account yet.",
+    // The picker is sourced from the team's GitHub App installation grant, so
+    // "your GitHub account" would be wrong — an empty list means the App was
+    // connected but isn't granted any repos yet.
+    noRepos: "No projects are connected to your team's GitHub yet — add some on GitHub, or continue without one.",
+    // Shown when the org-scoped repo list fails to load (502 upstream / 503
+    // suspended etc.). The new installation-backed endpoint can return these,
+    // and without this branch the failure was misrendered as an empty
+    // "no projects" list. The "Continue without a project" button below keeps
+    // it from being a dead end.
+    loadFailed: "Couldn't load your team's projects. Try again in a moment — or continue without one.",
     reconnect: "Reconnect GitHub with project access",
     notConfigured:
       "Code connection isn't set up here yet. You can continue now and connect a project later from Settings.",

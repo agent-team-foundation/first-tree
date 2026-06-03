@@ -83,7 +83,12 @@ export function StepConnectCode() {
     enabled: installed && !!organizationId,
   });
   const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
-  const hasPickableRepos = !scopeMissing && (reposQuery.data?.length ?? 0) > 0;
+  // The installation-backed endpoint can fail with 502 (upstream) / 503
+  // (no_installation / suspended / not_configured). Treat any non-403 error
+  // as a load failure with an honest message rather than letting it fall
+  // through to the empty "no projects" state.
+  const loadFailed = !!reposQuery.error && !scopeMissing;
+  const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
 
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
@@ -222,6 +227,10 @@ export function StepConnectCode() {
           <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
             Loading your projects…
           </p>
+        ) : loadFailed ? (
+          <FlowHint tone="error" role="alert">
+            {COPY.connectCode.loadFailed}
+          </FlowHint>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
           <FlowHint>{COPY.connectCode.noRepos}</FlowHint>
         ) : (

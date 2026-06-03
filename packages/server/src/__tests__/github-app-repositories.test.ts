@@ -27,7 +27,12 @@ const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
 describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM });
 
-  async function seedInstallation(app: ReturnType<typeof getApp>, orgId: string, installationId: number) {
+  async function seedInstallation(
+    app: ReturnType<typeof getApp>,
+    orgId: string,
+    installationId: number,
+    opts: { suspendedAt?: string | null } = {},
+  ) {
     await upsertInstallationFromMetadata(app.db, {
       installation: {
         id: installationId,
@@ -36,10 +41,32 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
         accountGithubId: installationId * 10,
         permissions: { contents: "read" },
         events: [],
-        suspendedAt: null,
+        suspendedAt: opts.suspendedAt ?? null,
       },
     });
     await bindInstallationToOrg(app.db, installationId, orgId);
+  }
+
+  /** Stub `globalThis.fetch` to fail the `/installation/repositories` call. */
+  function stubGithubReposError(status: number): () => void {
+    const original = globalThis.fetch;
+    const spy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (/\/app\/installations\/\d+\/access_tokens$/.test(url)) {
+        return new Response(JSON.stringify({ token: "ghs_stub", expires_at: "2099-01-01T00:00:00Z" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.startsWith("https://api.github.com/installation/repositories")) {
+        return new Response("upstream boom", { status });
+      }
+      return original(input, init);
+    });
+    globalThis.fetch = spy as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
   }
 
   /**
@@ -106,6 +133,35 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json<{ repos: Array<{ fullName: string }> }>();
     expect(body.repos.map((r) => r.fullName)).toEqual(["acme/new", "acme/old"]);
+  });
+
+  it("503 suspended when the installation is suspended", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `r-admin-${crypto.randomUUID().slice(0, 8)}` });
+    await seedInstallation(app, admin.organizationId, 910_003, { suspendedAt: "2025-01-01T00:00:00Z" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/repositories`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json<{ code: string }>().code).toBe("suspended");
+  });
+
+  it("502 upstream when GitHub rejects the repo-list call", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `r-admin-${crypto.randomUUID().slice(0, 8)}` });
+    await seedInstallation(app, admin.organizationId, 910_004);
+    restoreFetch = stubGithubReposError(500);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/repositories`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json<{ code: string }>().code).toBe("upstream");
   });
 
   it("503 no_installation when the team has no installation bound", async () => {

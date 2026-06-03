@@ -628,4 +628,40 @@ describe("services/github-app › listInstallationRepos", () => {
       status: 403,
     });
   });
+
+  it("stops at the maxPages cap even when every page is full", async () => {
+    const calls: number[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      const page = Number(new URL(urlOf(input)).searchParams.get("page"));
+      calls.push(page);
+      // Always a full page (100) → only the maxPages cap can stop the walk.
+      return new Response(
+        JSON.stringify({
+          total_count: 1000,
+          repositories: Array.from({ length: 100 }, (_, i) => repo(`acme/p${page}-${i}`, "2024-01-01T00:00:00Z")),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const repos = await listInstallationRepos("ghs_token", { fetcher, maxPages: 3 });
+    expect(calls).toEqual([1, 2, 3]);
+    expect(repos).toHaveLength(300);
+  });
+
+  it("sorts repos with no pushedAt last", async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          total_count: 3,
+          repositories: [
+            repo("acme/null", null),
+            repo("acme/old", "2024-01-01T00:00:00Z"),
+            repo("acme/new", "2025-01-01T00:00:00Z"),
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const repos = await listInstallationRepos("ghs_token", { fetcher });
+    expect(repos.map((r) => r.fullName)).toEqual(["acme/new", "acme/old", "acme/null"]);
+  });
 });

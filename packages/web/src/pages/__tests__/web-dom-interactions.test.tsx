@@ -1406,6 +1406,27 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Reconnect GitHub with project access", scopeMissing.container);
     await unmountRoot(scopeMissing.root);
 
+    // A non-403 failure from the org repo endpoint (502 upstream / 503
+    // no_installation|suspended) must show an honest load-failed message, not
+    // fall through to the empty "no projects" state.
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
+      installationId: 42,
+      accountLogin: "acme",
+      accountType: "Organization",
+      accountGithubId: 123,
+      repositorySelection: "selected",
+      permissions: {},
+      events: [],
+      suspended: false,
+      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
+    const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Couldn't load your team's projects", loadFailed.container);
+    await unmountRoot(loadFailed.root);
+
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Install First Tree on GitHub", notConfigured.container);
