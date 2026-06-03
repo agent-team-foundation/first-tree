@@ -137,7 +137,10 @@ type AuthContextValue = {
   logout: () => void;
 };
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+// Exported so DEV-only preview pages (e.g. /preview/resources) can render real
+// authenticated pages under a faked membership without a backend. Not used by
+// production app code, which goes through `AuthProvider` / `useAuth`.
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const SELECTED_ORG_KEY = "first-tree:selectedOrganizationId";
 

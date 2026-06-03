@@ -6,16 +6,22 @@ import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 
 /**
- * Admin-only section for the per-org Context Tree binding (repo / branch).
- * Replaces the legacy global FIRST_TREE_CONTEXT_TREE_* env vars; each
- * org now points at its own tree.
+ * Section for the per-org Context Tree binding (repo / branch). Replaces the
+ * legacy global FIRST_TREE_CONTEXT_TREE_* env vars; each org now points at its
+ * own tree.
+ *
+ * Members may *read* the binding (the `context_tree` namespace is
+ * `readPolicy: "member"`) so they can see which tree their agents read from;
+ * only admins may edit it. For members the form renders read-only with no
+ * Save affordance.
  *
  * Changes apply to *new* agent sessions: client agents fetch the latest
  * binding at startup, existing sessions keep the value they were spun up
  * with. Admins should advise members to restart agents after editing.
  */
 export function ContextTreeSettingsPanel() {
-  const { organizationId } = useAuth();
+  const { organizationId, role } = useAuth();
+  const isAdmin = role === "admin";
   const queryClient = useQueryClient();
 
   const settingQuery = useQuery({
@@ -76,6 +82,7 @@ export function ContextTreeSettingsPanel() {
             onChange={setRepo}
             mono
             placeholder="https://github.com/your-org/first-tree-context"
+            readOnly={!isAdmin}
           />
           <SettingsField
             label="Branch"
@@ -84,8 +91,11 @@ export function ContextTreeSettingsPanel() {
             onChange={setBranch}
             mono
             placeholder="main"
+            readOnly={!isAdmin}
             saved={saved}
-            rightSlot={<SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} />}
+            rightSlot={
+              isAdmin ? <SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} /> : undefined
+            }
           />
           {mutation.error instanceof Error && (
             <div className="text-body" style={{ color: "var(--state-error)" }}>

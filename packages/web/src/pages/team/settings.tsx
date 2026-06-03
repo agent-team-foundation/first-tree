@@ -1,7 +1,20 @@
+import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { PageHeader } from "../../components/ui/page-header.js";
-import { OrgSettingsPage } from "../org-settings.js";
+import { TeamIdentityPanel } from "../team-identity-panel.js";
 
+/**
+ * Settings → Team profile. Org-scoped team identity (display name).
+ *
+ * Admin-only: the only thing here is the org rename form, whose underlying
+ * API is admin-gated for write. There's nothing for a member to read, so we
+ * hide the nav entry (see settings.tsx) and redirect a member who deep-links
+ * here — same pattern as Settings → GitHub.
+ *
+ * Context Tree binding and runtime Resources used to share this page; they
+ * now live at /settings/context and /settings/resources respectively, each a
+ * single cohesive surface.
+ */
 export function TeamSettingsPage() {
   const { role } = useAuth();
 
@@ -12,20 +25,15 @@ export function TeamSettingsPage() {
       </div>
     );
   }
-
-  // Members see the page too — `OrgSettingsPage` mounts only the panels
-  // their role can read. Today that's just `SourceReposSettingsPanel`
-  // (read-only). The other panels (TeamIdentity / ContextTree /
-  // GithubIntegration) stay admin-only because their underlying APIs are
-  // admin-gated for write and showing an empty form to a non-admin
-  // confuses more than it helps.
-  const subtitle = role === "admin" ? "Identity, Context Tree, source repos" : "Repos your team's agents are bound to";
+  if (role !== "admin") {
+    return <Navigate to="/settings/computers" replace />;
+  }
 
   return (
     <>
-      <PageHeader title="Team" subtitle={subtitle} />
+      <PageHeader title="Team profile" subtitle="Your team's display name." />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <OrgSettingsPage />
+        <TeamIdentityPanel />
       </div>
     </>
   );

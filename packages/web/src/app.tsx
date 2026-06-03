@@ -18,11 +18,12 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
+import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
+import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
-import { TeamResourcesPage } from "./pages/team/resources.js";
 import { TeamSettingsPage } from "./pages/team/settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
@@ -67,6 +68,10 @@ const OnboardingPreviewPage = import.meta.env.DEV
 
 const TeamPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/team-preview.js").then((module) => ({ default: module.TeamPreviewPage })))
+  : null;
+
+const ResourcesPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/resources-preview.js").then((module) => ({ default: module.ResourcesPreviewPage })))
   : null;
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
@@ -149,6 +154,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {ResourcesPreviewPage ? (
+                <Route
+                  path="/preview/resources"
+                  element={
+                    <Suspense fallback={null}>
+                      <ResourcesPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               <Route
                 path="/preview/styleguide"
                 element={
@@ -186,17 +201,20 @@ export function App() {
                   </Route>
 
                   {/* Team — flat roster page, no sub-nav. Org-scoped admin
-                      configuration lives under /settings/team (it's a Settings
-                      surface, not a peer of the people-and-agents view). */}
+                      configuration (team profile / context tree / resources)
+                      lives under /settings, not as a peer of the
+                      people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
-                  <Route path="team/resources" element={<TeamResourcesPage />} />
 
-                  {/* Settings master-detail. `team` is the org-scoped panel
-                      collection (Identity / Context Tree / Source repos /
-                      GitHub integration); the rest are user-scoped. */}
+                  {/* Settings master-detail. The org-scoped surfaces are each
+                      a single cohesive page: `team` (Team profile / identity),
+                      `context` (Context Tree binding), `resources` (runtime
+                      resources). The rest are user-scoped. */}
                   <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="computers" replace />} />
                     <Route path="team" element={<TeamSettingsPage />} />
+                    <Route path="context" element={<SettingsContextTreePage />} />
+                    <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
                     <Route path="github" element={<SettingsGithubPage />} />
                     <Route path="onboarding" element={<SettingsOnboardingPage />} />
