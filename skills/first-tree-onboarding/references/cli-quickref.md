@@ -14,9 +14,9 @@ Always the first call. Walks up from cwd looking for
 The fields onboarding consumes most are `workspaceRoot`,
 `manifest.tree`, `manifest.sources`, `boundSources[]`,
 `unboundGitSiblings[]`, and `missingBoundSources[]` (declared-but-not-cloned
-sources). If no `workspace.json` is found, the output describes the
-legacy `inspect` `role` (back-compat during the W1 transition); in
-that case go to Phase A.5.
+sources). If no `workspace.json` is found anywhere up the path,
+`status` exits 1 with "No First Tree workspace found"; route to Phase B
+(new workspace) or Phase A.5 (legacy 0.5.x → W1 migration).
 
 ## Phase A.5 — Migrate legacy multi-mode workspace
 
@@ -55,15 +55,13 @@ cd <workspace-name>
 first-tree tree init --scope workspace \
   --tree-path ./<tree-name> \
   --tree-mode dedicated \
-  --workspace-id <slug> \
-  --no-recursive
+  --workspace-id <slug>
 # Or for an existing remote tree:
 first-tree tree init --scope workspace \
   --tree-path ./<tree-name> \
   --tree-url <url> \
   --tree-mode shared \
-  --workspace-id <slug> \
-  --no-recursive
+  --workspace-id <slug>
 
 # Workspace-level init (cwd is already the workspace root; tree is a
 # child of cwd). Same shape, default --tree-path inferred.
@@ -74,17 +72,12 @@ first-tree tree init --scope workspace --tree-url <url> --tree-mode shared --wor
 `init` writes the workspace-root framework (skills under
 `.agents/skills/` + `.claude/skills/`, framework `AGENTS.md` /
 `CLAUDE.md`), scaffolds or clones the tree, and writes
-`<workspaceRoot>/.first-tree/workspace.json` when scope is workspace
-and the tree resolves to an immediate child of cwd. For the lone-repo
-recipe above, the `mv` step ensures cwd is the workspace root with
-the source already inside, so a single `init` call produces the
-manifest directly — no follow-up migration needed.
-
-`--no-recursive` is required for the lone-repo recipe: without it,
-init's workspace-scope cascade would notice the freshly-scaffolded
-tree dir at cwd and bind it as a source. After init, surface
-`unboundGitSiblings[]` from a fresh `first-tree tree status` and ask
-the user which to add to `workspace.json.sources`.
+`<workspaceRoot>/.first-tree/workspace.json` listing every immediate-
+child git repo as a source. It does not recurse into nested git repos,
+and it does not install per-source skill/framework files — agents launch
+at the workspace root and read the workspace-rooted install. After init,
+surface `unboundGitSiblings[]` from a fresh `first-tree tree status` and
+ask the user which to add to `workspace.json.sources`.
 
 ## Phase B / Phase B-refresh — Skill Maintenance
 
@@ -130,8 +123,8 @@ Phase C is agent-driven, not CLI-driven. The only commands invoked are
 
 For lone-single-repo onboarding the canonical path is **not** to
 hand-create the manifest — use the Phase B recipe above (`mkdir
-<workspace>` + `mv <source>` + `init --scope workspace --no-recursive`).
-That recipe writes the manifest directly and avoids any legacy state.
+<workspace>` + `mv <source>` + `init --scope workspace`). That recipe
+writes the manifest directly and avoids any legacy state.
 
 Hand-create `<workspaceRoot>/.first-tree/workspace.json` only when
 recovering from a corrupted manifest in an existing workspace (e.g.

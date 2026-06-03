@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCommandContext } from "../src/commands/context.js";
 import { registerSubcommands } from "../src/commands/groups.js";
-import { inspectCurrentWorkingTree, runInspectCommand } from "../src/commands/tree/inspect.js";
-import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 import { runStatusCommand } from "../src/commands/tree/status.js";
 import type { CommandContext, SubcommandModule } from "../src/commands/types.js";
 
@@ -19,10 +17,6 @@ function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "first-tree-helpers-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 afterEach(() => {
@@ -98,75 +92,9 @@ describe("createCommandContext", () => {
   });
 });
 
-describe("inspectCurrentWorkingTree", () => {
-  it("classifies a plain folder", () => {
-    const root = makeTempDir();
-    const result = inspectCurrentWorkingTree(root);
-
-    expect(result.classification).toBe("folder");
-    expect(result.role).toBe("unknown");
-    expect(result.rootKind).toBe("folder");
-    expect(result.rootPath).toBe(root);
-  });
-
-  it("classifies an unbound workspace-like folder via role", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, "repo-a"));
-    mkdirSync(join(root, "repo-b"));
-    writeFileSync(join(root, "repo-a", ".git"), "gitdir: /tmp/a\n");
-    writeFileSync(join(root, "repo-b", ".git"), "gitdir: /tmp/b\n");
-
-    const result = inspectCurrentWorkingTree(root);
-
-    expect(result.classification).toBe("folder");
-    expect(result.role).toBe("unbound-workspace-root");
-  });
-
-  it("classifies a workspace root from source binding metadata", () => {
-    const root = makeTempDir();
-    writeFileSync(join(root, ".git"), "gitdir: /tmp/mock\n");
-    writeFileSync(
-      join(root, "AGENTS.md"),
-      `${buildSourceIntegrationBlock("context", {
-        bindingMode: "workspace-root",
-        entrypoint: "members/platform",
-        treeMode: "shared",
-        treeRepoUrl: "git@github.com:acme/context.git",
-      })}\n`,
-    );
-
-    const result = inspectCurrentWorkingTree(root);
-
-    expect(result.classification).toBe("workspace-root");
-    expect(result.role).toBe("workspace-root-bound");
-    expect(result.binding?.treeRepo).toBe("acme/context");
-    expect(result.binding?.treeEntrypoint).toBe("members/platform");
-    expect(result.binding?.treeMode).toBe("shared");
-  });
-
-  it("classifies a tree repo from tree metadata", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    mkdirSync(join(root, "members"), { recursive: true });
-    writeFileSync(join(root, ".git"), "gitdir: /tmp/mock\n");
-    writeFileSync(join(root, "NODE.md"), "# root node\n");
-    writeFileSync(join(root, "members", "NODE.md"), "# members\n");
-    writeJson(join(root, ".first-tree", "tree.json"), {
-      treeRepoName: "first-tree-context",
-    });
-
-    const result = inspectCurrentWorkingTree(root);
-
-    expect(result.classification).toBe("tree-repo");
-    expect(result.role).toBe("tree-repo");
-    expect(result.binding?.treeRepoName).toBe("first-tree-context");
-    expect(result.treeStatePath).toBe(join(root, ".first-tree", "tree.json"));
-  });
-});
-
-describe("runInspectCommand", () => {
+describe("runStatusCommand", () => {
   const baseContext: CommandContext = {
-    command: new Command("inspect"),
+    command: new Command("status"),
     options: {
       debug: false,
       json: false,
@@ -174,83 +102,22 @@ describe("runInspectCommand", () => {
     },
   };
 
-  it("prints human-readable output with binding details", () => {
-    const root = makeTempDir();
-    writeFileSync(join(root, ".git"), "gitdir: /tmp/mock\n");
-    writeFileSync(
-      join(root, "AGENTS.md"),
-      `${buildSourceIntegrationBlock("context", {
-        bindingMode: "shared-source",
-        entrypoint: ".",
-        treeMode: "shared",
-        treeRepoName: "context",
-        treeRepoUrl: "https://github.com/acme/context.git",
-      })}\n`,
-    );
-
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    process.chdir(root);
-
-    runInspectCommand(baseContext);
-
-    expect(log).toHaveBeenCalledOnce();
-    expect(String(log.mock.calls[0]?.[0])).toContain("role: source-repo-bound");
-    expect(String(log.mock.calls[0]?.[0])).toContain("classification: source-repo");
-    expect(String(log.mock.calls[0]?.[0])).toContain("tree repo: acme/context");
-    expect(String(log.mock.calls[0]?.[0])).toContain("tree entrypoint: .");
-  });
-
-  it("prints JSON output when requested", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    writeJson(join(root, ".first-tree", "tree.json"), {
-      treeRepoName: "context",
-    });
-    writeFileSync(join(root, "NODE.md"), "# node\n");
-    mkdirSync(join(root, "members"), { recursive: true });
-    writeFileSync(join(root, "members", "NODE.md"), "# members\n");
-
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    process.chdir(root);
-
-    runInspectCommand({
-      ...baseContext,
-      options: {
-        ...baseContext.options,
-        json: true,
-      },
-    });
-
-    expect(log).toHaveBeenCalledOnce();
-    expect(String(log.mock.calls[0]?.[0])).toContain('"role": "tree-repo"');
-    expect(String(log.mock.calls[0]?.[0])).toContain('"classification": "tree-repo"');
-  });
-
-  it("prints tree repo name when only tree metadata is available", () => {
-    const root = makeTempDir();
-    mkdirSync(join(root, ".first-tree"), { recursive: true });
-    writeJson(join(root, ".first-tree", "tree.json"), {
-      treeRepoName: "context",
-    });
-
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    process.chdir(root);
-
-    runInspectCommand(baseContext);
-
-    expect(String(log.mock.calls[0]?.[0])).toContain("tree repo name: context");
-    expect(String(log.mock.calls[0]?.[0])).toContain("tree state:");
-  });
-
-  it("lets status delegate to inspect output", () => {
+  it("exits 1 with W1 onboarding guidance when no workspace.json is found", () => {
     const root = makeTempDir();
     writeFileSync(join(root, ".git"), "gitdir: /tmp/mock\n");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     process.chdir(root);
 
     runStatusCommand(baseContext);
 
-    expect(log).toHaveBeenCalledOnce();
-    expect(String(log.mock.calls[0]?.[0])).toContain("first-tree tree inspect");
+    expect(log).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const stderr = err.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(stderr).toContain("No First Tree workspace found");
+    expect(stderr).toContain("tree init --scope workspace");
+    expect(stderr).toContain("migrate-to-w1");
+
+    process.exitCode = undefined;
   });
 });

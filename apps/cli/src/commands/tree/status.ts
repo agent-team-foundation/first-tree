@@ -1,18 +1,13 @@
 import { computeWorkspaceStatus, discoverWorkspaceRoot, type WorkspaceStatus } from "../../core/workspace.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 
-import { runInspectCommand } from "./inspect.js";
-
 /**
  * Read-only status report for the workspace-rooted layout.
  *
- * Preference order:
- *   1. If the current working directory (or any ancestor) contains
- *      `.first-tree/workspace.json`, render the new workspace-rooted status
- *      report.
- *   2. Otherwise, fall back to the legacy `inspect` report for back-compat
- *      with unmigrated workspaces. PR-3 ships the migration command;
- *      until users run it, legacy invocations still work as before.
+ * Walks up from the current working directory looking for
+ * `<workspaceRoot>/.first-tree/workspace.json`. When no workspace is found
+ * the command exits 1 with a pointer at the onboarding and migration
+ * entrypoints — there is no legacy `inspect` fallback under W1.
  *
  * Implements the §status contract in
  *   first-tree-context: first-tree-skill-cli/workspace-layout-simplification.md
@@ -21,7 +16,10 @@ export function runStatusCommand(context: CommandContext): void {
   const workspaceRoot = discoverWorkspaceRoot(process.cwd());
 
   if (workspaceRoot === undefined) {
-    runInspectCommand(context);
+    console.error("No First Tree workspace found at or above cwd.");
+    console.error("- For a new workspace: `first-tree tree init --scope workspace --tree-path ./<name>`");
+    console.error("- For a legacy multi-mode layout: `first-tree tree migrate-to-w1`");
+    process.exitCode = 1;
     return;
   }
 

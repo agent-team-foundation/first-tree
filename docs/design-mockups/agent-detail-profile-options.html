@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Detail Profile Options</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --panel: #ffffff;
+        --fg: #171717;
+        --fg-2: #3f3f3f;
+        --fg-3: #696969;
+        --fg-4: #8d8d8d;
+        --line: #d9d9d6;
+        --line-faint: #ececea;
+        --accent: #111111;
+        --green: #58ad60;
+        --red: #ef5454;
+        --radius: 8px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .page {
+        max-width: 1680px;
+        margin: 0 auto;
+        padding: 28px 32px 56px;
+      }
+
+      .intro {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 22px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      .intro p {
+        margin: 6px 0 0;
+        color: var(--fg-3);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 36px;
+        align-items: start;
+      }
+
+      .option {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1120px);
+        gap: 24px;
+        min-width: 0;
+      }
+
+      .option-head {
+        min-height: 68px;
+        padding: 8px 4px 10px;
+      }
+
+      .option-kicker {
+        color: var(--fg-4);
+        font-family: var(--mono);
+        font-size: 12px;
+        margin-bottom: 5px;
+      }
+
+      .option-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 650;
+        font-size: 16px;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--fg-3);
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 1px 7px;
+        white-space: nowrap;
+      }
+
+      .option-note {
+        color: var(--fg-3);
+        margin-top: 5px;
+      }
+
+      .surface {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+      }
+
+      .app-header {
+        padding: 18px 24px 0;
+      }
+
+      .crumbs {
+        color: var(--fg-3);
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        font-size: 13px;
+        margin-bottom: 14px;
+      }
+
+      .agent-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .agent-title {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 12px;
+      }
+
+      .avatar {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--green);
+        color: white;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 750;
+        flex: 0 0 auto;
+      }
+
+      .avatar.large {
+        width: 72px;
+        height: 72px;
+        font-size: 28px;
+      }
+
+      .avatar.mid {
+        width: 56px;
+        height: 56px;
+        font-size: 22px;
+      }
+
+      .agent-name {
+        font-weight: 700;
+        font-size: 15px;
+      }
+
+      .handle,
+      .mono {
+        font-family: var(--mono);
+        color: var(--fg-4);
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--fg-2);
+        white-space: nowrap;
+      }
+
+      .offline {
+        color: var(--fg-3);
+        font-family: var(--mono);
+      }
+
+      .dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #777;
+        margin-right: 6px;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 26px;
+        border-bottom: 1px solid var(--line);
+        margin-top: 16px;
+        padding-left: 24px;
+      }
+
+      .tab {
+        padding: 13px 0 10px;
+        color: var(--fg-3);
+        font-weight: 550;
+      }
+
+      .tab.active {
+        color: var(--fg);
+        border-bottom: 2px solid var(--fg);
+      }
+
+      .content {
+        padding: 24px;
+      }
+
+      .section-title-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 11px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.25;
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .button {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 5px;
+        padding: 7px 11px;
+        font-weight: 620;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .section {
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+
+      .section + .section {
+        margin-top: 28px;
+      }
+
+      .profile-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 30px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line-faint);
+        padding: 18px 0;
+      }
+
+      .aside {
+        border-left: 1px solid var(--line-faint);
+        padding-left: 28px;
+      }
+
+      .subhead {
+        font-weight: 650;
+        margin-bottom: 10px;
+      }
+
+      .details {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .field {
+        display: grid;
+        grid-template-columns: 132px minmax(0, 1fr);
+        gap: 18px;
+        border-bottom: 1px solid var(--line-faint);
+        padding: 9px 0;
+        min-height: 38px;
+      }
+
+      .label {
+        color: var(--fg-3);
+      }
+
+      .value {
+        font-weight: 600;
+        min-width: 0;
+      }
+
+      .nowrap {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chip {
+        display: inline-flex;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 1px 7px;
+        font-family: var(--mono);
+        color: var(--fg-2);
+        background: #fff;
+        font-weight: 500;
+      }
+
+      .appearance-line {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        border-bottom: 1px solid var(--line-faint);
+        padding: 13px 0;
+      }
+
+      .avatar-edit {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        flex: 0 0 auto;
+      }
+
+      .avatar-edit .avatar {
+        width: 56px;
+        height: 56px;
+        font-size: 22px;
+      }
+
+      .edit-mark {
+        position: absolute;
+        right: -2px;
+        bottom: -2px;
+        width: 19px;
+        height: 19px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--fg-2);
+        font-size: 11px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+
+      .muted {
+        color: var(--fg-4);
+      }
+
+      .danger {
+        margin-top: 30px;
+      }
+
+      .danger h2 {
+        color: var(--red);
+      }
+
+      .danger-row {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr) auto;
+        gap: 16px;
+        border-bottom: 1px solid var(--line-faint);
+        padding: 12px 0;
+        align-items: center;
+      }
+
+      .hero-card {
+        border-top: 1px solid var(--line);
+        padding: 18px 0 20px;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 18px;
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      .hero-name {
+        font-size: 20px;
+        font-weight: 750;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      .meta-cell {
+        padding: 13px 14px;
+        border-right: 1px solid var(--line-faint);
+      }
+
+      .meta-cell:last-child {
+        border-right: 0;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .mini-card {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 13px;
+        background: #fff;
+      }
+
+      .mini-card p {
+        margin: 7px 0 0;
+        color: var(--fg-3);
+      }
+
+      .dense-layout {
+        border-top: 1px solid var(--line);
+      }
+
+      .dense-block {
+        display: grid;
+        grid-template-columns: 150px minmax(0, 1fr) auto;
+        gap: 18px;
+        border-bottom: 1px solid var(--line-faint);
+        padding: 14px 0;
+        align-items: start;
+      }
+
+      .dense-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 18px;
+        row-gap: 8px;
+      }
+
+      .tiny-field .label {
+        font-size: 12px;
+      }
+
+      .tiny-field .value {
+        margin-top: 2px;
+      }
+
+      @media (max-width: 1200px) {
+        .option {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="intro">
+        <div>
+          <h1>Agent Detail Profile Tab - Design Options</h1>
+          <p>Same data model, three different compositions for the Profile tab.</p>
+        </div>
+        <div class="tag">recommended: option A</div>
+      </div>
+
+      <div class="grid">
+        <article class="option">
+          <div class="option-head">
+            <div class="option-kicker">OPTION A</div>
+            <div class="option-title">Integrated Profile A2 <span class="tag">recommended</span></div>
+            <div class="option-note">One object surface; identity fields get stable width, avatar itself is the appearance edit target.</div>
+          </div>
+          <div class="surface">
+            <div class="app-header">
+              <div class="crumbs"><span>Team</span><span>/</span><span>Agents</span><span>/</span><strong>gandy-test</strong></div>
+              <div class="agent-header">
+                <div class="agent-title">
+                  <div class="avatar">G</div>
+                  <div>
+                    <div class="agent-name">gandy-test <span class="handle">@gandy-test</span></div>
+                  </div>
+                </div>
+                <div class="actions"><span class="offline"><span class="dot"></span>Offline</span><strong>Chat</strong><span class="muted">Test</span></div>
+              </div>
+            </div>
+            <div class="tabs">
+              <div class="tab active">Profile</div>
+              <div class="tab">Runtime</div>
+              <div class="tab">Prompt</div>
+              <div class="tab">Resources</div>
+              <div class="tab">Usage</div>
+            </div>
+            <div class="content">
+              <div class="section-title-row">
+                <h2>Profile</h2>
+                <button type="button" class="button">Edit identity</button>
+              </div>
+              <div class="profile-split">
+                <div>
+                  <div class="subhead">Identity</div>
+                  <div class="details">
+                    <div class="field"><div class="label">Display name</div><div class="value nowrap">gandy-test</div></div>
+                    <div class="field"><div class="label">Agent name</div><div class="value mono nowrap">@gandy-test</div></div>
+                    <div class="field"><div class="label">Visibility</div><div class="value"><span class="chip">Private to you</span></div></div>
+                    <div class="field"><div class="label">Owner</div><div class="value nowrap">Dev User</div></div>
+                  </div>
+                </div>
+                <div class="aside">
+                  <div class="section-title-row" style="margin-bottom: 0">
+                    <div class="subhead">Appearance</div>
+                  </div>
+                  <div class="appearance-line">
+                    <div class="avatar-edit" aria-label="Edit avatar">
+                      <div class="avatar">G</div>
+                      <span class="edit-mark">✎</span>
+                    </div>
+                    <div>
+                      <div class="value">Generated avatar</div>
+                      <div class="muted">No custom image uploaded</div>
+                      <div class="muted">Color auto</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="danger">
+                <div class="section-title-row"><h2>Agent lifecycle</h2></div>
+                <div class="danger-row"><div>Suspend agent</div><div class="muted">Stop the connected runtime and prevent new messages.</div><button type="button" class="button">Suspend</button></div>
+                <div class="danger-row"><div>Delete agent</div><div class="muted">Suspend this agent before deleting it.</div><button type="button" class="button muted">Delete</button></div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="option">
+          <div class="option-head">
+            <div class="option-kicker">OPTION B</div>
+            <div class="option-title">Profile Header Emphasis</div>
+            <div class="option-note">More personality: a larger identity band, then operational details below.</div>
+          </div>
+          <div class="surface">
+            <div class="app-header">
+              <div class="crumbs"><span>Team</span><span>/</span><span>Agents</span><span>/</span><strong>gandy-test</strong></div>
+              <div class="agent-header">
+                <div class="agent-title">
+                  <div class="avatar">G</div>
+                  <div class="agent-name">gandy-test <span class="handle">@gandy-test</span></div>
+                </div>
+                <div class="actions"><span class="offline"><span class="dot"></span>Offline</span><strong>Chat</strong></div>
+              </div>
+            </div>
+            <div class="tabs">
+              <div class="tab active">Profile</div>
+              <div class="tab">Runtime</div>
+              <div class="tab">Prompt</div>
+              <div class="tab">Resources</div>
+              <div class="tab">Usage</div>
+            </div>
+            <div class="content">
+              <div class="hero-card">
+                <div class="avatar large">G</div>
+                <div>
+                  <div class="hero-name">gandy-test</div>
+                  <div class="handle">@gandy-test</div>
+                  <div style="margin-top: 9px"><span class="chip">Private to you</span></div>
+                </div>
+                <button type="button" class="button">Edit profile</button>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-cell"><div class="label">Owner</div><div class="value">Dev User</div></div>
+                <div class="meta-cell"><div class="label">Avatar</div><div class="value">Generated</div></div>
+                <div class="meta-cell"><div class="label">Image</div><div class="value">None</div></div>
+                <div class="meta-cell"><div class="label">Color</div><div class="value">Auto</div></div>
+              </div>
+              <div class="card-grid">
+                <div class="mini-card"><h3>Identity</h3><p>Name and visibility save immediately.</p></div>
+                <div class="mini-card"><h3>Appearance</h3><p>Avatar updates across chats and lists.</p></div>
+              </div>
+              <div class="danger">
+                <div class="section-title-row"><h2>Agent lifecycle</h2></div>
+                <div class="danger-row"><div>Suspend agent</div><div class="muted">Prevent new routed messages.</div><button type="button" class="button">Suspend</button></div>
+                <div class="danger-row"><div>Delete agent</div><div class="muted">Suspend first.</div><button type="button" class="button muted">Delete</button></div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="option">
+          <div class="option-head">
+            <div class="option-kicker">OPTION C</div>
+            <div class="option-title">Dense Settings</div>
+            <div class="option-note">Most utilitarian: compact, scan-friendly, least expressive.</div>
+          </div>
+          <div class="surface">
+            <div class="app-header">
+              <div class="crumbs"><span>Team</span><span>/</span><span>Agents</span><span>/</span><strong>gandy-test</strong></div>
+              <div class="agent-header">
+                <div class="agent-title">
+                  <div class="avatar">G</div>
+                  <div class="agent-name">gandy-test <span class="handle">@gandy-test</span></div>
+                </div>
+                <div class="actions"><span class="offline"><span class="dot"></span>Offline</span><strong>Chat</strong></div>
+              </div>
+            </div>
+            <div class="tabs">
+              <div class="tab active">Profile</div>
+              <div class="tab">Runtime</div>
+              <div class="tab">Prompt</div>
+              <div class="tab">Resources</div>
+              <div class="tab">Usage</div>
+            </div>
+            <div class="content">
+              <div class="section-title-row"><h2>Profile</h2><button type="button" class="button">Edit</button></div>
+              <div class="dense-layout">
+                <div class="dense-block">
+                  <div><h3>Identity</h3></div>
+                  <div class="dense-fields">
+                    <div class="tiny-field"><div class="label">Display name</div><div class="value">gandy-test</div></div>
+                    <div class="tiny-field"><div class="label">Agent name</div><div class="value mono">@gandy-test</div></div>
+                    <div class="tiny-field"><div class="label">Visibility</div><div class="value">Private to you</div></div>
+                    <div class="tiny-field"><div class="label">Owner</div><div class="value">Dev User</div></div>
+                  </div>
+                  <button type="button" class="button">Edit</button>
+                </div>
+                <div class="dense-block">
+                  <div><h3>Appearance</h3></div>
+                  <div class="appearance-line" style="padding: 0; border-bottom: 0">
+                    <div class="avatar mid">G</div>
+                    <div>
+                      <div class="value">Generated avatar</div>
+                      <div class="muted">No image · Color auto</div>
+                    </div>
+                  </div>
+                  <button type="button" class="button">Edit</button>
+                </div>
+                <div class="dense-block">
+                  <div><h3>Agent lifecycle</h3></div>
+                  <div class="dense-fields">
+                    <div class="tiny-field"><div class="label">Suspend agent</div><div class="value muted">Stop runtime.</div></div>
+                    <div class="tiny-field"><div class="label">Delete agent</div><div class="value muted">Suspend first.</div></div>
+                  </div>
+                  <button type="button" class="button">Suspend</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>

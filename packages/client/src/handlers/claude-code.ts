@@ -1346,9 +1346,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
   // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
-  // `agents.<name>` key). Used as `--workspace-id` for first-tree integrate
-  // so a single agent's multi-chat workspaces all bind to the same skill
-  // workspace identity instead of churning a new id per chat.
+  // `agents.<name>` key). Carried through to the per-session bootstrap so a
+  // single agent's multi-chat workspaces share the same workspace identity
+  // instead of churning a new id per chat.
   const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
@@ -1461,7 +1461,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree integrate` shell-out). Gated by the stage-2 sentinel + Context-Tree
+   * tree skill install` shell-out). Gated by the stage-2 sentinel + Context-Tree
    * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
    *
    *   - Sentinel absent → full bootstrap.

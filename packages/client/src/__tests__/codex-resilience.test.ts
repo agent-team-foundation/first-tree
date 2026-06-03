@@ -25,10 +25,9 @@ const usage = (input: number, cached: number, output: number, reasoning = 0) => 
  *     between tests — otherwise leaked state from one test contaminates
  *     the next.
  *
- * The full `runTurn` retry loop (mock Codex + Thread + SessionContext) is
- * intentionally NOT covered here — testing it end-to-end requires faking
- * the bootstrap / git-mirror / first-tree integration chain, which would
- * double the PR scope. The retry path's correctness rests on:
+ * The full `runTurn` retry loop needs a mock Codex + Thread + SessionContext,
+ * so the targeted regression for that state machine lives in
+ * `codex-retry-abort.test.ts`. The classifier path's correctness here rests on:
  *   1. typecheck (covers `usageBox` narrowing + control flow)
  *   2. `isTransientCodexErrorMessage` table (this file)
  *   3. the existing `codex-bootstrap.test.ts` / `codex-thread-options.test.ts`

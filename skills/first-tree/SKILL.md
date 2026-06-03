@@ -171,13 +171,12 @@ from `cwd` looking for that file, then reports:
 | `boundSources[].present === false` | a bound source is listed but not cloned locally | `git clone` it as a sibling of the tree, or remove from `sources` if it should not be tracked. |
 | `unboundGitSiblings[]` | a git repo under `workspaceRoot` that is not in `sources` | If it should be part of the team's context, add its name to `workspace.json.sources`. |
 
-If `status` exits with "not inside a First Tree workspace", the current
+If `status` exits with "No First Tree workspace found", the current
 cwd is unbound. Run `first-tree-onboarding` before doing context work.
-
-For workspaces that have not yet been migrated from the legacy
-multi-mode binding (`.first-tree-workspace` marker + tree/`.first-tree/bindings/`),
-`status` falls back to the legacy `inspect` reporter — that's a signal to
-run `first-tree tree migrate-to-w1` next.
+If the cwd sits inside a pre-0.6.0 layout (`.first-tree-workspace`
+marker, `<tree>/.first-tree/bindings/`, or `<source>/.first-tree/source.json`
+exist on disk), run `first-tree tree migrate-to-w1` first — `status` no
+longer recognises the legacy shape.
 
 ### 2. Tree HEAD freshness
 

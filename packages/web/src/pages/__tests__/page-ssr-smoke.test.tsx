@@ -907,16 +907,14 @@ describe("page SSR smoke coverage", () => {
     const { ProfileTab } = await import("../agent-detail/profile-tab.js");
     const { PromptTab } = await import("../agent-detail/prompt-tab.js");
     const { ResourcesTab } = await import("../agent-detail/resources-tab.js");
-    const { SetupTab } = await import("../agent-detail/setup-tab.js");
-    const { ToolsTab } = await import("../agent-detail/tools-tab.js");
+    const { RuntimeTab } = await import("../agent-detail/runtime-tab.js");
 
     const html = renderPage(
       <Routes>
         <Route path="/agents/:uuid" element={<AgentDetailPage />}>
           <Route path="profile" element={<ProfileTab />} />
-          <Route path="setup" element={<SetupTab />} />
+          <Route path="runtime" element={<RuntimeTab />} />
           <Route path="prompt" element={<PromptTab />} />
-          <Route path="tools" element={<ToolsTab />} />
           <Route path="resources" element={<ResourcesTab />} />
         </Route>
       </Routes>,
@@ -927,9 +925,8 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Profile");
 
     for (const [route, expected] of [
-      ["/agents/agent-1/setup", "Runtime"],
-      ["/agents/agent-1/prompt", "System prompt append"],
-      ["/agents/agent-1/tools", "MCP servers"],
+      ["/agents/agent-1/runtime", "Runtime"],
+      ["/agents/agent-1/prompt", "Instructions"],
       ["/agents/agent-1/resources", "Environment variables"],
     ] as const) {
       expect(
@@ -937,9 +934,8 @@ describe("page SSR smoke coverage", () => {
           <Routes>
             <Route path="/agents/:uuid" element={<AgentDetailPage />}>
               <Route path="profile" element={<ProfileTab />} />
-              <Route path="setup" element={<SetupTab />} />
+              <Route path="runtime" element={<RuntimeTab />} />
               <Route path="prompt" element={<PromptTab />} />
-              <Route path="tools" element={<ToolsTab />} />
               <Route path="resources" element={<ResourcesTab />} />
             </Route>
           </Routes>,
@@ -947,16 +943,6 @@ describe("page SSR smoke coverage", () => {
         ),
       ).toContain(expected);
     }
-    expect(
-      renderPage(
-        <Routes>
-          <Route path="/agents/:uuid" element={<AgentDetailPage />}>
-            <Route path="tools" element={<ToolsTab />} />
-          </Route>
-        </Routes>,
-        "/agents/agent-1/tools",
-      ),
-    ).toContain("Legacy per-agent MCP editing is disabled");
   });
 
   it("renders agent detail sections with populated draft rows", async () => {
@@ -968,7 +954,7 @@ describe("page SSR smoke coverage", () => {
     const { ModelSection } = await import("../agent-detail/model-section.js");
     const { PromptSection } = await import("../agent-detail/prompt-section.js");
     const { ReasoningEffortSection } = await import("../agent-detail/reasoning-effort-section.js");
-    const { SetupSection } = await import("../agent-detail/setup-section.js");
+    const { RuntimeSection } = await import("../agent-detail/runtime-section.js");
 
     const noop = () => undefined;
     const asyncNoop = async () => undefined;
@@ -977,7 +963,7 @@ describe("page SSR smoke coverage", () => {
       <>
         <IdentitySection agent={agent()} onSave={asyncNoop} />
         <AppearanceSection agent={agent()} onSave={asyncNoop} onRefresh={asyncNoop} />
-        <SetupSection
+        <RuntimeSection
           runtimeProvider="claude-code"
           computerLabel="gandy-macbook"
           canBindComputer={false}

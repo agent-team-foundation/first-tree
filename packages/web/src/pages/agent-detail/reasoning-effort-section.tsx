@@ -77,7 +77,7 @@ export function ReasoningEffortSection({
   return (
     <ConfigRow
       label="Reasoning effort"
-      helpText={EFFORT_HELP_BY_PROVIDER[provider]}
+      description={EFFORT_HELP_BY_PROVIDER[provider]}
       meta={dirty ? <DraftStatusChip status="modified" /> : null}
       action={
         dirty ? (
@@ -94,6 +94,7 @@ export function ReasoningEffortSection({
         disabled={disabled}
         placeholder="(unset)"
         aria-label="Reasoning effort"
+        className="w-full max-w-none"
       />
     </ConfigRow>
   );

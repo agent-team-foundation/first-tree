@@ -49,10 +49,10 @@ export function UsageTab(): ReactElement {
   if (ctx.isHuman) {
     return (
       <Section title="Usage">
-        <p className="text-body" style={{ color: "var(--fg-3)" }}>
+        <UsagePlaceholder>
           Token usage is only tracked for agent-type accounts. This profile represents a human member and does not run
           model turns.
-        </p>
+        </UsagePlaceholder>
       </Section>
     );
   }
@@ -94,15 +94,13 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="One cell per day · darker means more input tokens consumed."
+      description="Daily input tokens. Darker cells mean more usage."
       action={<DensityLegend />}
     >
       {isError ? (
-        <ErrorRow message="Failed to load activity." />
+        <UsagePlaceholder tone="error">Failed to load activity.</UsagePlaceholder>
       ) : isLoading ? (
-        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-4) 0" }}>
-          Loading…
-        </p>
+        <UsagePlaceholder>Loading activity…</UsagePlaceholder>
       ) : (
         <ActivityBody summary={data} />
       )}
@@ -302,17 +300,13 @@ function RecentTurnsBlock({
   isError: boolean;
 }): ReactElement {
   return (
-    <Section title="Recent turns" count="30d">
+    <Section title="Recent turns" description={`Last ${RECENT_TURNS_LIMIT} turns from the last 30 days.`}>
       {isError ? (
-        <ErrorRow message="Failed to load recent turns." />
+        <UsagePlaceholder tone="error">Failed to load recent turns.</UsagePlaceholder>
       ) : isLoading ? (
-        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
-          Loading…
-        </p>
+        <UsagePlaceholder>Loading recent turns…</UsagePlaceholder>
       ) : rows.length === 0 ? (
-        <p className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
-          No turns in the last 30 days.
-        </p>
+        <UsagePlaceholder>No turns recorded in the last 30 days.</UsagePlaceholder>
       ) : (
         <TurnsTable rows={rows} />
       )}
@@ -382,12 +376,15 @@ function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
                   {formatCompactCount(r.outputTokens)}
                 </td>
                 <td>
-                  <div
-                    role="img"
-                    className="usage-turn-volbar"
-                    aria-label={`${formatCompactCount(total)} tokens this turn`}
-                  >
-                    <span style={{ width: `${(total / max) * 100}%` }} />
+                  <div className="usage-turn-total-cell">
+                    <span className="mono text-body">{formatCompactCount(total)}</span>
+                    <div
+                      role="img"
+                      className="usage-turn-volbar"
+                      aria-label={`${formatCompactCount(total)} tokens this turn`}
+                    >
+                      <span style={{ width: `${(total / max) * 100}%` }} />
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -492,15 +489,10 @@ function computeStats(days: DayBucket[]): {
    Misc
    ========================================================================== */
 
-/**
- * Inline error placeholder for failed usage queries. Made distinct from
- * the empty-state copy so an actual outage (network / 401 / 5xx) doesn't
- * read as "no data" — review nit R3 flagged this as an audit-blocker.
- */
-function ErrorRow({ message }: { message: string }): ReactElement {
+function UsagePlaceholder({ children, tone }: { children: ReactNode; tone?: "error" }): ReactElement {
   return (
-    <p className="text-caption" style={{ color: "var(--state-error)", padding: "var(--sp-3) 0" }}>
-      {message}
+    <p className="usage-placeholder text-label" data-tone={tone}>
+      {children}
     </p>
   );
 }

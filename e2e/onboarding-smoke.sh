@@ -176,33 +176,35 @@ JS
 }
 
 run_direct_cli_smoke() {
-  local repo_root="$WORK_ROOT/direct-cli/sbti-cli"
-  local inspect_before="$WORK_ROOT/direct-cli.inspect-before.json"
+  local source_name
+  local workspace_root
+  local repo_root
+  local status_after
   local init_json="$WORK_ROOT/direct-cli.init.json"
-  local inspect_after="$WORK_ROOT/direct-cli.inspect-after.json"
   local verify_json="$WORK_ROOT/direct-cli.verify.json"
   local automation_json="$WORK_ROOT/direct-cli.automation.json"
   local doctor_json="$WORK_ROOT/direct-cli.skill-doctor.json"
   local tree_root
-  local role
 
-  mkdir -p "$WORK_ROOT/direct-cli"
+  source_name="$(basename "${TEST_REPO_URL%.git}")"
+  workspace_root="$WORK_ROOT/direct-cli/${source_name}-workspace"
+  repo_root="$workspace_root/$source_name"
+  status_after="$WORK_ROOT/direct-cli.status-after.json"
+
+  mkdir -p "$workspace_root"
   clone_repo "$TEST_REPO_URL" "$repo_root"
 
   (
-    cd "$repo_root"
-    log "Running direct CLI onboarding smoke in $repo_root"
-    node "$FT_CLI" tree inspect --json >"$inspect_before"
-    role="$(json_value "$inspect_before" role)"
-    [[ "$role" == "unbound-source-repo" ]] || fail "expected pre-init role to be unbound-source-repo, got $role"
+    cd "$workspace_root"
+    log "Running direct CLI onboarding smoke in $workspace_root"
 
-    node "$FT_CLI" tree init --json --no-recursive >"$init_json"
+    node "$FT_CLI" tree init --json --scope workspace --tree-path "./${source_name}-tree" --tree-mode dedicated >"$init_json"
     tree_root="$(json_value "$init_json" treeRoot)"
     [[ -n "$tree_root" ]] || fail "tree init did not report a treeRoot"
 
-    node "$FT_CLI" tree inspect --json >"$inspect_after"
-    role="$(json_value "$inspect_after" role)"
-    [[ "$role" == "source-repo-bound" ]] || fail "expected post-init role to be source-repo-bound, got $role"
+    node "$FT_CLI" tree status --json >"$status_after"
+    [[ "$(json_value "$status_after" workspaceRoot)" == "$workspace_root" ]] || fail "expected status to report workspaceRoot=$workspace_root"
+    [[ "$(json_query "$status_after" manifest.tree)" == "${source_name}-tree" ]] || fail "expected manifest.tree=${source_name}-tree"
 
     node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
     [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "tree verify did not report ok=true"
@@ -210,10 +212,10 @@ run_direct_cli_smoke() {
     node "$FT_CLI" tree automation install --tier 2 --tree-path "$tree_root" --dry-run --json >"$automation_json"
     [[ "$(json_value "$automation_json" stage)" == "write_rule_layer" ]] || fail "expected tree automation dry-run stage to be write_rule_layer"
 
-    node "$FT_CLI" tree skill doctor --json --root "$repo_root" >"$doctor_json"
+    node "$FT_CLI" tree skill doctor --json --root "$workspace_root" >"$doctor_json"
 
-    [[ -f "$repo_root/AGENTS.md" ]] || fail "source repo AGENTS.md was not created"
-    [[ -f "$repo_root/CLAUDE.md" ]] || fail "source repo CLAUDE.md was not created"
+    [[ -f "$workspace_root/AGENTS.md" ]] || fail "workspace root AGENTS.md was not created"
+    [[ -f "$workspace_root/CLAUDE.md" ]] || fail "workspace root CLAUDE.md was not created"
     [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing from tree repo"
     [[ -f "$tree_root/.first-tree/agent-templates/developer.yaml" ]] || fail "developer template missing from tree repo"
     [[ -f "$tree_root/.first-tree/agent-templates/code-reviewer.yaml" ]] || fail "code-reviewer template missing from tree repo"
@@ -225,11 +227,11 @@ run_direct_cli_smoke() {
 run_codex_prompt_smoke() {
   local repo_root="$WORK_ROOT/prompt-codex/$(basename "${PROMPT_TEST_REPO_URL%.git}")"
   local output_file="$WORK_ROOT/prompt-codex.output.txt"
-  local inspect_after="$WORK_ROOT/prompt-codex.inspect-after.json"
+  local status_after="$WORK_ROOT/prompt-codex.status-after.json"
   local verify_json="$WORK_ROOT/prompt-codex.verify.json"
   local agent_exit_code
-  local role
-  local tree_repo_name
+  local workspace_root
+  local tree_name
   local tree_root
 
   mkdir -p "$WORK_ROOT/prompt-codex"
@@ -254,12 +256,12 @@ run_codex_prompt_smoke() {
   [[ -f "$output_file" ]] || fail "Codex prompt smoke did not write output"
   (
     cd "$repo_root"
-    node "$FT_CLI" tree inspect --json >"$inspect_after"
-    role="$(json_value "$inspect_after" role)"
-    [[ "$role" == "source-repo-bound" ]] || fail "expected Codex prompt smoke to bind the source repo, got $role"
-    tree_repo_name="$(json_query "$inspect_after" binding.treeRepoName)"
-    [[ -n "$tree_repo_name" ]] || fail "Codex prompt smoke did not record binding.treeRepoName"
-    tree_root="$(cd .. && pwd)/$tree_repo_name"
+    node "$FT_CLI" tree status --json >"$status_after"
+    workspace_root="$(json_value "$status_after" workspaceRoot)"
+    [[ -n "$workspace_root" ]] || fail "Codex prompt smoke did not produce a workspaceRoot"
+    tree_name="$(json_query "$status_after" manifest.tree)"
+    [[ -n "$tree_name" ]] || fail "Codex prompt smoke did not record manifest.tree"
+    tree_root="$workspace_root/$tree_name"
     [[ -d "$tree_root" ]] || fail "expected tree root at $tree_root"
     node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
     [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "Codex prompt smoke tree verify did not report ok=true"
@@ -276,11 +278,11 @@ run_codex_prompt_smoke() {
 run_claude_prompt_smoke() {
   local repo_root="$WORK_ROOT/prompt-claude/$(basename "${PROMPT_TEST_REPO_URL%.git}")"
   local output_file="$WORK_ROOT/prompt-claude.output.txt"
-  local inspect_after="$WORK_ROOT/prompt-claude.inspect-after.json"
+  local status_after="$WORK_ROOT/prompt-claude.status-after.json"
   local verify_json="$WORK_ROOT/prompt-claude.verify.json"
   local agent_exit_code
-  local role
-  local tree_repo_name
+  local workspace_root
+  local tree_name
   local tree_root
 
   mkdir -p "$WORK_ROOT/prompt-claude"
@@ -304,12 +306,12 @@ run_claude_prompt_smoke() {
   [[ -f "$output_file" ]] || fail "Claude prompt smoke did not write output"
   (
     cd "$repo_root"
-    node "$FT_CLI" tree inspect --json >"$inspect_after"
-    role="$(json_value "$inspect_after" role)"
-    [[ "$role" == "source-repo-bound" ]] || fail "expected Claude prompt smoke to bind the source repo, got $role"
-    tree_repo_name="$(json_query "$inspect_after" binding.treeRepoName)"
-    [[ -n "$tree_repo_name" ]] || fail "Claude prompt smoke did not record binding.treeRepoName"
-    tree_root="$(cd .. && pwd)/$tree_repo_name"
+    node "$FT_CLI" tree status --json >"$status_after"
+    workspace_root="$(json_value "$status_after" workspaceRoot)"
+    [[ -n "$workspace_root" ]] || fail "Claude prompt smoke did not produce a workspaceRoot"
+    tree_name="$(json_query "$status_after" manifest.tree)"
+    [[ -n "$tree_name" ]] || fail "Claude prompt smoke did not record manifest.tree"
+    tree_root="$workspace_root/$tree_name"
     [[ -d "$tree_root" ]] || fail "expected tree root at $tree_root"
     node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
     [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "Claude prompt smoke tree verify did not report ok=true"

@@ -2,11 +2,19 @@ import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@first-tree/shared";
 import { Eye, EyeOff, Lock, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
+import { ResourceEmptyState } from "./resource-empty-state.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
 /**
@@ -43,17 +51,20 @@ export function EnvSection(props: EnvSectionProps) {
 
   const action = !props.disabled ? (
     <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-      <Plus className="h-3 w-3" /> Add
+      <Plus className="h-3 w-3" /> Add variable
     </Button>
   ) : null;
 
   return (
-    <Section title="Environment variables" count={activeCount} action={action}>
+    <Section
+      title="Environment variables"
+      count={activeCount}
+      description="Injected into this agent's runtime process. Sensitive values are encrypted and hidden after save."
+      action={action}
+    >
       <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
-            No environment variables.
-          </p>
+          <ResourceEmptyState>No environment variables configured.</ResourceEmptyState>
         ) : (
           props.items.map((item) => {
             const isSensitive = item.value.sensitive;
@@ -202,6 +213,9 @@ function EnvDialog({ open, onOpenChange, initial, allowKeepExisting, forbiddenKe
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{initial ? "Edit environment variable" : "Add environment variable"}</DialogTitle>
+          <DialogDescription>
+            Environment variables are saved with the rest of this agent's resource draft.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">

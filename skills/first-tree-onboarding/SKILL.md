@@ -53,16 +53,14 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 | Status output                                              | Next                                                                                                  |
 | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Reports a workspace root + tree + bound sources (W1)       | Skip Phase B; jump to Phase B-refresh, then Phase C.                                                  |
-| "not inside a First Tree workspace" / no `workspace.json`  | Phase B (single repo) or Phase B (workspace) — decide by what's on disk (see Phase B entry table).    |
-| Falls back to legacy `inspect` output with `role: *-bound` | The workspace is on the legacy multi-mode layout — go to Phase A.5 (migrate) **before** Phase C.       |
-| `role: tree-repo`                                          | **STOP.** Tell the user: "You're inside the tree subdir of a workspace. cd to the workspace root and re-run." |
-| `role: unknown`                                            | Ask: "Not a recognized git repo or workspace. Run `git init` here, or did you mean a different path?" |
+| Exits non-zero with "No First Tree workspace found"        | Either Phase B (new workspace) OR Phase A.5 (legacy 0.5.x → W1 migration). See Phase A.5 entry signal. |
+| Cwd is inside the tree subdir of a workspace               | **STOP.** Tell the user: "You're inside the tree subdir of a workspace. cd to the workspace root and re-run." (Detect by checking whether cwd resolves to or under `<workspaceRoot>/<manifest.tree>` after walking up from cwd to find the manifest.) |
 
 **Exit gate:** workspace shape classified; `workspaceRoot` known when bound, or "needs binding" / "needs migration" flag set.
 
 ### Phase A.5 — Migrate legacy workspace (only when Phase A detected legacy state)
 
-**Entry signal:** Phase A reported the workspace is on the legacy multi-mode binding (`.first-tree-workspace` marker, `<tree>/.first-tree/bindings/`, or `<source>/.first-tree/source.json` survive without a `workspace.json`).
+**Entry signal:** the user explicitly says they're migrating from a pre-0.6.0 layout, OR `tree status` exited 1 AND any of these legacy markers exist on disk: `.first-tree-workspace` marker file anywhere up the path, `<tree>/.first-tree/bindings/` directory, or `<source>/.first-tree/source.json`. `tree status` no longer surfaces a legacy role, so the signal is filesystem-based.
 
 **Action:**
 
@@ -71,7 +69,7 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
 3. Re-run `first-tree tree status --json` → confirm the new layout.
 4. The migration leaves dirty working-tree edits in the tree and each source repo; tell the user to inspect and commit before continuing.
 
-**Exit gate:** `first-tree tree status --json` reports `workspaceRoot` + `manifest.tree` + non-empty `manifest.sources` (the W1 shape, not the legacy `inspect` fallback). The migration result is separate — its own JSON output reports `dryRun: false`, an empty `warnings[]` (or only acceptable warnings the user has acknowledged), and no `kind: "not-applicable"` from the prior dry-run. Use `tree status` for the post-migration shape check; use the migrate output for the cleanup audit trail. Do not conflate the two.
+**Exit gate:** `first-tree tree status --json` reports `workspaceRoot` + `manifest.tree` + non-empty `manifest.sources`. The migration result is separate — its own JSON output reports `dryRun: false`, an empty `warnings[]` (or only acceptable warnings the user has acknowledged), and no `kind: "not-applicable"` from the prior dry-run. Use `tree status` for the post-migration shape check; use the migrate output for the cleanup audit trail. Do not conflate the two.
 
 ### Phase B — Bind (auto unless ambiguous)
 
@@ -84,14 +82,13 @@ Each phase has **entry signal → action → exit gate**. If the exit gate fails
      1. Pick a workspace dir name (default = `<source-name>-workspace`). Ask the user before moving if they have a preferred name.
      2. From the source repo's parent: `mkdir <workspace-name>` and `mv <source-repo> <workspace-name>/`. The source repo path changes — warn the user before the `mv`.
      3. `cd <workspace-name>`.
-     4. `first-tree tree init --scope workspace --tree-path ./<tree-name> --tree-mode dedicated --workspace-id <slug> --no-recursive` (or `--tree-mode shared --tree-url <url>` for an existing remote tree). `--no-recursive` is required: without it init would also try to bind the newly-scaffolded tree dir as a source.
+     4. `first-tree tree init --scope workspace --tree-path ./<tree-name> --tree-mode dedicated --workspace-id <slug>` (or `--tree-mode shared --tree-url <url>` for an existing remote tree).
    - **Workspace root with multiple child repos (cwd is already the workspace dir)** → `first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug-of-source-root>`. Adds `--tree-url <url>` for an existing remote tree.
-   - **⚠ recursion:** if cwd contains nested git repos that look distinct (private repos, submodules, `trusted-external/*`, vendored code), default to NOT recursing and **ask** before adding them to `workspace.json.sources`.
-2. `first-tree tree init` runs all of: install the five shipped skills at the workspace root, write framework `AGENTS.md` / `CLAUDE.md` at the workspace root, scaffold the tree subdir (when no `--tree-url`) or clone it (when `--tree-url`), and write `<workspaceRoot>/.first-tree/workspace.json` with the source(s) discovered at the workspace root.
+2. `first-tree tree init` runs all of: install the five shipped skills at the workspace root, write framework `AGENTS.md` / `CLAUDE.md` at the workspace root, scaffold the tree subdir (when no `--tree-url`) or clone it (when `--tree-url`), and write `<workspaceRoot>/.first-tree/workspace.json` with every immediate-child git repo at the workspace root listed under `manifest.sources`. Init does not recurse into nested git repos and does not install per-source skill/framework files.
 3. After init succeeds, walk `unboundGitSiblings[]` from a fresh `first-tree tree status` and ask the user which to add to `sources`. Adding a source is an in-place edit to `workspace.json.sources`; no separate CLI command is needed.
 4. `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>`.
 
-**Exit gate:** `tree verify` exits 0. `tree status --json` reports a workspace (`workspaceRoot` + `manifest.tree` + non-empty `boundSources[]`) — not a legacy `role: *-bound` fallback. If status reports no workspace at all, init most likely ran from the wrong cwd (inside the source rather than the pre-created workspace dir) and produced a sibling-tree layout. Use the "tree init exits 0 but tree status still reports no workspace" edge-case row below for recovery.
+**Exit gate:** `tree verify` exits 0. `tree status --json` reports a workspace (`workspaceRoot` + `manifest.tree` + non-empty `boundSources[]`). If status still exits 1 after init succeeded, init most likely ran from the wrong cwd (inside the source rather than the pre-created workspace dir). Re-read SKILL.md Phase B and re-run from the correct workspace root.
 
 ### Phase B-refresh — Already bound (auto)
 
@@ -197,6 +194,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm install -g first-tree@latest` errors with `Unsupported URL Type "workspace:"` | Don't retry. Fall back to building from a local `agent-team-foundation/first-tree` checkout: `pnpm install && pnpm --filter first-tree build`, then run via `node <repo>/apps/cli/dist/index.js`.                                                       |
 | `gh auth status` fails                                                             | Don't push tree branches in Phase C or create GitHub resources — keep work local until `gh auth login`.                                                                                                                                                |
+| `tree init` rejects `--scope repo`                                                 | `--scope repo` is removed under W1. Follow Phase B's lone-source recipe: pre-create the workspace dir, `mv` the source in, `cd` in, then run `first-tree tree init --scope workspace --tree-path ./<tree> --tree-mode dedicated --workspace-id <slug> --no-recursive`. |
 | `tree init` exits 0 but `tree status` still reports no workspace                   | `init` writes `workspace.json` only when scope is workspace-level AND the tree resolves to an immediate child of cwd. Common cause: init ran from inside the lone source repo (which produces a sibling tree and no manifest). `migrate-to-w1` does not detect this layout — it looks for `.first-tree-workspace`, `bindings/`, or `source.json`, none of which the current init writes. Recover by undoing the init and following Phase B's lone-repo flow: show the user what init wrote (the new sibling `<source>-tree/` dir; `AGENTS.md` / `CLAUDE.md` / `WHITEPAPER.md` / `.agents/` / `.claude/` inside the source) and ask before deleting. After cleanup, pre-create the workspace dir, `mv` the source in, `cd` in, and run `first-tree tree init --scope workspace --tree-path ./<tree> --tree-mode dedicated --workspace-id <slug> --no-recursive`. Do NOT hand-create `workspace.json` here — the hand-repair path in `references/cli-quickref.md` is for recovering a corrupted manifest in an existing W1 workspace only, not for fresh onboarding. |
 | `tree verify` fails after Phase B                                                  | Print the failures, stop. Most common cause: the sibling tree dir was created but `tree init` was interrupted mid-write. Recovery: `rm -rf <treePath>` then re-run `tree init`. **Always ask before rm.**                                                |
 | `migrate-to-w1` reports `kind: "not-applicable"` with a clear reason               | Surface the reason and stop. Common causes: cwd is a workspace-member source whose parent is already a workspace (cd up), or `source.json` points at a non-sibling tree path (out-of-scope under W1's side-by-side assumption).                          |

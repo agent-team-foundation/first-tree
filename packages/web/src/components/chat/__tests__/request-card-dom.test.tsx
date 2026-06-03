@@ -97,6 +97,31 @@ describe("RequestCard rendering", () => {
     );
     expect(container.textContent).not.toContain(BODY);
     expect(container.textContent).not.toContain("Ship 5% or 20%?");
-    expect(container.textContent).toContain("Expand");
+    // Collapsed row is a single clickable button (chevron + chip + subject
+    // summary); the whole row expands on click — no separate "Expand" word.
+    expect(container.textContent).toContain("REQUEST");
+    expect(container.textContent).toContain("Rollout");
+  });
+
+  it("namespaces option radio groups by message id so two open requests don't merge", async () => {
+    // Question ids are only request-local (both cards use `q1`). The radio
+    // `name` must be namespaced by message id, or the browser groups the two
+    // cards' real radio inputs together and selecting in one clears the other.
+    const a: Message = { ...requestMsg(), id: "reqA" };
+    const b: Message = { ...requestMsg(), id: "reqB" };
+    const container = await renderDom(
+      wrap(
+        <>
+          <RequestCard message={a} thread={[a]} viewerAgentId={HUMAN} body={<div />} resolveAgentName={(id) => id} />
+          <RequestCard message={b} thread={[b]} viewerAgentId={HUMAN} body={<div />} resolveAgentName={(id) => id} />
+        </>,
+      ),
+    );
+    const names = new Set(
+      Array.from(container.querySelectorAll("input[type='radio']")).map((el) => el.getAttribute("name")),
+    );
+    // Two distinct, message-scoped groups — never the bare local id.
+    expect(names).toEqual(new Set(["reqA:q1", "reqB:q1"]));
+    expect(names.has("q1")).toBe(false);
   });
 });

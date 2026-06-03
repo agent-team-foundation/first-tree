@@ -1,21 +1,38 @@
 import { AGENT_VISIBILITY, type Agent, type UpdateAgent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { listAgents } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { AgentChip } from "../../components/agent-chip.js";
+import { Avatar } from "../../components/avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
-import { humanizeAgentType, humanizeVisibility } from "../../lib/agent-labels.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
-import { ConfigRow } from "./flat-section.js";
+
+const VISIBILITY_COPY = {
+  [AGENT_VISIBILITY.ORGANIZATION]: {
+    label: "Visible to your team",
+    description: "Anyone on your team can @mention and chat with it.",
+  },
+  [AGENT_VISIBILITY.PRIVATE]: {
+    label: "Private to you",
+    description: "Only this agent's owner can see and chat with it.",
+  },
+} as const;
 
 /**
  * Redesign §5.3 Identity — a compact two-line summary plus a dedicated
@@ -27,9 +44,19 @@ export type IdentitySectionProps = {
   agent: Agent;
   canEdit?: boolean;
   onSave: (patch: UpdateAgent) => Promise<void>;
+  title?: ReactNode;
+  description?: ReactNode;
+  aside?: ReactNode;
 };
 
-export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySectionProps) {
+export function IdentitySection({
+  agent,
+  canEdit = true,
+  onSave,
+  title = "Identity",
+  description = "Identity saves immediately; runtime behavior is configured from the other tabs.",
+  aside,
+}: IdentitySectionProps) {
   const [open, setOpen] = useState(false);
   const resolveAgent = useAgentIdentityMap();
   const resolveMember = useMemberNameMap();
@@ -42,43 +69,62 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
     : [];
   const managerName = agent.managerId ? resolveMember(agent.managerId) : null;
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
+  const handle = agent.name ?? agent.uuid.slice(0, 8);
+  const hasOrganizationContext = role || domains.length > 0;
 
   const action =
     canEdit && agent.status === "active" ? (
       <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-        <Pencil className="h-3 w-3" /> Edit
+        <Pencil className="h-3 w-3" /> {aside ? "Edit identity" : "Edit"}
       </Button>
     ) : null;
 
   return (
-    <Section title="Identity" action={action}>
-      <ConfigRow label="Display name" value={<span className="font-semibold">{agent.displayName}</span>} />
-      <ConfigRow label="Agent name" value={agent.name ? <span className="font-mono">@{agent.name}</span> : "—"} />
-      {delegateIdentity && (
-        <ConfigRow
-          label="Delegate"
-          value={<AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />}
-        />
-      )}
-      <ConfigRow label="Manager" value={managerName ?? "—"} />
-      {role && <ConfigRow label="Role" value={role} />}
-      <ConfigRow label="Type" value={humanizeAgentType(agent.type)} />
-      <ConfigRow label="Visibility" value={humanizeVisibility(agent.visibility)} />
-      {domains.length > 0 && (
-        <ConfigRow
-          label="Domains"
-          value={
-            <span className="inline-flex flex-wrap gap-1 align-middle">
-              {domains.map((d) => (
-                <DenseBadge key={d} tone="outline">
-                  {humanizeDomain(d)}
-                </DenseBadge>
-              ))}
-            </span>
-          }
-        />
-      )}
-
+    <Section title={title} description={description} action={action}>
+      <div
+        className={aside ? "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,0.85fr)] lg:gap-8" : undefined}
+        style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
+      >
+        <div className="min-w-0">
+          <div className={aside ? "grid gap-0" : "grid gap-0 md:grid-cols-2 md:gap-x-8"}>
+            <IdentityField label="Display name">{agent.displayName}</IdentityField>
+            <IdentityField label="Agent name">
+              <span className="mono">@{handle}</span>
+            </IdentityField>
+            <IdentityField label="Visibility">
+              <VisibilityBadge visibility={agent.visibility} />
+            </IdentityField>
+            <IdentityField label="Owner">
+              <MemberReference memberId={agent.managerId} name={managerName ?? "—"} />
+            </IdentityField>
+            {delegateIdentity && (
+              <IdentityField label="Delegate">
+                <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
+              </IdentityField>
+            )}
+            {hasOrganizationContext && (
+              <IdentityField label="Context">
+                <span className="inline-flex flex-wrap gap-1.5 align-middle">
+                  {role && <DenseBadge tone="outline">{role}</DenseBadge>}
+                  {domains.map((d) => (
+                    <DenseBadge key={d} tone="outline">
+                      {humanizeDomain(d)}
+                    </DenseBadge>
+                  ))}
+                </span>
+              </IdentityField>
+            )}
+          </div>
+        </div>
+        {aside && (
+          <div
+            className="min-w-0 lg:flex lg:items-center lg:border-l lg:pl-8"
+            style={{ borderColor: "var(--border-faint)" }}
+          >
+            {aside}
+          </div>
+        )}
+      </div>
       {canEdit && <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />}
     </Section>
   );
@@ -110,7 +156,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
   }, [open, agent]);
 
   const isHuman = agent.type === "human";
-  // Only the agent's manager or an admin can change visibility. The backend
+  // Only the agent's owner (stored as managerId) or an admin can change visibility. The backend
   // enforces this via assertCanManage; this mirrors that on the UI so the
   // field is disabled when the caller can't persist the change anyway.
   const canChangeVisibility = role === "admin" || agent.managerId === memberId;
@@ -149,6 +195,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     ],
     [assistantsQuery.data],
   );
+  const visibilityHelp = VISIBILITY_COPY[visibility].description;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -188,6 +235,9 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit Identity</DialogTitle>
+          <DialogDescription>
+            Identity updates save immediately. Runtime behavior is configured from the other tabs.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
@@ -216,14 +266,12 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
               onChange={(v) => setVisibility(v as typeof visibility)}
               disabled={!canChangeVisibility}
               options={[
-                { value: AGENT_VISIBILITY.PRIVATE, label: "Private — only the manager" },
-                { value: AGENT_VISIBILITY.ORGANIZATION, label: "Organization — all members" },
+                { value: AGENT_VISIBILITY.ORGANIZATION, label: VISIBILITY_COPY[AGENT_VISIBILITY.ORGANIZATION].label },
+                { value: AGENT_VISIBILITY.PRIVATE, label: VISIBILITY_COPY[AGENT_VISIBILITY.PRIVATE].label },
               ]}
             />
             <p className="text-caption text-muted-foreground">
-              {canChangeVisibility
-                ? "Private agents are only visible to their manager; organization agents appear in every member's list."
-                : "Only the manager or an admin can change this agent's visibility."}
+              {canChangeVisibility ? visibilityHelp : "Only the owner or an admin can change this agent's visibility."}
             </p>
           </div>
           {isHuman && (
@@ -285,4 +333,41 @@ function humanizeDomain(domain: string): string {
   const spaced = domain.replace(/[-_]+/g, " ").trim();
   if (!spaced) return domain;
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function VisibilityBadge({ visibility }: { visibility: Agent["visibility"] }) {
+  return (
+    <DenseBadge tone={visibility === AGENT_VISIBILITY.ORGANIZATION ? "accent" : "outline"}>
+      {VISIBILITY_COPY[visibility].label}
+    </DenseBadge>
+  );
+}
+
+function IdentityField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      className="grid min-w-0 grid-cols-1 items-baseline gap-1 sm:grid-cols-[8.25rem_minmax(0,1fr)] sm:gap-4"
+      style={{ padding: "var(--sp-2) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
+    >
+      <div className="text-body truncate" style={{ color: "var(--fg-3)" }}>
+        {label}
+      </div>
+      <div
+        className="min-w-0 text-body font-medium"
+        style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function MemberReference({ memberId, name }: { memberId: string | null | undefined; name: string }) {
+  if (!memberId) return <span>—</span>;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 align-middle">
+      <Avatar name={name} seed={memberId} size={18} />
+      <span className="truncate">{name}</span>
+    </span>
+  );
 }

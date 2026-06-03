@@ -32,7 +32,7 @@ type TabProps = {
   active?: boolean;
   onClick?: () => void;
   children: ReactNode;
-  /** Shows an amber "unsaved changes" dot after the label (green-liveness: needs-you). */
+  /** Shows a neutral "unsaved changes" dot after the label. */
   dirty?: boolean;
   className?: string;
 } & Pick<HTMLAttributes<HTMLButtonElement>, "role" | "aria-selected" | "aria-controls" | "id">;
@@ -70,7 +70,7 @@ export function Tab({ active, onClick, children, dirty, className, ...rest }: Ta
   );
 }
 
-/** Small amber dot marking a tab whose section has unsaved draft changes. */
+/** Small neutral dot marking a tab whose section has unsaved draft changes. */
 export function TabDirtyDot() {
   return (
     <span
@@ -80,7 +80,7 @@ export function TabDirtyDot() {
         width: "var(--sp-1_5)",
         height: "var(--sp-1_5)",
         borderRadius: "50%",
-        background: "var(--state-needs-you)",
+        background: "var(--fg-4)",
         flexShrink: 0,
       }}
     />

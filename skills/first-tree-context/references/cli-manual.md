@@ -6,12 +6,13 @@ This repo exposes the Context Tree CLI group for tree lifecycle work.
 
 Use for tree lifecycle work:
 
-- inspect current repo state
-- initialize or bind a source/workspace root to a tree
-- bootstrap, verify, upgrade, and publish tree repos
+- check current workspace status
+- initialize a source/workspace root against a tree
+- migrate legacy multi-mode layouts to W1
+- verify and upgrade tree repos
 - install hook wiring and maintain shipped skill payloads
 
 Current implementation status: the tree lifecycle surface is live in this repo,
-including `inspect`, `status`, `init`, `bootstrap`, `bind`, `integrate`,
-`workspace sync`, `verify`, `upgrade`, `publish`, `codeowners`,
-`claude-hook`, `inject`, `review`, and `tree skill ...`.
+including `status`, `init`, `migrate-to-w1`, `verify`, `upgrade`, `codeowners`,
+`claude-hook`, `inject`, `review`, plus the `tree skill ...` and
+`tree automation ...` groups.
