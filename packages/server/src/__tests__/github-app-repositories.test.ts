@@ -177,10 +177,11 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
     expect(res.json<{ code: string }>().code).toBe("no_installation");
   });
 
-  it("is member-readable (a non-admin member can list the team's repos)", async () => {
+  it("requires admin — a non-admin member is forbidden (the response is the full installation catalog)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `r-admin-${crypto.randomUUID().slice(0, 8)}` });
 
+    // Demote to a plain member, then re-login so the JWT carries role:member.
     const userId = (
       await app.db.select({ id: users.id }).from(users).where(eq(users.username, admin.username)).limit(1)
     )[0]?.id;
@@ -196,16 +197,16 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
     });
     const fresh = loginRes.json<{ accessToken: string }>();
 
+    // Even with an installation bound, a non-admin must be refused before any
+    // GitHub call — the payload exposes the full installation candidate
+    // catalog (private repo names / clone URLs), which is admin-only.
     await seedInstallation(app, admin.organizationId, 910_002);
-    restoreFetch = stubGithub([{ full_name: "acme/web", pushed_at: "2025-01-01T00:00:00Z" }]);
 
     const res = await app.inject({
       method: "GET",
       url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/repositories`,
       headers: { authorization: `Bearer ${fresh.accessToken}` },
     });
-    // The admin-gated details GET would 403 here; this member-readable route must 200.
-    expect(res.statusCode).toBe(200);
-    expect(res.json<{ repos: Array<{ fullName: string }> }>().repos.map((r) => r.fullName)).toEqual(["acme/web"]);
+    expect(res.statusCode).toBe(403);
   });
 });

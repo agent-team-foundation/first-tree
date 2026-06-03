@@ -125,9 +125,9 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * GET `/repositories` — member-readable list of the repos this team's
-   * GitHub App installation can access. Powers the onboarding admin
-   * connect-code project picker.
+   * GET `/repositories` — admin-only list of the repos this team's GitHub
+   * App installation can access. Powers the onboarding admin connect-code
+   * project picker.
    *
    * Why this instead of the caller's OAuth `/user/repos` (the `/me/github/repos`
    * endpoint): the product is team-by-default, so the picker should offer
@@ -137,6 +137,14 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
    * and we only ever list repos the agent can actually reach (no picking a
    * repo the installation can't touch, which would 403 on the first git op).
    *
+   * Admin-gated (NOT member-readable like `/exists`): the response is the
+   * full installation candidate catalog — every reachable repo's name,
+   * clone URL, default branch and private flag — which can include private
+   * repos a given member isn't even a GitHub collaborator on. `/exists` is
+   * not a precedent (it returns a boolean, not a catalog), and the only
+   * consumer is the admin-path connect-code step (`connect-code` is in
+   * ADMIN_STEPS only), so least-privilege costs nothing here.
+   *
    * Failure shapes (each a distinct `code` so the picker can react):
    *   - no installation bound      → 503 `no_installation` ("connect code first / later")
    *   - installation suspended     → 503 `suspended`
@@ -144,7 +152,7 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
    *   - mint / GitHub upstream blip → 502 `upstream`
    */
   app.get<{ Params: { orgId: string } }>("/repositories", async (request, reply) => {
-    const scope = await requireOrgMembership(request, app.db);
+    const scope = await requireOrgAdmin(request, app.db);
     const row = await findInstallationByOrg(app.db, scope.organizationId);
     const mint = await mintContextTreeInstallationToken(row, app.config.oauth?.githubApp);
     if (!mint.ok) {
