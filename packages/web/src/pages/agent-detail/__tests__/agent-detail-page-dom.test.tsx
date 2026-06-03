@@ -377,8 +377,33 @@ afterEach(() => {
 });
 
 describe("AgentDetailPage", () => {
-  it("renders the effective prompt and edits the custom prompt inline", async () => {
+  it("renders prompt resource blocks and edits the custom prompt inline", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "resource:team-prompt-1",
+              bindingId: null,
+              resourceId: "team-prompt-1",
+              name: "Team style guide",
+              scope: "team",
+              source: "team_recommended",
+              defaultEnabled: "recommended",
+              promptBody: "Use the team style guide.",
+              order: 0,
+            }),
+            effectivePrompt(),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+      }),
+    );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective prompt");
@@ -393,9 +418,14 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
+    await waitForText(container, "Team Resource: Team style guide");
+    expect(container.textContent).toContain("Use the team style guide.");
+    expect(container.textContent).toContain("Agent Resource: inline prompt");
 
     await click(exactButtonByText(container, "Edit custom prompt"));
     await waitForText(container, "Save prompt");
+    expect(container.textContent).toContain("Team Resource: Team style guide");
+    expect(container.textContent).toContain("Use the team style guide.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Always explain tradeoffs.");
     expect(textarea?.style.minHeight).toBe("16rem");
@@ -455,7 +485,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective prompt");
-    await click(exactButtonByText(container, "Edit custom prompt"));
+    await click(exactButtonByText(container, "Customize for this agent"));
     await waitForText(container, "Save prompt");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
@@ -523,7 +553,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective prompt");
-    await click(exactButtonByText(container, "Edit custom prompt"));
+    await click(exactButtonByText(container, "Customize for this agent"));
     await waitForText(container, "Save prompt");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
@@ -567,7 +597,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "No prompt resources enabled.");
-    await click(exactButtonByText(container, "Edit custom prompt"));
+    await click(exactButtonByText(container, "Add custom prompt"));
     await waitForText(container, "Save prompt");
     await click(exactButtonByText(container, "Save prompt"));
     await waitForText(container, "Prompt body is required.");
@@ -577,7 +607,7 @@ describe("AgentDetailPage", () => {
       "Expected prompt body validation error to clear",
     );
 
-    await click(exactButtonByText(container, "Edit custom prompt"));
+    await click(exactButtonByText(container, "Add custom prompt"));
     await waitForText(container, "Save prompt");
     expect(container.textContent).not.toContain("Prompt body is required.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");

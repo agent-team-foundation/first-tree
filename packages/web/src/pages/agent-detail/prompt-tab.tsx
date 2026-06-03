@@ -5,7 +5,7 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
@@ -42,59 +42,37 @@ export function PromptTab() {
   const prompt = ctx.config?.payload.prompt.append ?? "";
   const canEditPrompt = ctx.canManageAgent && ctx.agent.status === "active";
   const resourceError = resourcesQuery.error instanceof Error ? resourcesQuery.error.message : null;
+  const resources = resourcesQuery.data;
+  const editorError = savePromptMut.error instanceof Error ? savePromptMut.error.message : null;
+
+  function openPromptEditor() {
+    if (!resources) return;
+    savePromptMut.reset();
+    setEditor(createPromptEditorState(resources));
+  }
+
+  function closePromptEditor() {
+    savePromptMut.reset();
+    setEditor(null);
+  }
+
   return (
-    <Section
-      title="Effective prompt"
-      description="Resolved from Team and Agent prompt resources."
-      action={
-        canEditPrompt && !editor ? (
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={resourcesQuery.isLoading || !!resourceError}
-            onClick={() => {
-              if (!resourcesQuery.data) return;
-              setEditor(createPromptEditorState(resourcesQuery.data));
-              savePromptMut.reset();
-            }}
-          >
-            <Pencil className="h-3 w-3" />
-            Edit custom prompt
-          </Button>
-        ) : null
-      }
-    >
+    <Section title="Effective prompt" description="Resolved from Team and Agent prompt resources.">
       <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-        {editor ? (
-          <InlineCustomPromptEditor
-            body={editor.body}
-            error={savePromptMut.error instanceof Error ? savePromptMut.error.message : null}
+        {resources ? (
+          <PromptResourceBlocks
+            data={resources}
+            editor={editor}
+            error={editorError}
             saving={savePromptMut.isPending}
+            canEdit={canEditPrompt && !resourceError}
+            onStartEdit={openPromptEditor}
             onBodyChange={(body) => setEditor((current) => (current ? { ...current, body } : current))}
-            onCancel={() => {
-              savePromptMut.reset();
-              setEditor(null);
-            }}
+            onCancel={closePromptEditor}
             onSubmit={(body) => savePromptMut.mutate(body)}
           />
         ) : (
-          <div
-            className="text-body"
-            style={{
-              minHeight: prompt ? "10rem" : undefined,
-              border: "var(--hairline) solid var(--border-faint)",
-              borderRadius: "var(--radius-panel)",
-              background: prompt ? "var(--bg)" : "var(--bg-sunken)",
-              padding: "var(--sp-3)",
-            }}
-          >
-            {prompt ? (
-              <Markdown>{prompt}</Markdown>
-            ) : (
-              <span className="text-muted-foreground">No prompt resources enabled.</span>
-            )}
-          </div>
+          <PromptFallbackPanel prompt={prompt} />
         )}
       </div>
       {resourceError ? (
@@ -110,6 +88,8 @@ type PromptEditorState = {
   body: string;
   target: PromptEditorTarget;
 };
+
+type EffectivePromptRow = AgentResourcesOutput["effective"]["prompts"][number];
 
 type PromptEditorTarget =
   | { kind: "update-inline"; bindingIndex: number }
@@ -218,6 +198,174 @@ function convertPromptBindingToInline(
 
 function nextOrder(bindings: readonly AgentResourceBindingInput[]): number {
   return bindings.reduce((max, binding) => Math.max(max, binding.order ?? 0), 0) + 1;
+}
+
+function PromptResourceBlocks(props: {
+  data: AgentResourcesOutput;
+  editor: PromptEditorState | null;
+  error: string | null;
+  saving: boolean;
+  canEdit: boolean;
+  onStartEdit: () => void;
+  onBodyChange: (body: string) => void;
+  onCancel: () => void;
+  onSubmit: (body: string) => void;
+}) {
+  const rows = enabledPromptRows(props.data);
+  const inlineBinding = findInlinePromptBinding(props.data.bindings);
+  const editableBindingId = inlineBinding?.binding.id ?? null;
+  const singleTeamPrompt = findSingleEnabledTeamPrompt(props.data);
+  const editorIsInline = props.editor?.target.kind === "update-inline";
+  const editorNeedsAgentBlock = props.editor !== null && !editorIsInline;
+  const shouldShowCustomPlaceholder =
+    !props.editor && props.canEdit && !editableBindingId && (rows.length === 0 || !singleTeamPrompt);
+  const blocks: ReactNode[] = rows.map((row, index) => {
+    const isEditableInlineRow = !!row.bindingId && row.bindingId === editableBindingId;
+    const isEditingRow = !!props.editor && editorIsInline && isEditableInlineRow;
+    const action =
+      props.canEdit && !props.editor && isEditableInlineRow ? (
+        <PromptBlockAction label="Edit custom prompt" onClick={props.onStartEdit} />
+      ) : props.canEdit && !props.editor && !editableBindingId && singleTeamPrompt?.id === row.id ? (
+        <PromptBlockAction label="Customize for this agent" onClick={props.onStartEdit} />
+      ) : null;
+
+    return (
+      <PromptResourceBlock key={row.id} title={promptResourceTitle(row)} action={action} separated={index > 0}>
+        {isEditingRow && props.editor ? (
+          <InlineCustomPromptEditor
+            body={props.editor.body}
+            error={props.error}
+            saving={props.saving}
+            onBodyChange={props.onBodyChange}
+            onCancel={props.onCancel}
+            onSubmit={props.onSubmit}
+          />
+        ) : (
+          <PromptBody body={row.promptBody ?? ""} />
+        )}
+      </PromptResourceBlock>
+    );
+  });
+
+  if (editorNeedsAgentBlock && props.editor) {
+    blocks.push(
+      <PromptResourceBlock
+        key="agent-custom-editor"
+        title="Agent Resource: custom prompt"
+        separated={blocks.length > 0}
+      >
+        <InlineCustomPromptEditor
+          body={props.editor.body}
+          error={props.error}
+          saving={props.saving}
+          onBodyChange={props.onBodyChange}
+          onCancel={props.onCancel}
+          onSubmit={props.onSubmit}
+        />
+      </PromptResourceBlock>,
+    );
+  } else if (shouldShowCustomPlaceholder) {
+    blocks.push(
+      <PromptResourceBlock
+        key="agent-custom-placeholder"
+        title="Agent Resource: custom prompt"
+        action={<PromptBlockAction label="Add custom prompt" onClick={props.onStartEdit} />}
+        separated={blocks.length > 0}
+      >
+        <span className="text-muted-foreground">
+          {rows.length === 0 ? "No prompt resources enabled." : "No custom prompt yet."}
+        </span>
+      </PromptResourceBlock>,
+    );
+  }
+
+  return (
+    <PromptPanel>
+      {blocks.length > 0 ? blocks : <span className="text-muted-foreground">No prompt resources enabled.</span>}
+    </PromptPanel>
+  );
+}
+
+function PromptFallbackPanel(props: { prompt: string }) {
+  return (
+    <PromptPanel minHeight={props.prompt ? "10rem" : undefined} sunken={!props.prompt}>
+      {props.prompt ? (
+        <Markdown>{props.prompt}</Markdown>
+      ) : (
+        <span className="text-muted-foreground">No prompt resources enabled.</span>
+      )}
+    </PromptPanel>
+  );
+}
+
+function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: boolean }) {
+  return (
+    <div
+      className="text-body"
+      style={{
+        minHeight: props.minHeight,
+        border: "var(--hairline) solid var(--border-faint)",
+        borderRadius: "var(--radius-panel)",
+        background: props.sunken ? "var(--bg-sunken)" : "var(--bg)",
+        padding: "var(--sp-3)",
+      }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+function PromptResourceBlock(props: { title: string; action?: ReactNode; children: ReactNode; separated?: boolean }) {
+  return (
+    <div
+      style={{
+        paddingTop: props.separated ? "var(--sp-3)" : undefined,
+        marginTop: props.separated ? "var(--sp-3)" : undefined,
+        borderTop: props.separated ? "var(--hairline) solid var(--border-faint)" : undefined,
+      }}
+    >
+      <div
+        className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
+        style={{ marginBottom: "var(--sp-2)" }}
+      >
+        <h3 className="text-subtitle m-0">{props.title}</h3>
+        {props.action}
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
+function PromptBlockAction(props: { label: string; onClick: () => void }) {
+  return (
+    <Button type="button" size="xs" variant="outline" onClick={props.onClick}>
+      <Pencil className="h-3 w-3" />
+      {props.label}
+    </Button>
+  );
+}
+
+function PromptBody(props: { body: string }) {
+  return props.body ? (
+    <Markdown>{props.body}</Markdown>
+  ) : (
+    <span className="text-muted-foreground">No prompt body.</span>
+  );
+}
+
+function enabledPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
+  return data.effective.prompts.filter((row) => row.mode === "enabled" && !!row.promptBody);
+}
+
+function findSingleEnabledTeamPrompt(data: AgentResourcesOutput): EffectivePromptRow | null {
+  const rows = enabledPromptRows(data).filter((row) => row.resourceId && row.source.startsWith("team_"));
+  return rows.length === 1 ? (rows[0] ?? null) : null;
+}
+
+function promptResourceTitle(row: EffectivePromptRow): string {
+  if (row.source.startsWith("team_")) return `Team Resource: ${row.name}`;
+  if (row.source === "inline_prompt") return "Agent Resource: inline prompt";
+  return `Agent Resource: ${row.name}`;
 }
 
 function InlineCustomPromptEditor(props: {
