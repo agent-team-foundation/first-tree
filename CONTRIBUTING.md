@@ -5,8 +5,8 @@ architecture and per-package workflow live in [AGENTS.md](AGENTS.md).
 
 ## Repo layout
 
-See [AGENTS.md](AGENTS.md) for the monorepo structure and architecture
-rules. Quick map:
+See [AGENTS.md](AGENTS.md) for the monorepo structure and
+architecture rules. Quick map:
 
 - `apps/cli/` — the published `first-tree` CLI.
 - `packages/server/` — Fastify API server.
@@ -46,8 +46,8 @@ update [docs/cli-reference.md](docs/cli-reference.md) in the same PR.
 
 ## Conventions
 
-See [AGENTS.md](AGENTS.md) "Coding Conventions" and "Git Conventions"
-sections — they are the source of truth.
+See [AGENTS.md](AGENTS.md) "Coding Conventions" and
+"Git Conventions" sections — they are the source of truth.
 
 Highlights:
 

@@ -237,4 +237,3 @@ and `docs/onboarding-guide.md`.
 
 - [`references/agent-communication.md`](references/agent-communication.md) — full `chat send` / `chat invite` CLI mechanics (markdown / stdin / content-formatting / reaching non-members / mention resolution)
 - `scripts/quick_validate.py` — skill frontmatter sanity check (used by `pnpm validate:skill`)
-- `scripts/check-skill-sync.sh` — `.agents/skills/first-tree` / `.claude/skills/first-tree` symlink check

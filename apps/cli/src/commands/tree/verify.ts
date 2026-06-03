@@ -31,7 +31,6 @@ type VerifyCheck = {
 
 type VerifySummary = {
   checks: {
-    agentInstructions: VerifyCheck;
     frameworkVersion: VerifyCheck;
     members: VerifyCheck;
     nodes: VerifyCheck;
@@ -107,15 +106,6 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
   const memberResult = runValidateMembers(targetRoot);
   const summary: VerifySummary = {
     checks: {
-      agentInstructions: {
-        ok:
-          existsSync(join(targetRoot, "AGENTS.md")) &&
-          existsSync(join(targetRoot, "CLAUDE.md")) &&
-          readFileSync(join(targetRoot, "AGENTS.md"), "utf-8").includes("BEGIN CONTEXT-TREE FRAMEWORK"),
-        ...(existsSync(join(targetRoot, "AGENTS.md")) && existsSync(join(targetRoot, "CLAUDE.md"))
-          ? {}
-          : { errors: ["AGENTS.md and CLAUDE.md must both exist in the tree root."] }),
-      },
       frameworkVersion: {
         ok: existsSync(join(targetRoot, TREE_VERSION_FILE)),
         ...(existsSync(join(targetRoot, TREE_VERSION_FILE)) ? {} : { errors: [`.first-tree/VERSION is missing.`] }),
@@ -143,7 +133,11 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok: readTreeIdentityContract(targetRoot) !== undefined,
         ...(readTreeIdentityContract(targetRoot) !== undefined
           ? {}
-          : { errors: ["Managed tree identity is missing from AGENTS.md / CLAUDE.md."] }),
+          : {
+              errors: [
+                "Managed tree identity is missing — expected .first-tree/tree.json (or a legacy AGENTS.md / CLAUDE.md identity block).",
+              ],
+            }),
       },
     },
     ok: false,
@@ -162,7 +156,6 @@ function printVerifySummary(summary: VerifySummary): void {
     ["framework version", summary.checks.frameworkVersion],
     ["tree state", summary.checks.treeState],
     ["root node frontmatter", summary.checks.rootNodeFrontmatter],
-    ["agent instructions", summary.checks.agentInstructions],
     ["node validation", summary.checks.nodes],
     ["member validation", summary.checks.members],
     ["progress checklist", summary.checks.progress],

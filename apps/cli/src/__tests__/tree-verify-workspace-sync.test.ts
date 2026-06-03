@@ -40,8 +40,6 @@ function writeValidTree(root: string): void {
   mkdirSync(join(root, ".first-tree"), { recursive: true });
   writeFileSync(join(root, ".git"), "gitdir: /tmp/tree\n");
   writeFileSync(join(root, "NODE.md"), ["---", "title: Root", "owners: [team]", "---", "", "# Root", ""].join("\n"));
-  writeFileSync(join(root, "AGENTS.md"), "BEGIN CONTEXT-TREE FRAMEWORK\n");
-  writeFileSync(join(root, "CLAUDE.md"), "BEGIN CONTEXT-TREE FRAMEWORK\n");
   writeFileSync(join(root, ".first-tree", "VERSION"), "1\n");
   writeFileSync(join(root, ".first-tree", "progress.md"), "- [x] done\n");
   mkdirSync(join(root, "members", "gandy"), { recursive: true });
@@ -128,6 +126,10 @@ describe("tree verify command", () => {
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("[FAIL] framework version");
+    expect(output).toContain("[FAIL] tree state");
+    expect(output).toContain(
+      "Managed tree identity is missing — expected .first-tree/tree.json (or a legacy AGENTS.md / CLAUDE.md identity block).",
+    );
     expect(output).toContain("Root NODE.md is missing owners");
     expect(output).toContain("Unchecked progress item: Decide owner");
     expect(output).toContain("Some checks failed");
