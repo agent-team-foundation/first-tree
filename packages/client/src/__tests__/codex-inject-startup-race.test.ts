@@ -77,6 +77,7 @@ vi.mock("../runtime/bootstrap.js", () => ({
   readCachedContextTreeHead: vi.fn(() => null),
   readContextTreeHead: vi.fn(() => null),
   resolveBundledCliVersion: vi.fn(() => "0.0.0-test"),
+  writeAgentBriefing: vi.fn(),
   writeBundledCliVersion: vi.fn(),
   writeContextTreeHead: vi.fn(),
 }));

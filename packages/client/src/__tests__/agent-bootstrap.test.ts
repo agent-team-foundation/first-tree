@@ -16,6 +16,7 @@ vi.mock("../runtime/bootstrap.js", () => ({
   readCachedContextTreeHead: vi.fn(() => state.cachedTreeHead),
   resolveBundledCliVersion: vi.fn(() => "1.0.0"),
   readCachedBundledCliVersion: vi.fn(() => state.cachedCli),
+  writeAgentBriefing: vi.fn(),
   writeContextTreeHead: vi.fn((_w: string, h: string | null) => {
     state.cachedTreeHead = h;
   }),
@@ -84,6 +85,7 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       contextTreePath: "/tree",
       contextTreeRepoUrl: null,
       agentName: "agent-1",
+      briefing: "# Agent Identity\n\nstub briefing\n",
     };
 
     // Call 1: integration fails → CLI version NOT pinned.
@@ -108,6 +110,7 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       contextTreePath: null,
       contextTreeRepoUrl: null,
       agentName: "agent-1",
+      briefing: "# Agent Identity\n\nstub briefing\n",
     };
     ensureAgentBootstrap(params);
     // No Context Tree → installFirstTreeIntegration is never called regardless.

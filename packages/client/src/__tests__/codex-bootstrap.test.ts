@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
@@ -63,31 +63,12 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(existsSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER))).toBe(true);
   });
 
-  it("writes AGENTS.md when briefing.format='agents-md'", () => {
-    bootstrapWorkspace({
-      workspacePath,
-      identity: {
-        agentId: "agent-1",
-        inboxId: "inbox_agent-1",
-        displayName: "Tester",
-        type: "agent",
-        visibility: "organization",
-        delegateMention: null,
-        metadata: {},
-      },
-      contextTreePath: null,
-      serverUrl: "http://first-tree.test",
-      briefing: { format: "agents-md", content: "# Hello\n\nFollow your team's playbook.\n" },
-    });
-
-    const agentsPath = join(workspacePath, "AGENTS.md");
-    expect(existsSync(agentsPath)).toBe(true);
-    const text = readFileSync(agentsPath, "utf-8");
-    expect(text).toContain("Hello");
-    expect(text).toContain("Follow your team's playbook.");
-  });
-
-  it("does not write AGENTS.md when no briefing is supplied (claude-code path)", () => {
+  it("bootstrapWorkspace no longer writes the briefing (callers route through writeAgentBriefing)", () => {
+    // Briefing materialisation is now the caller's responsibility — the
+    // handler computes the unified briefing via `buildAgentBriefing` and
+    // hands it to `writeAgentBriefing` (or to `ensureAgentBootstrap` which
+    // calls writeAgentBriefing internally). `bootstrapWorkspace` is back to
+    // owning only the stable `.agent/` layout.
     bootstrapWorkspace({
       workspacePath,
       identity: {
@@ -104,9 +85,10 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     });
 
     expect(existsSync(join(workspacePath, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(workspacePath, "CLAUDE.md"))).toBe(false);
   });
 
-  it("inlines First Tree tools and messaging rules into the Codex AGENTS.md briefing", () => {
+  it("inlines First Tree tools and messaging rules into the unified briefing", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     const chatContext: ChatContext = {
       chatId: "chat-1",
@@ -119,12 +101,24 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     };
 
     const briefing = buildCodexAgentBriefing(
+      {
+        agentId: "codex-developer",
+        inboxId: "inbox_codex-developer",
+        displayName: "Codex Developer",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
       codexPayload({ prompt: { append: "Follow the local implementation plan." } }),
       chatContext,
       "/workspaces/codex-developer",
       [],
     );
 
+    expect(briefing).toContain("# Agent Identity");
+    expect(briefing).toContain("Codex Developer");
+    expect(briefing).toContain("## Agent-Specific Behavior");
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
     expect(briefing).toContain("# First Tree Agent Runtime");

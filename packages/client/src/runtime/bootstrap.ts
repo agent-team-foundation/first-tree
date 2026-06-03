@@ -1,6 +1,19 @@
 import { execFile, execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -293,13 +306,55 @@ export async function syncAgentContextTree(
  */
 export const FIRST_TREE_WORKSPACE_MARKER = ".first-tree-workspace";
 
-export type AgentBriefingFormat = "claude" | "agents-md";
+/**
+ * Materialise the unified agent briefing at `<workspacePath>/AGENTS.md` and
+ * keep `<workspacePath>/CLAUDE.md` as a relative symlink to it.
+ *
+ * One file, both providers: Codex's `project_root_markers` walk finds
+ * `AGENTS.md` directly; Claude Code's `settingSources: ["project"]` follows
+ * the `CLAUDE.md` symlink. Edits to the briefing layout only need to land in
+ * the {@link buildAgentBriefing} producer.
+ */
+export function writeAgentBriefing(workspacePath: string, content: string): void {
+  writeFileSync(join(workspacePath, "AGENTS.md"), content, "utf-8");
+  ensureClaudeMdSymlink(workspacePath);
+}
 
-export type AgentBriefing = {
-  format: AgentBriefingFormat;
-  /** Pre-rendered markdown to materialise as the briefing file. */
-  content: string;
-};
+/**
+ * Make `<workspacePath>/CLAUDE.md` a relative symlink to `AGENTS.md`. Replaces
+ * a stale regular file or broken/mis-targeted symlink left from earlier
+ * bootstrap formats; a no-op when the symlink is already correct.
+ *
+ * Atomically swaps in the new symlink via `rename` so two concurrent
+ * same-agent starts can't race the unlink/symlink pair into an `EEXIST`
+ * (PR #797 review nit #3). We materialise the new link at a unique
+ * sibling path, then `rename` it onto `CLAUDE.md` — POSIX makes that
+ * atomic, and the rename overwrites any existing file or symlink in place.
+ * The temp file is cleaned up on any failure so a crashed write does not
+ * leak siblings.
+ */
+export function ensureClaudeMdSymlink(workspacePath: string): void {
+  const claudeMd = join(workspacePath, "CLAUDE.md");
+  const targetRel = "AGENTS.md";
+  try {
+    const stats = lstatSync(claudeMd);
+    if (stats.isSymbolicLink() && readlinkSync(claudeMd) === targetRel) return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const tempPath = join(workspacePath, `.CLAUDE.md.${randomBytes(6).toString("hex")}.tmp`);
+  symlinkSync(targetRel, tempPath);
+  try {
+    renameSync(tempPath, claudeMd);
+  } catch (err) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Best-effort cleanup — surface the original rename failure.
+    }
+    throw err;
+  }
+}
 
 /**
  * Path to the cached Context-Tree HEAD inside the agent home. Used by the
@@ -475,33 +530,26 @@ export type BootstrapOptions = {
   identity: AgentIdentity;
   contextTreePath: string | null;
   serverUrl: string;
-  /**
-   * Provider-specific runtime briefing materialised at the workspace root.
-   * `agents-md` writes `AGENTS.md` (Codex reads it from the project root via
-   * the marker); `claude` is a no-op file-write because Claude Code receives
-   * the system prompt through the SDK option directly.
-   */
-  briefing?: AgentBriefing;
 };
 
 /**
  * Bootstrap the agent's home directory with stable, agent-level files plus
- * the workspace-root marker (and an optional provider-specific briefing).
+ * the workspace-root marker.
  *
  * Writes identity.json, context/agent-instructions.md (if context tree
- * available), tools.md, the `.first-tree-workspace` marker, and — for
- * Codex — `AGENTS.md`. Per the agent-session-cwd-redesign (proposals/
- * 2026-05-19) **only agent-level stable fields** live in identity.json;
- * per-chat data (chatId, participants) is injected per turn via the
- * Claude/Codex SDK system-prompt append channel, built by
- * {@link buildChatSystemPrompt}.
+ * available), tools.md, and the `.first-tree-workspace` marker. Per the
+ * agent-session-cwd-redesign (proposals/2026-05-19) **only agent-level stable
+ * fields** live in identity.json; per-chat data (chatId, participants) flows
+ * through the unified per-turn briefing file written by {@link
+ * writeAgentBriefing} (which the handler invokes on every start/resume after
+ * computing the briefing content via {@link buildAgentBriefing}).
  *
  * Idempotent: safe to call on every handler start() / resume(), though in
  * the per-agent-home model the handler short-circuits this when the
  * `.agent/init-complete` sentinel is already present.
  */
 export function bootstrapWorkspace(options: BootstrapOptions): void {
-  const { workspacePath, identity, contextTreePath, serverUrl, briefing } = options;
+  const { workspacePath, identity, contextTreePath, serverUrl } = options;
   const agentDir = join(workspacePath, ".agent");
   const contextDir = join(agentDir, "context");
 
@@ -527,10 +575,10 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
-  // 2. Copy organizational context from Context Tree (if available).
-  // Per PRD D7, the agent's behavior instructions live in the server-managed
-  // `agent_configs.payload.prompt.append` and are injected via the Claude
-  // Code SDK's `systemPrompt.append`, not via a workspace file.
+  // 2. Copy organizational context from Context Tree (if available). The
+  //    briefing builder reads back agent-instructions.md / domain-map.md from
+  //    here when assembling AGENTS.md, so this is also the staging area for
+  //    the unified briefing's tree sections.
   if (contextTreePath) {
     // Agent operating instructions (AGENT.md)
     const agentMdPath = join(contextTreePath, "AGENT.md");
@@ -552,11 +600,6 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   //    sees the briefing in this workspace and not whatever sits in the
   //    operator's HOME / git root.
   writeFileSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
-
-  // 5. Provider-specific briefing
-  if (briefing?.format === "agents-md") {
-    writeFileSync(join(workspacePath, "AGENTS.md"), briefing.content, "utf-8");
-  }
 }
 
 export type InstallFirstTreeIntegrationExec = (
