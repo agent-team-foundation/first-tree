@@ -12,6 +12,10 @@ export function listTeamResources(): Promise<ResourceRow[]> {
   return api.get<ResourceRow[]>(withOrg("/resources"));
 }
 
+export function listTeamResourcesForOrg(orgId: string): Promise<ResourceRow[]> {
+  return api.get<ResourceRow[]>(withOrgAt(orgId, "/resources"));
+}
+
 export function createTeamResource(body: CreateTeamResource): Promise<ResourceRow> {
   return api.post<ResourceRow>(withOrg("/resources"), body);
 }

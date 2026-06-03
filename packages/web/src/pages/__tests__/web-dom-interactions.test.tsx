@@ -75,6 +75,7 @@ const orgSettingsMocks = vi.hoisted(() => ({
 
 const resourceMocks = vi.hoisted(() => ({
   createTeamResourceForOrg: vi.fn(),
+  listTeamResourcesForOrg: vi.fn(),
 }));
 
 const onboardingEventMocks = vi.hoisted(() => ({
@@ -706,6 +707,40 @@ beforeEach(() => {
     createdAt: NOW,
     updatedAt: NOW,
   });
+  resourceMocks.listTeamResourcesForOrg.mockResolvedValue([
+    {
+      id: "resource-web",
+      organizationId: "org-1",
+      type: "repo",
+      scope: "team",
+      ownerAgentId: null,
+      name: "web",
+      repoCanonicalKey: "github.com/acme/web",
+      defaultEnabled: "recommended",
+      status: "active",
+      payload: { url: "https://github.com/acme/web.git" },
+      createdBy: "member-self",
+      updatedBy: "member-self",
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+    {
+      id: "resource-api",
+      organizationId: "org-1",
+      type: "repo",
+      scope: "team",
+      ownerAgentId: null,
+      name: "api",
+      repoCanonicalKey: "github.com/acme/api",
+      defaultEnabled: "recommended",
+      status: "active",
+      payload: { url: "git@github.com:acme/api.git" },
+      createdBy: "member-self",
+      updatedBy: "member-self",
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+  ]);
   clientApiMocks.post.mockResolvedValue({
     token: "connect-token",
     expiresIn: 600,
@@ -1537,7 +1572,7 @@ describe("web DOM interaction coverage", () => {
     );
     await unmountRoot(inviteeConfirm.root);
 
-    orgSettingsMocks.getSourceReposSetting.mockResolvedValueOnce({ repos: [] });
+    resourceMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]);
     githubMocks.listGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
     const inviteePickerScope = await renderOnboardingDom(<StepKickoff />, {
       path: "invitee",
@@ -1546,7 +1581,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Reconnect GitHub with project access", inviteePickerScope.container);
     await unmountRoot(inviteePickerScope.root);
 
-    orgSettingsMocks.getSourceReposSetting.mockResolvedValueOnce({ repos: [] });
+    resourceMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]);
     githubMocks.listGithubRepos.mockRejectedValueOnce(new Error("network"));
     const inviteePickerNetwork = await renderOnboardingDom(<StepKickoff />, {
       path: "invitee",

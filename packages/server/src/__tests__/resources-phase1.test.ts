@@ -201,6 +201,102 @@ describe("Resources Phase 1", () => {
     expect(rows[0]).toMatchObject({ scope: "team", defaultEnabled: "recommended" });
   });
 
+  it("runs legacy backfill once, bumps affected agent versions, and does not resurrect retired or removed resources", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.db.insert(organizationSettings).values({
+      organizationId: owner.organizationId,
+      namespace: "source_repos",
+      value: { repos: [{ url: "https://github.com/acme/legacy-web.git", defaultBranch: "main" }] },
+      version: 1,
+      updatedBy: owner.userId,
+    });
+    await app.db
+      .update(agentConfigs)
+      .set({
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          gitRepos: [{ url: "https://github.com/acme/agent-extra.git", localPath: "agent-extra" }],
+          prompt: { append: "Legacy prompt append." },
+          resourceSkills: [],
+        },
+      })
+      .where(eq(agentConfigs.agentId, agent.uuid));
+
+    const first = await backfillResourcesPhase1(app.db);
+    expect(first.teamReposCreated).toBe(1);
+    expect(first.agentReposCreated).toBe(1);
+    expect(first.bindingsCreated).toBe(2);
+    expect(first.agentVersionsBumped).toBe(1);
+
+    const [afterFirst] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+    expect(afterFirst?.version).toBe(2);
+
+    const [teamRepo] = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.organizationId, owner.organizationId),
+          eq(resources.type, "repo"),
+          eq(resources.scope, "team"),
+          eq(resources.repoCanonicalKey, canonicalizeResourceRepoUrl("https://github.com/acme/legacy-web.git")),
+        ),
+      )
+      .limit(1);
+    expect(teamRepo).toBeDefined();
+    await app.resourcesService.retireResource(teamRepo?.id ?? "", owner.memberId);
+
+    const currentResources = await app.resourcesService.getAgentResources(agent.uuid);
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      { expectedVersion: currentResources.version, bindings: [] },
+      owner.memberId,
+    );
+    const [beforeSecond] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+
+    const second = await backfillResourcesPhase1(app.db);
+    expect(second.teamReposCreated).toBe(0);
+    expect(second.agentReposCreated).toBe(0);
+    expect(second.bindingsCreated).toBe(0);
+    expect(second.agentVersionsBumped).toBe(0);
+
+    const activeLegacyTeamRepos = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.organizationId, owner.organizationId),
+          eq(resources.type, "repo"),
+          eq(resources.scope, "team"),
+          eq(resources.repoCanonicalKey, canonicalizeResourceRepoUrl("https://github.com/acme/legacy-web.git")),
+          inArray(resources.status, ["active", "stale"]),
+        ),
+      );
+    expect(activeLegacyTeamRepos).toEqual([]);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, agent.uuid));
+    expect(bindings).toEqual([]);
+    const [afterSecond] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+    expect(afterSecond?.version).toBe(beforeSecond?.version);
+  });
+
   it("promotes an agent-scoped repo atomically and bumps the agent config version", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");
@@ -302,6 +398,49 @@ describe("Resources Phase 1", () => {
     const baseConfig = await app.configService.get(agent.uuid);
     const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
     expect(resolved.payload.prompt.append.length).toBeLessThanOrEqual(PROMPT_APPEND_MAX_LENGTH);
+  });
+
+  it("previews prompt overflow using create and update candidate payloads", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    await createRuntimeAgent(app, owner);
+
+    const createPreview = await inject(
+      app,
+      owner.accessToken,
+      "POST",
+      `/api/v1/orgs/${owner.organizationId}/resources/impact-preview`,
+      {
+        type: "prompt",
+        defaultEnabled: "recommended",
+        payload: { body: "x".repeat(PROMPT_APPEND_MAX_LENGTH + 1) },
+      },
+    );
+    expect(createPreview.statusCode).toBe(200);
+    expect(createPreview.json()).toMatchObject({ affectedAgentCount: 1, promptOverflowAgentCount: 1 });
+
+    const prompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Preview prompt",
+        defaultEnabled: "recommended",
+        payload: { body: "short" },
+      },
+      owner.memberId,
+    );
+    const updatePreview = await inject(
+      app,
+      owner.accessToken,
+      "POST",
+      `/api/v1/resources/${prompt.id}/impact-preview`,
+      {
+        defaultEnabled: "recommended",
+        payload: { body: "y".repeat(PROMPT_APPEND_MAX_LENGTH + 1) },
+      },
+    );
+    expect(updatePreview.statusCode).toBe(200);
+    expect(updatePreview.json()).toMatchObject({ affectedAgentCount: 1, promptOverflowAgentCount: 1 });
   });
 
   it("returns 409 when updating a team repo resource to a duplicate canonical URL", async () => {

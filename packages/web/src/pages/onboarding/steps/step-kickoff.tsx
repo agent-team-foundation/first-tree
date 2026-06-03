@@ -6,8 +6,8 @@ import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
-import { getContextTreeSetting, getSourceReposSetting, putContextTreeSetting } from "../../../api/org-settings.js";
-import { createTeamResourceForOrg } from "../../../api/resources.js";
+import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
+import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
@@ -25,6 +25,16 @@ function repoLabel(url: string): string {
     .replace(/^https?:\/\/[^/]+\//, "")
     .replace(/^git@[^:]+:/, "")
     .replace(/\.git$/, "");
+}
+
+function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
+  return resources
+    .filter((resource) => resource.type === "repo" && resource.defaultEnabled === "recommended")
+    .map((resource) => {
+      const payload = resource.payload as { url?: unknown };
+      return typeof payload.url === "string" ? payload.url : null;
+    })
+    .filter((url): url is string => Boolean(url));
 }
 
 /** Shared "create the chat + send the first task + finish" sequence. */
@@ -281,9 +291,9 @@ function InviteeKickoff() {
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos, installResult] = await Promise.all([
+      const [tree, resources, installResult] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
-        getSourceReposSetting(organizationId ?? ""),
+        listTeamResourcesForOrg(organizationId ?? ""),
         // Three-state result: true = installed, false = server confirmed
         // missing, null = probe failed (network blip, 5xx). The null
         // sentinel is distinct from `false` so refetchInterval below can
@@ -295,7 +305,7 @@ function InviteeKickoff() {
       ]);
       return {
         treeUrl: tree.repo ?? "",
-        teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
+        teamRepoUrls: teamRecommendedRepoUrls(resources),
         // Optimistic on uncertainty: don't bounce the user into
         // no-installation on a transient blip. The refetchInterval below
         // keeps polling until we have an authoritative answer; if that

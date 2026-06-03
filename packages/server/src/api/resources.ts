@@ -38,8 +38,8 @@ export async function resourceRoutes(app: FastifyInstance): Promise<void> {
     { config: { otelRecordBody: true } },
     async (request) => {
       await requireResourceAccess(request, app.db, "write");
-      resourceImpactPreviewSchema.parse(request.body);
-      return app.resourcesService.previewResourceImpact(request.params.resourceId, {});
+      const body = resourceImpactPreviewSchema.parse(request.body);
+      return app.resourcesService.previewResourceImpact(request.params.resourceId, body);
     },
   );
 }

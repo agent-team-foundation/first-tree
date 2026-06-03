@@ -166,14 +166,6 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
   await flush();
 }
 
-async function click(element: Element | null): Promise<void> {
-  if (!element) throw new Error("Expected element to click");
-  await act(async () => {
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  });
-  await flush();
-}
-
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -283,34 +275,19 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("renders source repos for admins and members, removes repos, and shows errors", async () => {
+  it("renders legacy source repos as a read-only compatibility panel", async () => {
     const { SourceReposSettingsPanel } = await import("../source-repos-settings-panel.js");
     const { container, root } = await renderPanel(<SourceReposSettingsPanel />);
     await waitForText(container, "https://github.com/acme/web");
     expect(container.textContent).toContain("branch: main");
     expect(container.textContent).toContain("2");
-
-    const remove = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Remove https://github.com/acme/web"]',
-    );
-    if (!remove) throw new Error("Remove button missing");
-    await act(async () => {
-      remove.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-      remove.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
-    });
-    await click(remove);
-    expect(settingsMocks.putSourceReposSetting).toHaveBeenCalledWith("org-1", {
-      repos: [{ url: "https://github.com/acme/api" }],
-    });
-
-    settingsMocks.putSourceReposSetting.mockRejectedValueOnce(new Error("remove failed"));
-    await click(container.querySelector<HTMLButtonElement>('button[aria-label="Remove https://github.com/acme/api"]'));
-    await waitForText(container, "remove failed");
+    expect(container.textContent).toContain("Manage active repo resources from Team Resources");
+    expect(container.querySelector("button")).toBeNull();
     await act(async () => root.unmount());
 
     authMock.value = { ...authMock.value, role: "member" };
     const member = await renderPanel(<SourceReposSettingsPanel />);
-    await waitForText(member.container, "Read-only");
+    await waitForText(member.container, "Team Resources");
     expect(member.container.querySelector("button")).toBeNull();
     await act(async () => member.root.unmount());
 

@@ -38,6 +38,7 @@ import type { Notifier } from "./notifier.js";
 type ResourceDbRow = typeof resources.$inferSelect;
 type BindingDbRow = typeof agentResourceBindings.$inferSelect;
 type AgentSummary = { uuid: string; name: string | null; displayName: string };
+type ResourceSimulation = { resources?: ResourceDbRow[] };
 
 export type ResourcesService = {
   listTeamResources(organizationId: string): Promise<ResourceRow[]>;
@@ -117,11 +118,14 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       .where(inArray(agents.uuid, ids));
   }
 
-  async function buildImpactOutput(agentIds: Iterable<string>): Promise<ResourceImpactPreviewOutput> {
+  async function buildImpactOutput(
+    agentIds: Iterable<string>,
+    simulation?: ResourceSimulation,
+  ): Promise<ResourceImpactPreviewOutput> {
     const summaries = await summarizeAgents(agentIds);
     let overflow = 0;
     for (const agent of summaries) {
-      const effective = await resolveEffectiveResources(agent.uuid);
+      const effective = await resolveEffectiveResources(agent.uuid, simulation);
       if (effective.unavailable.some((u) => u.reason === "prompt_budget_exceeded")) overflow++;
     }
     return {
@@ -161,6 +165,35 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     if (type !== "repo") return null;
     const repoPayload = repoResourcePayloadSchema.parse(payload);
     return canonicalizeResourceRepoUrl(repoPayload.url);
+  }
+
+  function makePreviewTeamResource(args: {
+    organizationId: string;
+    id: string;
+    type: ResourceType;
+    name: string;
+    scope?: "team" | "agent";
+    ownerAgentId?: string | null;
+    defaultEnabled: "available" | "recommended" | null;
+    payload: ResourcePayload;
+  }): ResourceDbRow {
+    const now = new Date();
+    return {
+      id: args.id,
+      organizationId: args.organizationId,
+      type: args.type,
+      scope: args.scope ?? "team",
+      ownerAgentId: args.ownerAgentId ?? null,
+      name: args.name,
+      repoCanonicalKey: canonicalKeyFor(args.type, args.payload),
+      defaultEnabled: args.defaultEnabled,
+      status: "active",
+      payload: args.payload,
+      createdBy: "preview",
+      updatedBy: "preview",
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   function defaultResourceName(input: AgentResourceBindingInput): string {
@@ -345,10 +378,13 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     return parsed.success ? parsed.data.body : null;
   }
 
-  async function resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources> {
+  async function resolveEffectiveResources(
+    agentId: string,
+    simulation?: ResourceSimulation,
+  ): Promise<EffectiveAgentResources> {
     const agent = await loadAgent(agentId);
     const version = await getConfigVersion(agentId);
-    const resourceRows = await db
+    let resourceRows = await db
       .select()
       .from(resources)
       .where(
@@ -358,6 +394,20 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           or(eq(resources.scope, "team"), eq(resources.ownerAgentId, agentId)),
         ),
       );
+    if (simulation?.resources?.length) {
+      const simulatedById = new Map(resourceRows.map((row) => [row.id, row]));
+      for (const resource of simulation.resources) {
+        if (resource.organizationId !== agent.organizationId) continue;
+        if (resource.status === "retired") {
+          simulatedById.delete(resource.id);
+          continue;
+        }
+        if (resource.scope === "team" || resource.ownerAgentId === agentId) {
+          simulatedById.set(resource.id, resource);
+        }
+      }
+      resourceRows = Array.from(simulatedById.values());
+    }
     const bindings = await db
       .select()
       .from(agentResourceBindings)
@@ -821,13 +871,45 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     },
 
     async previewOrgImpact(organizationId, input) {
-      if (input.defaultEnabled === "recommended") return buildImpactOutput(await listRuntimeAgentIds(organizationId));
+      if (input.defaultEnabled === "recommended") {
+        const simulation =
+          input.type && input.payload !== undefined
+            ? {
+                resources: [
+                  makePreviewTeamResource({
+                    organizationId,
+                    id: "preview:new-resource",
+                    type: input.type,
+                    name: "Preview resource",
+                    defaultEnabled: "recommended",
+                    payload: parsePayload(input.type, input.payload),
+                  }),
+                ],
+              }
+            : undefined;
+        return buildImpactOutput(await listRuntimeAgentIds(organizationId), simulation);
+      }
       return { affectedAgentCount: 0, promptOverflowAgentCount: 0, agents: [] };
     },
 
-    async previewResourceImpact(resourceId) {
+    async previewResourceImpact(resourceId, input) {
       const current = await loadResource(resourceId);
-      return buildImpactOutput(await impactForResource(current));
+      const payload = input.payload === undefined ? current.payload : parsePayload(current.type, input.payload);
+      const preview = makePreviewTeamResource({
+        organizationId: current.organizationId,
+        id: current.id,
+        type: current.type,
+        name: current.name,
+        scope: current.scope,
+        ownerAgentId: current.ownerAgentId,
+        defaultEnabled: input.defaultEnabled ?? current.defaultEnabled,
+        payload,
+      });
+      const impactedSet = new Set(await impactForResource(current));
+      if (preview.defaultEnabled === "recommended") {
+        for (const agentId of await listRuntimeAgentIds(current.organizationId)) impactedSet.add(agentId);
+      }
+      return buildImpactOutput(impactedSet, { resources: [preview] });
     },
 
     async getAgentResources(agentId) {

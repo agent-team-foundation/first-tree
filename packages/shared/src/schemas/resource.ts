@@ -91,7 +91,7 @@ const mcpHttpNoSecretServerSchema = z
   .object({
     name: z.string().min(1),
     transport: z.literal("http"),
-    url: z.string().url(),
+    url: z.string().url().refine(hasNoUrlCredentials, "MCP resource URLs must not include credentials."),
   })
   .strict();
 
@@ -99,7 +99,7 @@ const mcpSseNoSecretServerSchema = z
   .object({
     name: z.string().min(1),
     transport: z.literal("sse"),
-    url: z.string().url(),
+    url: z.string().url().refine(hasNoUrlCredentials, "MCP resource URLs must not include credentials."),
   })
   .strict();
 
@@ -117,6 +117,11 @@ export const resourcePayloadSchema = z.union([
   noSecretMcpServerSchema,
 ]);
 export type ResourcePayload = z.infer<typeof resourcePayloadSchema>;
+
+function hasNoUrlCredentials(value: string): boolean {
+  const parsed = new URL(value);
+  return parsed.username === "" && parsed.password === "";
+}
 
 const namedResourceInputShape = {
   name: z.string().min(1).max(200),

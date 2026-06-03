@@ -68,6 +68,17 @@ describe("resource schemas", () => {
         },
       }).success,
     ).toBe(false);
+    expect(
+      createTeamResourceSchema.safeParse({
+        type: "mcp",
+        name: "Docs",
+        payload: {
+          name: "docs",
+          transport: "sse",
+          url: "https://user:token@docs.example/mcp",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps the runtime prompt budget pinned to 32,000 characters", () => {

@@ -588,7 +588,7 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("admin can GET, PUT, DELETE source_repos via the generic route", async () => {
+  it("source_repos remains readable but rejects generic route writes", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/source_repos`;
@@ -607,15 +607,14 @@ describe("org-settings API (admin gating + masking)", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { repos: [{ url: "https://github.com/example/api" }] },
     });
-    expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ repos: [{ url: "https://github.com/example/api" }] });
+    expect(put.statusCode).toBe(410);
 
     const del = await app.inject({
       method: "DELETE",
       url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(del.statusCode).toBe(204);
+    expect(del.statusCode).toBe(410);
 
     const get2 = await app.inject({
       method: "GET",

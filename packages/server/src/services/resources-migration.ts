@@ -5,7 +5,7 @@ import {
   orgSourceReposStorageSchema,
   type RepoResourcePayload,
 } from "@first-tree/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
@@ -18,29 +18,96 @@ export type ResourcesBackfillResult = {
   teamReposCreated: number;
   agentReposCreated: number;
   bindingsCreated: number;
+  agentVersionsBumped: number;
   warnings: string[];
 };
+
+const BACKFILL_MARKER_NAMESPACE = "resources_phase1_backfill";
 
 export async function backfillResourcesPhase1(db: Database): Promise<ResourcesBackfillResult> {
   const result: ResourcesBackfillResult = {
     teamReposCreated: 0,
     agentReposCreated: 0,
     bindingsCreated: 0,
+    agentVersionsBumped: 0,
     warnings: [],
   };
 
   await db.transaction(async (tx) => {
     const targetDb = tx as unknown as Database;
     await targetDb.execute(sql`SELECT pg_advisory_xact_lock(20260603, 1)`);
-    await backfillOrgSourceRepos(targetDb, result);
-    await backfillAgentConfigs(targetDb, result);
+    const pendingOrgIds = await listPendingBackfillOrgIds(targetDb);
+    if (pendingOrgIds.size === 0) return;
+    const affectedAgents = new Set<string>();
+    await backfillOrgSourceRepos(targetDb, result, pendingOrgIds, affectedAgents);
+    await backfillAgentConfigs(targetDb, result, pendingOrgIds, affectedAgents);
+    result.agentVersionsBumped = await bumpAgentConfigVersions(targetDb, affectedAgents);
+    await markBackfillComplete(targetDb, pendingOrgIds);
   });
   return result;
 }
 
-async function backfillOrgSourceRepos(db: Database, result: ResourcesBackfillResult): Promise<void> {
+async function listPendingBackfillOrgIds(db: Database): Promise<Set<string>> {
+  const sourceRows = await db
+    .select({ organizationId: organizationSettings.organizationId })
+    .from(organizationSettings)
+    .where(eq(organizationSettings.namespace, "source_repos"));
+  const configRows = await db
+    .select({ organizationId: agents.organizationId })
+    .from(agentConfigs)
+    .innerJoin(agents, eq(agents.uuid, agentConfigs.agentId));
+  const orgIds = new Set([
+    ...sourceRows.map((row) => row.organizationId),
+    ...configRows.map((row) => row.organizationId),
+  ]);
+  if (orgIds.size === 0) return orgIds;
+  const completedRows = await db
+    .select({ organizationId: organizationSettings.organizationId })
+    .from(organizationSettings)
+    .where(
+      and(
+        eq(organizationSettings.namespace, BACKFILL_MARKER_NAMESPACE),
+        inArray(organizationSettings.organizationId, Array.from(orgIds)),
+      ),
+    );
+  for (const row of completedRows) orgIds.delete(row.organizationId);
+  return orgIds;
+}
+
+async function markBackfillComplete(db: Database, orgIds: Set<string>): Promise<void> {
+  const completedAt = new Date();
+  for (const organizationId of orgIds) {
+    await db
+      .insert(organizationSettings)
+      .values({
+        organizationId,
+        namespace: BACKFILL_MARKER_NAMESPACE,
+        value: { completedAt: completedAt.toISOString(), phase: 1 },
+        version: 1,
+        updatedBy: null,
+        updatedAt: completedAt,
+      })
+      .onConflictDoUpdate({
+        target: [organizationSettings.organizationId, organizationSettings.namespace],
+        set: {
+          value: { completedAt: completedAt.toISOString(), phase: 1 },
+          version: sql`${organizationSettings.version} + 1`,
+          updatedBy: null,
+          updatedAt: completedAt,
+        },
+      });
+  }
+}
+
+async function backfillOrgSourceRepos(
+  db: Database,
+  result: ResourcesBackfillResult,
+  pendingOrgIds: Set<string>,
+  affectedAgents: Set<string>,
+): Promise<void> {
   const rows = await db.select().from(organizationSettings).where(eq(organizationSettings.namespace, "source_repos"));
   for (const row of rows) {
+    if (!pendingOrgIds.has(row.organizationId)) continue;
     const parsed = orgSourceReposStorageSchema.safeParse(row.value);
     if (!parsed.success) {
       result.warnings.push(`source_repos parse failed for org ${row.organizationId}`);
@@ -52,7 +119,10 @@ async function backfillOrgSourceRepos(db: Database, result: ResourcesBackfillRes
           url: repo.url,
           ...(repo.defaultBranch ? { defaultBranch: repo.defaultBranch } : {}),
         });
-        if (created) result.teamReposCreated++;
+        if (created) {
+          result.teamReposCreated++;
+          for (const agentId of await listRuntimeAgentIds(db, row.organizationId)) affectedAgents.add(agentId);
+        }
       } catch (err) {
         result.warnings.push(`source_repos repo skipped for org ${row.organizationId}: ${messageOf(err)}`);
       }
@@ -60,7 +130,12 @@ async function backfillOrgSourceRepos(db: Database, result: ResourcesBackfillRes
   }
 }
 
-async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResult): Promise<void> {
+async function backfillAgentConfigs(
+  db: Database,
+  result: ResourcesBackfillResult,
+  pendingOrgIds: Set<string>,
+  affectedAgents: Set<string>,
+): Promise<void> {
   const rows = await db
     .select({
       agentId: agentConfigs.agentId,
@@ -71,6 +146,7 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
     .innerJoin(agents, eq(agents.uuid, agentConfigs.agentId));
 
   for (const row of rows) {
+    if (!pendingOrgIds.has(row.organizationId)) continue;
     const parsed = agentRuntimeConfigPayloadSchema.safeParse(row.payload);
     if (!parsed.success) {
       result.warnings.push(`agent config parse failed for ${row.agentId}`);
@@ -81,6 +157,7 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
         const canonical = canonicalizeResourceRepoUrl(repo.url);
         const team = await findTeamRepoResource(db, row.organizationId, canonical);
         if (team) {
+          if (team.status === "retired") continue;
           if (repo.ref || repo.localPath) {
             const created = await ensureBinding(db, {
               organizationId: row.organizationId,
@@ -93,7 +170,10 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
               repoRef: repo.ref ?? null,
               repoLocalPath: repo.localPath ?? null,
             });
-            if (created) result.bindingsCreated++;
+            if (created) {
+              result.bindingsCreated++;
+              affectedAgents.add(row.agentId);
+            }
           }
           continue;
         }
@@ -103,6 +183,7 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
           ...(repo.ref ? { defaultBranch: repo.ref } : {}),
         });
         if (agentRepoId.created) result.agentReposCreated++;
+        if (!agentRepoId.id) continue;
         const bindingCreated = await ensureBinding(db, {
           organizationId: row.organizationId,
           agentId: row.agentId,
@@ -114,7 +195,10 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
           repoRef: repo.ref ?? null,
           repoLocalPath: repo.localPath ?? null,
         });
-        if (bindingCreated) result.bindingsCreated++;
+        if (bindingCreated) {
+          result.bindingsCreated++;
+          affectedAgents.add(row.agentId);
+        }
       } catch (err) {
         result.warnings.push(`agent gitRepo skipped for ${row.agentId}: ${messageOf(err)}`);
       }
@@ -133,7 +217,10 @@ async function backfillAgentConfigs(db: Database, result: ResourcesBackfillResul
         repoRef: null,
         repoLocalPath: null,
       });
-      if (created) result.bindingsCreated++;
+      if (created) {
+        result.bindingsCreated++;
+        affectedAgents.add(row.agentId);
+      }
     }
   }
 }
@@ -167,9 +254,9 @@ async function findTeamRepoResource(
   db: Database,
   organizationId: string,
   canonical: string,
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; status: string } | null> {
   const [row] = await db
-    .select({ id: resources.id })
+    .select({ id: resources.id, status: resources.status })
     .from(resources)
     .where(
       and(
@@ -177,7 +264,7 @@ async function findTeamRepoResource(
         eq(resources.type, "repo"),
         eq(resources.scope, "team"),
         eq(resources.repoCanonicalKey, canonical),
-        inArray(resources.status, ["active", "stale"]),
+        inArray(resources.status, ["active", "stale", "retired"]),
       ),
     )
     .limit(1);
@@ -189,10 +276,10 @@ async function ensureAgentRepoResource(
   organizationId: string,
   agentId: string,
   payload: RepoResourcePayload,
-): Promise<{ id: string; created: boolean }> {
+): Promise<{ id: string | null; created: boolean }> {
   const canonical = canonicalizeResourceRepoUrl(payload.url);
   const [existing] = await db
-    .select({ id: resources.id })
+    .select({ id: resources.id, status: resources.status })
     .from(resources)
     .where(
       and(
@@ -201,11 +288,11 @@ async function ensureAgentRepoResource(
         eq(resources.scope, "agent"),
         eq(resources.ownerAgentId, agentId),
         eq(resources.repoCanonicalKey, canonical),
-        inArray(resources.status, ["active", "stale"]),
+        inArray(resources.status, ["active", "stale", "retired"]),
       ),
     )
     .limit(1);
-  if (existing) return { id: existing.id, created: false };
+  if (existing) return { id: existing.status === "retired" ? null : existing.id, created: false };
   const id = uuidv7();
   await db.insert(resources).values({
     id,
@@ -222,6 +309,28 @@ async function ensureAgentRepoResource(
     updatedBy: "system",
   });
   return { id, created: true };
+}
+
+async function listRuntimeAgentIds(db: Database, organizationId: string): Promise<string[]> {
+  const rows = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.organizationId, organizationId), ne(agents.status, "deleted"), ne(agents.type, "human")));
+  return rows.map((row) => row.uuid);
+}
+
+async function bumpAgentConfigVersions(db: Database, agentIds: Set<string>): Promise<number> {
+  const ids = Array.from(agentIds);
+  if (ids.length === 0) return 0;
+  await db
+    .update(agentConfigs)
+    .set({
+      version: sql`${agentConfigs.version} + 1`,
+      updatedAt: new Date(),
+      updatedBy: "system",
+    })
+    .where(inArray(agentConfigs.agentId, ids));
+  return ids.length;
 }
 
 async function ensureBinding(

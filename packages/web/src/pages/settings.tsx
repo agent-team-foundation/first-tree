@@ -30,7 +30,7 @@ import { cn } from "../lib/utils.js";
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
- *   Team          — org-scoped Identity / Context Tree / Source repos
+ *   Team          — org-scoped Identity / Context Tree
  *   GitHub        — admin-only platform integration
  *   Onboarding    — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)

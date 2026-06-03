@@ -922,12 +922,13 @@ describe("page SSR smoke coverage", () => {
     expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
     expect(renderPage(<TeamSettingsPage />)).toContain("Identity");
-    expect(renderPage(<OrgSettingsPage />)).toContain("Source repos");
+    expect(renderPage(<OrgSettingsPage />)).toContain("Context tree");
 
     authMock.value = { ...authMock.value, role: "member" };
     expect(renderPage(<SettingsGithubPage />)).toBe("");
     expect(renderPage(<TeamSettingsPage />)).toContain("Repos your team");
     expect(renderPage(<OrgSettingsPage />)).not.toContain("Identity");
+    expect(renderPage(<OrgSettingsPage />)).not.toContain("Source repos");
 
     authMock.value = { ...authMock.value, role: null };
     expect(renderPage(<SettingsGithubPage />)).toContain("Loading");

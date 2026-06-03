@@ -82,6 +82,7 @@ describe("api wrapper paths", () => {
     await organizations.updateOrganization("org/id", { displayName: "Acme" });
     await overview.getOverview();
     await resources.listTeamResources();
+    await resources.listTeamResourcesForOrg("org/id");
     await resources.createTeamResource({
       type: "repo",
       name: "Web",
@@ -123,6 +124,7 @@ describe("api wrapper paths", () => {
     expect(apiMock.patch).toHaveBeenCalledWith("/orgs/org%2Fid", { displayName: "Acme" });
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/resources");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/resources");
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/resources", {
       type: "repo",
       name: "Web",
