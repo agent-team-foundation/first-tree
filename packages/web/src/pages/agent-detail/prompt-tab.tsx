@@ -111,7 +111,7 @@ type PromptEditorState = {
 
 type PromptEditorTarget =
   | { kind: "update-inline"; bindingIndex: number }
-  | { kind: "convert-binding"; bindingIndex: number }
+  | { kind: "convert-binding"; bindingIndex: number; replacesResourceId: string | null }
   | { kind: "replace-resource"; replacesResourceId: string }
   | { kind: "add-inline" };
 
@@ -155,7 +155,11 @@ function seedFromSingleTeamPrompt(data: AgentResourcesOutput): { body: string; t
       target:
         bindingIndex === null
           ? { kind: "replace-resource", replacesResourceId: row.resourceId }
-          : { kind: "convert-binding", bindingIndex },
+          : {
+              kind: "convert-binding",
+              bindingIndex,
+              replacesResourceId: row.source === "team_recommended" ? row.resourceId : null,
+            },
     };
   }
   return { body: "", target: { kind: "add-inline" } };
@@ -179,14 +183,7 @@ function updatePromptBindings(
   }
   if (target.kind === "convert-binding") {
     return bindings.map((binding, index) =>
-      index === target.bindingIndex
-        ? {
-            ...binding,
-            resourceId: null,
-            inlinePromptBody: body,
-            replacesResourceId: binding.mode === "replace" ? binding.replacesResourceId : null,
-          }
-        : binding,
+      index === target.bindingIndex ? convertPromptBindingToInline(binding, target.replacesResourceId, body) : binding,
     );
   }
   return [
@@ -200,6 +197,21 @@ function updatePromptBindings(
       order: nextOrder(bindings),
     },
   ];
+}
+
+function convertPromptBindingToInline(
+  binding: AgentResourceBindingInput,
+  replacesResourceId: string | null,
+  body: string,
+): AgentResourceBindingInput {
+  const replaceTarget = binding.mode === "replace" ? (binding.replacesResourceId ?? null) : replacesResourceId;
+  return {
+    ...binding,
+    mode: replaceTarget ? "replace" : "include",
+    resourceId: null,
+    inlinePromptBody: body,
+    replacesResourceId: replaceTarget,
+  };
 }
 
 function nextOrder(bindings: readonly AgentResourceBindingInput[]): number {
@@ -218,6 +230,11 @@ function CustomPromptDialog(props: {
   const body = props.editor?.body ?? "";
   const open = props.editor !== null;
 
+  function close() {
+    setLocalError(null);
+    props.onOpenChange(false);
+  }
+
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!body.trim()) {
@@ -232,8 +249,11 @@ function CustomPromptDialog(props: {
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen) setLocalError(null);
-        props.onOpenChange(nextOpen);
+        if (nextOpen) {
+          props.onOpenChange(true);
+        } else {
+          close();
+        }
       }}
     >
       <DialogContent aria-describedby={undefined}>
@@ -264,7 +284,7 @@ function CustomPromptDialog(props: {
             </p>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)} disabled={props.saving}>
+            <Button type="button" variant="ghost" onClick={close} disabled={props.saving}>
               Cancel
             </Button>
             <Button type="submit" disabled={props.saving}>

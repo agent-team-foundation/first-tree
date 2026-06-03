@@ -73,6 +73,29 @@ vi.mock("../../../auth/auth-context.js", () => ({
 
 const NOW = "2026-05-28T12:00:00.000Z";
 
+type EffectivePromptRow = AgentResourcesOutput["effective"]["prompts"][number];
+
+function effectivePrompt(overrides: Partial<EffectivePromptRow> = {}): EffectivePromptRow {
+  const base: EffectivePromptRow = {
+    id: "binding:inline-1:enabled",
+    bindingId: "inline-1",
+    resourceId: null,
+    replacesResourceId: null,
+    type: "prompt",
+    name: "Inline prompt",
+    scope: null,
+    source: "inline_prompt",
+    mode: "enabled",
+    defaultEnabled: null,
+    payload: null,
+    repo: null,
+    promptBody: "Always explain tradeoffs.",
+    unavailableReason: null,
+    order: 1,
+  };
+  return { ...base, ...overrides };
+}
+
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
@@ -122,25 +145,7 @@ function agentResources(overrides: Partial<AgentResourcesOutput> = {}): AgentRes
     effective: overrides.effective ?? {
       version: overrides.version ?? 7,
       repos: [],
-      prompts: [
-        {
-          id: "binding:inline-1:enabled",
-          bindingId: "inline-1",
-          resourceId: null,
-          replacesResourceId: null,
-          type: "prompt",
-          name: "Inline prompt",
-          scope: null,
-          source: "inline_prompt",
-          mode: "enabled",
-          defaultEnabled: null,
-          payload: null,
-          repo: null,
-          promptBody: "Always explain tradeoffs.",
-          unavailableReason: null,
-          order: 1,
-        },
-      ],
+      prompts: [effectivePrompt()],
       skills: [],
       mcp: [],
       unavailable: [],
@@ -415,6 +420,187 @@ describe("AgentDetailPage", () => {
       ],
     });
     expect(container.textContent).not.toContain("Resources route");
+
+    await act(async () => root.unmount());
+  });
+
+  it("creates an inline replacement when editing a recommended team prompt", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "resource:team-prompt-1",
+              bindingId: null,
+              resourceId: "team-prompt-1",
+              name: "Team style guide",
+              scope: "team",
+              source: "team_recommended",
+              defaultEnabled: "recommended",
+              promptBody: "Use the team style guide.",
+              order: 0,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Effective prompt");
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(document.body, "Save prompt");
+    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(textarea?.value).toBe("Use the team style guide.");
+    if (!textarea) throw new Error("Expected custom prompt textarea");
+    await setValue(textarea, "Use the agent-specific style guide.");
+    await click(exactButtonByText(document.body, "Save prompt"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [
+        {
+          type: "prompt",
+          mode: "replace",
+          resourceId: null,
+          replacesResourceId: "team-prompt-1",
+          inlinePromptBody: "Use the agent-specific style guide.",
+          order: 1,
+        },
+      ],
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("converts an explicit recommended prompt binding to an inline replacement", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "binding:team-binding-1:enabled",
+              bindingId: "team-binding-1",
+              resourceId: "team-prompt-1",
+              name: "Team style guide",
+              scope: "team",
+              source: "team_recommended",
+              defaultEnabled: "recommended",
+              promptBody: "Use the team style guide.",
+              order: 2,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "team-binding-1",
+            type: "prompt",
+            mode: "include",
+            resourceId: "team-prompt-1",
+            replacesResourceId: null,
+            inlinePromptBody: null,
+            order: 2,
+          },
+        ],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Effective prompt");
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(document.body, "Save prompt");
+    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(textarea?.value).toBe("Use the team style guide.");
+    if (!textarea) throw new Error("Expected custom prompt textarea");
+    await setValue(textarea, "Use the agent-specific style guide.");
+    await click(exactButtonByText(document.body, "Save prompt"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [
+        {
+          id: "team-binding-1",
+          type: "prompt",
+          mode: "replace",
+          resourceId: null,
+          replacesResourceId: "team-prompt-1",
+          inlinePromptBody: "Use the agent-specific style guide.",
+          order: 2,
+        },
+      ],
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("adds an inline prompt and clears local validation errors on cancel", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    const emptyConfig = config();
+    agentConfigMocks.getAgentConfig.mockResolvedValueOnce(
+      config({ payload: { ...emptyConfig.payload, prompt: { append: "" } } }),
+    );
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: { version: 7, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+        bindings: [],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "No prompt resources enabled.");
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(document.body, "Save prompt");
+    await click(exactButtonByText(document.body, "Save prompt"));
+    await waitForText(document.body, "Prompt body is required.");
+    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Prompt body is required."),
+      "Expected prompt body validation error to clear",
+    );
+
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(document.body, "Save prompt");
+    expect(document.body.textContent).not.toContain("Prompt body is required.");
+    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(textarea?.value).toBe("");
+    if (!textarea) throw new Error("Expected custom prompt textarea");
+    await setValue(textarea, "Prefer concise answers.");
+    await click(exactButtonByText(document.body, "Save prompt"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [
+        {
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Prefer concise answers.",
+          order: 1,
+        },
+      ],
+    });
 
     await act(async () => root.unmount());
   });
