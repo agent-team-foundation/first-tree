@@ -450,6 +450,43 @@ describe("Resources Phase 1", () => {
     expect(resolved.payload.prompt.append.length).toBeLessThanOrEqual(PROMPT_APPEND_MAX_LENGTH);
   });
 
+  it("preserves legacy stored MCP servers until Team MCP resources take over", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const legacyMcp = { name: "legacy-tools", transport: "stdio" as const, command: "node", args: ["legacy.js"] };
+    await app.db
+      .update(agentConfigs)
+      .set({
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          mcpServers: [legacyMcp],
+          resourceSkills: [],
+        },
+      })
+      .where(eq(agentConfigs.agentId, agent.uuid));
+
+    const legacyBaseConfig = await app.configService.get(agent.uuid);
+    const legacyResolved = await app.resourcesService.resolveRuntimeConfig(legacyBaseConfig);
+    expect(legacyResolved.payload.mcpServers).toEqual([legacyMcp]);
+
+    const teamMcp = { name: "team-tools", transport: "stdio" as const, command: "node", args: ["team.js"] };
+    await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "mcp",
+        name: "Team tools",
+        defaultEnabled: "recommended",
+        payload: teamMcp,
+      },
+      owner.memberId,
+    );
+
+    const teamBaseConfig = await app.configService.get(agent.uuid);
+    const teamResolved = await app.resourcesService.resolveRuntimeConfig(teamBaseConfig);
+    expect(teamResolved.payload.mcpServers).toEqual([teamMcp]);
+  });
+
   it("previews prompt overflow using create and update candidate payloads", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

@@ -635,6 +635,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
   async function resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig> {
     const effective = await resolveEffectiveResources(config.agentId);
     const resolvedPrompt = runtimePromptAppend(effective.prompts);
+    const resolvedMcp = runtimeMcp(effective.mcp);
     return {
       ...config,
       version: effective.version,
@@ -645,7 +646,8 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           .map((row) => row.repo)
           .filter((repo): repo is GitRepo => repo !== null),
         prompt: { ...config.payload.prompt, append: resolvedPrompt },
-        mcpServers: runtimeMcp(effective.mcp),
+        mcpServers:
+          effective.mcp.length === 0 && config.payload.mcpServers.length > 0 ? config.payload.mcpServers : resolvedMcp,
         resourceSkills: runtimeSkills(effective.skills),
       },
     };
