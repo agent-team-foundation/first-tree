@@ -1527,6 +1527,16 @@ tr[data-interactive]:hover {
   }
 }
 
+/* Hide the third-party feedback FAB while any modal / side sheet is open. It's
+   injected at the end of <body> (outside the Radix portal) with a very high
+   z-index, so it otherwise floats above the scrim — and overlaps the
+   right-anchored sheet's footer (the Create / Save button). Radix sets
+   role="dialog" + data-state="open" on both Dialog and Sheet content, so one
+   rule covers both. */
+body:has([role="dialog"][data-state="open"]) hearback-widget {
+  display: none;
+}
+
 /* Mention chip — pill style for rendered sent messages (rehype-mentions
  * plugin). The composer mirror overlay uses `.mention-text` instead
  * (see below) because any horizontal padding / background offset on
