@@ -126,6 +126,8 @@ describe("tree verify command", () => {
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("[FAIL] framework version");
+    expect(output).toContain("[FAIL] tree state");
+    expect(output).toContain("Managed tree identity is missing from .first-tree/tree.json.");
     expect(output).toContain("Root NODE.md is missing owners");
     expect(output).toContain("Unchecked progress item: Decide owner");
     expect(output).toContain("Some checks failed");
