@@ -274,16 +274,17 @@ run_agent_onboarding() {
 }
 
 run_live_validate_flow() {
-  local source_name repo_root tree_root tree_repo_name output_file inspect_before init_json inspect_after verify_json
+  local source_name workspace_root repo_root tree_root tree_name output_file init_json status_after verify_json
   local branch_name pr_number checks_json remote_url
   source_name="$(basename "${SOURCE_REPO_URL%.git}")"
-  repo_root="$WORK_ROOT/$source_name"
+  workspace_root="$WORK_ROOT/${source_name}-workspace"
+  repo_root="$workspace_root/$source_name"
   output_file="$WORK_ROOT/agent-output.txt"
-  inspect_before="$WORK_ROOT/inspect-before.json"
   init_json="$WORK_ROOT/init.json"
-  inspect_after="$WORK_ROOT/inspect-after.json"
+  status_after="$WORK_ROOT/status-after.json"
   verify_json="$WORK_ROOT/verify.json"
 
+  mkdir -p "$workspace_root"
   clone_source_repo "$repo_root"
   (
     cd "$repo_root"
@@ -296,12 +297,13 @@ run_live_validate_flow() {
 
     (
       cd "$repo_root"
-      node "$FT_CLI" tree inspect --json >"$inspect_after"
+      node "$FT_CLI" tree status --json >"$status_after"
     )
-    [[ "$(json_value "$inspect_after" role)" == "source-repo-bound" ]] || fail "expected source repo to be bound after onboarding"
-    tree_repo_name="$(json_query "$inspect_after" binding.treeRepoName)"
-    [[ -n "$tree_repo_name" ]] || fail "binding.treeRepoName missing after onboarding"
-    tree_root="$(cd "$repo_root/.." && pwd)/$tree_repo_name"
+    workspace_root="$(json_value "$status_after" workspaceRoot)"
+    [[ -n "$workspace_root" ]] || fail "expected status to report a workspaceRoot after onboarding"
+    tree_name="$(json_query "$status_after" manifest.tree)"
+    [[ -n "$tree_name" ]] || fail "manifest.tree missing after onboarding"
+    tree_root="$workspace_root/$tree_name"
     [[ -d "$tree_root" ]] || fail "expected tree root at $tree_root"
 
     (
@@ -315,17 +317,15 @@ run_live_validate_flow() {
     ! grep -Fq "Default bootstrap member node" "$tree_root/members/owner/NODE.md" || fail "default member placeholder still present after onboarding"
     [[ -s "$output_file" ]] || fail "agent onboarding did not produce any captured output"
   else
-    log "Running direct CLI onboarding in $repo_root"
+    log "Running direct CLI onboarding in $workspace_root"
     (
-      cd "$repo_root"
-      node "$FT_CLI" tree inspect --json >"$inspect_before"
-      [[ "$(json_value "$inspect_before" role)" == "unbound-source-repo" ]] || fail "expected source repo to start as unbound-source-repo"
-      node "$FT_CLI" tree skill install --root "$repo_root" >/dev/null
-      node "$FT_CLI" tree init --json --tree-mode dedicated --no-recursive >"$init_json"
+      cd "$workspace_root"
+      node "$FT_CLI" tree skill install --root "$workspace_root" >/dev/null
+      node "$FT_CLI" tree init --json --scope workspace --tree-path "./${source_name}-tree" --tree-mode dedicated >"$init_json"
       tree_root="$(json_value "$init_json" treeRoot)"
       [[ -n "$tree_root" ]] || fail "tree init did not report a treeRoot"
-      node "$FT_CLI" tree inspect --json >"$inspect_after"
-      [[ "$(json_value "$inspect_after" role)" == "source-repo-bound" ]] || fail "expected source repo to be bound after tree init"
+      node "$FT_CLI" tree status --json >"$status_after"
+      [[ "$(json_value "$status_after" workspaceRoot)" == "$workspace_root" ]] || fail "expected status to report workspaceRoot=$workspace_root after tree init"
       node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
       [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "tree verify did not report ok=true"
       [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing from tree repo"

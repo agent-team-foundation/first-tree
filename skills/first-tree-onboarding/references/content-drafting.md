@@ -31,10 +31,10 @@ by `manifest.tree`. There is no sibling-vs-child branch under W1; the
 sibling layout was consolidated by `migrate-to-w1` before Phase C
 runs (Phase A.5 in `SKILL.md`).
 
-If `tree status` falls back to the legacy `inspect` reporter (no
-`workspace.json` present), the workspace was never migrated to W1.
-Stop and go back to Phase A.5. Phase C must not run against an
-unmigrated workspace.
+If `tree status` exits non-zero (no `workspace.json` present),
+onboarding never bound this workspace. Stop and go back to Phase B
+(or Phase A.5 if legacy markers exist on disk). Phase C must not run
+against an unbound workspace.
 
 Use absolute paths. Never `cd` — always pass `git -C $TREE_ROOT`.
 
@@ -142,7 +142,7 @@ If the tree is not yet published to a remote (Phase B happened on a fresh local-
 
 ## Cleanup
 
-Under W1 the tree is always a real sibling of the source(s) at `$WORKSPACE_ROOT/$(manifest.tree)`, not a temporary clone under `.first-tree/tmp/`. No tmp-clone cleanup is needed at the end of Phase C. If a legacy `.first-tree/tmp/<treeRepoName>/` directory is found anywhere under a source repo, it is leftover state from a pre-W1 workspace — flag it and let `migrate-to-w1` or the user remove it.
+Under W1 the tree is always a real sibling of the source(s) at `$WORKSPACE_ROOT/$(manifest.tree)`, not a temporary clone. No tmp-clone cleanup is needed at the end of Phase C.
 
 ## Idempotency
 

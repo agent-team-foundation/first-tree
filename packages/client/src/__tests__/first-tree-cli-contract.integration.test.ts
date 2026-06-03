@@ -67,8 +67,11 @@ function tracingExec(captured: string[]): InstallFirstTreeIntegrationExec {
  *
  * Why this file exists: the mock-exec unit tests can't catch protocol drift
  * between the runtime's argv construction and the first-tree CLI's accepted flags.
- * That gap is exactly how `--source-path` (a flag the CLI doesn't accept)
- * shipped to production and silently broke every session bootstrap.
+ * `installFirstTreeIntegration` now drives `tree skill install --root
+ * <workspace>` per session, which materialises the shipped skill payloads
+ * under `.agents/skills/` and `.claude/skills/`. Framework files
+ * (workspace.json, AGENTS.md / CLAUDE.md) are written once by `tree init`
+ * during onboarding, not by the per-session hook this file exercises.
  *
  * Runs against the in-tree CLI source via a PATH shim. That keeps the contract
  * stable even when a developer has a packaged/global `first-tree` installed
@@ -112,10 +115,13 @@ function installFirstTreePathShim(binDir: string): void {
 }
 
 /**
- * Initialise a fake context-tree git repo. first-tree CLI insists on a real
- * git checkout for `tree integrate --mode workspace-root` because the
- * managed binding block records the tree's origin URL — matching how the runtime's
- * `syncContextTree` produces the path it hands over (a fresh `git clone`).
+ * Initialise a fake context-tree git repo. The runtime hands
+ * `installFirstTreeIntegration` a path that came out of `syncContextTree`
+ * (a fresh `git clone`), so the fixture mirrors that — even though the
+ * post-W1 `tree skill install` only writes skill payloads at the
+ * workspace root and never reads the tree checkout itself, keeping the
+ * fixture realistic catches regressions in callers that still rely on
+ * the cloned tree being present.
  */
 function makeFakeTreeRepo(dir: string, remoteUrl?: string): void {
   mkdirSync(dir, { recursive: true });
@@ -133,7 +139,7 @@ function makeFakeTreeRepo(dir: string, remoteUrl?: string): void {
   }
 }
 
-describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => {
+describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI skill install contract", () => {
   beforeEach(() => {
     tmpBase = mkdtempSync(join(tmpdir(), "ft-cli-contract-"));
     installFirstTreePathShim(join(tmpBase, "bin"));
@@ -151,7 +157,7 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
     }
   });
 
-  it("integrate produces the workspace-root binding set the agent will load", () => {
+  it("skill install materialises the shipped skill payloads at the workspace root", () => {
     const workspace = join(tmpBase, "ws-happy");
     const treePath = join(tmpBase, "tree-happy");
     mkdirSync(workspace, { recursive: true });
@@ -182,31 +188,13 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
     // Skill files materialised under both .agents/ (Codex) and .claude/ (Claude Code).
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree", "SKILL.md")), diagnostic).toBe(true);
     expect(existsSync(join(workspace, ".claude", "skills", "first-tree"))).toBe(true);
-
-    // Managed binding block written into both runtime briefing files.
-    expect(existsSync(join(workspace, "AGENTS.md"))).toBe(true);
-    expect(existsSync(join(workspace, "CLAUDE.md"))).toBe(true);
-
-    const claudeMd = readFileSync(join(workspace, "CLAUDE.md"), "utf-8");
-    // The presence of the managed block end-marker confirms the integrate
-    // tool actually ran to completion (vs. just creating a stub).
-    expect(claudeMd).toContain("BEGIN FIRST-TREE-SOURCE-INTEGRATION");
-    expect(claudeMd).toContain("END FIRST-TREE-SOURCE-INTEGRATION");
-    expect(claudeMd).toContain("FIRST-TREE-BINDING-MODE: `workspace-root`");
-    // workspaceId we passed flows through verbatim.
-    expect(claudeMd).toContain("FIRST-TREE-WORKSPACE-ID: `test-agent`");
-    // --tree-url propagation: this is the assertion that catches a regression
-    // back to the pre-fix path where the URL never made it through.
-    expect(claudeMd).toContain("FIRST-TREE-TREE-REPO-URL: `https://example.com/org/tree.git`");
   });
 
   it("end-to-end: bootstrapWorkspace + installFirstTreeIntegration mirror what handler.start does", () => {
     // This exercises the two-step bootstrap path a claude-code session
     // actually runs at start(): copy AGENT.md/NODE.md into .agent/context/,
     // write identity.json, then shell out to first-tree to drop the skill
-    // and binding block into the workspace. The fix on the table changed
-    // both the argv shape and how the URL flows in — this test fails the
-    // moment either side regresses.
+    // payloads into the workspace.
     const workspace = join(tmpBase, "ws-e2e");
     const treePath = join(tmpBase, "tree-e2e");
     mkdirSync(workspace, { recursive: true });
@@ -244,44 +232,14 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
     const result = installFirstTreeIntegration({
       workspacePath: workspace,
       contextTreePath: treePath,
-      // Agent name as workspace-id (the post-fix behavior).
       workspaceId: "test-agent",
       treeRepoUrl: "https://example.com/org/tree.git",
       log: (m) => logs.push(m),
     });
     expect(result, `install failed:\n${logs.join("\n")}`).toBe(true);
 
-    // skill + binding both materialised on top of the existing .agent layout
+    // Skill payloads materialised on top of the existing .agent layout.
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
-    const claudeMd = readFileSync(join(workspace, "CLAUDE.md"), "utf-8");
-    expect(claudeMd).toContain("BEGIN FIRST-TREE-SOURCE-INTEGRATION");
-    expect(claudeMd).toContain("FIRST-TREE-WORKSPACE-ID: `test-agent`");
-    expect(claudeMd).toContain("FIRST-TREE-TREE-REPO-URL: `https://example.com/org/tree.git`");
-  });
-
-  it("integrate without --tree-url still succeeds via git remote fallback", () => {
-    const workspace = join(tmpBase, "ws-no-url");
-    const treePath = join(tmpBase, "tree-no-url");
-    mkdirSync(workspace, { recursive: true });
-    // Tree has a git remote — CLI's URL fallback path needs something to read.
-    makeFakeTreeRepo(treePath, "https://example.com/fallback/tree.git");
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "test-agent",
-      // treeRepoUrl intentionally omitted — exercise the silent fallback path.
-      log: (m) => logs.push(m),
-    });
-
-    if (!result) {
-      throw new Error(`installFirstTreeIntegration returned false. Logs:\n${logs.join("\n")}`);
-    }
-
-    const claudeMd = readFileSync(join(workspace, "CLAUDE.md"), "utf-8");
-    expect(claudeMd).toContain("BEGIN FIRST-TREE-SOURCE-INTEGRATION");
-    // CLI picked up the remote URL from tree's git config when no flag was passed.
-    expect(claudeMd).toContain("FIRST-TREE-TREE-REPO-URL: `https://example.com/fallback/tree.git`");
+    expect(existsSync(join(workspace, ".claude", "skills", "first-tree"))).toBe(true);
   });
 });

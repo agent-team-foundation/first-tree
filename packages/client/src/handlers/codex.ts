@@ -1122,7 +1122,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
   /**
    * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree integrate` shell-out + briefing write) or — when the sentinel and
+   * tree skill install` shell-out + briefing write) or — when the sentinel and
    * Context-Tree HEAD match the cached state — only refresh the per-chat
    * briefing (AGENTS.md). Mirrors the claude-code handler's
    * `ensureAgentBootstrap` so both handlers converge on identical per-agent-
@@ -1324,7 +1324,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       // Re-fetch chat-context every resume so newly-joined participants
       // surface in AGENTS.md. The sentinel still gates the expensive
-      // `first-tree tree integrate` shell-out.
+      // `first-tree tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       await prepareSourceRepos(payload, cwd, sessionCtx);

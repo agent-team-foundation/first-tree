@@ -65,7 +65,7 @@ export const githubCommand: CommandModule = {
             console.error(
               [
                 "first-tree github scan resolved local binding metadata, but it did not include a published GitHub tree repo.",
-                "Run `first-tree tree publish` first, or retry with `--tree-repo <owner/repo>`.",
+                "Push the tree repo to GitHub (e.g. `git -C <treePath> push -u origin main`), or retry with `--tree-repo <owner/repo>`.",
               ].join("\n"),
             );
             process.exitCode = 1;

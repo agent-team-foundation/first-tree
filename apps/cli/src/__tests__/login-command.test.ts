@@ -167,7 +167,14 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
-describe("login command", () => {
+// `runLogin` dynamic-imports `commands/login.js` on every test run, which
+// pulls in the credentials / config / runtime module graph fresh each time.
+// On hot caches that resolves in ~500 ms; on cold CI runners it has been
+// observed hitting ~5 s (vitest's default `testTimeout`). The tests do not
+// drive long-running work themselves, so the 5 s default is too tight for
+// CI's first-load cost — bump to 15 s across the describe to give cold
+// caches headroom without affecting hot-run latency.
+describe("login command", { timeout: 15_000 }, () => {
   it("exchanges a connect token, writes credentials/config, and honors --no-start", async () => {
     await runLogin(["login", jwt({ iss: "http://first-tree.test/", memberId: "member-new" }), "--no-start"]);
 

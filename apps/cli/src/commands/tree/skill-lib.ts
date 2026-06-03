@@ -15,16 +15,15 @@ import { fileURLToPath } from "node:url";
 /**
  * Skills that every agent needs regardless of Context Tree binding. These
  * are deployed by `bootstrapWorkspace` (packages/client) on every session
- * start, so the on-disk `SKILL.md` is reachable even for agents that never
- * run `tree integrate`. Currently empty.
+ * start, so the on-disk `SKILL.md` is reachable for every agent.
+ * Currently empty.
  */
 export const CORE_SKILL_NAMES = [] as const;
 
 /**
- * Skills that ship with a Context Tree binding. These are deployed by the
- * tree-related CLI commands (`tree integrate`, `tree bind`, `tree bootstrap`,
- * `tree skill install/upgrade`, `tree upgrade`) and are only useful for
- * agents that operate on a Context Tree.
+ * Skills that ship with a Context Tree binding. These are deployed by
+ * `tree init`, `tree skill install/upgrade`, and `tree upgrade`, and are
+ * only useful for agents that operate on a Context Tree.
  */
 export const TREE_SKILL_NAMES = [
   "first-tree",

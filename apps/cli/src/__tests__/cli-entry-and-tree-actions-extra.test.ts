@@ -174,36 +174,13 @@ describe("CLI entry and public exports", () => {
 });
 
 describe("tree bootstrap, upgrade, and codeowners actions", () => {
-  it("runs bootstrap in JSON and human modes and reports missing target options", async () => {
-    const { bootstrapCommand } = await import("../commands/tree/bootstrap.js");
+  it("bootstraps a tree root and writes the expected scaffolding", async () => {
+    const { bootstrapTreeRoot } = await import("../commands/tree/bootstrap.js");
     const root = makeTempDir("ft-bootstrap-action-");
 
-    bootstrapCommand.action(context(commandWithOptions({ treePath: root, treeMode: "shared" }), true));
-    const jsonPayload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as {
-      root: string;
-      treeMode: string;
-    };
-    expect(jsonPayload).toMatchObject({ root, treeMode: "shared" });
+    const summary = bootstrapTreeRoot(root, { treeMode: "shared" });
+    expect(summary).toMatchObject({ root, treeMode: "shared" });
     expect(readFileSync(join(root, "NODE.md"), "utf8")).toContain("Context Tree");
-
-    process.chdir(root);
-    bootstrapCommand.action(context(commandWithOptions({ here: true }), false));
-    expect(
-      vi
-        .mocked(console.log)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain("Context Tree Bootstrap");
-
-    process.exitCode = undefined;
-    bootstrapCommand.action(context(commandWithOptions({}), false));
-    expect(process.exitCode).toBe(1);
-    expect(
-      vi
-        .mocked(console.error)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain("Pass either `--here` or `--tree-path <path>`");
   });
 
   it("runs tree upgrade command for tree roots, source roots, and invalid roots", async () => {
