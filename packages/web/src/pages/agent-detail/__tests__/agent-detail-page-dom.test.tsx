@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { Agent, AgentRuntimeConfig } from "@first-tree/shared";
+import type { Agent, AgentResourcesOutput, AgentRuntimeConfig } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -32,6 +32,11 @@ const agentMocks = vi.hoisted(() => ({
   updateAgent: vi.fn(),
 }));
 
+const agentResourceMocks = vi.hoisted(() => ({
+  getAgentResources: vi.fn(),
+  updateAgentResources: vi.fn(),
+}));
+
 const sessionMocks = vi.hoisted(() => ({
   listAgentSessions: vi.fn(),
 }));
@@ -54,6 +59,8 @@ vi.mock("../../../api/agents.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/agents.js")>()),
   ...agentMocks,
 }));
+
+vi.mock("../../../api/agent-resources.js", () => agentResourceMocks);
 
 vi.mock("../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/sessions.js")>()),
@@ -106,6 +113,50 @@ function config(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig
     },
     updatedAt: overrides.updatedAt ?? NOW,
     updatedBy: overrides.updatedBy ?? "member-self",
+  };
+}
+
+function agentResources(overrides: Partial<AgentResourcesOutput> = {}): AgentResourcesOutput {
+  return {
+    version: overrides.version ?? 7,
+    effective: overrides.effective ?? {
+      version: overrides.version ?? 7,
+      repos: [],
+      prompts: [
+        {
+          id: "binding:inline-1:enabled",
+          bindingId: "inline-1",
+          resourceId: null,
+          replacesResourceId: null,
+          type: "prompt",
+          name: "Inline prompt",
+          scope: null,
+          source: "inline_prompt",
+          mode: "enabled",
+          defaultEnabled: null,
+          payload: null,
+          repo: null,
+          promptBody: "Always explain tradeoffs.",
+          unavailableReason: null,
+          order: 1,
+        },
+      ],
+      skills: [],
+      mcp: [],
+      unavailable: [],
+    },
+    bindings: overrides.bindings ?? [
+      {
+        id: "inline-1",
+        type: "prompt",
+        mode: "include",
+        resourceId: null,
+        replacesResourceId: null,
+        inlinePromptBody: "Always explain tradeoffs.",
+        order: 1,
+      },
+    ],
+    availableTeamResources: overrides.availableTeamResources ?? [],
   };
 }
 
@@ -295,6 +346,11 @@ beforeEach(() => {
     },
   });
   agentMocks.rebindAgent.mockResolvedValue(agent({ clientId: "client-2", runtimeProvider: "codex" }));
+  agentResourceMocks.getAgentResources.mockResolvedValue(agentResources());
+  agentResourceMocks.updateAgentResources.mockImplementation(
+    async (_agentId: string, body: { bindings: AgentResourcesOutput["bindings"] }) =>
+      agentResources({ version: 8, bindings: body.bindings }),
+  );
   agentConfigMocks.getAgentConfig.mockResolvedValue(config());
   agentConfigMocks.updateAgentConfig.mockResolvedValue(config({ version: 8 }));
   agentConfigMocks.dryRunAgentConfig.mockResolvedValue({ diff: [{ op: "replace", path: "/prompt/append" }] });
@@ -316,7 +372,7 @@ afterEach(() => {
 });
 
 describe("AgentDetailPage", () => {
-  it("renders the effective prompt and links prompt editing to resources", async () => {
+  it("renders the effective prompt and edits the custom prompt inline", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
@@ -333,8 +389,32 @@ describe("AgentDetailPage", () => {
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
 
-    await click(exactButtonByText(container, "Edit resources"));
-    await waitForText(container, "Resources route");
+    await click(exactButtonByText(container, "Edit custom prompt"));
+    await waitForText(document.body, "Save prompt");
+    const textarea = document.body.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(textarea?.value).toBe("Always explain tradeoffs.");
+    if (!textarea) throw new Error("Expected custom prompt textarea");
+    await setValue(textarea, "Prefer concise answers.");
+    await click(exactButtonByText(document.body, "Save prompt"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [
+        {
+          id: "inline-1",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Prefer concise answers.",
+          order: 1,
+        },
+      ],
+    });
+    expect(container.textContent).not.toContain("Resources route");
 
     await act(async () => root.unmount());
   });
