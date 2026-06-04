@@ -254,22 +254,12 @@ Interpret the output in three buckets:
 Always tell the user:
 
 - Tier 0 (`validate.yml`) is installed by default.
-- Tier 1 AI PR review is not installed by this skill; it belongs to `first-tree cloud`.
 - Tier 2 is optional and rule-based; the onboarding skill can prepare files and explain the rollout, but hard-to-reverse policy changes stay manual.
 - The current parity target for "proper automation similar to `first-tree-context`" is documented in [`github-automation.md`](github-automation.md). Use that file when you need the exact workflow roles, ruleset assumptions, App/secrets names, or rollout sequence.
 
-## Phase E — Agent templates
+**Out of scope here:** AI-driven PR review and any agent-driven automation belong to `first-tree cloud`, not to this skill. Do not install model-calling workflows under the Tier 0 / Tier 2 banner.
 
-`tree init` already wrote two defaults into `<workspaceRoot>/<manifest.tree>/.first-tree/agent-templates/`:
-
-- `developer.yaml`
-- `code-reviewer.yaml`
-
-For details (schema, add/drop rules, role customization), see [`agent-templates.md`](agent-templates.md).
-
-This phase is mostly a confirmation step. The only reason to write/edit YAML here is if the user wants a custom role beyond the two defaults.
-
-## Phase F — Wrap-up
+## Phase E — Wrap-up
 
 ```bash
 first-tree tree skill doctor                  # from workspace root
@@ -279,13 +269,12 @@ first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>
 
 If any doctor exits non-zero, **do not** print the success summary. Print the failures and stop.
 
-The success summary template is in SKILL.md Phase F. Fill it from `tree status` output and the recorded automation state.
+The success summary template is in SKILL.md Phase E. Fill it from `tree status` output and the recorded automation state.
 
 GitHub automation lines are mandatory:
 
 ```text
 GitHub Actions: validate.yml installed (Tier 0, rule-based)
-AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
 Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
 ```
 

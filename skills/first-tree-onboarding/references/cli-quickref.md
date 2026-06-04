@@ -91,7 +91,7 @@ first-tree tree skill link                    # repair .claude symlinks at works
 
 `tree skill upgrade` is safe to rerun. `doctor` is the fastest health probe.
 
-## Phase B / F — Verification
+## Phase B / E — Verification
 
 ```bash
 first-tree tree verify                                       # run from inside the tree subdir
