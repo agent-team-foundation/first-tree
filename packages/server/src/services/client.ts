@@ -456,21 +456,25 @@ export async function retireClient(db: Database, clientId: string): Promise<void
 }
 
 /**
- * System-scope sweep: mark clients as disconnected when their last-seen
- * server instance stopped sending heartbeats. Runs globally across all orgs
- * by design — it is invoked only by internal timers, never from a
- * user-scoped request, so the per-org filter the read paths enforce does not
- * apply. Org isolation on the data these clients belong to is still
- * enforced at the read paths (see `assertClientOwner` / `listClients`).
+ * System-scope sweep: mark clients as disconnected when their own heartbeat
+ * is stale, or when their last-seen server instance stopped sending
+ * heartbeats. Runs globally across all orgs by design — it is invoked only by
+ * internal timers, never from a user-scoped request, so the per-org filter the
+ * read paths enforce does not apply. Org isolation on the data these clients
+ * belong to is still enforced at the read paths (see `assertClientOwner` /
+ * `listClients`).
  */
 export async function cleanupStaleClients(db: Database, staleSeconds = 60): Promise<number> {
   const result = await db.execute<{ id: string }>(sql`
     UPDATE clients SET status = 'disconnected'
-    WHERE instance_id IN (
-      SELECT instance_id FROM server_instances
-      WHERE last_heartbeat < NOW() - make_interval(secs => ${staleSeconds})
+    WHERE status = 'connected'
+    AND (
+      last_seen_at < NOW() - make_interval(secs => ${staleSeconds})
+      OR instance_id IN (
+        SELECT instance_id FROM server_instances
+        WHERE last_heartbeat < NOW() - make_interval(secs => ${staleSeconds})
+      )
     )
-    AND status = 'connected'
     RETURNING id
   `);
 
@@ -478,7 +482,7 @@ export async function cleanupStaleClients(db: Database, staleSeconds = 60): Prom
     const staleIds = result.map((r) => r.id);
     await db
       .update(agentPresence)
-      .set({ status: "offline", ...runtimeFieldsReset(new Date()) })
+      .set({ status: "offline", clientId: null, ...runtimeFieldsReset(new Date()) })
       .where(inArray(agentPresence.clientId, staleIds));
   }
 

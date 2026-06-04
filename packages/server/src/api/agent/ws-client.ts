@@ -1041,16 +1041,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         clearTimeout(authTimeout);
         if (authExpiryTimer) clearTimeout(authExpiryTimer);
 
-        for (const [agentId, info] of boundAgents) {
+        for (const [, info] of boundAgents) {
           notifier.unsubscribe(info.inboxId, socket);
-          const currentOwner = connectionManager.getAgentClientId(agentId);
-          if (currentOwner === clientId) {
-            try {
-              await presenceService.unbindAgent(app.db, agentId);
-            } catch {
-              // best-effort
-            }
-          }
         }
         boundAgents.clear();
 
@@ -1066,20 +1058,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           //   t2  the t0 onClose finally awaits to disconnectClient and would
           //       happily stamp clients.status='disconnected', clobbering t1
           //
-          // `isActiveClientConnection` returns false at t2 because the in-
-          // memory entry now points at the *new* socket, not us. Skip the DB
-          // write in that case so the new connection's `connected` status
-          // survives. Bug captured live at /clients[0].status='disconnected'
-          // with last_seen_at 13s old + a fully-registered client.log.
-          const stillActive = connectionManager.isActiveClientConnection(clientId, socket);
+          // A WebSocket close is only a transport loss. Proactive auth
+          // refreshes and short network blips reconnect in seconds, so do not
+          // stamp the client or agents disconnected here. Heartbeat staleness
+          // cleanup owns the grace window and marks the client/agents offline
+          // only if they do not reconnect in time.
           connectionManager.removeClientConnection(clientId, socket);
-          if (stillActive) {
-            try {
-              await clientService.disconnectClient(app.db, clientId);
-            } catch {
-              // best-effort
-            }
-          }
         }
       });
     });
