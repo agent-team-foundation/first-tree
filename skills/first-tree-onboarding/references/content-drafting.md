@@ -88,7 +88,7 @@ Do **not** create new `members/<name>/` nodes for other contributors in the init
 | `companyContext.stage`                           | If `package.json` `version` < `0.1.0` → `"prototype"`. If between `0.1.0` and `1.0.0` → `"alpha"`. If ≥ `1.0.0` → `"production"`. If no version field → leave `""` with `# unverified`. | medium     |
 | `companyContext.techStackConstraints`            | Top 5 entries from manifest deps (the most-used languages/frameworks). Format: `- <name>` (e.g., `- typescript`, `- react`, `- postgres`).                                              | high       |
 | `companyContext.culture`                         | Leave `[]` with comment `# unverified — culture is a human input`.                                                                                                                      | always low |
-| `agents`                                         | Leave `[]`. The daemon writes here; not a draft target.                                                                                                                                 | n/a        |
+| `agents`                                         | Leave `[]`. Runtime tooling (outside this skill) writes here; not a Phase C draft target.                                                                                               | n/a        |
 | `collaboration.routing` / `collaboration.review` | Leave `[]` with `# unverified — author later`.                                                                                                                                          | n/a        |
 | `humanInvolveRules.defaults`                     | Keep the default 3 entries.                                                                                                                                                             | high       |
 
@@ -155,8 +155,7 @@ Never overwrite content that has already been edited (signal: the placeholder st
 
 ## What Phase C does NOT do
 
-- Does not start the daemon (Phase D).
-- Does not modify agent templates (Phase E).
+- Does not install GitHub automation workflows (that's Phase D).
 - Does not register source repos. Source binding lives in `<workspaceRoot>/.first-tree/workspace.json`'s `sources` field and is edited as a direct JSON change (or by the runtime / human adding a sibling).
 - Does not run any LLM call beyond what the agent itself does. There is no separate LLM service the skill calls.
 - Does not deduce facts not present in the source signals listed above. If something can't be inferred, leave it empty with `# unverified`.
