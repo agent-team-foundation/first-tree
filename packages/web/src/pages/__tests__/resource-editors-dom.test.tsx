@@ -18,6 +18,7 @@ const resourceMocks = vi.hoisted(() => ({
   updateResource: vi.fn(),
   retireResource: vi.fn(),
   previewOrgResourceImpact: vi.fn(),
+  previewResourceImpact: vi.fn(),
 }));
 
 vi.mock("../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
@@ -60,18 +61,63 @@ async function flush(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
   });
+}
+
+/**
+ * Poll for a button by text, flushing between attempts. Radix Popover / Dialog
+ * render their contents through a portal on an async tick, so a single flush()
+ * after the trigger click can race the option appearing (flaky under slower
+ * CI timing). Wait until it's there instead of assuming one tick is enough.
+ */
+async function waitForButton(text: string): Promise<HTMLButtonElement> {
+  for (let i = 0; i < 50; i++) {
+    const found = byText(text);
+    if (found) return found;
+    await flush();
+  }
+  throw new Error(`waitForButton: "${text}" never appeared`);
+}
+
+/**
+ * Close any open overlay (Radix Dialog / our Popover both dismiss on Escape).
+ * Call before unmounting a test that left a dialog open, so the overlay's
+ * cleanup runs while mounted instead of racing unmount and leaking body
+ * attributes (pointer-events / scroll-lock) into the next test.
+ */
+async function pressEscape(): Promise<void> {
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await flush();
+}
+
+/** Wait until a button is present AND enabled, then click it. */
+async function clickWhenEnabled(text: string): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    const found = byText(text);
+    if (found && !found.disabled) {
+      await click(found);
+      return;
+    }
+    await flush();
+  }
+  throw new Error(`clickWhenEnabled: "${text}" never became enabled`);
 }
 
 async function render(): Promise<{ root: Root }> {
   const { SettingsResourcesPage } = await import("../settings/resources.js");
+  const { ToastProvider } = await import("../../components/ui/toast.js");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
     root.render(
       <QueryClientProvider client={createClient()}>
-        <SettingsResourcesPage />
+        <ToastProvider>
+          <SettingsResourcesPage />
+        </ToastProvider>
       </QueryClientProvider>,
     );
   });
@@ -120,13 +166,35 @@ function lastByPlaceholder(placeholder: string): HTMLInputElement {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // Radix Dialog (+ react-remove-scroll) sets attributes/styles on <body>/<html>
+  // while open — pointer-events, aria-hidden, inert, data-scroll-locked. In
+  // happy-dom these can survive a root.unmount(), so a dialog test would poison
+  // the next test's portal rendering (e.g. the Add-resource popover never
+  // mounting). Scrub them so every test starts from a clean document.
+  for (const el of [document.body, document.documentElement]) {
+    el.removeAttribute("style");
+    el.removeAttribute("aria-hidden");
+    el.removeAttribute("inert");
+    el.removeAttribute("data-scroll-locked");
+    el.removeAttribute("data-aria-hidden");
+  }
   authMock.value = { role: "admin", organizationId: "org-1", meLoaded: true };
   resourceMocks.listTeamResources.mockResolvedValue([GITHUB_MCP]);
   resourceMocks.createTeamResource.mockResolvedValue(
     row({ id: "new", type: "repo", name: "x", payload: { url: "x" } }),
   );
   resourceMocks.updateResource.mockResolvedValue(GITHUB_MCP);
-  resourceMocks.retireResource.mockResolvedValue({ affectedAgentCount: 0, promptOverflowAgentCount: 0 });
+  resourceMocks.retireResource.mockResolvedValue({ affectedAgentCount: 0, promptOverflowAgentCount: 0, agents: [] });
+  resourceMocks.previewOrgResourceImpact.mockResolvedValue({
+    affectedAgentCount: 0,
+    promptOverflowAgentCount: 0,
+    agents: [],
+  });
+  resourceMocks.previewResourceImpact.mockResolvedValue({
+    affectedAgentCount: 0,
+    promptOverflowAgentCount: 0,
+    agents: [],
+  });
 });
 
 afterEach(() => {
@@ -277,12 +345,160 @@ describe("resource editors", () => {
     await act(async () => root.unmount());
   });
 
-  it("hides add / edit / retire affordances for members", async () => {
+  it("hides add / edit / retire affordances for members but keeps preview", async () => {
     authMock.value = { role: "member", organizationId: "org-1", meLoaded: true };
     const { root } = await render();
     expect(byText("Add resource")).toBeUndefined();
     expect(byAria("Edit github")).toBeUndefined();
     expect(byAria("Retire github")).toBeUndefined();
+    // Read-only preview is available to every member.
+    expect(byAria("Preview github")).toBeTruthy();
+    await act(async () => root.unmount());
+  });
+
+  it("requires a confirm step before retiring (cancel does not retire)", async () => {
+    const { root } = await render();
+    // Trash no longer retires on one click — it opens a confirm dialog.
+    await click(byAria("Retire github"));
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('Retire "github"?');
+
+    // Cancel backs out without retiring.
+    await click(byText("Cancel"));
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+
+    // Re-open and confirm → retire fires once with the resource id. The confirm
+    // re-disables briefly while the impact re-fetches, so wait for it to enable.
+    await click(byAria("Retire github"));
+    await clickWhenEnabled("Retire");
+    expect(resourceMocks.retireResource).toHaveBeenCalledTimes(1);
+    expect(resourceMocks.retireResource.mock.calls[0]?.[0]).toBe("mcp-1");
+    await act(async () => root.unmount());
+  });
+
+  it("re-checks impact on every open — never confirms against a cached stale count", async () => {
+    // A fresh controllable promise per call lets us prove the second open
+    // re-fetches (gcTime: 0) instead of reusing the first open's cached count.
+    const resolvers: Array<(v: { affectedAgentCount: number; promptOverflowAgentCount: number; agents: [] }) => void> =
+      [];
+    resourceMocks.previewResourceImpact.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { root } = await render();
+
+    // Open #1: pending → disabled; resolve → enabled.
+    await click(byAria("Retire github"));
+    expect(byText("Retire")?.disabled).toBe(true);
+    await act(async () => {
+      resolvers[0]?.({ affectedAgentCount: 1, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
+    await click(byText("Cancel"));
+
+    // Reopen: must re-fetch and re-disable (not reuse the cached count), so a
+    // background refetch can't leave a stale-but-clickable confirm.
+    await click(byAria("Retire github"));
+    expect(resourceMocks.previewResourceImpact).toHaveBeenCalledTimes(2);
+    expect(byText("Retire")?.disabled).toBe(true);
+    await act(async () => {
+      resolvers[1]?.({ affectedAgentCount: 1, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
+    await pressEscape();
+    await act(async () => root.unmount());
+  });
+
+  it("disables the confirm button until the impact check resolves", async () => {
+    // Hold the impact check open so we can observe the pending state.
+    let resolveImpact: (v: { affectedAgentCount: number; promptOverflowAgentCount: number; agents: [] }) => void =
+      () => {};
+    resourceMocks.previewResourceImpact.mockReturnValue(
+      new Promise((r) => {
+        resolveImpact = r;
+      }),
+    );
+    const { root } = await render();
+    await click(byAria("Retire github"));
+    // While "Checking impact…", the confirm is disabled — can't retire blind.
+    expect(byText("Retire")?.disabled).toBe(true);
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+
+    // Once the count is in, the button enables.
+    await act(async () => {
+      resolveImpact({ affectedAgentCount: 2, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
+    await pressEscape();
+    await act(async () => root.unmount());
+  });
+
+  it("opens a read-only preview from the eye icon", async () => {
+    resourceMocks.listTeamResources.mockResolvedValue([
+      row({
+        id: "prompt-1",
+        type: "prompt",
+        name: "house style",
+        payload: { body: "# Voice\nWrite plainly.", description: "Tone guide" },
+      }),
+    ]);
+    const { root } = await render();
+    await click(byAria("Preview house style"));
+    // Read-only detail shows the full body content, not a one-line summary.
+    expect(document.body.textContent).toContain("Write plainly.");
+    // No edit controls inside the preview.
+    expect(document.getElementById("prompt-body")).toBeNull();
+    await pressEscape();
+    await act(async () => root.unmount());
+  });
+
+  it("warns on prompt overflow before saving, then saves on confirm", async () => {
+    resourceMocks.previewOrgResourceImpact.mockResolvedValue({
+      affectedAgentCount: 3,
+      promptOverflowAgentCount: 2,
+      agents: [],
+    });
+    // Render the prompt editor directly rather than driving the Add-resource
+    // Popover. The assertion target is the overflow save flow, not menu
+    // navigation (already covered by the create tests above) — and opening a
+    // portal-anchored Popover after the Dialog-heavy tests in this file is a
+    // CI-only teardown-leak hazard. Mounting the editor sidesteps it entirely.
+    const { ResourceEditor } = await import("../settings/resource-editors.js");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={createClient()}>
+          <ResourceEditor state={{ mode: "create", type: "prompt" }} onClose={() => {}} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    const body = document.getElementById("prompt-body");
+    if (!(body instanceof HTMLTextAreaElement)) throw new Error("prompt-body");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(body, "long body");
+      body.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+
+    // First click runs the silent overflow check → warns, does NOT save yet.
+    await click(byText("Create"));
+    // The check is async (impact preview) — wait for the warning to surface.
+    await waitForButton("Save anyway");
+    expect(resourceMocks.createTeamResource).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("exceed the prompt budget for 2 agents");
+
+    // Second click ("Save anyway") commits.
+    await click(await waitForButton("Save anyway"));
+    expect(resourceMocks.createTeamResource).toHaveBeenCalledTimes(1);
+    await pressEscape();
     await act(async () => root.unmount());
   });
 });

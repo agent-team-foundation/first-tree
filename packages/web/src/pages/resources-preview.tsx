@@ -44,33 +44,59 @@ const SAMPLE: ResourceRow[] = [
     type: "repo",
     name: "first-tree",
     defaultEnabled: "recommended",
-    payload: { url: "git@github.com:agent-team-foundation/first-tree.git" },
+    // A deliberately long URL so the row truncation + hover tooltip is testable.
+    payload: { url: "git@github.com:agent-team-foundation/first-tree-monorepo-with-a-very-long-name.git" },
   }),
   row({
     id: "r2",
     type: "repo",
     name: "context-tree",
-    payload: { url: "git@github.com:agent-team-foundation/context-tree.git" },
+    payload: { url: "git@github.com:agent-team-foundation/context-tree.git", defaultBranch: "main" },
   }),
   row({
     id: "r3",
     type: "prompt",
     name: "Code review checklist",
     defaultEnabled: "recommended",
-    payload: { description: "House rules for reviewing a diff before approval." },
+    payload: {
+      description: "House rules for reviewing a diff before approval.",
+      body: "# Code review checklist\n\n- **Correctness** — does it do what the PR says?\n- **Tests** — new behaviour covered, edge cases included.\n- **Security** — no secrets, no SQL string-building, trust boundaries respected.\n- **Style** — tokens not raw values, no `any`, no `as` without a reason.\n\nApprove only when every box is honestly ticked.",
+    },
   }),
   row({
     id: "r4",
-    type: "skill",
-    name: "release-notes",
-    payload: { description: "Draft release notes from a merged PR range." },
+    type: "prompt",
+    // No description → list summary falls back to a stripped body snippet
+    // (instead of the old meaningless "N chars").
+    name: "Tone guide",
+    payload: {
+      body: "Write plainly and directly. Prefer short sentences. Avoid filler like *very*, *really*, *just*. Lead with the conclusion, then the reasoning.",
+    },
   }),
   row({
     id: "r5",
+    type: "skill",
+    name: "release-notes",
+    payload: {
+      name: "release-notes",
+      namespace: "team",
+      description: "Draft release notes from a merged PR range.",
+      body: "## release-notes\n\nGiven a PR range, group merged PRs into **Features / Fixes / Chores** and write a one-line human summary for each. Link every entry to its PR.",
+      metadata: { category: "writing" },
+    },
+  }),
+  row({
+    id: "r6",
     type: "mcp",
     name: "github",
     defaultEnabled: "recommended",
     payload: { name: "github", transport: "http", url: "https://mcp.example.com/github" },
+  }),
+  row({
+    id: "r7",
+    type: "mcp",
+    name: "local-tools",
+    payload: { name: "local-tools", transport: "stdio", command: "npx", args: ["-y", "@team/mcp-tools", "--verbose"] },
   }),
 ];
 
