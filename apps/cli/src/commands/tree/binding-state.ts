@@ -28,6 +28,7 @@ export const TREE_VERSION_FILE = join(TREE_RUNTIME_ROOT, "VERSION");
 export const TREE_PROGRESS_FILE = join(TREE_RUNTIME_ROOT, "progress.md");
 export const SOURCE_STATE_FILE = join(TREE_RUNTIME_ROOT, "source.json");
 export const TREE_STATE_FILE = join(TREE_RUNTIME_ROOT, "tree.json");
+export const TREE_CODE_REPOS_FILE = join(TREE_RUNTIME_ROOT, "code-repos.json");
 export const TREE_BINDINGS_DIR = join(TREE_RUNTIME_ROOT, "bindings");
 export const TREE_SOURCE_REPOS_FILE = "source-repos.md";
 

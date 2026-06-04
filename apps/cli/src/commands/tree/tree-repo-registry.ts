@@ -1,8 +1,15 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-import { listTreeBindings, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
+import { listTreeBindings, TREE_CODE_REPOS_FILE, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { ensureTrailingNewline, parseGitHubRemoteUrl } from "./shared.js";
+
+const CODE_REPOS_SCHEMA_VERSION = 1;
+
+type CodeReposFile = {
+  repos: ManagedTreeCodeRepo[];
+  schemaVersion: number;
+};
 
 const TREE_CODE_REPO_REGISTRY_BEGIN = "<!-- BEGIN FIRST-TREE-CODE-REPO-REGISTRY -->";
 const TREE_CODE_REPO_REGISTRY_END = "<!-- END FIRST-TREE-CODE-REPO-REGISTRY -->";
@@ -143,7 +150,59 @@ function writeRegistryFile(path: string, repos: ManagedTreeCodeRepo[]): SyncActi
   return current === null ? "created" : "updated";
 }
 
+function readCodeReposFile(treeRoot: string): ManagedTreeCodeRepo[] {
+  const path = join(treeRoot, TREE_CODE_REPOS_FILE);
+
+  if (!existsSync(path)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "repos" in parsed &&
+      Array.isArray((parsed as { repos: unknown }).repos)
+    ) {
+      const file = parsed as CodeReposFile;
+      return dedupeRepos(
+        file.repos
+          .map((repo) => normalizeGitHubRepoUrl(repo.url))
+          .filter((repo): repo is ManagedTreeCodeRepo => repo !== undefined),
+      );
+    }
+  } catch {
+    // fall through to empty
+  }
+
+  return [];
+}
+
+function writeCodeReposFile(treeRoot: string, repos: ManagedTreeCodeRepo[]): SyncAction {
+  const path = join(treeRoot, TREE_CODE_REPOS_FILE);
+  const next = `${JSON.stringify({ repos, schemaVersion: CODE_REPOS_SCHEMA_VERSION }, null, 2)}\n`;
+  const current = existsSync(path) ? readFileSync(path, "utf-8") : null;
+
+  if (current === next) {
+    return "unchanged";
+  }
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, next);
+  return current === null ? "created" : "updated";
+}
+
 export function listKnownTreeCodeRepos(treeRoot: string): ManagedTreeCodeRepo[] {
+  // `.first-tree/code-repos.json` is the canonical store. Tree-root
+  // `AGENTS.md` / `CLAUDE.md` were the v0.x storage and are read here only as
+  // a legacy fallback (those files are no longer generated; see #794). When
+  // both are empty, fall back to walking the source bindings directory.
+  const persisted = readCodeReposFile(treeRoot);
+  if (persisted.length > 0) {
+    return persisted;
+  }
+
   for (const file of TREE_REGISTRY_FILES) {
     const path = join(treeRoot, file);
 
@@ -168,8 +227,12 @@ export function syncTreeCodeRepoRegistry(treeRoot: string, repoUrls: string[]): 
       .filter((value): value is ManagedTreeCodeRepo => value !== undefined),
   );
 
-  let overallAction: SyncAction = "skipped";
+  // Canonical write: always persist to `.first-tree/code-repos.json`.
+  let overallAction: SyncAction = writeCodeReposFile(treeRoot, repos);
 
+  // Legacy mirrors: if tree-root `AGENTS.md` / `CLAUDE.md` still exist on an
+  // older tree, keep their managed registry block in sync. New trees no
+  // longer generate these files so this loop is a no-op for them.
   for (const file of TREE_REGISTRY_FILES) {
     const path = join(treeRoot, file);
 
@@ -179,8 +242,6 @@ export function syncTreeCodeRepoRegistry(treeRoot: string, repoUrls: string[]): 
 
     const action = writeRegistryFile(path, repos);
     if (action === "created" || action === "updated") {
-      overallAction = action;
-    } else if (overallAction === "skipped") {
       overallAction = action;
     }
   }
