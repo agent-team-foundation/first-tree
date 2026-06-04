@@ -67,20 +67,17 @@ describe("useConfigDraft", () => {
 
     expect(latest?.summary.anyDirty).toBe(false);
     act(() => {
-      latest?.setPromptAppend("Explain tradeoffs.");
       latest?.setModel("opus");
       latest?.setReasoningEffort("high");
     });
 
-    expect(latest?.summary.dirtySections).toEqual(["prompt", "model", "effort"]);
+    expect(latest?.summary.dirtySections).toEqual(["model", "effort"]);
     expect(latest?.buildPayloadPatch()).toMatchObject({
-      prompt: { append: "Explain tradeoffs." },
       model: "opus",
       reasoningEffort: "high",
     });
 
     act(() => {
-      latest?.revertPrompt();
       latest?.revertModel();
       latest?.revertReasoningEffort();
     });

@@ -23,7 +23,6 @@ describe("createConfigDraft", () => {
   it("creates a clean draft baseline from a server config", () => {
     const draft = createConfigDraft(config);
 
-    expect(draft.promptAppend).toBe("Be precise.");
     expect(draft.model).toBe("sonnet");
     expect(draft.reasoningEffort).toBe("high");
     expect(draft.mcp).toEqual([

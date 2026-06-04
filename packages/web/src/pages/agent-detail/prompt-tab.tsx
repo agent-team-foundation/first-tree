@@ -11,8 +11,10 @@ import { getAgentResources, updateAgentResources } from "../../api/agent-resourc
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Section } from "../../components/ui/section.js";
+import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { useAgentDetailContext } from "./layout-context.js";
+import { sourceLabel } from "./resource-source.js";
 
 export function PromptTab() {
   const ctx = useAgentDetailContext();
@@ -37,6 +39,19 @@ export function PromptTab() {
       setEditor(null);
     },
   });
+  // All prompt-binding management (enable / disable / remove / re-enable) goes
+  // through one mutation that submits the full bindings array. The old Resources
+  // tab is gone, so the Prompt tab is now the only surface that manages these.
+  const bindingMut = useMutation({
+    mutationFn: (bindings: AgentResourceBindingInput[]) => {
+      if (!resourcesQuery.data) throw new Error("prompt resources not loaded");
+      return updateAgentResources(ctx.uuid, { expectedVersion: resourcesQuery.data.version, bindings });
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(["agent-resources", ctx.uuid], next);
+      queryClient.invalidateQueries({ queryKey: ["agent-config", ctx.uuid] });
+    },
+  });
   if (ctx.isHuman) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
   const prompt = ctx.config?.payload.prompt.append ?? "";
@@ -44,11 +59,51 @@ export function PromptTab() {
   const resourceError = resourcesQuery.error instanceof Error ? resourcesQuery.error.message : null;
   const resources = resourcesQuery.data;
   const editorError = savePromptMut.error instanceof Error ? savePromptMut.error.message : null;
+  const bindingError = bindingMut.error instanceof Error ? bindingMut.error.message : null;
+  const bindings = resources?.bindings ?? [];
+  // A team prompt is "active" if a binding includes it OR overrides it (replace),
+  // so an overridden prompt never reappears in the Available list.
+  const activeResourceIds = new Set(
+    bindings.flatMap((b) => [b.resourceId, b.replacesResourceId]).filter((id): id is string => !!id),
+  );
+  const availablePrompts = (resources?.availableTeamResources ?? []).filter(
+    (resource) =>
+      resource.type === "prompt" && resource.defaultEnabled === "available" && !activeResourceIds.has(resource.id),
+  );
 
-  function openPromptEditor() {
+  function enablePrompt(resourceId: string) {
+    bindingMut.mutate([...bindings, { type: "prompt", mode: "include", resourceId, order: nextOrder(bindings) }]);
+  }
+  function disablePrompt(resourceId: string) {
+    // Drop any existing include/replace binding for this resource first — otherwise
+    // the resolver sees include + disable and the prompt stays enabled at runtime.
+    bindingMut.mutate([
+      ...bindings.filter((b) => b.resourceId !== resourceId && b.replacesResourceId !== resourceId),
+      { type: "prompt", mode: "disable", resourceId, order: nextOrder(bindings) },
+    ]);
+  }
+  function removeBinding(bindingId: string) {
+    bindingMut.mutate(bindings.filter((binding) => binding.id !== bindingId));
+  }
+
+  // Edit an inline binding that has no effective row (e.g. an empty body the
+  // backend drops). Without this the binding is invisible and unremovable.
+  function editBinding(bindingId: string) {
     if (!resources) return;
     savePromptMut.reset();
-    setEditor(createPromptEditorState(resources));
+    const index = resources.bindings.findIndex((binding) => binding.id === bindingId);
+    if (index < 0) return;
+    setEditor({
+      rowId: `orphan:${bindingId}`,
+      body: resources.bindings[index]?.inlinePromptBody ?? "",
+      target: { kind: "update-inline", bindingIndex: index },
+    });
+  }
+
+  function openPromptEditor(row: EffectivePromptRow | null) {
+    if (!resources) return;
+    savePromptMut.reset();
+    setEditor(createPromptEditorState(resources, row));
   }
 
   function closePromptEditor() {
@@ -57,34 +112,97 @@ export function PromptTab() {
   }
 
   return (
-    <Section title="Effective prompt" description="Resolved from Team and Agent prompt resources.">
-      <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-        {resources ? (
-          <PromptResourceBlocks
-            data={resources}
-            editor={editor}
-            error={editorError}
-            saving={savePromptMut.isPending}
-            canEdit={canEditPrompt && !resourceError}
-            onStartEdit={openPromptEditor}
-            onBodyChange={(body) => setEditor((current) => (current ? { ...current, body } : current))}
-            onCancel={closePromptEditor}
-            onSubmit={(body) => savePromptMut.mutate(body)}
-          />
-        ) : (
-          <PromptFallbackPanel prompt={prompt} />
-        )}
-      </div>
-      {resourceError ? (
-        <p className="text-body" style={{ color: "var(--state-error)", margin: 0, padding: "var(--sp-3) 0" }}>
-          {resourceError}
-        </p>
+    <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+      <Section
+        title="Instructions"
+        description="Team and your own instructions for this agent — toggle, customize, or add your own."
+        action={
+          canEditPrompt && !resourceError && !editor && resources ? (
+            <Button size="xs" variant="outline" onClick={() => openPromptEditor(null)}>
+              Add custom instructions
+            </Button>
+          ) : null
+        }
+      >
+        <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+          {resources ? (
+            <PromptResourceBlocks
+              data={resources}
+              editor={editor}
+              error={editorError}
+              saving={savePromptMut.isPending}
+              canEdit={canEditPrompt && !resourceError}
+              busy={bindingMut.isPending}
+              onStartEdit={openPromptEditor}
+              onBodyChange={(body) => setEditor((current) => (current ? { ...current, body } : current))}
+              onCancel={closePromptEditor}
+              onSubmit={(body) => savePromptMut.mutate(body)}
+              onDisable={disablePrompt}
+              onRemoveBinding={removeBinding}
+              onEditBinding={editBinding}
+            />
+          ) : (
+            <PromptFallbackPanel prompt={prompt} />
+          )}
+        </div>
+        {resourceError ? (
+          <p className="text-body" style={{ color: "var(--state-error)", margin: 0, padding: "var(--sp-3) 0" }}>
+            {resourceError}
+          </p>
+        ) : null}
+        {bindingError ? (
+          <p className="text-body" style={{ color: "var(--state-error)", margin: 0, padding: "var(--sp-3) 0" }}>
+            {bindingError}
+          </p>
+        ) : null}
+      </Section>
+      {canEditPrompt && !resourceError && availablePrompts.length > 0 ? (
+        <Section
+          title="Available team instructions"
+          description="Optional instructions your team offers. Enable the ones you want this agent to use."
+        >
+          {availablePrompts.map((resource) => (
+            <div
+              key={resource.id}
+              className="flex items-center justify-between gap-3"
+              style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
+            >
+              <p className="m-0 text-body font-medium truncate" style={{ color: "var(--fg)" }}>
+                {resource.name}
+              </p>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={bindingMut.isPending}
+                onClick={() => enablePrompt(resource.id)}
+              >
+                Enable
+              </Button>
+            </div>
+          ))}
+        </Section>
       ) : null}
-    </Section>
+      <Section
+        title="Effective instructions"
+        description="The full instructions this agent runs with, after your changes — team and custom, in order."
+      >
+        <div style={{ paddingTop: "var(--sp-3)" }}>
+          <PromptPanel minHeight={prompt ? "10rem" : undefined} sunken={!prompt}>
+            {prompt ? (
+              <Markdown>{prompt}</Markdown>
+            ) : (
+              <span className="text-muted-foreground">No instructions yet.</span>
+            )}
+          </PromptPanel>
+        </div>
+      </Section>
+    </div>
   );
 }
 
 type PromptEditorState = {
+  /** Effective row being edited; null for a brand-new standalone custom prompt. */
+  rowId: string | null;
   body: string;
   target: PromptEditorTarget;
 };
@@ -97,54 +215,37 @@ type PromptEditorTarget =
   | { kind: "replace-resource"; replacesResourceId: string }
   | { kind: "add-inline" };
 
-function createPromptEditorState(data: AgentResourcesOutput): PromptEditorState {
-  const existing = findInlinePromptBinding(data.bindings);
-  if (existing) {
-    return {
-      body: existing.binding.inlinePromptBody ?? "",
-      target: { kind: "update-inline", bindingIndex: existing.index },
-    };
-  }
-  const seed = seedFromSingleTeamPrompt(data);
-  return {
-    body: seed.body,
-    target: seed.target,
-  };
-}
+function createPromptEditorState(data: AgentResourcesOutput, row: EffectivePromptRow | null): PromptEditorState {
+  // Brand-new standalone custom prompt (not tied to any team prompt).
+  if (!row) return { rowId: null, body: "", target: { kind: "add-inline" } };
 
-function findInlinePromptBinding(
-  bindings: readonly AgentResourceBindingInput[],
-): { binding: AgentResourceBindingInput; index: number } | null {
-  for (let index = 0; index < bindings.length; index++) {
-    const binding = bindings[index];
-    if (!binding) continue;
-    if (binding.type === "prompt" && binding.mode !== "disable" && typeof binding.inlinePromptBody === "string") {
-      return { binding, index };
-    }
-  }
-  return null;
-}
+  const bindingIndex = row.bindingId ? findBindingIndexById(data.bindings, row.bindingId) : null;
+  const binding = bindingIndex !== null ? data.bindings[bindingIndex] : null;
 
-function seedFromSingleTeamPrompt(data: AgentResourcesOutput): { body: string; target: PromptEditorTarget } {
-  const enabledTeamPrompts = data.effective.prompts.filter(
-    (row) => row.mode === "enabled" && row.resourceId && row.source.startsWith("team_") && row.promptBody,
-  );
-  const [row] = enabledTeamPrompts;
-  if (enabledTeamPrompts.length === 1 && row?.resourceId && row.promptBody) {
-    const bindingIndex = row.bindingId ? findBindingIndexById(data.bindings, row.bindingId) : null;
+  // Editing an existing custom prompt (inline body or a replacement) in place.
+  if (bindingIndex !== null && binding && typeof binding.inlinePromptBody === "string") {
+    return { rowId: row.id, body: binding.inlinePromptBody ?? "", target: { kind: "update-inline", bindingIndex } };
+  }
+
+  // Customizing a team prompt → create a replacement for that specific prompt.
+  if (row.resourceId) {
     return {
-      body: row.promptBody,
+      rowId: row.id,
+      body: row.promptBody ?? "",
       target:
         bindingIndex === null
           ? { kind: "replace-resource", replacesResourceId: row.resourceId }
           : {
+              // Always keep the override tied to the original team prompt (recommended
+              // or available), so the original doesn't reappear as a duplicate.
               kind: "convert-binding",
               bindingIndex,
-              replacesResourceId: row.source === "team_recommended" ? row.resourceId : null,
+              replacesResourceId: row.resourceId,
             },
     };
   }
-  return { body: "", target: { kind: "add-inline" } };
+
+  return { rowId: row.id, body: row.promptBody ?? "", target: { kind: "add-inline" } };
 }
 
 function findBindingIndexById(bindings: readonly AgentResourceBindingInput[], bindingId: string): number | null {
@@ -206,97 +307,189 @@ function PromptResourceBlocks(props: {
   error: string | null;
   saving: boolean;
   canEdit: boolean;
-  onStartEdit: () => void;
+  busy: boolean;
+  onStartEdit: (row: EffectivePromptRow | null) => void;
   onBodyChange: (body: string) => void;
   onCancel: () => void;
   onSubmit: (body: string) => void;
+  onDisable: (resourceId: string) => void;
+  onRemoveBinding: (bindingId: string) => void;
+  onEditBinding: (bindingId: string) => void;
 }) {
   const rows = enabledPromptRows(props.data);
-  const inlineBinding = findInlinePromptBinding(props.data.bindings);
-  const editableBindingId = inlineBinding?.binding.id ?? null;
-  const editableInlineRowExists = !!editableBindingId && rows.some((row) => row.bindingId === editableBindingId);
-  const hasHiddenInlineBinding = !!editableBindingId && !editableInlineRowExists;
-  const singleTeamPrompt = findSingleEnabledTeamPrompt(props.data);
-  const editorIsInline = props.editor?.target.kind === "update-inline" && editableInlineRowExists;
+  // Disabled / overridden prompts are hidden from the active list, but the user
+  // must still be able to re-enable or revert them — render them below.
+  const inactiveRows = props.data.effective.prompts.filter((row) => row.mode === "disabled" || row.mode === "replaced");
+  // Inline prompt bindings the backend produced no effective row for (e.g. an
+  // empty body it drops): keep them visible so they can be edited or removed —
+  // an unremovable empty include binding otherwise makes every save fail.
+  const renderedBindingIds = new Set<string>();
+  for (const row of [...rows, ...inactiveRows]) if (row.bindingId) renderedBindingIds.add(row.bindingId);
+  // Bindings that already show an active (editable) row — used so a "replaced"
+  // row only offers its own Remove when no live replacement row exists.
+  const enabledBindingIds = new Set<string>();
+  for (const row of rows) if (row.bindingId) enabledBindingIds.add(row.bindingId);
+  const orphanBindings = props.data.bindings.filter(
+    (binding) =>
+      binding.type === "prompt" && binding.mode !== "disable" && !!binding.id && !renderedBindingIds.has(binding.id),
+  );
+  // Editing an existing custom prompt happens in place; customizing a team
+  // prompt (replace / convert) or adding a new one renders as its own block.
+  const editorIsInline = props.editor?.target.kind === "update-inline";
   const editorNeedsAgentBlock = props.editor !== null && !editorIsInline;
-  const shouldShowCustomPlaceholder =
-    !props.editor &&
-    props.canEdit &&
-    (hasHiddenInlineBinding || (!editableBindingId && (rows.length === 0 || !singleTeamPrompt)));
-  const blocks: ReactNode[] = rows.map((row, index) => {
-    const isEditableInlineRow = !!row.bindingId && row.bindingId === editableBindingId;
-    const isEditingRow = !!props.editor && editorIsInline && isEditableInlineRow;
-    const action =
-      props.canEdit && !props.editor && isEditableInlineRow ? (
-        <PromptBlockAction label="Edit custom prompt" onClick={props.onStartEdit} />
-      ) : props.canEdit && !props.editor && !editableBindingId && singleTeamPrompt?.id === row.id ? (
-        <PromptBlockAction label="Customize for this agent" onClick={props.onStartEdit} />
-      ) : null;
 
+  const editorNode = props.editor ? (
+    <InlineCustomPromptEditor
+      body={props.editor.body}
+      error={props.error}
+      saving={props.saving}
+      onBodyChange={props.onBodyChange}
+      onCancel={props.onCancel}
+      onSubmit={props.onSubmit}
+    />
+  ) : null;
+
+  const blocks: ReactNode[] = rows.map((row, index) => {
+    const isEditingRow = !!props.editor && editorIsInline && props.editor.rowId === row.id;
+    const action = props.editor || !props.canEdit ? null : promptRowAction(row, props);
+    const marker = row.mode === "unavailable" ? "Unavailable" : undefined;
     return (
-      <PromptResourceBlock key={row.id} title={promptResourceTitle(row)} action={action} separated={index > 0}>
-        {isEditingRow && props.editor ? (
-          <InlineCustomPromptEditor
-            body={props.editor.body}
-            error={props.error}
-            saving={props.saving}
-            onBodyChange={props.onBodyChange}
-            onCancel={props.onCancel}
-            onSubmit={props.onSubmit}
-          />
-        ) : (
-          <PromptBody body={row.promptBody ?? ""} />
-        )}
+      <PromptResourceBlock
+        key={row.id}
+        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={marker} />}
+        action={action}
+        separated={index > 0}
+      >
+        {isEditingRow ? editorNode : <PromptBody body={row.promptBody ?? ""} />}
       </PromptResourceBlock>
     );
   });
 
-  if (editorNeedsAgentBlock && props.editor) {
+  if (editorNeedsAgentBlock) {
     blocks.push(
       <PromptResourceBlock
         key="agent-custom-editor"
-        title="Agent Resource: custom prompt"
+        title={<PromptBlockHeading name={null} source="inline_prompt" />}
         separated={blocks.length > 0}
       >
-        <InlineCustomPromptEditor
-          body={props.editor.body}
-          error={props.error}
-          saving={props.saving}
-          onBodyChange={props.onBodyChange}
-          onCancel={props.onCancel}
-          onSubmit={props.onSubmit}
-        />
+        {editorNode}
       </PromptResourceBlock>,
     );
-  } else if (shouldShowCustomPlaceholder) {
+  }
+
+  for (const row of inactiveRows) {
+    const marker = row.mode === "disabled" ? "Off" : "Overridden";
+    // Disabled team prompt → Re-enable. Overridden prompt with no live replacement
+    // row (e.g. an empty inline replacement) → Remove, so it never gets stuck.
+    const manageable =
+      props.canEdit &&
+      !props.editor &&
+      !!row.bindingId &&
+      (row.mode === "disabled" || !enabledBindingIds.has(row.bindingId));
+    const action = manageable ? (
+      <PromptBlockAction
+        label={row.mode === "disabled" ? "Re-enable" : "Remove"}
+        disabled={props.busy}
+        onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
+      />
+    ) : null;
     blocks.push(
       <PromptResourceBlock
-        key="agent-custom-placeholder"
-        title="Agent Resource: custom prompt"
+        key={row.id}
+        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={marker} />}
+        action={action}
+        separated={blocks.length > 0}
+      >
+        <PromptBody body={row.promptBody ?? ""} />
+      </PromptResourceBlock>,
+    );
+  }
+
+  for (const binding of orphanBindings) {
+    const bindingId = binding.id;
+    if (!bindingId) continue;
+    const orphanId = `orphan:${bindingId}`;
+    const isEditingOrphan = !!props.editor && props.editor.rowId === orphanId;
+    blocks.push(
+      <PromptResourceBlock
+        key={orphanId}
+        title={<PromptBlockHeading name={null} source="inline_prompt" />}
         action={
-          <PromptBlockAction
-            label={hasHiddenInlineBinding ? "Edit custom prompt" : "Add custom prompt"}
-            onClick={props.onStartEdit}
-          />
+          props.editor || !props.canEdit ? null : (
+            <div className="flex gap-2">
+              <PromptBlockAction icon label="Edit custom instructions" onClick={() => props.onEditBinding(bindingId)} />
+              <PromptBlockAction
+                label="Remove"
+                disabled={props.busy}
+                onClick={() => props.onRemoveBinding(bindingId)}
+              />
+            </div>
+          )
         }
         separated={blocks.length > 0}
       >
-        <span className="text-muted-foreground">
-          {hasHiddenInlineBinding
-            ? "No prompt body."
-            : rows.length === 0
-              ? "No prompt resources enabled."
-              : "No custom prompt yet."}
-        </span>
+        {isEditingOrphan ? editorNode : <span className="text-muted-foreground">No instructions yet.</span>}
       </PromptResourceBlock>,
     );
   }
 
   return (
     <PromptPanel>
-      {blocks.length > 0 ? blocks : <span className="text-muted-foreground">No prompt resources enabled.</span>}
+      {blocks.length > 0 ? blocks : <span className="text-muted-foreground">No instructions yet.</span>}
     </PromptPanel>
   );
+}
+
+/** Inline action buttons for an active prompt row, mirroring the old Resources tab:
+ *  customize / edit any prompt, disable a recommended one, remove a custom or opted-in one. */
+function promptRowAction(
+  row: EffectivePromptRow,
+  props: {
+    busy: boolean;
+    onStartEdit: (row: EffectivePromptRow | null) => void;
+    onDisable: (resourceId: string) => void;
+    onRemoveBinding: (bindingId: string) => void;
+  },
+): ReactNode {
+  const buttons: ReactNode[] = [];
+  const remove = (
+    <PromptBlockAction
+      key="remove"
+      label="Remove"
+      disabled={props.busy}
+      onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
+    />
+  );
+  if (row.source === "inline_prompt") {
+    buttons.push(
+      <PromptBlockAction key="edit" icon label="Edit custom instructions" onClick={() => props.onStartEdit(row)} />,
+    );
+    if (row.bindingId) buttons.push(remove);
+  } else if (row.source.startsWith("team_") && row.resourceId) {
+    buttons.push(
+      <PromptBlockAction
+        key="customize"
+        icon
+        label="Customize for this agent"
+        onClick={() => props.onStartEdit(row)}
+      />,
+    );
+    if (row.source === "team_recommended") {
+      buttons.push(
+        <PromptBlockAction
+          key="disable"
+          label="Disable"
+          disabled={props.busy}
+          onClick={() => row.resourceId && props.onDisable(row.resourceId)}
+        />,
+      );
+    } else if (row.bindingId) {
+      buttons.push(remove);
+    }
+  } else if (row.bindingId) {
+    buttons.push(remove);
+  }
+  return buttons.length > 0 ? <div className="flex gap-2">{buttons}</div> : null;
 }
 
 function PromptFallbackPanel(props: { prompt: string }) {
@@ -305,7 +498,7 @@ function PromptFallbackPanel(props: { prompt: string }) {
       {props.prompt ? (
         <Markdown>{props.prompt}</Markdown>
       ) : (
-        <span className="text-muted-foreground">No prompt resources enabled.</span>
+        <span className="text-muted-foreground">No instructions yet.</span>
       )}
     </PromptPanel>
   );
@@ -328,7 +521,12 @@ function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: 
   );
 }
 
-function PromptResourceBlock(props: { title: string; action?: ReactNode; children: ReactNode; separated?: boolean }) {
+function PromptResourceBlock(props: {
+  title: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  separated?: boolean;
+}) {
   return (
     <div
       style={{
@@ -349,10 +547,10 @@ function PromptResourceBlock(props: { title: string; action?: ReactNode; childre
   );
 }
 
-function PromptBlockAction(props: { label: string; onClick: () => void }) {
+function PromptBlockAction(props: { label: string; onClick: () => void; disabled?: boolean; icon?: boolean }) {
   return (
-    <Button type="button" size="xs" variant="outline" onClick={props.onClick}>
-      <Pencil className="h-3 w-3" />
+    <Button type="button" size="xs" variant="outline" disabled={props.disabled} onClick={props.onClick}>
+      {props.icon ? <Pencil className="h-3 w-3" /> : null}
       {props.label}
     </Button>
   );
@@ -362,23 +560,42 @@ function PromptBody(props: { body: string }) {
   return props.body ? (
     <Markdown>{props.body}</Markdown>
   ) : (
-    <span className="text-muted-foreground">No prompt body.</span>
+    <span className="text-muted-foreground">No instructions yet.</span>
   );
 }
 
 function enabledPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
-  return data.effective.prompts.filter((row) => row.mode === "enabled" && !!row.promptBody);
+  // Active list = enabled + unavailable (e.g. budget-exceeded). Include blank-body
+  // rows too: a team prompt can legitimately have an empty body and still needs its
+  // management controls. (The backend only drops blank *inline* bindings, which the
+  // orphan-binding path below recovers — those never produce a row here.)
+  return data.effective.prompts.filter((row) => row.mode === "enabled" || row.mode === "unavailable");
 }
 
-function findSingleEnabledTeamPrompt(data: AgentResourcesOutput): EffectivePromptRow | null {
-  const rows = enabledPromptRows(data).filter((row) => row.resourceId && row.source.startsWith("team_"));
-  return rows.length === 1 ? (rows[0] ?? null) : null;
+function promptBlockName(row: EffectivePromptRow): string | null {
+  // Inline prompts have no meaningful resource name — the source label says it all.
+  if (row.source === "inline_prompt") return null;
+  return row.name;
 }
 
-function promptResourceTitle(row: EffectivePromptRow): string {
-  if (row.source.startsWith("team_")) return `Team Resource: ${row.name}`;
-  if (row.source === "inline_prompt") return "Agent Resource: inline prompt";
-  return `Agent Resource: ${row.name}`;
+function PromptBlockHeading(props: { name: string | null; source: EffectivePromptRow["source"]; marker?: string }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      {props.name ? <span>{props.name}</span> : null}
+      <span className="text-caption font-normal" style={{ color: "var(--fg-4)" }}>
+        {sourceLabel(props.source)}
+      </span>
+      {props.marker ? (
+        <span
+          className="mono inline-flex items-center gap-1.5 text-caption font-normal"
+          style={{ color: "var(--fg-4)" }}
+        >
+          <StatusGlyph colorVar="var(--fg-4)" shape="dot" size={7} ariaLabel={props.marker} />
+          {props.marker}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function InlineCustomPromptEditor(props: {
@@ -404,7 +621,7 @@ function InlineCustomPromptEditor(props: {
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!props.body.trim()) {
-      setLocalError("Prompt body is required.");
+      setLocalError("Instructions are required.");
       return;
     }
     setLocalError(null);
@@ -459,7 +676,7 @@ function InlineCustomPromptEditor(props: {
             Cancel
           </Button>
           <Button type="submit" size="xs" variant="outline" disabled={props.saving}>
-            {props.saving ? "Saving..." : "Save prompt"}
+            {props.saving ? "Saving..." : "Save instructions"}
           </Button>
         </div>
       </div>

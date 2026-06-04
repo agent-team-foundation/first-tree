@@ -41,12 +41,11 @@ import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
 
 const SECTION_TO_TAB: Record<DraftSectionName, string> = {
-  prompt: "prompt",
   model: "runtime",
   effort: "runtime",
-  mcp: "resources",
+  mcp: "capabilities",
   env: "runtime",
-  git: "resources",
+  git: "capabilities",
 };
 
 type TabDef = { key: string; label: string; path: string };
@@ -56,11 +55,11 @@ function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
   if (canEditConfig) {
     tabs.push(
       { key: "runtime", label: "Runtime", path: "runtime" },
-      { key: "prompt", label: "Prompt", path: "prompt" },
-      { key: "resources", label: "Resources", path: "resources" },
+      { key: "prompt", label: "Instructions", path: "prompt" },
+      { key: "capabilities", label: "Capabilities", path: "capabilities" },
     );
   } else if (!isHuman) {
-    tabs.push({ key: "resources", label: "Resources", path: "resources" });
+    tabs.push({ key: "capabilities", label: "Capabilities", path: "capabilities" });
   }
   // Usage is an observation surface, not part of the edit flow. Keep it at
   // the end so configuration tabs read left-to-right as the setup workflow.
@@ -539,7 +538,7 @@ export function AgentDetailPage() {
           gap: "var(--sp-5)",
           width: "100%",
           maxWidth:
-            currentTabKey === "resources" || currentTabKey === "usage"
+            currentTabKey === "capabilities" || currentTabKey === "usage"
               ? "var(--agent-detail-wide-rail)"
               : "var(--agent-detail-rail)",
         }}
@@ -572,7 +571,7 @@ export function AgentDetailPage() {
         open={discardDialogOpen}
         onOpenChange={setDiscardDialogOpen}
         title="Discard unsaved changes?"
-        description="Your edits to Prompt / Runtime / Resources will be reverted to the last saved baseline."
+        description="Your edits to Instructions / Runtime / Capabilities will be reverted to the last saved baseline."
         confirmLabel="Discard changes"
         destructive
         onConfirm={() => {
