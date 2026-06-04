@@ -360,7 +360,15 @@ function PromptResourceBlocks(props: {
         action={action}
         separated={index > 0}
       >
-        {isEditingRow ? editorNode : <PromptBody body={row.promptBody ?? ""} />}
+        {/* Only enabled rows are merged into the Effective preview, so only they
+            get the short summary; unavailable rows keep full text to stay inspectable. */}
+        {isEditingRow ? (
+          editorNode
+        ) : row.mode === "enabled" ? (
+          <PromptSummary body={row.promptBody ?? ""} />
+        ) : (
+          <PromptBody body={row.promptBody ?? ""} />
+        )}
       </PromptResourceBlock>
     );
   });
@@ -400,6 +408,8 @@ function PromptResourceBlocks(props: {
         action={action}
         separated={blocks.length > 0}
       >
+        {/* Inactive (disabled/overridden) prompts are NOT in the Effective preview,
+            so this row is the only place to inspect the full body — render it in full. */}
         <PromptBody body={row.promptBody ?? ""} />
       </PromptResourceBlock>,
     );
@@ -556,6 +566,20 @@ function PromptBlockAction(props: { label: string; onClick: () => void; disabled
   );
 }
 
+// Active rows show only a short summary — their full merged text lives in the
+// "Effective instructions" preview at the bottom, so we don't render whole bodies twice.
+function PromptSummary(props: { body: string }) {
+  return props.body ? (
+    <p className="m-0 text-caption line-clamp-2" style={{ color: "var(--fg-3)" }}>
+      {props.body}
+    </p>
+  ) : (
+    <span className="text-muted-foreground">No instructions yet.</span>
+  );
+}
+
+// Full body — used for inactive (disabled/overridden) rows, which are absent from
+// the Effective preview and so need their complete text inspectable here.
 function PromptBody(props: { body: string }) {
   return props.body ? (
     <Markdown>{props.body}</Markdown>
