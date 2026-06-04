@@ -206,9 +206,9 @@ async function main(): Promise<void> {
 
   // ── Step 5: Start a real ClientRuntime against the test server. ────────────
   // Run channel-env's side effects (FIRST_TREE_HOME + CLI binding) before any
-  // runtime code — bootstrap.ts's `generateToolsDoc` /
-  // `installFirstTreeIntegration` throw otherwise. See `apps/cli/src/core/
-  // channel-env.ts`.
+  // runtime code — the agent briefing builder
+  // (`runtime/agent-briefing.ts`) and `installFirstTreeIntegration` throw
+  // otherwise. See `apps/cli/src/core/channel-env.ts`.
   await import("../src/core/channel-env.js");
   const { ClientRuntime } = await import("../src/core/client-runtime.js");
 

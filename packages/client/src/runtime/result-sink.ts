@@ -156,7 +156,9 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // explicit signal that it has nothing new for the recipient. Skip
     // delivery and free the turn. The runtime does NOT evaluate content
     // length or "meaningfulness" — that's the agent's semantic decision.
-    // The matching prompt directive lives in bootstrap.ts generateToolsDoc.
+    // The matching prompt directive lives in the `# Working in First Tree`
+    // intro block built by `runtime/agent-briefing.ts` (look for
+    // "Stay silent when you have nothing to add").
     if (text.trim().length === 0) {
       deps.clearTrigger();
       deps.log("silent turn: agent produced empty output, skipping delivery");

@@ -251,6 +251,12 @@ whose topic already has that shape.**`;
 }
 
 function cliOverviewBlock(bin: string): string {
+  // Subcommand lists are the actually-registered ones, not aspirational —
+  // see `apps/cli/src/commands/{chat,agent,daemon,tree,org}/`. Agent
+  // briefings ship `tree skill install` payloads, so every command listed
+  // here must exist or the agent will burn a turn on `unknown command`.
+  // A unit test in `agent-briefing.test.ts` pins the rendered table
+  // against the real subcommand surface.
   return `## CLI Overview
 
 The \`${bin}\` CLI spans two arms — **workspace collaboration** (talking
@@ -258,12 +264,11 @@ to people and other agents) and **context management** (the Context Tree):
 
 | Namespace | What it owns |
 |---|---|
-| \`${bin} chat …\`        | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
-| \`${bin} agent …\`       | self-introspection — \`status\`, \`session\`, \`config show\` |
-| \`${bin} daemon …\`      | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree …\`        | Context Tree — \`status\`, \`read\`, \`write\`, \`verify\`, \`publish\` |
-| \`${bin} github scan …\` | GitHub notification daemon |
-| \`${bin} org …\`         | workspace ↔ tree binding |
+| \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
+| \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
+| \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
+| \`${bin} tree …\`   | Context Tree — \`status\`, \`init\`, \`migrate\`, \`verify\`, \`upgrade\`, \`inject\`, \`review\` |
+| \`${bin} org …\`    | workspace ↔ tree binding |
 
 Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`)
 runs from the web console or a human terminal — **never from inside a
@@ -327,10 +332,9 @@ workflow:
 
 | Task | Skill |
 |---|---|
-| Reflect one specific PR / doc / note into the tree   | \`first-tree-write\` |
-| Broad drift audit (no specific source attached)      | \`first-tree-sync\`  |
-| Bind an unbound repo or workspace to a tree          | \`first-tree-onboarding\` |
-| GitHub notification spawned this agent for tree work | \`first-tree-github-scan\` |
+| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` |
+| Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
+| Bind an unbound repo or workspace to a tree        | \`first-tree-onboarding\` |
 
 Do not invent ad-hoc tree edits without loading the skill — the workflow
 covers staging, review routing, and ownership rules you will not
@@ -372,6 +376,12 @@ function skillsSection(workspacePath: string, payload: AgentRuntimeConfigPayload
 }
 
 function firstTreeFamilyMap(): string {
+  // Listed skills MUST match what `first-tree tree skill install` actually
+  // deploys (`apps/cli/src/commands/tree/skill-lib.ts` →
+  // `TREE_SKILL_NAMES`). Adding an aspirational row here would tell every
+  // tree-bound agent to load a skill the runtime never puts on disk. A
+  // unit test in `agent-briefing.test.ts` walks the repo's `skills/`
+  // directory and asserts the names listed below match the shipped set.
   return `## First Tree Family
 
 Skill \`description\` fields drive progressive disclosure — the runtime
@@ -382,12 +392,23 @@ the auto-injected list.
 
 | Skill | Load when |
 |---|---|
-| \`first-tree\`             | communication principles / pre-task hygiene / CLI namespace map |
-| \`first-tree-context\`     | what's a Context Tree node / ownership / navigation |
-| \`first-tree-onboarding\`  | "bind this repo / workspace to a tree" — one-shot |
-| \`first-tree-sync\`        | "is the tree up to date?" — broad drift audit, no source |
-| \`first-tree-write\`       | "reflect this PR / doc / note into the tree" — specific source |
-| \`first-tree-github-scan\` | handling a single GitHub notification spawned by \`github scan\` |
-| \`attention\`              | asking a human well — waking the right person, expectations |
-| \`github-scan\`            | running / operating the \`github scan\` daemon itself |`;
+| \`first-tree\`            | communication principles / pre-task hygiene / CLI namespace map |
+| \`first-tree-context\`    | what's a Context Tree node / ownership / navigation |
+| \`first-tree-onboarding\` | "bind this repo / workspace to a tree" — one-shot |
+| \`first-tree-sync\`       | "is the tree up to date?" — broad drift audit, no source |
+| \`first-tree-write\`      | "reflect this PR / doc / note into the tree" — specific source |`;
 }
+
+/**
+ * Names of the First Tree skill payloads listed in the Skill Map. Exported
+ * so the unit test can cross-check against the on-disk `skills/` directory
+ * (and against `TREE_SKILL_NAMES` in `apps/cli/.../skill-lib.ts` if anyone
+ * ever consolidates the two lists).
+ */
+export const FIRST_TREE_FAMILY_SKILL_NAMES = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-onboarding",
+  "first-tree-sync",
+  "first-tree-write",
+] as const;

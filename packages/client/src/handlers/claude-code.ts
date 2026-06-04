@@ -1366,9 +1366,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * sessions starting at the same time don't race `git worktree add` for the
    * same path. See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
    *
-   * Side effect: refreshes `sourceReposForPrompt` so the per-turn system-
-   * prompt block (`buildChatSystemPrompt`) can list absolute paths +
-   * upstream coordinates for the LLM.
+   * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
+   * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
+   * list absolute paths + upstream coordinates for the LLM.
    *
    * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
    * and the error bubbles up to the caller (SessionManager).

@@ -13,13 +13,13 @@
 //    config call — which the CLI entry guarantees by importing this
 //    first.
 // 2. CLI binding (binName + packageName) into `@first-tree/client` so
-//    runtime helpers — bootstrap.ts's `generateToolsDoc` and
-//    `installFirstTreeIntegration` —
-//    emit the correct binary name (`first-tree` / `first-tree-staging`
-//    / `first-tree-dev`) and the right npm package for `npx
-//    <pkg>@latest` fallbacks. Pre-multi-env these all baked "first-tree"
-//    into the agent-facing tools.md, so staging / dev agents called a
-//    binary that wasn't installed.
+//    runtime helpers — `runtime/agent-briefing.ts`'s briefing builder
+//    and `runtime/bootstrap.ts`'s `installFirstTreeIntegration` — emit
+//    the correct binary name (`first-tree` / `first-tree-staging` /
+//    `first-tree-dev`) and the right npm package for `npx <pkg>@latest`
+//    fallbacks. Pre-multi-env these all baked "first-tree" into the
+//    agent-facing briefing, so staging / dev agents called a binary
+//    that wasn't installed.
 //
 // History note (FIRST_TREE_HOME): an earlier version of `resolver.ts`
 // exported the home path as a top-level `const` evaluated at module

@@ -19,12 +19,13 @@ export function renderChatContextSection(chatContext: ChatContext | undefined): 
   // Topic is the raw `chats.topic` column. We render it on every turn —
   // either the explicit value or a sentinel — so the agent can decide
   // whether to set/refresh it without round-tripping through the API. See
-  // the "Naming this Chat (Topic)" section in tools.md for the two hard
-  // rules the agent is expected to follow when it sees `(unset)` here.
+  // the `## Chat Topic` subsection of the unified briefing
+  // (`runtime/agent-briefing.ts`) for the two hard rules the agent is
+  // expected to follow when it sees `(unset)` here.
   if (chatContext.topic && chatContext.topic.trim().length > 0) {
     lines.push(`- Topic: ${chatContext.topic}`);
   } else {
-    lines.push(`- Topic: (unset — see "Naming this Chat" in tools.md)`);
+    lines.push(`- Topic: (unset — see "Chat Topic" in this briefing)`);
   }
   // Title is the server-resolved display label (falls back to first-message
   // preview / participant join when topic is null). Only render when it
