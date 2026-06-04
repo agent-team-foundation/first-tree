@@ -1,15 +1,23 @@
 # GitHub Automation During Onboarding
 
-This reference backs Phase D.5 in `SKILL.md`.
+This reference backs Phase D in `SKILL.md`.
 
-## The split
+## Scope
+
+This skill ships the **rule-based** layer only:
 
 - **Tier 0** — `validate.yml`, installed by default, rule-based, no secrets.
-- **Tier 1** — AI PR review, not installed by this skill, owned by `first-tree cloud`.
 - **Tier 2** — `owners:` gate plus `auto-merge.yml` / `review-enforcer.yml`, optional, rule-based, but tied to GitHub rulesets and App setup.
 
-The onboarding skill owns Tier 0 by default and can help stage Tier 2. It does
-not install Tier 1.
+The onboarding skill owns Tier 0 by default and can help stage Tier 2.
+
+**Out of scope.** Anything that requires an LLM call, a model provider API key,
+or an agent runtime — including AI PR review (summaries, generated comments)
+and any future LLM-augmented owners-gate judgment — is **agent-driven**. By
+product design (see proposal `tree-repo-github-automation-onboarding.20260512`)
+the rule / agent split is what keeps this skill stable: rules live here,
+agents live in `first-tree cloud`. Do not install model-calling workflows from
+this skill, even if the user asks. Point them at `first-tree cloud` instead.
 
 ## Current parity target
 
@@ -22,10 +30,11 @@ rule layer the skill teaches should be functionally similar to what
 | `validate.yml`        | Run `first-tree tree verify` on every PR                                                   | yes                   | onboarding skill |
 | `auto-merge.yml`      | Classify a PR by `owners:` / `members/` rules and auto-approve / auto-merge the safe cases | no, opt-in            | onboarding skill |
 | `review-enforcer.yml` | Dismiss non-owner approvals on cross-owner PRs                                             | no, opt-in            | onboarding skill |
-| AI PR review          | Summaries, comments, model calls, First Tree Cloud dispatch                                | no                    | `first-tree cloud` |
 
 That is the practical meaning of "set up the tree repo like `first-tree-context`
-does today" for the current product surface.
+does today" for the current product surface. Anything else `first-tree-context`
+runs (e.g. AI PR review) is operated separately and is not part of this skill's
+install path.
 
 ## What "proper automation" means
 
@@ -172,7 +181,6 @@ When a user says "set up the tree repo with the proper GitHub rules," the agent
 should be able to explain all of this from the skill alone:
 
 - Tier 0 is safe and installed by default.
-- Tier 1 is separate and belongs to First Tree Cloud, not to the onboarding skill.
 - Tier 2 is rule-based and can mirror the current `first-tree-context` gate,
   but it depends on:
   - workflow files on the default branch
@@ -181,6 +189,9 @@ should be able to explain all of this from the skill alone:
   - stable `owners:` / `members/`
 - The onboarding skill may write files and print commands.
 - The onboarding skill must not execute the ruleset-changing `gh api` commands.
+- AI-driven automation (PR review, generated comments, LLM-based gate
+  judgment) is **not** in this skill — it lives in `first-tree cloud`. If the
+  user wants it, point them at `first-tree cloud`.
 
 If the agent cannot say those things, it does not yet "have all the
 information" needed to teach the setup reliably.
@@ -190,7 +201,9 @@ information" needed to teach the setup reliably.
 The skill should keep agents from inventing ad hoc setup:
 
 - Do not ask for provider API keys as part of tree onboarding.
-- Do not install AI PR review into the tree repo as if it were Tier 0 or Tier 2.
+- Do not install AI PR review or any model-calling workflow under the Tier 0 /
+  Tier 2 banner — agent-driven automation is out of scope and belongs to
+  `first-tree cloud`.
 - Do not create a different gate model such as "just use CODEOWNERS" unless the
   product docs change.
 - Do not skip the `evaluate -> active` explanation when discussing Tier 2.

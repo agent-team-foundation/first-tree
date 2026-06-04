@@ -1,14 +1,16 @@
 ---
 name: first-tree-onboarding
-version: 0.6.0
+version: 0.6.1
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
-description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "workspace.json bound, real content drafted, automation checked, agent templates confirmed" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", "migrate this workspace to W1", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the setup. Use this skill instead of running `first-tree tree init` from raw memory; it owns role-by-role branching, the initial-content drafting phase the CLI does NOT do, the W1 migration of legacy multi-mode workspaces, and the final doctor checks.
+  first-tree: ">=0.5.0 <0.7.0"
+description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "workspace.json bound, real content drafted, automation rule layer checked" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", "migrate this workspace to W1", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the setup. Use this skill instead of running `first-tree tree init` from raw memory; it owns the initial-content drafting phase the CLI does NOT do, the W1 migration of legacy multi-mode workspaces, the Tier 0 / Tier 2 GitHub rule-layer install, and the final doctor checks. Agent-driven automation (AI PR review, agent template management, daemon install) is out of scope — owned by `first-tree cloud` and operator tooling.
 ---
 
 # First Tree Onboarding (one-shot command)
 
-When the user invokes this skill, you (the agent) drive onboarding **end to end**. Phases A→F below run in order. Within a phase, **execute without asking** unless the action is irreversible or genuinely ambiguous (see "When to ask the user"). At the end, print the wrap-up summary in Phase F.
+When the user invokes this skill, you (the agent) drive onboarding **end to end**. Phases A→E below run in order. Within a phase, **execute without asking** unless the action is irreversible or genuinely ambiguous (see "When to ask the user"). At the end, print the wrap-up summary in Phase E.
+
+This skill is scoped to **rule-based** tree setup: workspace binding, initial content, and rule-layer GitHub workflows (Tier 0 + Tier 2). Anything **agent-driven** — AI PR review, agent runtime / template management, GitHub Scan daemon install — is out of scope and is owned by `first-tree cloud` / operator tooling. Do not pull those in.
 
 Read first: [`../first-tree/SKILL.md`](../first-tree/SKILL.md) and [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md). They define the workspace and tree concepts the rest of this skill assumes.
 
@@ -18,8 +20,7 @@ Read first: [`../first-tree/SKILL.md`](../first-tree/SKILL.md) and [`../first-tr
 2. The bound tree exists on disk at `<workspaceRoot>/<manifest.tree>`, and `first-tree tree verify --tree-path <workspaceRoot>/<manifest.tree>` exits 0.
 3. The tree's `NODE.md`, `members/owner/NODE.md`, and `.first-tree/org.yaml` contain real content (no remaining placeholder strings — see [`references/content-drafting.md`](references/content-drafting.md) §Detection).
 4. `first-tree tree skill doctor` exits 0 from the workspace root.
-5. Tier 0's `validate.yml` exists inside the tree subdir, the agent has explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>` and recorded the returned stage.
-6. The user has explicitly confirmed which agent templates to keep in `<workspaceRoot>/<manifest.tree>/.first-tree/agent-templates/`.
+5. Tier 0's `validate.yml` exists inside the tree subdir, and the user has either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>` with the returned stage recorded.
 
 If any of these fails, stop and report — never silently mark onboarding complete.
 
@@ -120,7 +121,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 4. For each tree field listed in `content-drafting.md` §Extraction Rules, run the matching rule. Mark every field with `# unverified — source: <where>` if confidence is low. **Never invent facts not present in the source signals.**
 5. `git -C $TREE diff --staged` and present to user. Get explicit "yes" before remote actions.
 6. `git -C $TREE commit` → `git -C $TREE push -u origin chore/initial-content-draft` → `gh pr create --repo <slug> --title "..." --body "..."` (or, if user prefers, push to `main` directly — ask).
-   **Exit gate:** all three placeholder strings from the entry signal are gone in the on-disk tree. If the user chose the PR flow and the PR is still open (not merged), treat Phase C as **deferred** — print the deferred summary in Phase F and exit; the user re-runs `/first-tree-onboarding` after merging to finish the remaining phases.
+   **Exit gate:** all three placeholder strings from the entry signal are gone in the on-disk tree. If the user chose the PR flow and the PR is still open (not merged), treat Phase C as **deferred** — print the deferred summary in Phase E and exit; the user re-runs `/first-tree-onboarding` after merging to finish the remaining phases.
 
 ### Phase D — GitHub automation rule layer (always)
 
@@ -131,7 +132,6 @@ If none match → skip Phase C. The combined check is reliable because all three
 1. Confirm `<workspaceRoot>/<manifest.tree>/.github/workflows/validate.yml` exists. If it does not, run `first-tree tree upgrade --tree-path <workspaceRoot>/<manifest.tree>` once and re-check.
 2. Tell the user, explicitly:
    - Tier 0 (`validate.yml`) is installed by default and is rule-based.
-   - Tier 1 (AI PR review) is **not** installed by this skill and belongs to `first-tree cloud`.
    - Tier 2 (`owners:` gate + auto-merge / review-enforcer) is optional and rule-based; if the user wants it now, the CLI will prepare workflow files and print the GitHub ruleset commands, but the agent must not execute those policy-changing `gh api` calls.
    - The exact current parity target with `first-tree-context`'s rule layer lives in [`references/github-automation.md`](references/github-automation.md). Use that file as the source of truth for what "proper tree GitHub automation" means.
 3. Ask once: "Do you want to start Tier 2 now, or leave it for later?"
@@ -149,20 +149,9 @@ If none match → skip Phase C. The combined check is reliable because all three
 - Tier 2 pending PR / ruleset work
 - Tier 2 already configured
 
-### Phase E — Agent templates (auto verify; ask only on add/drop)
+### Phase E — Wrap-up (always)
 
-**Entry signal:** Phase D done.
-
-**Action:**
-
-1. List `<workspaceRoot>/<manifest.tree>/.first-tree/agent-templates/`. Confirm `developer.yaml` and `code-reviewer.yaml` exist (CLI wrote them in Phase B).
-2. Ask: "Keep developer + code-reviewer? Add custom roles (designer / qa / etc.)?"
-3. Apply changes per [`references/agent-templates.md`](references/agent-templates.md). For drops: `git rm`. For adds: copy `developer.yaml` as schema and edit the prompt + skills list.
-4. Commit any changes to the tree.
-
-**Exit gate:** user has confirmed the roster.
-
-### Phase F — Wrap-up (always)
+**Entry signal:** Phase D exit gate passed.
 
 **Action:**
 
@@ -177,11 +166,9 @@ If none match → skip Phase C. The combined check is reliable because all three
    Workspace:   <workspaceRoot>
    Tree:        <manifest.tree>  (<workspaceRoot>/<manifest.tree>)
    Sources:     <comma-separated sources from manifest>
-   Tree URL:    <boundSources[?].remoteUrl or "not published">
+   Tree URL:    <treeRemoteUrl or "not published">
    GitHub Actions: validate.yml installed (Tier 0, rule-based)
-   AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
    Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <treePath>` | configured>
-   Agents:      <comma-separated template names>
 
    Next:
    - Edit <workspaceRoot>/<manifest.tree>/.first-tree/org.yaml to fill in stage/industry if marked unverified.
@@ -201,7 +188,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 | Phase C: source repo has no README and < 5 commits                                 | Generate the minimal scaffolding-replacement (real domain list from top-level dirs only) and mark every other field `# unverified — source repo too sparse to infer`. Open the PR anyway so the user can fill in.                                       |
 | Phase C: tree was published to remote but local sibling dir is missing             | `tree status --json` exposes the tree separately from sources: read `treePresent` (and `treeRemoteUrl` when set). The tree is NEVER an entry in `boundSources[]` — that array is `manifest.sources` only. If `treePresent === false`, ask the user for the tree's remote URL (or use `treeRemoteUrl` if set) and `git clone <url> <workspaceRoot>/<manifest.tree>`. Re-run Phase C once `treePresent` flips to `true`. |
 | Workspace root has many nested repos                                               | Default to NOT adding nested repos to `sources` automatically. List them to the user and ask which to bind.                                                                                                                                              |
-| User re-runs the skill on already-bound repo                                       | Phase A → Phase B-refresh → Phase C (will skip if progress.md is fully checked) → Phase F. The skill is idempotent.                                                                                                                                     |
+| User re-runs the skill on already-bound repo                                       | Phase A → Phase B-refresh → Phase C (will skip if progress.md is fully checked) → Phase D → Phase E. The skill is idempotent.                                                                                                                          |
 | Tree on a private GitHub org, gh user lacks repo-create scope                      | Skip `gh repo create` in Phase B. Commit locally and tell the user the manual `git remote add origin … && git push -u origin main` steps.                                                                                                               |
 | Source repo and tree repo are on different GitHub accounts                         | Ask once which account the tree should live under. Default = same owner as source.                                                                                                                                                                      |
 | Tier 2 command reports `create_ruleset` / `activate_ruleset`                       | Print the command from `first-tree tree automation install --tier 2 --tree-path <workspaceRoot>/<manifest.tree>`. Do not execute it yourself. Those repo-policy operations belong to the user.                                                          |
@@ -209,8 +196,8 @@ If none match → skip Phase C. The combined check is reliable because all three
 ## Hard rules (never violate)
 
 - **Never push to the tree's main branch without an explicit "yes"** from the user. Default for Phase C content is a PR.
-- **Never start an agent runtime in Phase E.** Templates only.
-- **Never claim onboarding done if any Phase F doctor exits non-zero.**
+- **Never install agent-driven automation as part of onboarding.** AI PR review, agent runtimes, and the GitHub Scan daemon are out of scope; they belong to `first-tree cloud` / operator tooling.
+- **Never claim onboarding done if any Phase E doctor exits non-zero.**
 - **Never run onboarding inside the tree subdir.** `tree status` from there will detect it; stop and explain.
 - **Never invent content in Phase C.** If a fact isn't in the source signals listed in `content-drafting.md`, leave the field empty with a `# unverified` marker.
 - **Never bypass `gh auth status` failures** by hand-crafting tokens. Stop and instruct the user.
@@ -221,7 +208,6 @@ If none match → skip Phase C. The combined check is reliable because all three
 
 - [`references/recipe.md`](references/recipe.md) — exact commands and verification per phase.
 - [`references/content-drafting.md`](references/content-drafting.md) — Phase C extraction rules, confidence labels, tree-path resolution, PR flow.
-- [`references/github-automation.md`](references/github-automation.md) — Phase D.5: Tier 0/Tier 1/Tier 2 split, Tier 2 stage meanings, and the manual-command boundary.
+- [`references/github-automation.md`](references/github-automation.md) — Phase D: Tier 0 / Tier 2 rule layer, Tier 2 stage meanings, and the manual-command boundary.
 - [`references/role-decisions.md`](references/role-decisions.md) — workspace position × action matrix used by Phase A.
-- [`references/agent-templates.md`](references/agent-templates.md) — Phase E template schema and add/drop rules.
 - [`references/cli-quickref.md`](references/cli-quickref.md) — every CLI invocation this skill makes, in one place.
