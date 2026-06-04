@@ -100,7 +100,11 @@ export function ResourcesTab() {
                   onRemoveBinding={(bindingId) => mutateBindings(currentBindings.filter((b) => b.id !== bindingId))}
                   onDisable={(resourceId) =>
                     mutateBindings([
-                      ...currentBindings,
+                      // Drop any existing include/replace binding for this resource first —
+                      // otherwise the resolver sees include + disable and it stays enabled.
+                      ...currentBindings.filter(
+                        (b) => b.resourceId !== resourceId && b.replacesResourceId !== resourceId,
+                      ),
                       { type: row.type, mode: "disable", resourceId, order: currentBindings.length + 1 },
                     ])
                   }

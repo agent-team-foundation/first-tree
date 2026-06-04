@@ -75,7 +75,12 @@ export function PromptTab() {
     bindingMut.mutate([...bindings, { type: "prompt", mode: "include", resourceId, order: nextOrder(bindings) }]);
   }
   function disablePrompt(resourceId: string) {
-    bindingMut.mutate([...bindings, { type: "prompt", mode: "disable", resourceId, order: nextOrder(bindings) }]);
+    // Drop any existing include/replace binding for this resource first — otherwise
+    // the resolver sees include + disable and the prompt stays enabled at runtime.
+    bindingMut.mutate([
+      ...bindings.filter((b) => b.resourceId !== resourceId && b.replacesResourceId !== resourceId),
+      { type: "prompt", mode: "disable", resourceId, order: nextOrder(bindings) },
+    ]);
   }
   function removeBinding(bindingId: string) {
     bindingMut.mutate(bindings.filter((binding) => binding.id !== bindingId));

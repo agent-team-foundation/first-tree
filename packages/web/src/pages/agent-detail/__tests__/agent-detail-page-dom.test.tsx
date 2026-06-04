@@ -661,6 +661,61 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
+  it("drops the existing include binding when disabling an explicitly-included recommended prompt", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "binding:team-binding-1:enabled",
+              bindingId: "team-binding-1",
+              resourceId: "team-prompt-1",
+              name: "Team style guide",
+              scope: "team",
+              source: "team_recommended",
+              defaultEnabled: "recommended",
+              promptBody: "Use the team style guide.",
+              order: 2,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "team-binding-1",
+            type: "prompt",
+            mode: "include",
+            resourceId: "team-prompt-1",
+            replacesResourceId: null,
+            inlinePromptBody: null,
+            order: 2,
+          },
+        ],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Effective instructions");
+    await click(exactButtonByText(container, "Disable"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected prompt resource update",
+    );
+    // The pre-existing include binding must be dropped, not left alongside the
+    // disable binding — otherwise the resolver keeps the prompt enabled at runtime.
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 7,
+      bindings: [{ type: "prompt", mode: "disable", resourceId: "team-prompt-1", order: 3 }],
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("adds an inline prompt and clears local validation errors on cancel", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const emptyConfig = config();
