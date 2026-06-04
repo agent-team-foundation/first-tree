@@ -73,11 +73,11 @@ export function ResourcesTab() {
           action={
             canEdit && type === "repo" ? (
               <Button size="xs" variant="outline" onClick={() => setRepoOpen(true)}>
-                <Plus className="h-3 w-3" /> Agent repo
+                <Plus className="h-3.5 w-3.5" /> Agent repo
               </Button>
             ) : canEdit && type === "prompt" ? (
               <Button size="xs" variant="outline" onClick={() => setPromptOpen({ replacesResourceId: null })}>
-                <Plus className="h-3 w-3" /> Inline prompt
+                <Plus className="h-3.5 w-3.5" /> Inline prompt
               </Button>
             ) : null
           }

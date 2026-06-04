@@ -110,8 +110,8 @@ export function AddResourceMenu({ onPick }: { onPick: (type: ResourceType) => vo
     <Popover
       align="end"
       trigger={({ open, toggle }) => (
-        <Button size="sm" aria-expanded={open} onClick={toggle}>
-          <Plus className="h-4 w-4" /> Add resource
+        <Button size="sm" variant="cta" aria-expanded={open} onClick={toggle}>
+          <Plus className="h-3.5 w-3.5" /> Add resource
         </Button>
       )}
     >
