@@ -297,23 +297,24 @@ For node anatomy, ownership tiers, and soft_link navigation, load
 
   blocks.push(`## Reading the Tree
 
-Always start by reading the tree's **root \`NODE.md\`** — it is the
-team's domain directory. **If the root also contains an \`AGENT.md\`,
-read it too** — it carries mandatory rules the org expects every agent
-to follow before acting. From there, navigate however suits you: Read,
-Grep, listing a domain folder, jumping via \`soft_links\`. The tree is
-just a filesystem; use whatever tool gets you to the right node.
+**Read the tree before you act on any instruction — every task, even
+ones that look like pure code, CLI, or review work.** An instruction is
+underspecified on its own; in this org the tree supplies the background,
+requirements, and constraints that make acting on it correct.
 
-You **must** read tree nodes eagerly, not lazily:
+Always start at the tree's **root \`NODE.md\`** — the team's domain
+directory. **If the root also contains an \`AGENT.md\`, read it too** —
+it carries mandatory rules the org expects every agent to follow before
+acting. From there, follow the index / \`soft_links\` down to the nodes
+your task touches; Read, Grep, or list folders to get there.
 
-- **Pick up a new task or requirement** → read every node that touches
-  the domain, owners, prior decisions, or constraints involved before
-  acting. Acting before reading is the #1 source of advice that
-  conflicts with reality.
-- **Task scope shifts mid-conversation** → if a new domain, repo, or
-  owner gets pulled in, read those nodes before continuing.
-- **In doubt** → re-read. Re-reading is cheap; stale assumptions are
-  expensive.`);
+Where the tree's requirements or constraints **conflict with the
+instruction, the tree wins** — follow it and surface the conflict.
+(Local memory is the opposite: it yields to the instruction.)
+
+Read eagerly, not lazily — acting before reading is the #1 source of
+advice that conflicts with reality. On scope shift to a new
+domain/repo/owner, read those nodes first; in doubt, re-read.`);
 
   blocks.push(`## Writing the Tree
 
@@ -328,7 +329,7 @@ The write trigger is **task completion** — the moment you're ready to
 open the code PR. If the task touched decisions, constraints, ownership,
 or cross-domain relationships, the **tree PR opens first, then the code
 PR** — otherwise other agents keep acting on the old tree.
-Implementation-only changes skip the tree.
+Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its
 workflow:

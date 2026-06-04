@@ -316,9 +316,9 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // legacy "`AGENT.md`" string in someone's `prompt.append`).
     expect(briefing).toMatch(/If the root also contains an `AGENT\.md`, ?\s*read it too/);
     expect(briefing).toContain("mandatory rules the org expects every agent");
-    expect(briefing).toContain("read tree nodes eagerly, not lazily");
-    expect(briefing).toContain("Pick up a new task or requirement");
-    expect(briefing).toContain("Task scope shifts mid-conversation");
+    expect(briefing).toContain("before you act on any instruction");
+    expect(briefing).toContain("the tree wins");
+    expect(briefing).toContain("eagerly, not lazily");
 
     // Writing discipline anchors — fresh vs persistent context framing and
     // the tree-PR-before-code-PR ordering rule. The prose wraps the
