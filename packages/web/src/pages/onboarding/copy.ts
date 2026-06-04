@@ -166,7 +166,7 @@ export const COPY = {
     // command-pointing line only holds while waiting; once connected we swap
     // to a neutral confirmation so it doesn't tell the user to "run the
     // command below" when no command is shown.
-    whyWaiting: "Run the command below on the computer where your agent should run.",
+    whyWaiting: "Your agent does real work on a computer you pick. Run the command below.",
     whyConnected: "This is where your agent will run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
@@ -233,10 +233,12 @@ export const COPY = {
     /** Shown atop confirm / picker so invitee knows where the work lands. */
     treeLabel: "Context Tree",
     // Launch CTA — per-substate so it names what's actually starting:
-    //   admin + tree → building the Context Tree; admin no-project → just a
-    //   first chat; invitee → getting to work. (Green `cta` everywhere.)
+    //   admin + tree → building the Context Tree; admin no-project → meeting
+    //   the agent (no project yet, so it's an intro — framed around the agent
+    //   as a teammate, not "chatting", which reads as a chatbot); invitee →
+    //   getting to work. (Green `cta` everywhere.)
     startBuilding: "Start building",
-    startChatting: "Start chatting",
+    startChatting: "Meet your agent",
     startWorking: "Start working",
     starting: "Starting your agent…",
     invalidUrl:
@@ -258,7 +260,11 @@ export const COPY = {
     noInstallShareIntro: "Send this link so your admin can connect your team's code:",
     confirmTitle: "Your team is ready",
     confirmBody: "Your team set up its projects and Context Tree. Pick what your agent should work on.",
-    startAnyway: "Start chatting anyway",
+    // Bailout on the waiting / no-installation screens — proceed with your
+    // own agent now instead of waiting on the team. Framed positively around
+    // the agent (was "Start chatting anyway"; "anyway" read as defiant/
+    // discouraging, and "chatting" as a chatbot).
+    startAnyway: "Meet your agent",
   },
   /** failure recovery, shared */
   errors: {

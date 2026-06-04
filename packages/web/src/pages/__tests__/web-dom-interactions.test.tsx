@@ -1532,7 +1532,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Start your agent", adminNoProject.container);
     await click(
       [...adminNoProject.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Start"),
+        button.textContent?.includes("Meet your agent"),
       ) ?? null,
     );
     expect(chatApiMocks.createAgentChat).toHaveBeenLastCalledWith("agent-1");
@@ -1547,7 +1547,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Waiting for your team to set up", inviteeWaiting.container);
     await click(
       [...inviteeWaiting.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Start chatting anyway"),
+        button.textContent?.includes("Meet your agent"),
       ) ?? null,
     );
     expect(inviteeWaiting.flow.finishLater).toHaveBeenCalled();
