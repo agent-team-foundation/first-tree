@@ -14,9 +14,11 @@
  *     been silent for `mappedIdleSeconds` (default 1h). Additionally:
  *     skip individual users whose `unread_mention_count > 0`.
  *
- *   Route B — chats with no GitHub mapping. Archive only the (chat, user)
- *     pairs where the user has no unread mentions AND the chat has been
- *     silent for `unmappedIdleSeconds` (default 12h).
+ *   Route B — chats with no GitHub mapping and no human owner. Archive only
+ *     the (chat, user) pairs where the user has no unread mentions AND the
+ *     chat has been silent for `unmappedIdleSeconds` (default 12h). Human-
+ *     owned chats are user-created workspace conversations and must stay
+ *     active until explicitly archived.
  *
  * Per-user safety: writes use the same UPSERT + setWhere guard as the
  * removed `archiveChatsForMergedPr` — only implicit-active or
@@ -115,9 +117,12 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
 }
 
 /**
- * Route B: chats with no GitHub mapping that have been silent past
- * `idleSeconds`, restricted to per-(chat, user) rows that all of:
+ * Route B: chats with no GitHub mapping and no human owner that have been
+ * silent past `idleSeconds`, restricted to per-(chat, user) rows that all of:
  *
+ *   - the chat is not owned by a human speaker — human-owned chats are
+ *     manually created workspace conversations and should not disappear from
+ *     Active merely because they are quiet,
  *   - the user has acknowledged the chat at least once (`last_read_at IS
  *     NOT NULL`) — never auto-archive a view the user has never even
  *     opened; without this guard a never-clicked watcher would find the
@@ -153,6 +158,14 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
        AND c.parent_chat_id IS NULL
        AND c.last_message_at IS NOT NULL
        AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
+       AND NOT EXISTS (
+         SELECT 1
+           FROM chat_membership owner_cm
+           JOIN agents owner_a ON owner_a.uuid = owner_cm.agent_id
+          WHERE owner_cm.chat_id = c.id
+            AND owner_cm.role = 'owner'
+            AND owner_a.type = 'human'
+       )
        AND cus.last_read_at IS NOT NULL
        AND cus.unread_mention_count = 0
        AND cus.engagement_status = 'active'

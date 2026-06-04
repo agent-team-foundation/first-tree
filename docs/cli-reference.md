@@ -466,6 +466,9 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
 | `FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` | `43200` |
 
+`FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` applies only to chats with no
+GitHub mapping and no human owner.
+
 **Observability:**
 
 | Variable | Purpose | Default |

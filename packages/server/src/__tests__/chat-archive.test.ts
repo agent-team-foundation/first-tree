@@ -5,9 +5,9 @@
  *   Route A — chats with GitHub mappings: archive when every mapped entity
  *             is terminal AND `last_message_at` is older than the mapped
  *             idle threshold.
- *   Route B — chats with no GitHub mapping: archive (chat, user) pairs
- *             with no unread mentions AND `last_message_at` older than the
- *             unmapped idle threshold.
+ *   Route B — chats with no GitHub mapping and no human owner: archive
+ *             (chat, user) pairs with no unread mentions AND
+ *             `last_message_at` older than the unmapped idle threshold.
  *
  * Also asserts the shared per-user safety guards: deleted-sticky and
  * already-archived rows are never touched; sweeps are idempotent.
@@ -22,6 +22,7 @@ import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { sweepChatArchive } from "../services/chat-archive.js";
+import { createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -426,6 +427,22 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     await sweepChatArchive(app.db);
 
     expect(await getEngagement(app, chatId, human)).toBe("active");
+  });
+
+  it("does not archive a manually created chat owned by a human", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [delegate],
+    });
+    await app.db.update(chats).set({ lastMessageAt: longAgo() }).where(eq(chats.id, chatId));
+    await seedReadAcknowledgement(app, chatId, admin.humanAgentUuid);
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.unmappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, chatId, admin.humanAgentUuid)).toBe("active");
   });
 
   it("does not archive chats that have GitHub mappings (Route A's responsibility)", async () => {
