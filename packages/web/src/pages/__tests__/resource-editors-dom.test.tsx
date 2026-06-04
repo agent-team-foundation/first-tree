@@ -61,7 +61,36 @@ async function flush(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
   });
+}
+
+/**
+ * Poll for a button by text, flushing between attempts. Radix Popover / Dialog
+ * render their contents through a portal on an async tick, so a single flush()
+ * after the trigger click can race the option appearing (flaky under slower
+ * CI timing). Wait until it's there instead of assuming one tick is enough.
+ */
+async function waitForButton(text: string): Promise<HTMLButtonElement> {
+  for (let i = 0; i < 50; i++) {
+    const found = byText(text);
+    if (found) return found;
+    await flush();
+  }
+  throw new Error(`waitForButton: "${text}" never appeared`);
+}
+
+/** Wait until a button is present AND enabled, then click it. */
+async function clickWhenEnabled(text: string): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    const found = byText(text);
+    if (found && !found.disabled) {
+      await click(found);
+      return;
+    }
+    await flush();
+  }
+  throw new Error(`clickWhenEnabled: "${text}" never became enabled`);
 }
 
 async function render(): Promise<{ root: Root }> {
@@ -313,11 +342,48 @@ describe("resource editors", () => {
     await click(byText("Cancel"));
     expect(resourceMocks.retireResource).not.toHaveBeenCalled();
 
-    // Re-open and confirm → retire fires once with the resource id.
+    // Re-open and confirm → retire fires once with the resource id. The confirm
+    // re-disables briefly while the impact re-fetches, so wait for it to enable.
     await click(byAria("Retire github"));
-    await click(byText("Retire"));
+    await clickWhenEnabled("Retire");
     expect(resourceMocks.retireResource).toHaveBeenCalledTimes(1);
     expect(resourceMocks.retireResource.mock.calls[0]?.[0]).toBe("mcp-1");
+    await act(async () => root.unmount());
+  });
+
+  it("re-checks impact on every open — never confirms against a cached stale count", async () => {
+    // A fresh controllable promise per call lets us prove the second open
+    // re-fetches (gcTime: 0) instead of reusing the first open's cached count.
+    const resolvers: Array<(v: { affectedAgentCount: number; promptOverflowAgentCount: number; agents: [] }) => void> =
+      [];
+    resourceMocks.previewResourceImpact.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { root } = await render();
+
+    // Open #1: pending → disabled; resolve → enabled.
+    await click(byAria("Retire github"));
+    expect(byText("Retire")?.disabled).toBe(true);
+    await act(async () => {
+      resolvers[0]?.({ affectedAgentCount: 1, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
+    await click(byText("Cancel"));
+
+    // Reopen: must re-fetch and re-disable (not reuse the cached count), so a
+    // background refetch can't leave a stale-but-clickable confirm.
+    await click(byAria("Retire github"));
+    expect(resourceMocks.previewResourceImpact).toHaveBeenCalledTimes(2);
+    expect(byText("Retire")?.disabled).toBe(true);
+    await act(async () => {
+      resolvers[1]?.({ affectedAgentCount: 1, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
     await act(async () => root.unmount());
   });
 
@@ -371,7 +437,7 @@ describe("resource editors", () => {
     });
     const { root } = await render();
     await click(byText("Add resource"));
-    await click(byText("Prompt"));
+    await click(await waitForButton("Prompt"));
     const body = document.getElementById("prompt-body");
     if (!(body instanceof HTMLTextAreaElement)) throw new Error("prompt-body");
     await act(async () => {
@@ -381,11 +447,13 @@ describe("resource editors", () => {
 
     // First click runs the silent overflow check → warns, does NOT save yet.
     await click(byText("Create"));
+    // The check is async (impact preview) — wait for the warning to surface.
+    await waitForButton("Save anyway");
     expect(resourceMocks.createTeamResource).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("exceed the prompt budget for 2 agents");
 
     // Second click ("Save anyway") commits.
-    await click(byText("Save anyway"));
+    await click(await waitForButton("Save anyway"));
     expect(resourceMocks.createTeamResource).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });

@@ -54,6 +54,11 @@ export function SettingsResourcesPage() {
       addToast({ title: `Retired "${retireTarget?.name ?? "resource"}"` });
       setRetireTarget(null);
     },
+    onError: (e) => {
+      // Surface the failure instead of silently re-enabling the dialog; the
+      // dialog stays open so the user can retry or cancel.
+      addToast({ title: "Couldn't retire resource", description: e instanceof Error ? e.message : String(e) });
+    },
   });
 
   const grouped = useMemo(() => {
@@ -234,12 +239,19 @@ function RetireConfirmDialog(props: {
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  // Destructive action: never confirm against a stale count. `gcTime: 0` drops
+  // the cache when the dialog closes, so each open re-fetches fresh rather than
+  // reusing a prior result; the confirm button + copy then gate on `isFetching`
+  // (not just `isPending`) so an in-flight (re)fetch keeps it blocked.
   const impactQuery = useQuery({
     queryKey: ["resource-impact", props.resource.id],
     queryFn: () => previewResourceImpact(props.resource.id),
+    gcTime: 0,
+    staleTime: 0,
   });
+  const checking = impactQuery.isFetching;
   const count = impactQuery.data?.affectedAgentCount;
-  const impactLine = impactQuery.isLoading
+  const impactLine = checking
     ? "Checking impact…"
     : count === undefined
       ? "This removes the resource from the team's runtime defaults."
@@ -259,15 +271,11 @@ function RetireConfirmDialog(props: {
             Cancel
           </Button>
           {/* Block the confirm until the impact check resolves, so the user
-              can't retire before seeing how many agents it affects. `isPending`
-              clears on both success and error — a failed soft-check never locks
-              the button. */}
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={props.onConfirm}
-            disabled={props.retiring || impactQuery.isPending}
-          >
+              can't retire before seeing how many agents it affects. `isFetching`
+              (not just `isPending`) also blocks a background refetch on reopen,
+              so a cached stale count is never confirmable; it clears on both
+              success and error, so a failed check never locks the button. */}
+          <Button type="button" variant="destructive" onClick={props.onConfirm} disabled={props.retiring || checking}>
             {props.retiring ? "Retiring…" : "Retire"}
           </Button>
         </DialogFooter>
