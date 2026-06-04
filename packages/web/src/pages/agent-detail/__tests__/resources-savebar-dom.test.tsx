@@ -97,7 +97,6 @@ function summary(dirtySections: DraftSummary["dirtySections"] = []): DraftSummar
     anyDirty: dirtySections.length > 0,
     dirtySections,
     counts: {
-      prompt: dirtySections.includes("prompt") ? 1 : 0,
       model: dirtySections.includes("model") ? 1 : 0,
       effort: dirtySections.includes("effort") ? 1 : 0,
       mcp: dirtySections.includes("mcp") ? 1 : 0,
@@ -110,7 +109,6 @@ function summary(dirtySections: DraftSummary["dirtySections"] = []): DraftSummar
 function draft(overrides: Partial<UseConfigDraftResult> = {}): UseConfigDraftResult {
   return {
     draft: {
-      promptAppend: "",
       model: "sonnet",
       reasoningEffort: "medium",
       mcp: [],
@@ -125,11 +123,8 @@ function draft(overrides: Partial<UseConfigDraftResult> = {}): UseConfigDraftRes
       ],
     },
     summary: summary(["env", "git"]),
-    promptDirty: false,
     modelDirty: false,
     reasoningEffortDirty: false,
-    setPromptAppend: vi.fn(),
-    revertPrompt: vi.fn(),
     setModel: vi.fn(),
     revertModel: vi.fn(),
     setReasoningEffort: vi.fn(),
@@ -277,8 +272,8 @@ describe("ResourcesTab and SaveBar", () => {
 
     spy.mockReturnValue(context({ canEditConfig: false, canManageAgent: false }));
     let container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Repos");
-    expect(container.textContent).toContain("Repos");
+    await waitForText(container, "Code repositories");
+    expect(container.textContent).toContain("Code repositories");
     expect(container.textContent).not.toContain("Agent repo");
 
     await act(async () => root?.unmount());
@@ -323,16 +318,16 @@ describe("ResourcesTab and SaveBar", () => {
         },
         availableTeamResources: [
           {
-            id: "prompt-available",
+            id: "skill-available",
             organizationId: "org-1",
-            type: "prompt",
+            type: "skill",
             scope: "team",
             ownerAgentId: null,
-            name: "Available prompt",
+            name: "Available skill",
             repoCanonicalKey: null,
             defaultEnabled: "available",
             status: "active",
-            payload: { body: "Prefer short diffs." },
+            payload: { name: "Available skill", description: "A skill.", body: "Do the thing.", metadata: {} },
             createdBy: "member-1",
             updatedBy: "member-1",
             createdAt: NOW,
@@ -344,25 +339,25 @@ describe("ResourcesTab and SaveBar", () => {
     const { ResourcesTab } = await import("../resources-tab.js");
 
     const container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Repos");
+    await waitForText(container, "Code repositories");
 
-    expect(container.textContent).toContain("Repos");
-    expect(container.textContent).toContain("Prompts");
+    expect(container.textContent).toContain("Code repositories");
+    expect(container.textContent).toContain("Skills");
+    expect(container.textContent).not.toContain("Prompts");
     expect(container.textContent).toContain("Team repo");
     expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
     expect(container.textContent).toContain("Agent repo");
-    expect(container.textContent).toContain("Inline prompt");
 
-    await click(buttonByText(container, "Enable Available prompt"));
+    await click(buttonByText(container, "Enable Available skill"));
     expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
       expectedVersion: 3,
-      bindings: [{ type: "prompt", mode: "include", resourceId: "prompt-available", order: 1 }],
+      bindings: [{ type: "skill", mode: "include", resourceId: "skill-available", order: 1 }],
     });
   });
 
   it("renders SaveBar saved, error, conflict, saving, and jump actions", async () => {
     expect(dirtySummaryLabel(summary())).toBe("");
-    expect(dirtySummaryLabel(summary(["prompt", "env"]))).toBe("Prompt · Env");
+    expect(dirtySummaryLabel(summary(["model", "env"]))).toBe("Model · Env");
     const onSave = vi.fn();
     const onDiscard = vi.fn();
     const onReloadRemote = vi.fn();
@@ -370,7 +365,7 @@ describe("ResourcesTab and SaveBar", () => {
 
     const container = await renderElement(
       <SaveBar
-        summary={summary(["prompt", "env"])}
+        summary={summary(["model", "env"])}
         saveHint="local draft"
         conflictMessage="remote changed"
         errorMessage="save failed"
@@ -384,15 +379,15 @@ describe("ResourcesTab and SaveBar", () => {
       />,
     );
 
-    expect(container.textContent).toContain("Configuration changes in Prompt, Env");
+    expect(container.textContent).toContain("Configuration changes in Model, Env");
     expect(container.textContent).not.toContain("sections with unsaved changes");
     expect(container.textContent).toContain("local draft");
     expect(container.textContent).toContain("remote changed");
     expect(container.textContent).toContain("save failed");
     expect(container.textContent).toContain("Loading latest");
     expect(container.textContent).toContain("Saving");
-    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "Prompt") ?? null);
-    expect(onJumpTo).toHaveBeenCalledWith("prompt");
+    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "Model") ?? null);
+    expect(onJumpTo).toHaveBeenCalledWith("model");
     await click(
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Discard changes") ?? null,
     );

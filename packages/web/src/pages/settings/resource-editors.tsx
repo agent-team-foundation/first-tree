@@ -43,14 +43,14 @@ const MCP_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function typeLabelPlural(type: ResourceType): string {
   if (type === "repo") return "Repos";
-  if (type === "prompt") return "Prompts";
+  if (type === "prompt") return "Instructions";
   if (type === "skill") return "Skills";
   return "MCP";
 }
 
 function typeLabelSingular(type: ResourceType): string {
   if (type === "repo") return "Repo";
-  if (type === "prompt") return "Prompt";
+  if (type === "prompt") return "Instructions";
   if (type === "skill") return "Skill";
   return "MCP";
 }
@@ -636,14 +636,14 @@ function PromptEditor({ state, save, onClose }: EditorProps) {
 
   const payload = (): CreateTeamResource => ({
     type: "prompt",
-    name: name.trim() || "Prompt",
+    name: name.trim() || "Instructions",
     defaultEnabled: mode,
     payload: { body, ...(description.trim() ? { description: description.trim() } : {}) },
   });
 
   return (
     <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
-      <Field id="prompt-name" label="Name" value={name} onChange={setName} placeholder="Prompt name" />
+      <Field id="prompt-name" label="Name" value={name} onChange={setName} placeholder="Instructions name" />
       <Field
         id="prompt-desc"
         label="Description"

@@ -2,7 +2,9 @@ import {
   type AgentResourceBindingInput,
   deriveRepoLocalPath,
   type EffectiveResourceRow,
+  noSecretMcpServerSchema,
   type ResourceType,
+  skillResourcePayloadSchema,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
@@ -13,15 +15,18 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
+import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { useAgentDetailContext } from "./layout-context.js";
+import { sourceLabel } from "./resource-source.js";
 
-const RESOURCE_TYPES: ResourceType[] = ["repo", "prompt", "skill", "mcp"];
+// Prompts are managed in the Prompt tab, not here — Capabilities lists only
+// what the agent can use: code repos, skills, and MCP integrations.
+const RESOURCE_TYPES: ResourceType[] = ["repo", "skill", "mcp"];
 
 export function ResourcesTab() {
   const ctx = useAgentDetailContext();
   const queryClient = useQueryClient();
   const [repoOpen, setRepoOpen] = useState(false);
-  const [promptOpen, setPromptOpen] = useState<{ replacesResourceId: string | null } | null>(null);
   const resourcesQuery = useQuery({
     queryKey: ["agent-resources", ctx.uuid],
     queryFn: () => getAgentResources(ctx.uuid),
@@ -70,14 +75,11 @@ export function ResourcesTab() {
           key={type}
           title={typeLabel(type)}
           count={data.effective[resourceBucket(type)].length}
+          description={type === "mcp" ? "Tools come from the MCP servers connected here." : undefined}
           action={
             canEdit && type === "repo" ? (
               <Button size="xs" variant="outline" onClick={() => setRepoOpen(true)}>
                 <Plus className="h-3.5 w-3.5" /> Agent repo
-              </Button>
-            ) : canEdit && type === "prompt" ? (
-              <Button size="xs" variant="outline" onClick={() => setPromptOpen({ replacesResourceId: null })}>
-                <Plus className="h-3.5 w-3.5" /> Inline prompt
               </Button>
             ) : null
           }
@@ -85,7 +87,7 @@ export function ResourcesTab() {
           <div>
             {data.effective[resourceBucket(type)].length === 0 ? (
               <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-                No {typeLabel(type).toLowerCase()} enabled.
+                No {emptyNoun(type)} enabled.
               </p>
             ) : (
               data.effective[resourceBucket(type)].map((row) => (
@@ -102,7 +104,6 @@ export function ResourcesTab() {
                       { type: row.type, mode: "disable", resourceId, order: currentBindings.length + 1 },
                     ])
                   }
-                  onReplacePrompt={(resourceId) => setPromptOpen({ replacesResourceId: resourceId })}
                 />
               ))
             )}
@@ -154,25 +155,6 @@ export function ResourcesTab() {
           setRepoOpen(false);
         }}
       />
-      <InlinePromptDialog
-        open={!!promptOpen}
-        replacesResourceId={promptOpen?.replacesResourceId ?? null}
-        onOpenChange={(open) => !open && setPromptOpen(null)}
-        onSubmit={(body, replacesResourceId) => {
-          mutateBindings([
-            ...currentBindings,
-            {
-              type: "prompt",
-              mode: replacesResourceId ? "replace" : "include",
-              resourceId: null,
-              replacesResourceId,
-              inlinePromptBody: body,
-              order: currentBindings.length + 1,
-            },
-          ]);
-          setPromptOpen(null);
-        }}
-      />
     </div>
   );
 }
@@ -184,14 +166,15 @@ function EffectiveRow(props: {
   pending: boolean;
   onRemoveBinding: (bindingId: string) => void;
   onDisable: (resourceId: string) => void;
-  onReplacePrompt: (resourceId: string) => void;
 }) {
-  const detail =
-    props.row.repo?.url ??
-    (props.row.promptBody ? `${props.row.promptBody.length} chars` : (props.row.unavailableReason ?? props.row.source));
+  // Unavailable rows surface the failure reason as the subtitle; everything
+  // else shows a type-appropriate detail. The subtitle never falls back to the
+  // raw `source` enum (that used to duplicate the source under skills/MCP rows).
+  const subtitle = props.row.mode === "unavailable" ? props.row.unavailableReason : rowSubtitle(props.row);
+  const status = statusMarker(props.row.mode);
+  const source = sourceLabel(props.row.source);
   const canRemove = props.row.bindingId && props.bindings.some((b) => b.id === props.row.bindingId);
   const canDisable = props.row.resourceId && props.row.source === "team_recommended" && props.row.mode === "enabled";
-  const canReplacePrompt = props.row.type === "prompt" && props.row.resourceId && props.row.source.startsWith("team_");
   return (
     <div
       className="flex items-center gap-3"
@@ -202,27 +185,22 @@ function EffectiveRow(props: {
           <p className="m-0 text-body font-medium truncate" style={{ color: "var(--fg)" }}>
             {props.row.name}
           </p>
-          <span className="text-caption" style={{ color: statusColor(props.row.mode) }}>
-            {props.row.mode}
-          </span>
+          {status ? (
+            <span className="mono inline-flex items-center gap-1.5 text-caption" style={{ color: status.color }}>
+              <StatusGlyph colorVar={status.color} shape="dot" size={7} ariaLabel={status.label} />
+              {status.label}
+            </span>
+          ) : null}
           <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            {props.row.source}
+            {source}
           </span>
         </div>
-        <p className="m-0 text-caption truncate mono" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
-          {props.row.repo?.localPath ? `${detail} -> ${props.row.repo.localPath}` : detail}
-        </p>
+        {subtitle ? (
+          <p className="m-0 text-caption truncate mono" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+            {subtitle}
+          </p>
+        ) : null}
       </div>
-      {props.canEdit && canReplacePrompt ? (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={props.pending}
-          onClick={() => props.onReplacePrompt(props.row.resourceId ?? "")}
-        >
-          Replace
-        </Button>
-      ) : null}
       {props.canEdit && canDisable ? (
         <Button
           size="xs"
@@ -313,49 +291,6 @@ function AgentRepoDialog(props: {
   );
 }
 
-function InlinePromptDialog(props: {
-  open: boolean;
-  replacesResourceId: string | null;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (body: string, replacesResourceId: string | null) => void;
-}) {
-  const [body, setBody] = useState("");
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{props.replacesResourceId ? "Replace prompt" : "Add inline prompt"}</DialogTitle>
-        </DialogHeader>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!body.trim()) return;
-            props.onSubmit(body, props.replacesResourceId);
-            setBody("");
-          }}
-          className="space-y-4"
-        >
-          <div className="space-y-2">
-            <Label htmlFor="inline-prompt-body">Body</Label>
-            <textarea
-              id="inline-prompt-body"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              className="min-h-40 w-full rounded border bg-background p-2 text-body"
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit">{props.replacesResourceId ? "Replace" : "Add"}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function Field(props: {
   id: string;
   label: string;
@@ -386,14 +321,46 @@ function resourceBucket(type: ResourceType): "repos" | "prompts" | "skills" | "m
 }
 
 function typeLabel(type: ResourceType): string {
-  if (type === "repo") return "Repos";
+  if (type === "repo") return "Code repositories";
   if (type === "prompt") return "Prompts";
   if (type === "skill") return "Skills";
-  return "MCP";
+  return "Integrations (MCP)";
 }
 
-function statusColor(mode: EffectiveResourceRow["mode"]): string {
-  if (mode === "unavailable") return "var(--state-error)";
-  if (mode === "disabled" || mode === "replaced") return "var(--fg-4)";
-  return "var(--state-working)";
+function emptyNoun(type: ResourceType): string {
+  if (type === "repo") return "code repositories";
+  if (type === "prompt") return "prompts";
+  if (type === "skill") return "skills";
+  return "MCP integrations";
+}
+
+/** One-line, human subtitle per resource type. Never the raw `source` enum. */
+function rowSubtitle(row: EffectiveResourceRow): string | null {
+  if (row.type === "repo") {
+    const url = row.repo?.url;
+    if (!url) return null;
+    return row.repo?.localPath ? `${url} -> ${row.repo.localPath}` : url;
+  }
+  if (row.type === "prompt") {
+    return row.promptBody ? `${row.promptBody.length} chars` : null;
+  }
+  if (row.type === "skill") {
+    const parsed = skillResourcePayloadSchema.safeParse(row.payload);
+    return parsed.success ? parsed.data.description : null;
+  }
+  const mcp = noSecretMcpServerSchema.safeParse(row.payload);
+  if (!mcp.success) return null;
+  return mcp.data.transport === "stdio" ? mcp.data.command : mcp.data.url;
+}
+
+/**
+ * Status marker — only rendered when a row deviates from the normal "enabled"
+ * state, so normal rows stay clean. `Off` (not `Disabled`) avoids colliding
+ * with the row's own `Disable` action button.
+ */
+function statusMarker(mode: EffectiveResourceRow["mode"]): { label: string; color: string } | null {
+  if (mode === "disabled") return { label: "Off", color: "var(--fg-4)" };
+  if (mode === "replaced") return { label: "Overridden", color: "var(--fg-4)" };
+  if (mode === "unavailable") return { label: "Can't load", color: "var(--state-error)" };
+  return null;
 }

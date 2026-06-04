@@ -406,32 +406,32 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective prompt");
+    await waitForText(container, "Effective instructions");
     expect(container.textContent).toContain("Kael");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
     expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
       "Runtime",
-      "Prompt",
-      "Resources",
+      "Instructions",
+      "Capabilities",
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
-    await waitForText(container, "Team Resource: Team style guide");
+    await waitForText(container, "Team style guide");
     expect(container.textContent).toContain("Use the team style guide.");
-    expect(container.textContent).toContain("Agent Resource: inline prompt");
+    expect(container.textContent).toContain("Added by you");
 
-    await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(container, "Save prompt");
-    expect(container.textContent).toContain("Team Resource: Team style guide");
+    await click(exactButtonByText(container, "Edit custom instructions"));
+    await waitForText(container, "Save instructions");
+    expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Use the team style guide.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Always explain tradeoffs.");
     expect(textarea?.style.minHeight).toBe("16rem");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Prefer concise answers.");
-    await click(exactButtonByText(container, "Save prompt"));
+    await click(exactButtonByText(container, "Save instructions"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -500,18 +500,18 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Team Resource: Team style guide");
-    await waitForText(container, "Agent Resource: custom prompt");
-    expect(container.textContent).toContain("No prompt body.");
+    await waitForText(container, "Team style guide");
+    await waitForText(container, "Added by you");
+    expect(container.textContent).toContain("No instructions yet.");
 
-    await click(exactButtonByText(container, "Edit custom prompt"));
-    await waitForText(container, "Save prompt");
+    await click(exactButtonByText(container, "Edit custom instructions"));
+    await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Use the team style guide.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Recovered custom prompt.");
-    await click(exactButtonByText(container, "Save prompt"));
+    await click(exactButtonByText(container, "Save instructions"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -563,14 +563,14 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective prompt");
+    await waitForText(container, "Effective instructions");
     await click(exactButtonByText(container, "Customize for this agent"));
-    await waitForText(container, "Save prompt");
+    await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Use the agent-specific style guide.");
-    await click(exactButtonByText(container, "Save prompt"));
+    await click(exactButtonByText(container, "Save instructions"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -631,14 +631,14 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective prompt");
+    await waitForText(container, "Effective instructions");
     await click(exactButtonByText(container, "Customize for this agent"));
-    await waitForText(container, "Save prompt");
+    await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Use the agent-specific style guide.");
-    await click(exactButtonByText(container, "Save prompt"));
+    await click(exactButtonByText(container, "Save instructions"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -675,25 +675,25 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "No prompt resources enabled.");
-    await click(exactButtonByText(container, "Add custom prompt"));
-    await waitForText(container, "Save prompt");
-    await click(exactButtonByText(container, "Save prompt"));
-    await waitForText(container, "Prompt body is required.");
+    await waitForText(container, "No instructions yet.");
+    await click(exactButtonByText(container, "Add custom instructions"));
+    await waitForText(container, "Save instructions");
+    await click(exactButtonByText(container, "Save instructions"));
+    await waitForText(container, "Instructions are required.");
     await click(exactButtonByText(container, "Cancel"));
     await waitForCondition(
-      () => !container.textContent?.includes("Prompt body is required."),
+      () => !container.textContent?.includes("Instructions are required."),
       "Expected prompt body validation error to clear",
     );
 
-    await click(exactButtonByText(container, "Add custom prompt"));
-    await waitForText(container, "Save prompt");
-    expect(container.textContent).not.toContain("Prompt body is required.");
+    await click(exactButtonByText(container, "Add custom instructions"));
+    await waitForText(container, "Save instructions");
+    expect(container.textContent).not.toContain("Instructions are required.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("");
     if (!textarea) throw new Error("Expected custom prompt textarea");
     await setValue(textarea, "Prefer concise answers.");
-    await click(exactButtonByText(container, "Save prompt"));
+    await click(exactButtonByText(container, "Save instructions"));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
@@ -718,7 +718,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective prompt");
+    await waitForText(container, "Effective instructions");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");

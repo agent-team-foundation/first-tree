@@ -74,6 +74,10 @@ const ResourcesPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/resources-preview.js").then((module) => ({ default: module.ResourcesPreviewPage })))
   : null;
 
+const AgentDetailPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/agent-detail-preview.js").then((module) => ({ default: module.AgentDetailPreviewPage })))
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -164,6 +168,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {AgentDetailPreviewPage ? (
+                <Route
+                  path="/preview/agent-detail/*"
+                  element={
+                    <Suspense fallback={null}>
+                      <AgentDetailPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               <Route
                 path="/preview/styleguide"
                 element={
@@ -197,7 +211,9 @@ export function App() {
                     <Route path="setup" element={<Navigate to="../runtime" replace />} />
                     <Route path="prompt" element={<PromptTab />} />
                     <Route path="tools" element={<Navigate to="../profile" replace />} />
-                    <Route path="resources" element={<ResourcesTab />} />
+                    <Route path="capabilities" element={<ResourcesTab />} />
+                    {/* Legacy deep links: the tab was renamed Resources → Capabilities. */}
+                    <Route path="resources" element={<Navigate to="../capabilities" replace />} />
                   </Route>
 
                   {/* Team — flat roster page, no sub-nav. Org-scoped admin

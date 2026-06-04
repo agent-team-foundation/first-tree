@@ -964,7 +964,7 @@ describe("page SSR smoke coverage", () => {
 
     for (const [route, expected] of [
       ["/agents/agent-1/runtime", "Runtime"],
-      ["/agents/agent-1/prompt", "Effective prompt"],
+      ["/agents/agent-1/prompt", "Effective instructions"],
       ["/agents/agent-1/resources", "Team web"],
     ] as const) {
       expect(
@@ -990,7 +990,6 @@ describe("page SSR smoke coverage", () => {
     const { IdentitySection } = await import("../agent-detail/identity-section.js");
     const { McpSection } = await import("../agent-detail/mcp-section.js");
     const { ModelSection } = await import("../agent-detail/model-section.js");
-    const { PromptSection } = await import("../agent-detail/prompt-section.js");
     const { ReasoningEffortSection } = await import("../agent-detail/reasoning-effort-section.js");
     const { RuntimeSection } = await import("../agent-detail/runtime-section.js");
 
@@ -1009,7 +1008,6 @@ describe("page SSR smoke coverage", () => {
           modelSlot={<ModelSection value="sonnet" baseline="opus" onChange={noop} onRevert={noop} />}
           effortSlot={<ReasoningEffortSection value="high" baseline="" onChange={noop} onRevert={noop} />}
         />
-        <PromptSection value={AGENT_CONFIG.payload.prompt.append} baseline="" onChange={noop} onRevert={noop} />
         <McpSection
           items={AGENT_CONFIG.payload.mcpServers.map((item, index) => row(`mcp-${index}`, item))}
           otherNames={() => new Set()}
@@ -1041,7 +1039,6 @@ describe("page SSR smoke coverage", () => {
     expect(rendered).toContain("Identity");
     expect(rendered).toContain("Appearance");
     expect(rendered).toContain("gandy-macbook");
-    expect(rendered).toContain("Always explain tradeoffs.");
     expect(rendered).toContain("filesystem");
     expect(rendered).toContain("FIRST_TREE_ENV");
     expect(rendered).toContain("https://github.com/acme/web.git");
