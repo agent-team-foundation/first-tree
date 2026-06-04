@@ -1,7 +1,7 @@
 import type { CreateTeamResource, ResourceRow, ResourceType } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useRef, useState } from "react";
 import {
   createTeamResource,
   previewOrgResourceImpact,
@@ -167,16 +167,23 @@ export function ResourceEditor({ state, onClose }: { state: EditorState; onClose
 // ─────────────────────────────────────────────────────────────────────────
 
 type SaveApi = {
-  submit: (payload: CreateTeamResource) => void;
-  preview: (payload: CreateTeamResource) => void;
+  /** Entry point. For prompt/skill, runs a silent prompt-overflow check first
+   *  (zero friction when there's no overflow); otherwise saves directly. */
+  requestSave: (payload: CreateTeamResource) => void;
   saving: boolean;
+  checking: boolean;
   error: string | null;
-  impact: string | null;
+  /** Set when a prompt-overflow was detected and the user must confirm. */
+  overflowWarning: string | null;
 };
 
 function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
   const [error, setError] = useState<string | null>(null);
-  const [impact, setImpact] = useState<string | null>(null);
+  const [overflowWarning, setOverflowWarning] = useState<string | null>(null);
+  // Once the user has seen the overflow warning, the next submit goes through.
+  // Sticky for the editor's lifetime — editing the body after acknowledging
+  // won't re-trigger the check, which is an acceptable trade for v1.
+  const acknowledged = useRef(false);
 
   const createMut = useMutation({
     mutationFn: createTeamResource,
@@ -193,7 +200,14 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
     onSuccess: onDone,
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
-  const previewMut = useMutation({
+
+  const doSubmit = (payload: CreateTeamResource) => {
+    setError(null);
+    if (state.mode === "edit") updateMut.mutate(payload);
+    else createMut.mutate(payload);
+  };
+
+  const overflowMut = useMutation({
     // Edit must use the per-resource impact endpoint — the org endpoint only
     // simulates a brand-new recommended resource and under-reports changes to
     // an existing (e.g. available, already-bound) one.
@@ -201,21 +215,36 @@ function useResourceSave(state: EditorState, onDone: () => void): SaveApi {
       const body = { type: payload.type, defaultEnabled: payload.defaultEnabled, payload: payload.payload };
       return state.mode === "edit" ? previewResourceImpact(state.resource.id, body) : previewOrgResourceImpact(body);
     },
-    onSuccess: (r) =>
-      setImpact(`${r.affectedAgentCount} agents affected, ${r.promptOverflowAgentCount} prompt overflows`),
-    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+    onSuccess: (r, payload) => {
+      const overflow = r?.promptOverflowAgentCount ?? 0;
+      if (overflow > 0) {
+        acknowledged.current = true;
+        setOverflowWarning(
+          `Saving this will exceed the prompt budget for ${overflow} agent${overflow === 1 ? "" : "s"}. Save anyway?`,
+        );
+        return;
+      }
+      doSubmit(payload);
+    },
+    // A failed soft-check must not block saving — fall through to the real save.
+    onError: (_e, payload) => doSubmit(payload),
   });
 
   return {
-    submit: (payload) => {
+    requestSave: (payload) => {
       setError(null);
-      if (state.mode === "edit") updateMut.mutate(payload);
-      else createMut.mutate(payload);
+      // Only prompt/skill bodies can overflow an agent's prompt budget.
+      const gated = payload.type === "prompt" || payload.type === "skill";
+      if (!gated || acknowledged.current) {
+        doSubmit(payload);
+        return;
+      }
+      overflowMut.mutate(payload);
     },
-    preview: (payload) => previewMut.mutate(payload),
     saving: createMut.isPending || updateMut.isPending,
+    checking: overflowMut.isPending,
     error,
-    impact,
+    overflowWarning,
   };
 }
 
@@ -378,16 +407,14 @@ function pairsToRecord(pairs: [string, string][]): Record<string, string> {
   return out;
 }
 
-// Shared footer (Cancel · Preview · Save) — reused by every editor.
+// Shared footer (Cancel · Save) — reused by every editor.
 function EditorFooter({
   save,
-  payload,
   saveLabel,
   onCancel,
   localError,
 }: {
   save: SaveApi;
-  payload: () => CreateTeamResource;
   saveLabel: string;
   onCancel: () => void;
   /** Client-side validation message (blocks submit before the API call). */
@@ -395,9 +422,9 @@ function EditorFooter({
 }) {
   return (
     <>
-      {save.impact ? (
-        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-          {save.impact}
+      {save.overflowWarning ? (
+        <p className="text-caption" style={{ color: "var(--state-blocked)" }}>
+          {save.overflowWarning}
         </p>
       ) : null}
       {localError || save.error ? (
@@ -408,11 +435,8 @@ function EditorFooter({
       <Button type="button" variant="ghost" onClick={onCancel}>
         Cancel
       </Button>
-      <Button type="button" variant="outline" onClick={() => save.preview(payload())}>
-        Preview
-      </Button>
-      <Button type="submit" disabled={save.saving}>
-        {saveLabel}
+      <Button type="submit" disabled={save.saving || save.checking}>
+        {save.overflowWarning ? "Save anyway" : saveLabel}
       </Button>
     </>
   );
@@ -593,7 +617,7 @@ function ModalEditor({
     const v = validate?.() ?? null;
     setLocalError(v);
     if (v) return;
-    save.submit(payload());
+    save.requestSave(payload());
   };
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
@@ -610,7 +634,6 @@ function ModalEditor({
           <DialogFooter>
             <EditorFooter
               save={save}
-              payload={payload}
               saveLabel={state.mode === "edit" ? "Save" : "Create"}
               onCancel={onClose}
               localError={localError}

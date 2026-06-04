@@ -18,6 +18,7 @@ const resourceMocks = vi.hoisted(() => ({
   updateResource: vi.fn(),
   retireResource: vi.fn(),
   previewOrgResourceImpact: vi.fn(),
+  previewResourceImpact: vi.fn(),
 }));
 
 vi.mock("../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
@@ -65,13 +66,16 @@ async function flush(): Promise<void> {
 
 async function render(): Promise<{ root: Root }> {
   const { SettingsResourcesPage } = await import("../settings/resources.js");
+  const { ToastProvider } = await import("../../components/ui/toast.js");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
     root.render(
       <QueryClientProvider client={createClient()}>
-        <SettingsResourcesPage />
+        <ToastProvider>
+          <SettingsResourcesPage />
+        </ToastProvider>
       </QueryClientProvider>,
     );
   });
@@ -126,7 +130,17 @@ beforeEach(() => {
     row({ id: "new", type: "repo", name: "x", payload: { url: "x" } }),
   );
   resourceMocks.updateResource.mockResolvedValue(GITHUB_MCP);
-  resourceMocks.retireResource.mockResolvedValue({ affectedAgentCount: 0, promptOverflowAgentCount: 0 });
+  resourceMocks.retireResource.mockResolvedValue({ affectedAgentCount: 0, promptOverflowAgentCount: 0, agents: [] });
+  resourceMocks.previewOrgResourceImpact.mockResolvedValue({
+    affectedAgentCount: 0,
+    promptOverflowAgentCount: 0,
+    agents: [],
+  });
+  resourceMocks.previewResourceImpact.mockResolvedValue({
+    affectedAgentCount: 0,
+    promptOverflowAgentCount: 0,
+    agents: [],
+  });
 });
 
 afterEach(() => {
@@ -277,12 +291,102 @@ describe("resource editors", () => {
     await act(async () => root.unmount());
   });
 
-  it("hides add / edit / retire affordances for members", async () => {
+  it("hides add / edit / retire affordances for members but keeps preview", async () => {
     authMock.value = { role: "member", organizationId: "org-1", meLoaded: true };
     const { root } = await render();
     expect(byText("Add resource")).toBeUndefined();
     expect(byAria("Edit github")).toBeUndefined();
     expect(byAria("Retire github")).toBeUndefined();
+    // Read-only preview is available to every member.
+    expect(byAria("Preview github")).toBeTruthy();
+    await act(async () => root.unmount());
+  });
+
+  it("requires a confirm step before retiring (cancel does not retire)", async () => {
+    const { root } = await render();
+    // Trash no longer retires on one click — it opens a confirm dialog.
+    await click(byAria("Retire github"));
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('Retire "github"?');
+
+    // Cancel backs out without retiring.
+    await click(byText("Cancel"));
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+
+    // Re-open and confirm → retire fires once with the resource id.
+    await click(byAria("Retire github"));
+    await click(byText("Retire"));
+    expect(resourceMocks.retireResource).toHaveBeenCalledTimes(1);
+    expect(resourceMocks.retireResource.mock.calls[0]?.[0]).toBe("mcp-1");
+    await act(async () => root.unmount());
+  });
+
+  it("disables the confirm button until the impact check resolves", async () => {
+    // Hold the impact check open so we can observe the pending state.
+    let resolveImpact: (v: { affectedAgentCount: number; promptOverflowAgentCount: number; agents: [] }) => void =
+      () => {};
+    resourceMocks.previewResourceImpact.mockReturnValue(
+      new Promise((r) => {
+        resolveImpact = r;
+      }),
+    );
+    const { root } = await render();
+    await click(byAria("Retire github"));
+    // While "Checking impact…", the confirm is disabled — can't retire blind.
+    expect(byText("Retire")?.disabled).toBe(true);
+    expect(resourceMocks.retireResource).not.toHaveBeenCalled();
+
+    // Once the count is in, the button enables.
+    await act(async () => {
+      resolveImpact({ affectedAgentCount: 2, promptOverflowAgentCount: 0, agents: [] });
+    });
+    await flush();
+    expect(byText("Retire")?.disabled).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("opens a read-only preview from the eye icon", async () => {
+    resourceMocks.listTeamResources.mockResolvedValue([
+      row({
+        id: "prompt-1",
+        type: "prompt",
+        name: "house style",
+        payload: { body: "# Voice\nWrite plainly.", description: "Tone guide" },
+      }),
+    ]);
+    const { root } = await render();
+    await click(byAria("Preview house style"));
+    // Read-only detail shows the full body content, not a one-line summary.
+    expect(document.body.textContent).toContain("Write plainly.");
+    // No edit controls inside the preview.
+    expect(document.getElementById("prompt-body")).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("warns on prompt overflow before saving, then saves on confirm", async () => {
+    resourceMocks.previewOrgResourceImpact.mockResolvedValue({
+      affectedAgentCount: 3,
+      promptOverflowAgentCount: 2,
+      agents: [],
+    });
+    const { root } = await render();
+    await click(byText("Add resource"));
+    await click(byText("Prompt"));
+    const body = document.getElementById("prompt-body");
+    if (!(body instanceof HTMLTextAreaElement)) throw new Error("prompt-body");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(body, "long body");
+      body.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+
+    // First click runs the silent overflow check → warns, does NOT save yet.
+    await click(byText("Create"));
+    expect(resourceMocks.createTeamResource).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("exceed the prompt budget for 2 agents");
+
+    // Second click ("Save anyway") commits.
+    await click(byText("Save anyway"));
+    expect(resourceMocks.createTeamResource).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
 });
