@@ -308,6 +308,14 @@ describe("buildAgentBriefing — # Context Tree", () => {
 
     // Reading discipline anchors.
     expect(briefing).toContain("root `NODE.md`");
+    // Reading the Tree must also point the agent at root `AGENT.md` when
+    // present — orgs put mandatory rules there and the de-injection
+    // direction would otherwise lose them silently. The check anchors on
+    // the conditional phrasing rather than the bare filename so it can't
+    // accidentally pass on a hit elsewhere in the briefing (e.g. the
+    // legacy "`AGENT.md`" string in someone's `prompt.append`).
+    expect(briefing).toMatch(/If the root also contains an `AGENT\.md`, ?\s*read it too/);
+    expect(briefing).toContain("mandatory rules the org expects every agent");
     expect(briefing).toContain("read tree nodes eagerly, not lazily");
     expect(briefing).toContain("Pick up a new task or requirement");
     expect(briefing).toContain("Task scope shifts mid-conversation");

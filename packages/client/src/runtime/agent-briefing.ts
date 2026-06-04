@@ -298,7 +298,9 @@ For node anatomy, ownership tiers, and soft_link navigation, load
   blocks.push(`## Reading the Tree
 
 Always start by reading the tree's **root \`NODE.md\`** — it is the
-team's domain directory. From there, navigate however suits you: Read,
+team's domain directory. **If the root also contains an \`AGENT.md\`,
+read it too** — it carries mandatory rules the org expects every agent
+to follow before acting. From there, navigate however suits you: Read,
 Grep, listing a domain folder, jumping via \`soft_links\`. The tree is
 just a filesystem; use whatever tool gets you to the right node.
 
