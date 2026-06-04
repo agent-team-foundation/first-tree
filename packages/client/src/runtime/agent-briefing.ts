@@ -52,7 +52,8 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
 
   sections.push(contextTreeSection(opts.contextTreePath));
 
-  sections.push(skillsSection(opts.workspacePath, opts.payload));
+  const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
+  if (skillsBlock) sections.push(skillsBlock);
 
   // Per-chat block — last, until issue #808 moves it off the per-agent
   // file. `renderChatContextSection` returns null when the fetch degraded;
@@ -267,7 +268,7 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree …\`   | Context Tree — \`status\`, \`init\`, \`migrate\`, \`verify\`, \`upgrade\`, \`inject\`, \`review\` |
+| \`${bin} tree …\`   | Context Tree — \`status\`, \`init\`, \`migrate-to-w1\`, \`verify\`, \`upgrade\`, \`inject\`, \`review\` |
 | \`${bin} org …\`    | workspace ↔ tree binding |
 
 Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`)
@@ -349,11 +350,19 @@ The Context Tree for this workspace is at:
 
 Read its root \`NODE.md\` first to map the domains before you act.`);
   } else {
+    // Tree-less stub: do NOT name `first-tree-onboarding` here. The
+    // onboarding skill is in `TREE_SKILL_NAMES`, which `tree skill
+    // install` only deploys alongside a Context Tree binding — a
+    // tree-less agent has no First Tree skills on disk and would 404
+    // trying to load that name. Binding a workspace is an operator
+    // action anyway (web console / human at the terminal), so surface
+    // the gap to a human instead of telling the agent to load a skill.
     blocks.push(`## Tree Location
 
 This agent has no Context Tree bound. If a task needs cross-domain
 context that should be persistent (decisions, ownership), surface that
-gap and load \`first-tree-onboarding\` to bind a tree before writing.`);
+gap to a human — binding a workspace to a tree is an operator action
+taken from the web console, not from inside a running agent.`);
   }
 
   return blocks.join("\n\n");
@@ -361,17 +370,30 @@ gap and load \`first-tree-onboarding\` to bind a tree before writing.`);
 
 // --- # Skills (Skill Map) ---------------------------------------------------
 
-function skillsSection(workspacePath: string, payload: AgentRuntimeConfigPayload | null): string {
-  const blocks: string[] = ["# Skills"];
-
+function skillsSection(
+  workspacePath: string,
+  payload: AgentRuntimeConfigPayload | null,
+  contextTreePath: string | null,
+): string {
   // Per-agent resource skills (from agent_configs.payload.resourceSkills),
   // when present. The resource-skills helper emits its own `## Team Skills`
   // header so we can splice it under the new `# Skills` umbrella.
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
+
+  // First Tree family skills are gated on `contextTreePath` — they ship
+  // via `installFirstTreeIntegration`, which `agent-bootstrap.ts` only
+  // runs when a Context Tree is bound. Listing them for a tree-less
+  // agent would tell it to load files that the runtime never put on disk
+  // (`CORE_SKILL_NAMES` is empty, so no fallback install path either).
+  const familyBlock = contextTreePath !== null ? firstTreeFamilyMap() : null;
+
+  // Skip the `# Skills` umbrella entirely when both inner blocks are
+  // empty — a bare header without rows is just visual noise.
+  if (!teamBlock && !familyBlock) return "";
+
+  const blocks: string[] = ["# Skills"];
   if (teamBlock) blocks.push(teamBlock);
-
-  blocks.push(firstTreeFamilyMap());
-
+  if (familyBlock) blocks.push(familyBlock);
   return blocks.join("\n\n");
 }
 

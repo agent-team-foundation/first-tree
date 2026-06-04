@@ -1410,8 +1410,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * Best-effort chat-context fetch for the identity-injection path. Failures
    * are logged but never bubble — bootstrap continues with `undefined` and
    * the agent simply loses the "Current Chat Context" block (graceful
-   * degradation; the Communication Rules in tools.md still tell it to fall
-   * back to conservative mode).
+   * degradation; the Communication block in the `# Working in First Tree`
+   * section of AGENTS.md still tells it to fall back to conservative mode).
    */
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
     try {

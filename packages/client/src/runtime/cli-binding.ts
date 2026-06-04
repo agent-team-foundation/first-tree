@@ -19,8 +19,10 @@ export type CliBinding = {
   /**
    * Binary name on PATH for this channel — `first-tree` (prod),
    * `first-tree-staging` (staging), `first-tree-dev` (dev).
-   * Appears verbatim in the agent-facing tools.md and as the `command`
-   * argv[0] for any sub-process shelling out to the CLI.
+   * Interpolated into the agent-facing AGENTS.md briefing (the
+   * `# Working in First Tree` intro, `## CLI Overview` table, and every
+   * `${bin} chat …` example) and used as the `command` argv[0] for any
+   * sub-process shelling out to the CLI.
    */
   binName: string;
   /**

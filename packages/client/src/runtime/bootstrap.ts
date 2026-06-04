@@ -431,7 +431,7 @@ export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
  *     `pnpm build` rewrites `dist/cli/index.mjs` and updates its mtime,
  *     so the appended suffix changes on every build → handler triggers
  *     a full re-bootstrap and the agent home picks up the new
- *     CLAUDE.md / tools.md / shipped skills payload.
+ *     AGENTS.md briefing and shipped skills payload.
  *
  * Channel is read from `getCliBinding().packageName`: `null` is the dev
  * channel (dev binaries are not published — see

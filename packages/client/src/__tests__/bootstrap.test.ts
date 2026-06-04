@@ -22,10 +22,10 @@ import {
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
-// Pin the CLI binding to the prod identity so assertions against the
-// emitted tools.md and CLI sub-process names keep matching the literals
-// they have always matched. Production-channel tests stay untouched;
-// non-prod channels are exercised in dedicated test cases below.
+// Pin the CLI binding to the prod identity so assertions against any
+// emitted CLI sub-process names keep matching the literals they have
+// always matched. Production-channel tests stay untouched; non-prod
+// channels are exercised in dedicated test cases below.
 beforeAll(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });

@@ -8,11 +8,12 @@ import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/boot
 import type { ChatContext } from "../runtime/chat-context.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 
-// `bootstrapWorkspace` internally writes `.agent/tools.md`, which reads the
-// channel-resolved CLI binding for the binary name. Pin it to the prod
-// identity so the helper has a binding installed even when these tests run
-// in isolation (the production CLI entry installs it via channel-env.ts,
-// but vitest workers boot without that side effect).
+// The unified briefing builder (`runtime/agent-briefing.ts`) reads the
+// channel-resolved CLI binding for the binary name interpolated into every
+// `${bin}` example. Pin it to the prod identity so the helper has a
+// binding installed even when these tests run in isolation (the production
+// CLI entry installs it via channel-env.ts, but vitest workers boot
+// without that side effect).
 beforeAll(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
@@ -114,6 +115,10 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       chatContext,
       "/workspaces/codex-developer",
       [],
+      // Tree-bound case so we can assert that the Skill Map + First Tree
+      // Family map are emitted. Tree-less Skill Map gating is exercised in
+      // `agent-briefing.test.ts`.
+      "/var/lib/context-trees/codex",
     );
 
     // Section names follow the AGENTS.md restructure: `# Identity`,

@@ -63,9 +63,9 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
       // Corrupt JSON — fall through to rewrite via bootstrapWorkspace.
     }
   }
-  // Mismatch (or missing / corrupt) — re-run the stable bootstrap so context/,
-  // tools.md, the boundary marker, and identity.json line up with the current
-  // agent metadata. Cheap relative to integrate / git.
+  // Mismatch (or missing / corrupt) — re-run the stable bootstrap so the
+  // boundary marker and identity.json line up with the current agent
+  // metadata. Cheap relative to integrate / git.
   bootstrapWorkspace({
     workspacePath: workspace,
     identity: sessionCtx.agent,

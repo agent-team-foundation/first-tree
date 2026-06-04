@@ -46,8 +46,12 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
 
 describe("buildAgentBriefing — top-level structure & section order", () => {
   it("emits sections in stable→volatile order with the per-chat block last", () => {
+    // Tree-bound + chat-context-bearing case so every header in the
+    // expected order list is present; tree-less / no-chat-context cases
+    // are exercised in their dedicated describe blocks below.
     const briefing = buildAgentBriefing(
       makeOpts({
+        contextTreePath: "/var/lib/context-trees/example",
         chatContext: {
           chatId: "chat-1",
           title: "ship redesign",
@@ -270,17 +274,24 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
 
-    // Real subcommands (from apps/cli/src/commands/tree/index.ts).
+    // Real subcommands (from apps/cli/src/commands/tree/index.ts +
+    // tree/migrate.ts which registers as `migrate-to-w1`, not `migrate`).
     expect(overview).toContain("`status`");
     expect(overview).toContain("`init`");
+    expect(overview).toContain("`migrate-to-w1`");
     expect(overview).toContain("`verify`");
     expect(overview).toContain("`upgrade`");
+    expect(overview).toContain("`inject`");
+    expect(overview).toContain("`review`");
 
     // Fictional subcommands the pre-revision table advertised — must stay
-    // gone or agents will burn turns on `unknown command`.
+    // gone or agents will burn turns on `unknown command`. `migrate` (the
+    // bare form, without the `-to-w1` suffix) was the round-2 regression —
+    // pin its absence explicitly so a future edit doesn't drop the suffix.
     expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bread\b/);
     expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bwrite\b/);
     expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bpublish\b/);
+    expect(overview).not.toMatch(/`tree …`[^\n]*`migrate`/);
   });
 });
 
@@ -328,14 +339,25 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 
-  it("substitutes a tree-less Tree Location stub when no tree is bound", () => {
+  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human (no skill names in the stub)", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     // Section header still emitted so the briefing's # Context Tree always
     // contains all four subsections — predictable for the agent and for
     // section-order assertions above.
     expect(briefing).toContain("## Tree Location");
-    expect(briefing).toContain("This agent has no Context Tree bound");
-    expect(briefing).toContain("first-tree-onboarding");
+    // Narrow the no-skill-name assertion to just the Tree Location block,
+    // not the whole briefing. `## Writing the Tree` is generic guidance
+    // and may legitimately name `first-tree-onboarding` in its routing
+    // table even for tree-less agents (so the agent knows what skill the
+    // routing points at, even if it has to surface the work to a human
+    // to actually run it). The Tree Location *stub* is what must not
+    // direct a tree-less agent to load an unshipped skill.
+    const treeLocationStart = briefing.indexOf("## Tree Location");
+    const stub = briefing.slice(treeLocationStart);
+    expect(stub).toContain("This agent has no Context Tree bound");
+    expect(stub).toContain("surface that\ngap to a human");
+    expect(stub).toContain("operator action");
+    expect(stub).not.toContain("first-tree-onboarding");
   });
 });
 
@@ -360,7 +382,9 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
 
     expect(new Set(shippedSkills)).toEqual(new Set(FIRST_TREE_FAMILY_SKILL_NAMES));
 
-    const briefing = buildAgentBriefing(makeOpts());
+    // Use a tree-bound briefing so the First Tree Family map is emitted —
+    // the tree-less omission case is exercised by its dedicated test below.
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const skillMap = briefing.slice(briefing.indexOf("## First Tree Family"));
 
     // Every shipped skill must appear; no unshipped names allowed.
@@ -374,7 +398,7 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(skillMap).not.toContain("`github-scan`");
   });
 
-  it("nests `## Team Skills` (per-agent resource skills) under `# Skills` when payload.resourceSkills is non-empty", () => {
+  it("nests `## Team Skills` (per-agent resource skills) under `# Skills` when payload.resourceSkills is non-empty (tree-bound)", () => {
     const payload = {
       kind: "claude-code" as const,
       model: "",
@@ -393,7 +417,7 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
       ],
       reasoningEffort: "" as const,
     };
-    const briefing = buildAgentBriefing(makeOpts({ payload }));
+    const briefing = buildAgentBriefing(makeOpts({ payload, contextTreePath: "/tree" }));
 
     const skillsSection = briefing.slice(briefing.indexOf("# Skills"));
     expect(skillsSection).toContain("## Team Skills");
@@ -403,11 +427,54 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(skillsSection.indexOf("## Team Skills")).toBeLessThan(skillsSection.indexOf("## First Tree Family"));
   });
 
-  it("omits `## Team Skills` when payload.resourceSkills is empty (First Tree Family is still emitted)", () => {
-    const briefing = buildAgentBriefing(makeOpts());
+  it("omits `## Team Skills` when payload.resourceSkills is empty (First Tree Family is still emitted for tree-bound agents)", () => {
+    // Tree-bound agent → First Tree Family is the only entry under # Skills.
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const skillsSection = briefing.slice(briefing.indexOf("# Skills"));
     expect(skillsSection).not.toContain("## Team Skills");
     expect(skillsSection).toContain("## First Tree Family");
+  });
+
+  it("omits the First Tree Family map for tree-less agents (skills are gated on `installFirstTreeIntegration`)", () => {
+    // A no-tree agent's `tree skill install` never runs, so listing the
+    // First Tree family would tell it to load skills that the runtime
+    // never put on disk. The map must be gated.
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
+    expect(briefing).not.toContain("## First Tree Family");
+    // And without Team Skills, the bare `# Skills` umbrella is skipped
+    // entirely — a header with no body is just visual noise.
+    expect(briefing).not.toMatch(/^# Skills\s*$/m);
+  });
+
+  it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {
+    // Resource skills are installed via `materializeResourceSkills`, which
+    // runs irrespective of Context Tree binding — so a tree-less agent
+    // with team skills configured still needs the `# Skills` header.
+    const payload = {
+      kind: "claude-code" as const,
+      model: "",
+      prompt: { append: "" },
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [
+        {
+          resourceId: "res-1",
+          name: "internal-playbook",
+          description: "Team-internal playbook",
+          metadata: {},
+          body: "# Playbook",
+        },
+      ],
+      reasoningEffort: "" as const,
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload, contextTreePath: null }));
+    expect(briefing).toContain("# Skills");
+    expect(briefing).toContain("## Team Skills");
+    expect(briefing).toContain("internal-playbook");
+    // Still no First Tree Family — those skills aren't installed for
+    // tree-less agents.
+    expect(briefing).not.toContain("## First Tree Family");
   });
 });
 

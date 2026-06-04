@@ -92,12 +92,13 @@ wake anyone.
 
 Every CLI invocation in First Tree skills spells the binary as
 `first-tree` for readability. **Do not run them literally on staging /
-dev hosts** — that binary may not exist. Read the first line of your
-`.agent/tools.md`: it encodes the channel-correct name (`first-tree` on
-prod, `first-tree-staging` on staging, `first-tree-dev` on dev). The
-`${bin}` value in every `chat send` directive there is already resolved.
-Substitute that exact binary into every command you copy from a skill
-before running.
+dev hosts** — that binary may not exist. Your `AGENTS.md` (the unified
+briefing under `# Working in First Tree`) interpolates the
+channel-correct name (`first-tree` on prod, `first-tree-staging` on
+staging, `first-tree-dev` on dev) into every example it ships — the
+intro paragraph and the `## CLI Overview` table both show the resolved
+binary directly. Substitute that exact binary into every command you
+copy from a skill before running.
 
 ## Your Hosting Daemon
 

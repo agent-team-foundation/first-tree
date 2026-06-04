@@ -51,8 +51,9 @@ describe("skill artifacts", () => {
         expect(block).not.toMatch(/--chat <chatId>/u);
         expect(block).not.toMatch(/--chat <directChatId>/u);
       }
-      // Anti-double-encode (Issue #389) — the long form lives here; tools.md
-      // also pins the one-line invariant.
+      // Anti-double-encode (Issue #389) — the long form lives here; the
+      // `# Working in First Tree` intro of AGENTS.md also pins the
+      // one-line invariant.
       expect(referenceMd).toContain("JSON.stringify");
     });
   });

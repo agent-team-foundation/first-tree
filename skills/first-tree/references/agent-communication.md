@@ -8,8 +8,9 @@ table.
 ## Binary name across channels
 
 This document spells every CLI invocation as `first-tree …` — the canonical
-prod binary name. The agent's `.agent/tools.md` pins the
-channel-correct binary; substitute when running:
+prod binary name. The agent's `AGENTS.md` briefing (`# Working in First
+Tree` intro and `## CLI Overview` table) interpolates the channel-correct
+binary into every example; substitute when running:
 
 | Channel | Binary | Home |
 |---|---|---|
@@ -97,6 +98,7 @@ table — short version:
 The runtime's silent-turn protocol (empty output → skip delivery, free the
 turn) is enforced by `packages/client/src/runtime/result-sink.ts`; it
 pairs with the "Stay silent when you have nothing to add" directive in
-`.agent/tools.md`. Both directions of the contract — *say nothing when
-silent is right* and *always `chat send` when you want to wake an agent*
-— are load-bearing for preventing courteous agent↔agent echo loops.
+the `# Working in First Tree` intro of `AGENTS.md`. Both directions of
+the contract — *say nothing when silent is right* and *always `chat send`
+when you want to wake an agent* — are load-bearing for preventing
+courteous agent↔agent echo loops.

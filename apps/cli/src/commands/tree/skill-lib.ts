@@ -390,9 +390,15 @@ export function copyCanonicalSkills(targetRoot: string): void {
 
 /**
  * Copy only the core skills — those required for every agent regardless of
- * Context Tree binding. Called by `bootstrapWorkspace` so the on-disk skill
- * payload exists before the agent's first turn, since the slimmed `tools.md`
- * only carries a pointer at it.
+ * Context Tree binding. Currently a no-op because `CORE_SKILL_NAMES` is
+ * empty (see top of file); kept wired so re-introducing a core skill needs
+ * no plumbing change. Callers used to be `bootstrapWorkspace` writing the
+ * skill payloads before the agent's first turn; the unified briefing
+ * (`# Working in First Tree` in AGENTS.md, built by
+ * `packages/client/src/runtime/agent-briefing.ts`) now carries the same
+ * runtime invariants inline, so a tree-less agent still gets the
+ * Communication / Workspace Collaboration / Asking Humans guidance even
+ * with no skills on disk.
  */
 export function copyCoreSkills(targetRoot: string): void {
   copySkillLayouts(targetRoot, coreSkillLayouts());
