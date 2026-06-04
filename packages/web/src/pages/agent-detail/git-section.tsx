@@ -38,7 +38,7 @@ export function GitSection(props: GitSectionProps) {
 
   const action = !props.disabled ? (
     <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-      <Plus className="h-3 w-3" /> Add repository
+      <Plus className="h-3.5 w-3.5" /> Add repository
     </Button>
   ) : null;
 

@@ -19,8 +19,8 @@ export function NoChatView({ onNewChat }: { onNewChat: () => void }) {
           Start a new chat to put your agent to work, or open an existing one from the list.
         </div>
         <div className="flex justify-center">
-          <Button type="button" onClick={onNewChat}>
-            <Plus className="h-4 w-4" />
+          <Button type="button" variant="cta" onClick={onNewChat}>
+            <Plus className="h-3.5 w-3.5" />
             <span>New chat</span>
           </Button>
         </div>

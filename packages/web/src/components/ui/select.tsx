@@ -280,7 +280,7 @@ export function Select({
   const optionId = (i: number): string => `${baseId}-opt-${i}`;
 
   return (
-    <div className={cn("max-w-md", className)}>
+    <div className={cn("w-full", className)}>
       <button
         ref={triggerRef}
         id={id}

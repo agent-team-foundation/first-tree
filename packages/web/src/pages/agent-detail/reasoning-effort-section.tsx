@@ -94,7 +94,6 @@ export function ReasoningEffortSection({
         disabled={disabled}
         placeholder="(unset)"
         aria-label="Reasoning effort"
-        className="w-full max-w-none"
       />
     </ConfigRow>
   );

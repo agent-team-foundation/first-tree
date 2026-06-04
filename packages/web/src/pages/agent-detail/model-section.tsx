@@ -89,15 +89,7 @@ export function ModelSection({
         ) : null
       }
     >
-      <Select
-        options={items}
-        value={value}
-        onChange={onChange}
-        disabled={disabled}
-        mono
-        aria-label="Model"
-        className="w-full max-w-none"
-      />
+      <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
   );
 }

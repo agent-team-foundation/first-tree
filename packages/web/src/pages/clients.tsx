@@ -324,7 +324,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         right={
           showHeaderConnectButton ? (
             <Button variant="outline" size="sm" onClick={openNewConnection}>
-              <Plus className="h-3 w-3" />
+              <Plus className="h-3.5 w-3.5" />
               Connect
             </Button>
           ) : undefined
@@ -491,8 +491,8 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               style={{ color: "var(--fg-3)", gap: "var(--sp-3)" }}
             >
               <span>No computers connected yet.</span>
-              <Button size="sm" onClick={openNewConnection}>
-                <Plus className="h-3 w-3" />
+              <Button size="sm" variant="cta" onClick={openNewConnection}>
+                <Plus className="h-3.5 w-3.5" />
                 Connect your first computer
               </Button>
             </div>
@@ -513,8 +513,8 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       style={{ color: "var(--fg-3)", gap: "var(--sp-3)", padding: "var(--sp-4) 0" }}
                     >
                       <span className="text-body">No computers of your own.</span>
-                      <Button size="sm" onClick={openNewConnection}>
-                        <Plus className="h-3 w-3" />
+                      <Button size="sm" variant="cta" onClick={openNewConnection}>
+                        <Plus className="h-3.5 w-3.5" />
                         Connect your first computer
                       </Button>
                     </div>
