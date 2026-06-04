@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeTreeBinding } from "../commands/tree/binding-state.js";
+import { TREE_CODE_REPOS_FILE, writeTreeBinding } from "../commands/tree/binding-state.js";
 import {
   buildTreeCodeRepoIndexNote,
   listKnownTreeCodeRepos,
@@ -110,21 +110,82 @@ describe("tree code repo registry", () => {
     ]);
   });
 
-  it("upserts one repository while preserving known entries and skips invalid input or missing files", () => {
+  it("upserts one repository while preserving known entries and skips invalid input", () => {
     writePromptFile("AGENTS.md");
     expect(syncTreeCodeRepoRegistry(root, ["https://github.com/acme/web.git"])).toBe("updated");
 
     expect(upsertTreeCodeRepoRegistry(root, "git@github.com:acme/api.git")).toBe("updated");
     expect(listKnownTreeCodeRepos(root).map((repo) => repo.slug)).toEqual(["acme/api", "acme/web"]);
     expect(upsertTreeCodeRepoRegistry(root, "not a github remote")).toBe("skipped");
+  });
 
-    const missingRoot = mkdtempSync(join(tmpdir(), "ft-tree-repo-registry-missing-"));
-    try {
-      expect(syncTreeCodeRepoRegistry(missingRoot, ["https://github.com/acme/web.git"])).toBe("skipped");
-      expect(existsSync(join(missingRoot, "AGENTS.md"))).toBe(false);
-    } finally {
-      rmSync(missingRoot, { recursive: true, force: true });
-    }
+  // Regression — issue surfaced on PR #794 (yuezengwu + baixiaohang Finding 2).
+  // Before the fix, `syncTreeCodeRepoRegistry` only wrote into tree-root
+  // `AGENTS.md` / `CLAUDE.md` and returned "skipped" when neither existed.
+  // Since PR #794 deletes those files from new trees, a fresh `tree init` with
+  // a GitHub origin used to produce an empty `source-repos.md`.
+  it("persists registry to `.first-tree/code-repos.json` for new trees that no longer carry AGENTS.md / CLAUDE.md", () => {
+    expect(existsSync(join(root, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+
+    const action = syncTreeCodeRepoRegistry(root, ["https://github.com/acme/web.git", "git@github.com:acme/api.git"]);
+
+    expect(action).toBe("created");
+    const persistedPath = join(root, TREE_CODE_REPOS_FILE);
+    expect(existsSync(persistedPath)).toBe(true);
+    const persisted = JSON.parse(readFileSync(persistedPath, "utf8")) as {
+      repos: Array<{ slug: string; url: string }>;
+      schemaVersion: number;
+    };
+    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.repos.map((r) => r.slug)).toEqual(["acme/api", "acme/web"]);
+    expect(listKnownTreeCodeRepos(root).map((repo) => repo.slug)).toEqual(["acme/api", "acme/web"]);
+
+    // Tree-root prompt files are not created as a side effect of registering.
+    expect(existsSync(join(root, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+  });
+
+  it("re-syncing the same registry to a new tree is idempotent", () => {
+    expect(syncTreeCodeRepoRegistry(root, ["https://github.com/acme/web.git"])).toBe("created");
+    expect(syncTreeCodeRepoRegistry(root, ["https://github.com/acme/web.git"])).toBe("unchanged");
+  });
+
+  it("`listKnownTreeCodeRepos` prefers `.first-tree/code-repos.json` over legacy AGENTS.md / CLAUDE.md", () => {
+    // Legacy registry says "old"; new JSON store says "new". Read path must
+    // prefer the JSON.
+    writePromptFile(
+      "AGENTS.md",
+      [
+        "<!-- BEGIN FIRST-TREE-CODE-REPO-REGISTRY -->",
+        "<!--",
+        "FIRST-TREE-CODE-REPO-REGISTRY: managed-block-v1",
+        "FIRST-TREE-CODE-REPO: `https://github.com/acme/legacy`",
+        "-->",
+        "<!-- END FIRST-TREE-CODE-REPO-REGISTRY -->",
+        "",
+      ].join("\n"),
+    );
+    syncTreeCodeRepoRegistry(root, ["https://github.com/acme/new.git"]);
+
+    expect(listKnownTreeCodeRepos(root).map((repo) => repo.slug)).toEqual(["acme/new"]);
+  });
+
+  it("`syncTreeCodeRepoRegistry` mirrors writes into legacy AGENTS.md / CLAUDE.md when they exist", () => {
+    // Migration safety: a tree predating PR #794 still has the prompt files;
+    // the registry should keep them in sync alongside the canonical JSON
+    // store so contributors still reading those files see the same data.
+    writePromptFile("AGENTS.md");
+
+    syncTreeCodeRepoRegistry(root, ["https://github.com/acme/web.git"]);
+
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
+    expect(agents).toContain("FIRST-TREE-CODE-REPO: `https://github.com/acme/web`");
+
+    const persisted = JSON.parse(readFileSync(join(root, TREE_CODE_REPOS_FILE), "utf8")) as {
+      repos: Array<{ slug: string }>;
+    };
+    expect(persisted.repos.map((r) => r.slug)).toEqual(["acme/web"]);
   });
 
   it("builds the source repo index note", () => {
