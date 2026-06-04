@@ -394,9 +394,9 @@ export const serverConfigSchema = defineConfig({
       },
     ),
     /**
-     * Idle threshold for chats with no GitHub mapping. Per (chat, user) —
-     * users with unread mentions are skipped; users without an unread
-     * stay archived after this much silence.
+     * Idle threshold for chats with no GitHub mapping and no human owner.
+     * Per (chat, user) — users with unread mentions are skipped; users
+     * without an unread stay archived after this much silence.
      */
     archiveUnmappedIdleSeconds: field(
       z.coerce
