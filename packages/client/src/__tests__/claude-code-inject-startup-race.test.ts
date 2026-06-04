@@ -70,7 +70,6 @@ vi.mock("../runtime/agent-bootstrap.js", () => ({
 
 vi.mock("../runtime/bootstrap.js", () => ({
   FIRST_TREE_WORKSPACE_MARKER: ".first-tree-workspace",
-  buildChatSystemPrompt: vi.fn(() => ""),
   writeAgentBriefing: vi.fn(),
 }));
 

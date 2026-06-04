@@ -25,7 +25,9 @@ import type { AgentIdentity } from "./handler.js";
  * the agent must explicitly call `first-tree chat send <name>` (see the
  * top-level `first-tree` skill — its SKILL.md "Communication Principles"
  * decision table and `references/agent-communication.md` carry the full
- * directive; `tools.md` keeps only the final-text contract and a pointer).
+ * directive; the `# Working in First Tree` section of AGENTS.md keeps the
+ * final-text contract and a pointer inline so even tree-less agents see
+ * it).
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
@@ -156,7 +158,9 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // explicit signal that it has nothing new for the recipient. Skip
     // delivery and free the turn. The runtime does NOT evaluate content
     // length or "meaningfulness" — that's the agent's semantic decision.
-    // The matching prompt directive lives in bootstrap.ts generateToolsDoc.
+    // The matching prompt directive lives in the `# Working in First Tree`
+    // intro block built by `runtime/agent-briefing.ts` (look for
+    // "Stay silent when you have nothing to add").
     if (text.trim().length === 0) {
       deps.clearTrigger();
       deps.log("silent turn: agent produced empty output, skipping delivery");

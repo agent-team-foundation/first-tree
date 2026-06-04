@@ -5,11 +5,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
-  buildChatSystemPrompt,
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
   deepEqualIdentity,
-  generateToolsDoc,
   type InstallFirstTreeIntegrationExec,
   installCoreSkills,
   installFirstTreeIntegration,
@@ -24,10 +22,10 @@ import {
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
-// Pin the CLI binding to the prod identity so assertions against the
-// emitted tools.md and CLI sub-process names keep matching the literals
-// they have always matched. Production-channel tests stay untouched;
-// non-prod channels are exercised in dedicated test cases below.
+// Pin the CLI binding to the prod identity so assertions against any
+// emitted CLI sub-process names keep matching the literals they have
+// always matched. Production-channel tests stay untouched; non-prod
+// channels are exercised in dedicated test cases below.
 beforeAll(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
@@ -194,8 +192,14 @@ describe("bootstrapWorkspace", () => {
     expect("chatContext" in data).toBe(false);
   });
 
-  it("writes tools.md with the runtime invariants the result-sink + silence-turn rely on", () => {
-    const workspace = join(tmpBase, "ws-tools");
+  it("no longer writes the legacy `.agent/tools.md` (content now lives in AGENTS.md)", () => {
+    // Pre-PR-797 the runtime emitted a `.agent/tools.md` stable file that the
+    // SDK CLAUDE.md generator referenced. PR 797 collapsed CLAUDE.md and the
+    // tools doc into the unified AGENTS.md briefing; this PR completes that
+    // by dropping the on-disk `.agent/tools.md` write entirely. The runtime
+    // invariants (final-text contract, silent-turn, Issue #389, Decision
+    // guide, etc.) are covered by the `buildAgentBriefing` tests.
+    const workspace = join(tmpBase, "ws-no-tools-md");
     mkdirSync(workspace, { recursive: true });
 
     bootstrapWorkspace({
@@ -205,33 +209,20 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const toolsPath = join(workspace, ".agent", "tools.md");
-    expect(existsSync(toolsPath)).toBe(true);
-
-    const content = readFileSync(toolsPath, "utf-8");
-    expect(content).toContain("First Tree Agent Runtime");
-    expect(content).toContain("[From: <agent-name>]");
-    expect(content).toContain("first-tree chat send");
-    // L4 silent-turn protocol: the prompt directive that pairs with the
-    // result-sink empty-output guard. Tells the agent that silence is the
-    // correct response when it has nothing new — drops courtesy fillers
-    // that would otherwise sustain agent↔agent loops. MUST stay in
-    // tools.md (not progressive-disclosure) — see proposal P3.
-    expect(content).toContain("Stay silent when you have nothing to add");
-    expect(content).toContain("If you have nothing new for the recipient, output nothing");
-    expect(content).toContain("the runtime ends the turn");
-    // Issue #389: pin the anti-double-encode directive so future prompt edits
-    // don't accidentally drop it. The CLI passes content as-is; agents that
-    // JSON.stringify before sending produce a literal `"@x ...\n..."` row
-    // that the UI cannot render as markdown. Stays in tools.md — runtime
-    // safety invariant.
-    expect(content).toContain("Content rules");
-    expect(content).toContain("JSON.stringify");
+    expect(existsSync(join(workspace, ".agent", "tools.md"))).toBe(false);
   });
 
-  it("tools.md pins the final-text contract, Decision guide + Fallback, and points the long-form CLI usage at the first-tree skill", () => {
-    const workspace = join(tmpBase, "ws-tools-rules");
-    mkdirSync(workspace, { recursive: true });
+  it("prunes a legacy `.agent/context/` staging directory on re-bootstrap", () => {
+    // Pre-PR-797 the runtime staged `agent-instructions.md` and
+    // `domain-map.md` under `.agent/context/`. Those staged copies were
+    // unused after the briefing started reading the tree directly, and are
+    // now redundant since the unified briefing references the tree by path
+    // instead of inlining content. A pre-existing `.agent/context/` from a
+    // resumed agent home must therefore be pruned at bootstrap time.
+    const workspace = join(tmpBase, "ws-prune-legacy-ctx");
+    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+    writeFileSync(join(workspace, ".agent", "context", "agent-instructions.md"), "legacy");
+    writeFileSync(join(workspace, ".agent", "context", "domain-map.md"), "legacy");
 
     bootstrapWorkspace({
       workspacePath: workspace,
@@ -240,103 +231,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    // Final-text contract still pinned in tools.md (load-bearing for
-    // result-sink + agent↔agent echo-loop prevention; see v1 §四 改造 4).
-    expect(content).toContain("human observers");
-    expect(content).toContain("does NOT wake other agents");
-    // The Decision guide table and the Fallback paragraph stay inline
-    // because `first-tree` is in TREE_SKILL_NAMES, not CORE_SKILL_NAMES —
-    // a tree-less agent (contextTreePath: null) would otherwise lose them
-    // entirely. Only the long-form CLI mechanics (chat invite / markdown /
-    // stdin / mention resolution) sink into the skill.
-    expect(content).toContain("## Communication Rules");
-    expect(content).toContain("Decision guide");
-    expect(content).toMatch(/Target is a \*\*human\*\* in this chat/);
-    expect(content).toMatch(/Target is an \*\*agent\*\* in this chat/);
-    expect(content).toContain("**Fallback**");
-    expect(content).toContain("conservative mode");
-    // tools.md still carries the pointer at the first-tree skill for the
-    // long-form CLI usage (and explicitly notes the tree-less case).
-    expect(content).toContain("## Workspace Collaboration");
-    expect(content).toContain("`first-tree` skill");
-    // Old contract text must stay gone — these are the lines the v1.5 spec
-    // requires 改造 4 to overwrite.
-    expect(content).not.toContain("Your final text response is automatically delivered");
-    expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
-    // Stale pointer at the retired first-tree-cloud skill must stay gone.
-    expect(content).not.toContain("first-tree-cloud");
-  });
-
-  it("tools.md is generated from the shared tools doc helper", () => {
-    const workspace = join(tmpBase, "ws-tools-helper");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity(),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-    });
-
-    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    expect(content).toBe(generateToolsDoc());
-  });
-
-  it("tools.md uses the channel-resolved binary name in the surviving chat-send invariant (post-P3 sink)", () => {
-    // Regression for the multi-env follow-up: the agent-facing tools.md used
-    // to hardcode `first-tree chat send`, which on staging hosts asks the
-    // agent to call a binary that doesn't exist (only `first-tree-staging`
-    // is installed). After the long-form CLI usage was sunk into the
-    // top-level `first-tree` skill, tools.md no longer carries `chat invite`
-    // / `agent list` examples — but the load-bearing `chat send <name>`
-    // directive (and the pointer's binary substitution note) still go
-    // through `${bin}`, so the channel binding must thread through.
-    // The full chat-send/invite/agent-list usage now lives in
-    // `skills/first-tree/references/agent-communication.md`; that file's
-    // channel-correctness is covered by the skill-content tests in
-    // `apps/cli/src/__tests__/skill-artifacts.test.ts`.
-    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-    const workspace = join(tmpBase, "ws-tools-staging");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity(),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-    });
-
-    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    expect(content).toContain("first-tree-staging chat send");
-    // The hardcoded prod name must NOT leak through — the literal
-    // `first-tree chat` would mis-direct staging agents to the prod binary.
-    // (The pointer text mentioning `first-tree` as a literal-to-substitute
-    // does so inside backticks and is not followed by `chat ` — the regex
-    // anchors on the literal CLI form `first-tree chat ` only.)
-    expect(content).not.toMatch(/\bfirst-tree chat /);
-  });
-
-  it("tools.md notes the ask-a-human flow is pending redesign", () => {
-    // The NHA / attention surface was removed; the prompt-layer text now
-    // carries a placeholder telling the agent to use its own judgment until
-    // a replacement is designed.
-    setCliBinding({ binName: "first-tree", packageName: "first-tree" });
-    const workspace = join(tmpBase, "ws-tools-askhuman");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity(),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-    });
-
-    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    expect(content).toContain("[pending redesign, 自行判断]");
-    // The retired NHA surface must not leak back into the prompt.
-    expect(content).not.toMatch(/attention raise/);
-    expect(content).not.toContain("AskUserQuestion");
+    expect(existsSync(join(workspace, ".agent", "context"))).toBe(false);
   });
 
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
@@ -388,12 +283,17 @@ describe("bootstrapWorkspace", () => {
     expect(existsSync(join(workspace, ".agent", "identity.json"))).toBe(true);
   });
 
-  it("copies AGENT.md as agent-instructions.md from context tree", () => {
-    const workspace = join(tmpBase, "ws-agent-md");
-    const ctxTree = join(tmpBase, "ctx-agent-md");
+  it("no longer stages AGENT.md / NODE.md under `.agent/context/` (briefing references the tree path instead)", () => {
+    // The unified briefing's `## Tree Location` section points the agent at
+    // the bound tree checkout directly; the legacy staging copies under
+    // `.agent/context/agent-instructions.md` and `.agent/context/domain-map.md`
+    // are no longer read by anything and so are no longer written.
+    const workspace = join(tmpBase, "ws-no-tree-staging");
+    const ctxTree = join(tmpBase, "ctx-tree-no-staging");
     mkdirSync(workspace, { recursive: true });
     mkdirSync(join(ctxTree, "members", "test-agent"), { recursive: true });
     writeFileSync(join(ctxTree, "AGENT.md"), "## Before Every Task\n\nRead the root NODE.md.");
+    writeFileSync(join(ctxTree, "NODE.md"), "# Context Tree\n\n## Domains\n\n- kael/\n");
 
     bootstrapWorkspace({
       workspacePath: workspace,
@@ -402,28 +302,9 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const instructionsPath = join(workspace, ".agent", "context", "agent-instructions.md");
-    expect(existsSync(instructionsPath)).toBe(true);
-    expect(readFileSync(instructionsPath, "utf-8")).toContain("Before Every Task");
-  });
-
-  it("copies root NODE.md as domain-map.md from context tree", () => {
-    const workspace = join(tmpBase, "ws-domain-map");
-    const ctxTree = join(tmpBase, "ctx-domain-map");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(join(ctxTree, "members", "test-agent"), { recursive: true });
-    writeFileSync(join(ctxTree, "NODE.md"), "# Context Tree\n\n## Domains\n\n- kael/\n- agent-hub/");
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity(),
-      contextTreePath: ctxTree,
-      serverUrl: "http://localhost:8000",
-    });
-
-    const domainMapPath = join(workspace, ".agent", "context", "domain-map.md");
-    expect(existsSync(domainMapPath)).toBe(true);
-    expect(readFileSync(domainMapPath, "utf-8")).toContain("kael/");
+    expect(existsSync(join(workspace, ".agent", "context", "agent-instructions.md"))).toBe(false);
+    expect(existsSync(join(workspace, ".agent", "context", "domain-map.md"))).toBe(false);
+    expect(existsSync(join(workspace, ".agent", "context"))).toBe(false);
   });
 
   it("does not write degraded.md when contextTreePath is null (no Context Tree is normal)", () => {
@@ -441,10 +322,11 @@ describe("bootstrapWorkspace", () => {
     expect(existsSync(degradedPath)).toBe(false);
   });
 
-  // Tests that pinned `chatContext` being written into identity.json were
-  // dropped here: per agent-session-cwd-redesign, per-chat fields no longer
-  // live on disk. The new injection path is covered by `buildChatSystemPrompt`
-  // below.
+  // Per-chat fields (chatId, participants, topic) intentionally have no
+  // on-disk home — they flow through the unified briefing's per-turn
+  // `## Current Chat Context` block, exercised by the buildAgentBriefing
+  // tests. Issue #808 tracks moving that block off the per-agent file
+  // entirely.
 
   it("overwrites existing files on re-bootstrap", () => {
     const workspace = join(tmpBase, "ws-overwrite");
@@ -866,95 +748,6 @@ describe("installCoreSkills", () => {
     } finally {
       setCliBinding({ binName: "first-tree", packageName: "first-tree" });
     }
-  });
-});
-
-describe("buildChatSystemPrompt", () => {
-  const AGENT_HOME = "/var/lib/agent-hub/workspaces/test-agent";
-
-  it("emits the working-directory convention and on-demand worktree block", () => {
-    const text = buildChatSystemPrompt({
-      agentHome: AGENT_HOME,
-      chatContext: undefined,
-      sourceRepos: [],
-    });
-
-    expect(text).toContain("# Working Directory Convention");
-    expect(text).toContain(AGENT_HOME);
-    // No worktrees are pre-created in the 2026-05-22 redesign; the agent is
-    // instructed to create them on demand.
-    expect(text).toContain("## Creating Worktrees On Demand");
-    expect(text).toContain("No worktrees are pre-created");
-    expect(text).toContain("git worktree add");
-    expect(text).toContain("worktrees/<task-name>");
-  });
-
-  it("renders predeclared source repos with top-level paths and upstream coordinates", () => {
-    const text = buildChatSystemPrompt({
-      agentHome: AGENT_HOME,
-      chatContext: undefined,
-      sourceRepos: [
-        {
-          absolutePath: `${AGENT_HOME}/api`,
-          url: "git@github.com:example/api.git",
-          ref: "main",
-          branch: "session/test-agent",
-        },
-        {
-          absolutePath: `${AGENT_HOME}/web`,
-          url: "git@github.com:example/web.git",
-        },
-      ],
-    });
-
-    expect(text).toContain("## Source Repositories");
-    // Top-level paths — no `worktrees/` prefix.
-    expect(text).toContain(`\`${AGENT_HOME}/api\``);
-    expect(text).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
-    expect(text).toContain("url=git@github.com:example/api.git");
-    expect(text).toContain("ref=main");
-    expect(text).toContain("branch=session/test-agent");
-    expect(text).toContain(`\`${AGENT_HOME}/web\``);
-    // For the second entry — only url should appear, ref/branch lines omitted.
-    expect(text).not.toMatch(/url=git@github.com:example\/web\.git,\s*ref=/);
-    // The pre-checked-out source repo is on a never-advanced hub-session
-    // branch — the prompt must warn the agent NOT to reuse it for new
-    // work and instead branch a fresh worktree from a freshly-fetched
-    // origin ref (issue #655).
-    expect(text).toContain("refreshed during this chat");
-    expect(text).toContain("git fetch origin");
-    expect(text).toContain("origin/main");
-  });
-
-  it("appends the Current Chat Context block when chatContext is provided", () => {
-    const text = buildChatSystemPrompt({
-      agentHome: AGENT_HOME,
-      chatContext: {
-        chatId: "chat-123",
-        title: "ship redesign",
-        topic: "ship redesign",
-        participants: [
-          { name: "alice", displayName: "Alice", type: "human" },
-          { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
-        ],
-      },
-      sourceRepos: [],
-    });
-
-    expect(text).toContain("## Current Chat Context");
-    expect(text).toContain("Chat ID: chat-123");
-    expect(text).toContain("@alice");
-    expect(text).toContain("@bob-bot");
-  });
-
-  it("omits the Current Chat Context block when chatContext is undefined (degraded fetch)", () => {
-    const text = buildChatSystemPrompt({
-      agentHome: AGENT_HOME,
-      chatContext: undefined,
-      sourceRepos: [],
-    });
-
-    expect(text).not.toContain("## Current Chat Context");
   });
 });
 

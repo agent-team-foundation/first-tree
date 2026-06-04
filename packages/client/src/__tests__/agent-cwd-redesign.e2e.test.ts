@@ -245,9 +245,13 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const briefing = readFileSync(agentsMdPath, "utf-8");
 
     // New redesign sections — must be present.
-    expect(briefing).toContain("# Working Directory Convention");
+    // (Section headers were tightened in the AGENTS.md restructure follow-up:
+    // `# Working Directory Convention` → `## Working Directory` under the
+    // new `# Working in First Tree` umbrella, etc.)
+    expect(briefing).toContain("# Working in First Tree");
+    expect(briefing).toContain("## Working Directory");
     expect(briefing).toContain("## Source Repositories");
-    expect(briefing).toContain("## Creating Worktrees On Demand");
+    expect(briefing).toContain("## Worktrees");
     expect(briefing).toContain("git worktree add");
     expect(briefing).toContain("No worktrees are pre-created");
 
@@ -256,6 +260,11 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
 
     // Legacy wording from the previous design MUST be gone.
     expect(briefing).not.toContain("Predeclared worktrees");
+    // The pre-restructure section names must NOT linger — they would
+    // double-render with the new headers if a regenerator path skipped a step.
+    expect(briefing).not.toContain("# Working Directory Convention");
+    expect(briefing).not.toContain("## Creating Worktrees On Demand");
+    expect(briefing).not.toContain("# First Tree Agent Runtime");
     // Negation: the repo path should NOT be presented under worktrees/.
     expect(briefing).not.toContain(`${workspaceRoot}/worktrees/lib`);
 
@@ -458,8 +467,9 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
       // lands as AGENTS.md, and CLAUDE.md becomes a relative symlink to it.
       const refreshedClaudeMd = readFileSync(join(legacyCwd, "CLAUDE.md"), "utf-8");
       expect(refreshedClaudeMd).not.toBe("legacy session prompt\n");
-      expect(refreshedClaudeMd).toContain("# Agent Identity");
-      expect(refreshedClaudeMd).toContain("# Working Directory Convention");
+      expect(refreshedClaudeMd).toContain("# Identity");
+      expect(refreshedClaudeMd).toContain("# Working in First Tree");
+      expect(refreshedClaudeMd).toContain("## Working Directory");
       expect(readFileSync(join(legacyCwd, "AGENTS.md"), "utf-8")).toBe(refreshedClaudeMd);
 
       await handler.shutdown();

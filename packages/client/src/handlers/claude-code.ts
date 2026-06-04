@@ -1366,9 +1366,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * sessions starting at the same time don't race `git worktree add` for the
    * same path. See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
    *
-   * Side effect: refreshes `sourceReposForPrompt` so the per-turn system-
-   * prompt block (`buildChatSystemPrompt`) can list absolute paths +
-   * upstream coordinates for the LLM.
+   * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
+   * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
+   * list absolute paths + upstream coordinates for the LLM.
    *
    * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
    * and the error bubbles up to the caller (SessionManager).
@@ -1410,8 +1410,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * Best-effort chat-context fetch for the identity-injection path. Failures
    * are logged but never bubble — bootstrap continues with `undefined` and
    * the agent simply loses the "Current Chat Context" block (graceful
-   * degradation; the Communication Rules in tools.md still tell it to fall
-   * back to conservative mode).
+   * degradation; the Communication block in the `# Working in First Tree`
+   * section of AGENTS.md still tells it to fall back to conservative mode).
    */
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
     try {
