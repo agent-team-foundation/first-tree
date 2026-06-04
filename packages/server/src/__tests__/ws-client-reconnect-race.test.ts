@@ -3,7 +3,10 @@ import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
+import { createAgent } from "../services/agent.js";
+import * as clientService from "../services/client.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
 
 /**
@@ -82,6 +85,48 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     return ws;
   }
 
+  async function waitForFrame(
+    ws: WebSocket,
+    predicate: (msg: { type?: string }) => boolean,
+  ): Promise<{ type?: string }> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.off("message", onMessage);
+        reject(new Error("frame timeout"));
+      }, 5000);
+      const onMessage = (raw: WebSocket.RawData) => {
+        const msg = JSON.parse(raw.toString()) as { type?: string };
+        if (!predicate(msg)) return;
+        clearTimeout(timer);
+        ws.off("message", onMessage);
+        resolve(msg);
+      };
+      ws.on("message", onMessage);
+    });
+  }
+
+  async function createBoundAgent(ws: WebSocket, clientId: string): Promise<string> {
+    const agent = await createAgent(app.db, {
+      name: `race-agent-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Agent",
+      managerId: memberId,
+      clientId,
+      runtimeProvider: "claude-code",
+    });
+    ws.send(
+      JSON.stringify({
+        type: "agent:bind",
+        ref: `bind-${crypto.randomUUID()}`,
+        agentId: agent.uuid,
+        runtimeType: "claude-code",
+      }),
+    );
+    const msg = await waitForFrame(ws, (m) => m.type === "agent:bound" || m.type === "agent:bind:rejected");
+    expect(msg.type).toBe("agent:bound");
+    return agent.uuid;
+  }
+
   beforeAll(async () => {
     app = await createTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
@@ -142,20 +187,40 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     ws2.close();
   }, 10_000);
 
-  it("still writes 'disconnected' when the only socket closes (no replacement)", async () => {
-    // Sanity: the fix must not break the normal disconnect path. A
-    // single client opening then closing must end up disconnected in
-    // the DB, otherwise we'd have leaked the entire status signal.
+  it("keeps client and agent presence connected during the socket-close grace window", async () => {
+    // A single socket close is only a transport loss. Proactive auth
+    // refreshes and short network blips reconnect quickly, so the DB
+    // should keep the last connected presence until heartbeat staleness
+    // cleanup proves the client is gone.
     const token = await signAccess();
     const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
 
     const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
     const closed = new Promise<void>((resolve) => ws.on("close", () => resolve()));
     ws.close();
     await closed;
     await new Promise((r) => setTimeout(r, 100));
 
     const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId));
-    expect(row?.status).toBe("disconnected");
+    expect(row?.status).toBe("connected");
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(presence?.status).toBe("online");
+    expect(presence?.clientId).toBe(clientId);
+    expect(presence?.runtimeState).toBe("idle");
+
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+
+    await expect(clientService.cleanupStaleClients(app.db, 60)).resolves.toBe(1);
+
+    const [staleClient] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(staleClient?.status).toBe("disconnected");
+
+    const [stalePresence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(stalePresence?.status).toBe("offline");
+    expect(stalePresence?.clientId).toBeNull();
+    expect(stalePresence?.runtimeState).toBeNull();
   }, 10_000);
 });
