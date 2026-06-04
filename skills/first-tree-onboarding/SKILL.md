@@ -2,7 +2,7 @@
 name: first-tree-onboarding
 version: 0.6.1
 cliCompat:
-  first-tree: ">=0.5.0 <0.7.0"
+  first-tree: ">=0.5.0 <0.6.0"
 description: One-shot onboarding command for First Tree. Drives a repo or workspace from "no first-tree" all the way to "workspace.json bound, real content drafted, automation rule layer checked" — end to end, in one skill invocation. Trigger this skill when the user invokes `/first-tree-onboarding`, says "onboard this repo to first-tree", "set up first-tree here", "complete first-tree onboarding", "migrate this workspace to W1", or runs first-tree against an unbound repo or workspace. Also trigger when re-running on an already-bound repo to refresh skills, draft missing content, or reverify the setup. Use this skill instead of running `first-tree tree init` from raw memory; it owns the initial-content drafting phase the CLI does NOT do, the W1 migration of legacy multi-mode workspaces, the Tier 0 / Tier 2 GitHub rule-layer install, and the final doctor checks. Agent-driven automation (AI PR review, agent template management, daemon install) is out of scope — owned by `first-tree cloud` and operator tooling.
 ---
 
