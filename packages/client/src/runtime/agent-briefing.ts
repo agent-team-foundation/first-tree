@@ -329,7 +329,7 @@ The write trigger is **task completion** — the moment you're ready to
 open the code PR. If the task touched decisions, constraints, ownership,
 or cross-domain relationships, the **tree PR opens first, then the code
 PR** — otherwise other agents keep acting on the old tree.
-Implementation-only changes skip the tree PR — not the read.
+Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its
 workflow:
