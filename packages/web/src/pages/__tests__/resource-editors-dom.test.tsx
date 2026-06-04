@@ -80,6 +80,19 @@ async function waitForButton(text: string): Promise<HTMLButtonElement> {
   throw new Error(`waitForButton: "${text}" never appeared`);
 }
 
+/**
+ * Close any open overlay (Radix Dialog / our Popover both dismiss on Escape).
+ * Call before unmounting a test that left a dialog open, so the overlay's
+ * cleanup runs while mounted instead of racing unmount and leaking body
+ * attributes (pointer-events / scroll-lock) into the next test.
+ */
+async function pressEscape(): Promise<void> {
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await flush();
+}
+
 /** Wait until a button is present AND enabled, then click it. */
 async function clickWhenEnabled(text: string): Promise<void> {
   for (let i = 0; i < 50; i++) {
@@ -153,6 +166,18 @@ function lastByPlaceholder(placeholder: string): HTMLInputElement {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // Radix Dialog (+ react-remove-scroll) sets attributes/styles on <body>/<html>
+  // while open — pointer-events, aria-hidden, inert, data-scroll-locked. In
+  // happy-dom these can survive a root.unmount(), so a dialog test would poison
+  // the next test's portal rendering (e.g. the Add-resource popover never
+  // mounting). Scrub them so every test starts from a clean document.
+  for (const el of [document.body, document.documentElement]) {
+    el.removeAttribute("style");
+    el.removeAttribute("aria-hidden");
+    el.removeAttribute("inert");
+    el.removeAttribute("data-scroll-locked");
+    el.removeAttribute("data-aria-hidden");
+  }
   authMock.value = { role: "admin", organizationId: "org-1", meLoaded: true };
   resourceMocks.listTeamResources.mockResolvedValue([GITHUB_MCP]);
   resourceMocks.createTeamResource.mockResolvedValue(
@@ -384,6 +409,7 @@ describe("resource editors", () => {
     });
     await flush();
     expect(byText("Retire")?.disabled).toBe(false);
+    await pressEscape();
     await act(async () => root.unmount());
   });
 
@@ -408,6 +434,7 @@ describe("resource editors", () => {
     });
     await flush();
     expect(byText("Retire")?.disabled).toBe(false);
+    await pressEscape();
     await act(async () => root.unmount());
   });
 
@@ -426,6 +453,7 @@ describe("resource editors", () => {
     expect(document.body.textContent).toContain("Write plainly.");
     // No edit controls inside the preview.
     expect(document.getElementById("prompt-body")).toBeNull();
+    await pressEscape();
     await act(async () => root.unmount());
   });
 
@@ -435,9 +463,24 @@ describe("resource editors", () => {
       promptOverflowAgentCount: 2,
       agents: [],
     });
-    const { root } = await render();
-    await click(byText("Add resource"));
-    await click(await waitForButton("Prompt"));
+    // Render the prompt editor directly rather than driving the Add-resource
+    // Popover. The assertion target is the overflow save flow, not menu
+    // navigation (already covered by the create tests above) — and opening a
+    // portal-anchored Popover after the Dialog-heavy tests in this file is a
+    // CI-only teardown-leak hazard. Mounting the editor sidesteps it entirely.
+    const { ResourceEditor } = await import("../settings/resource-editors.js");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={createClient()}>
+          <ResourceEditor state={{ mode: "create", type: "prompt" }} onClose={() => {}} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
     const body = document.getElementById("prompt-body");
     if (!(body instanceof HTMLTextAreaElement)) throw new Error("prompt-body");
     await act(async () => {
@@ -455,6 +498,7 @@ describe("resource editors", () => {
     // Second click ("Save anyway") commits.
     await click(await waitForButton("Save anyway"));
     expect(resourceMocks.createTeamResource).toHaveBeenCalledTimes(1);
+    await pressEscape();
     await act(async () => root.unmount());
   });
 });
