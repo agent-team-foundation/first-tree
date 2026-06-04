@@ -14,7 +14,6 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
-import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "../../components/ui/sheet.js";
 import { Textarea } from "../../components/ui/textarea.js";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -379,7 +378,7 @@ function pairsToRecord(pairs: [string, string][]): Record<string, string> {
   return out;
 }
 
-// Shared footer (Cancel · Preview · Save) — reused by Dialog + Sheet editors.
+// Shared footer (Cancel · Preview · Save) — reused by every editor.
 function EditorFooter({
   save,
   payload,
@@ -603,7 +602,11 @@ function ModalEditor({
           <DialogTitle>{titleFor(state)}</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          {children}
+          {/* Fields scroll within the modal so a long prompt/skill body keeps
+              the footer visible; short forms (repo/mcp) never reach the cap. */}
+          <div className="space-y-4" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+            {children}
+          </div>
           <DialogFooter>
             <EditorFooter
               save={save}
@@ -620,7 +623,8 @@ function ModalEditor({
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// prompt / skill — side sheet (room for the markdown body)
+// prompt / skill — same centered modal as repo/mcp; the body textarea scrolls
+// within it. (Matches the existing CustomPromptDialog pattern.)
 // ─────────────────────────────────────────────────────────────────────────
 
 function PromptEditor({ state, save, onClose }: EditorProps) {
@@ -638,7 +642,7 @@ function PromptEditor({ state, save, onClose }: EditorProps) {
   });
 
   return (
-    <SheetEditor state={state} save={save} onClose={onClose} payload={payload}>
+    <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
       <Field id="prompt-name" label="Name" value={name} onChange={setName} placeholder="Prompt name" />
       <Field
         id="prompt-desc"
@@ -649,7 +653,7 @@ function PromptEditor({ state, save, onClose }: EditorProps) {
       />
       <BodyField id="prompt-body" value={body} onChange={setBody} />
       <DefaultModeField value={mode} onChange={setMode} />
-    </SheetEditor>
+    </ModalEditor>
   );
 }
 
@@ -685,7 +689,7 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
   };
 
   return (
-    <SheetEditor state={state} save={save} onClose={onClose} payload={payload}>
+    <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
       <Field id="skill-name" label="Name" value={name} onChange={setName} placeholder="release-notes" mono />
       <Field
         id="skill-namespace"
@@ -706,7 +710,7 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
       <BodyField id="skill-body" value={body} onChange={setBody} />
       <KeyValueField label="Metadata" pairs={metadata} onChange={setMetadata} />
       <DefaultModeField value={mode} onChange={setMode} />
-    </SheetEditor>
+    </ModalEditor>
   );
 }
 
@@ -721,46 +725,5 @@ function BodyField({ id, value, onChange }: { id: string; value: string; onChang
         placeholder="Markdown…"
       />
     </FieldShell>
-  );
-}
-
-function SheetEditor({
-  state,
-  save,
-  onClose,
-  payload,
-  validate,
-  children,
-}: EditorProps & { payload: () => CreateTeamResource; validate?: () => string | null; children: ReactNode }) {
-  const [localError, setLocalError] = useState<string | null>(null);
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const v = validate?.() ?? null;
-    setLocalError(v);
-    if (v) return;
-    save.submit(payload());
-  };
-  return (
-    <Sheet open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <SheetContent aria-describedby={undefined}>
-        <SheetHeader>
-          <SheetTitle>{titleFor(state)}</SheetTitle>
-        </SheetHeader>
-        {/* Footer lives inside the form so the submit button actually submits;
-            the body scrolls, the footer stays pinned at the sheet bottom. */}
-        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-1 space-y-4 overflow-y-auto">{children}</div>
-          <SheetFooter className="shrink-0" style={{ marginTop: "var(--sp-4)" }}>
-            <EditorFooter
-              save={save}
-              payload={payload}
-              saveLabel={state.mode === "edit" ? "Save" : "Create"}
-              onCancel={onClose}
-              localError={localError}
-            />
-          </SheetFooter>
-        </form>
-      </SheetContent>
-    </Sheet>
   );
 }

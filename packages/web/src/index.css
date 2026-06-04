@@ -1527,12 +1527,10 @@ tr[data-interactive]:hover {
   }
 }
 
-/* Hide the third-party feedback FAB while any modal / side sheet is open. It's
+/* Hide the third-party feedback FAB while any modal dialog is open. It's
    injected at the end of <body> (outside the Radix portal) with a very high
-   z-index, so it otherwise floats above the scrim — and overlaps the
-   right-anchored sheet's footer (the Create / Save button). Radix sets
-   role="dialog" + data-state="open" on both Dialog and Sheet content, so one
-   rule covers both. */
+   z-index, so it otherwise floats above the scrim and can overlap a dialog's
+   footer. Radix sets role="dialog" + data-state="open" on Dialog content. */
 body:has([role="dialog"][data-state="open"]) hearback-widget {
   display: none;
 }
