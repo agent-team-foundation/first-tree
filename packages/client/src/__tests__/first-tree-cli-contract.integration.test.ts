@@ -224,8 +224,10 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI skill install contract", ()
     >;
     expect(identityJson.agentId).toBe("agent-uuid-xyz");
     expect(identityJson.contextTreePath).toBe(treePath);
-    expect(existsSync(join(workspace, ".agent", "context", "agent-instructions.md"))).toBe(true);
-    expect(existsSync(join(workspace, ".agent", "context", "domain-map.md"))).toBe(true);
+    // The unified briefing now references the tree by path; the legacy
+    // `.agent/context/` staging copies are no longer written. See the
+    // AGENTS.md restructure follow-up to PR #797.
+    expect(existsSync(join(workspace, ".agent", "context"))).toBe(false);
     expect(existsSync(join(workspace, ".first-tree-workspace"))).toBe(true);
 
     const logs: string[] = [];

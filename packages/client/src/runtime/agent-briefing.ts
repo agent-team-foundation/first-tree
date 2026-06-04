@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
-import { buildChatSystemPrompt, generateToolsDoc, type PredeclaredSourceRepo } from "./bootstrap.js";
+import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import type { ChatContext } from "./chat-context.js";
+import { renderChatContextSection } from "./chat-context-section.js";
+import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 import { buildResourceSkillsBriefing } from "./resource-skills.js";
 
@@ -17,55 +17,48 @@ export type BuildAgentBriefingOptions = {
 
 /**
  * Build the unified agent briefing materialised at `<workspacePath>/AGENTS.md`.
- * `<workspacePath>/CLAUDE.md` is a symlink to it (see {@link ensureClaudeMdSymlink}),
- * so Codex (which walks up for `AGENTS.md`) and Claude Code (which loads
- * `CLAUDE.md` via `settingSources: ["project"]`) read the same content.
+ * `<workspacePath>/CLAUDE.md` is a symlink to it, so Codex (which walks up
+ * for `AGENTS.md`) and Claude Code (which loads `CLAUDE.md` via
+ * `settingSources: ["project"]`) read the same content.
  *
- * One channel, all sections — no more split between a stable on-disk briefing
- * and a per-turn SDK `systemPrompt.append`. The hub-managed
- * `agent_configs.payload.prompt.append` lands here too, so admin updates take
- * effect on the next session start/resume via briefing rewrite (same semantics
- * Codex has carried since proposal §⓪.3).
+ * Section order — stable per-agent content first, per-chat content last —
+ * so the prompt cache stays warm across sibling chats of the same agent.
+ * Issue #808 tracks moving the last block (Current Chat Context) off the
+ * per-agent file entirely; until that lands it stays here at the bottom
+ * so the rest of the briefing remains cacheable.
  *
- * Section order (omit any block that has no content):
- *   1. `# Agent Identity`
- *   2. `## Agent-Specific Behavior`  (per-agent prompt.append)
- *   3. `# Working Directory Convention` + `## Source Repositories` +
- *      `## Creating Worktrees On Demand` + `## Current Chat Context`
- *      (built by {@link buildChatSystemPrompt})
- *   4. `## Operating Instructions` (AGENT.md), `## Organization Domain Map`
- *      (root NODE.md), `## Context Tree Location` — all gated on
- *      `contextTreePath !== null`
- *   5. `# First Tree Agent Runtime` ({@link generateToolsDoc})
+ *   1. `# Identity`                            — per-agent
+ *   2. `## Agent-Specific Prompt`              — per-agent config (`payload.prompt.append`)
+ *   3. `# Working in First Tree`               — mostly static, with subsections:
+ *        intro · Working Directory · Source Repositories · Worktrees ·
+ *        Communication · Workspace Collaboration · Asking Humans ·
+ *        Chat Topic · CLI Overview
+ *   4. `# Context Tree`                        — per binding, with subsections:
+ *        Core Model · Reading the Tree · Writing the Tree · Tree Location
+ *   5. `# Skills`                              — Team Skills (if any) + First Tree Family
+ *   6. `## Current Chat Context`               — per-chat (issue #808 will move it out)
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const sections: string[] = [];
 
   sections.push(identitySection(opts.identity));
 
-  const agentBehavior = opts.payload?.prompt.append?.trim() ?? "";
-  if (agentBehavior) {
-    sections.push(`## Agent-Specific Behavior\n\n${agentBehavior}`);
+  const agentPrompt = opts.payload?.prompt.append?.trim() ?? "";
+  if (agentPrompt) {
+    sections.push(`## Agent-Specific Prompt\n\n${agentPrompt}`);
   }
 
-  const skillsBlock = buildResourceSkillsBriefing(opts.workspacePath, opts.payload).trim();
-  if (skillsBlock) {
-    sections.push(skillsBlock);
-  }
+  sections.push(workingInFirstTreeSection({ agentHome: opts.workspacePath, sourceRepos: opts.sourceRepos }));
 
-  const workingEnv = buildChatSystemPrompt({
-    agentHome: opts.workspacePath,
-    chatContext: opts.chatContext,
-    sourceRepos: opts.sourceRepos,
-  });
-  if (workingEnv) sections.push(workingEnv);
+  sections.push(contextTreeSection(opts.contextTreePath));
 
-  if (opts.contextTreePath) {
-    const ctxSection = contextTreeSections(opts.contextTreePath);
-    if (ctxSection) sections.push(ctxSection);
-  }
+  sections.push(skillsSection(opts.workspacePath, opts.payload));
 
-  sections.push(generateToolsDoc().trim());
+  // Per-chat block — last, until issue #808 moves it off the per-agent
+  // file. `renderChatContextSection` returns null when the fetch degraded;
+  // we omit the section entirely in that case.
+  const chatBlock = renderChatContextSection(opts.chatContext);
+  if (chatBlock) sections.push(chatBlock.trimEnd());
 
   return `${sections.join("\n\n")}\n`;
 }
@@ -73,33 +66,328 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
 function identitySection(identity: AgentIdentity): string {
   const name = identity.displayName ?? identity.agentId;
   const kind = identity.visibility === "private" ? "a personal assistant agent" : "an autonomous agent";
-  return `# Agent Identity\n\nYou are ${name}, ${kind}.`;
+  return `# Identity\n\nYou are ${name}, ${kind}.`;
 }
 
-/**
- * Read AGENT.md / NODE.md directly from the bound Context Tree checkout. We
- * intentionally do not read the staged `.agent/context/` copies here because
- * the handler builds the briefing *before* `bootstrapWorkspace` runs (the
- * briefing then drives the AGENTS.md write that bootstrap performs). Reading
- * the live tree avoids a stale-copy window after upstream tree updates.
- */
-function contextTreeSections(contextTreePath: string): string | null {
-  const sections: string[] = [];
+// --- # Working in First Tree -------------------------------------------------
 
-  const instructionsPath = join(contextTreePath, "AGENT.md");
-  if (existsSync(instructionsPath)) {
-    sections.push(`## Operating Instructions\n\n${readFileSync(instructionsPath, "utf-8").trim()}`);
+type WorkingInFirstTreeOpts = {
+  agentHome: string;
+  sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
+};
+
+function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
+  const bin = getCliBinding().binName;
+  const blocks: string[] = [];
+
+  blocks.push(`# Working in First Tree
+
+You are running inside **First Tree**, a messaging platform for agent teams.
+
+- Messages from other team members arrive as your prompt input. Each message
+  has a \`[From: <agent-name>]\` header — that name is what you pass back to
+  \`chat send\`.
+- **Your final response text is delivered to the chat for human observers to
+  read. It does NOT wake other agents.** To make another agent take action,
+  run \`${bin} chat send <name>\` explicitly.
+- **Stay silent when you have nothing to add.** Not every message needs a
+  reply. If you have nothing new for the recipient, output nothing and the
+  runtime ends the turn.
+- **Content rules (Issue #389):** pass content as a **raw string** — never
+  \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes
+  produces a literal \`"@x ...\\n..."\` row that the UI cannot render as
+  markdown.`);
+
+  blocks.push(workingDirectoryBlock(opts.agentHome));
+
+  if (opts.sourceRepos.length > 0) {
+    blocks.push(sourceRepositoriesBlock(opts.sourceRepos));
   }
 
-  const domainMapPath = join(contextTreePath, "NODE.md");
-  if (existsSync(domainMapPath)) {
-    sections.push(`## Organization Domain Map\n\n${readFileSync(domainMapPath, "utf-8").trim()}`);
-  }
+  blocks.push(worktreesBlock(opts.agentHome, opts.sourceRepos));
+  blocks.push(communicationBlock(bin));
+  blocks.push(workspaceCollaborationBlock(bin));
+  blocks.push(askingHumansBlock());
+  blocks.push(chatTopicBlock(bin));
+  blocks.push(cliOverviewBlock(bin));
 
-  sections.push(
-    `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\n` +
-      "Read specific domain nodes as needed following the operating instructions above.",
+  return blocks.join("\n\n");
+}
+
+function workingDirectoryBlock(agentHome: string): string {
+  return `## Working Directory
+
+Your fixed working directory is \`${agentHome}\`. This directory is shared
+by every chat you participate in for this agent — files you create in one
+chat are visible from another. Operate accordingly:
+
+- Refer to paths by their **absolute** form (the values listed below) so
+  switching into a subdirectory does not break references.
+- Treat the agent home as persistent state. Memory, caches, and notes
+  accumulate across chats by design.`;
+}
+
+function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
+  const lines: string[] = ["## Source Repositories", ""];
+  lines.push(
+    "The following repositories are pre-checked-out at the top level of your",
+    "working directory. They sit on a long-lived hub-session branch that is",
+    "**not** refreshed during this chat — the code may be many commits behind",
+    "`origin/main`. Use them only for read-only orientation (grep, file layout,",
+    "`git log`); for anything that must reflect current `main` (review, analysis,",
+    "code changes), do not reuse this checkout — create a fresh worktree off",
+    "`origin/<base>` (see below). Shared across every chat of this agent; do",
+    "not modify them in place or switch their branches.",
   );
+  lines.push("");
+  for (const repo of sourceRepos) {
+    const coords: string[] = [`url=${repo.url}`];
+    if (repo.ref) coords.push(`ref=${repo.ref}`);
+    if (repo.branch) coords.push(`branch=${repo.branch}`);
+    lines.push(`- \`${repo.absolutePath}\`  (${coords.join(", ")})`);
+  }
+  return lines.join("\n");
+}
 
-  return sections.length > 0 ? sections.join("\n\n") : null;
+function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
+  // Per proposal §⑧ R3: use absolute paths in the snippet. LLMs sometimes
+  // literal-copy `<placeholder>` strings, so only `<task-name>` and
+  // `<new-branch>` are placeholders here — the home prefix is interpolated.
+  return `## Worktrees
+
+**No worktrees are pre-created.** Every new task starts by branching a
+fresh worktree under \`${agentHome}/worktrees/<task-name>/\` off a freshly-
+fetched \`origin/<base>\` — do not reuse the pre-checked-out path above.
+
+\`\`\`bash
+# from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}
+git fetch origin
+git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main
+\`\`\`
+
+Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit. When
+finished, the operator cleans up with \`git worktree remove\`.`;
+}
+
+function communicationBlock(bin: string): string {
+  return `## Communication
+
+Decision guide (based on participant \`type\` in the Current Chat Context block):
+
+- Target is a **human** in this chat → your final text is enough; do not
+  redundantly \`chat send\` (it just adds noise).
+- Target is an **agent** in this chat → they will NOT see your final text
+  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them
+  to act.
+- No specific target (just narrating progress / thinking aloud) → final
+  text only; no send needed.
+
+**Fallback** (if the Current Chat Context block is missing — context
+injection may have failed): use conservative mode — all cross-agent
+collaboration goes through explicit \`chat send\`; do not rely on final
+text to wake anyone.`;
+}
+
+function workspaceCollaborationBlock(bin: string): string {
+  return `## Workspace Collaboration
+
+For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
+stdin, reaching non-members, mention resolution — load the top-level
+**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
+The skill's \`description\` triggers progressive disclosure whenever the
+user mentions chat, daemon, agent config, or anything related to First
+Tree.
+
+Substitute \`${bin}\` for the literal \`first-tree\` in any examples you
+read there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less
+agents** (no Context Tree binding) won't have \`first-tree\` installed on
+disk; the Communication block above is inline here for exactly that
+reason — the sunk content is the long CLI mechanics, not the routing
+rules.`;
+}
+
+function askingHumansBlock(): string {
+  return `## Asking Humans
+
+Asking a human is [pending redesign, 自行判断].`;
+}
+
+function chatTopicBlock(bin: string): string {
+  return `## Chat Topic
+
+The workspace chat list uses each chat's \`topic\` as its label. A good
+topic is a short (≤ 30 chars) phrase that tells a teammate at a glance
+what this chat is about — e.g. "调研 chat rename 方案" or "本周 ship 计划".
+
+The current value is shown in the "Current Chat Context" block at the
+bottom of this briefing as either an explicit \`Topic: <value>\` or the
+sentinel \`Topic: (unset ...)\`.
+
+**Two hard rules:**
+
+1. **Topic is unset → set one before ending this turn.**
+   When the context block shows \`Topic: (unset ...)\`, run:
+
+       ${bin} chat set-topic "<short phrase>"
+
+   The fallback label the workspace would otherwise show ("first 50 chars
+   of the first message" / "alice, bob-bot") is rarely distinctive across
+   many chats — naming the chat is a cheap win.
+
+2. **Topic is set but no longer matches what this chat is about → update it.**
+   Use judgment: don't churn the topic for minor digressions. Only run
+   \`${bin} chat set-topic "<new phrase>"\` when a teammate scanning the
+   workspace list would be misled by the current value.
+
+**Exception: GitHub-sourced topics — leave them alone.**
+
+Topics that look like \`PR repo#307: title\`, \`Issue repo#42\`, \`PR
+Review repo#X: ...\`, \`Discussion repo#X\`, or \`Commit repo@sha\` were
+auto-set by First Tree when the chat was minted from a GitHub event, and
+First Tree keeps them in sync with the upstream PR/issue title.
+Overriding them with your own label loses the repo / entity-id anchor
+that makes the chat list useful. **Do not run \`set-topic\` on a chat
+whose topic already has that shape.**`;
+}
+
+function cliOverviewBlock(bin: string): string {
+  return `## CLI Overview
+
+The \`${bin}\` CLI spans two arms — **workspace collaboration** (talking
+to people and other agents) and **context management** (the Context Tree):
+
+| Namespace | What it owns |
+|---|---|
+| \`${bin} chat …\`        | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
+| \`${bin} agent …\`       | self-introspection — \`status\`, \`session\`, \`config show\` |
+| \`${bin} daemon …\`      | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
+| \`${bin} tree …\`        | Context Tree — \`status\`, \`read\`, \`write\`, \`verify\`, \`publish\` |
+| \`${bin} github scan …\` | GitHub notification daemon |
+| \`${bin} org …\`         | workspace ↔ tree binding |
+
+Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`)
+runs from the web console or a human terminal — **never from inside a
+running agent**. Full surface: \`docs/cli-reference.md\`.`;
+}
+
+// --- # Context Tree ---------------------------------------------------------
+
+function contextTreeSection(contextTreePath: string | null): string {
+  const blocks: string[] = [];
+
+  blocks.push(`# Context Tree
+
+## Core Model
+
+The Context Tree is the team's source of truth for **decisions,
+constraints, ownership, and cross-domain relationships**. Execution
+detail stays in source systems; the tree carries the *what* and *why*
+you need to act correctly across repos and teams. Each domain is a
+directory; each node is a markdown file with frontmatter (\`owners\`,
+\`soft_links\`) plus the actual content.
+
+For node anatomy, ownership tiers, and soft_link navigation, load
+\`first-tree-context\`.`);
+
+  blocks.push(`## Reading the Tree
+
+Always start by reading the tree's **root \`NODE.md\`** — it is the
+team's domain directory. From there, navigate however suits you: Read,
+Grep, listing a domain folder, jumping via \`soft_links\`. The tree is
+just a filesystem; use whatever tool gets you to the right node.
+
+You **must** read tree nodes eagerly, not lazily:
+
+- **Pick up a new task or requirement** → read every node that touches
+  the domain, owners, prior decisions, or constraints involved before
+  acting. Acting before reading is the #1 source of advice that
+  conflicts with reality.
+- **Task scope shifts mid-conversation** → if a new domain, repo, or
+  owner gets pulled in, read those nodes before continuing.
+- **In doubt** → re-read. Re-reading is cheap; stale assumptions are
+  expensive.`);
+
+  blocks.push(`## Writing the Tree
+
+A chat is **fresh context** — the in-the-moment understanding you and
+your teammates build while doing the work. The tree is **persistent
+context** — the durable record the next agent will read in six months.
+The moment your code PR is ready to land, the job is to translate fresh
+context + the code change back into tree context, so the next agent
+picks up where you left off.
+
+The write trigger is **task completion** — the moment you're ready to
+open the code PR. If the task touched decisions, constraints, ownership,
+or cross-domain relationships, the **tree PR opens first, then the code
+PR** — otherwise other agents keep acting on the old tree.
+Implementation-only changes skip the tree.
+
+Before writing, you MUST load the relevant skill first and follow its
+workflow:
+
+| Task | Skill |
+|---|---|
+| Reflect one specific PR / doc / note into the tree   | \`first-tree-write\` |
+| Broad drift audit (no specific source attached)      | \`first-tree-sync\`  |
+| Bind an unbound repo or workspace to a tree          | \`first-tree-onboarding\` |
+| GitHub notification spawned this agent for tree work | \`first-tree-github-scan\` |
+
+Do not invent ad-hoc tree edits without loading the skill — the workflow
+covers staging, review routing, and ownership rules you will not
+remember by default.`);
+
+  if (contextTreePath) {
+    blocks.push(`## Tree Location
+
+The Context Tree for this workspace is at:
+
+    ${contextTreePath}
+
+Read its root \`NODE.md\` first to map the domains before you act.`);
+  } else {
+    blocks.push(`## Tree Location
+
+This agent has no Context Tree bound. If a task needs cross-domain
+context that should be persistent (decisions, ownership), surface that
+gap and load \`first-tree-onboarding\` to bind a tree before writing.`);
+  }
+
+  return blocks.join("\n\n");
+}
+
+// --- # Skills (Skill Map) ---------------------------------------------------
+
+function skillsSection(workspacePath: string, payload: AgentRuntimeConfigPayload | null): string {
+  const blocks: string[] = ["# Skills"];
+
+  // Per-agent resource skills (from agent_configs.payload.resourceSkills),
+  // when present. The resource-skills helper emits its own `## Team Skills`
+  // header so we can splice it under the new `# Skills` umbrella.
+  const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
+  if (teamBlock) blocks.push(teamBlock);
+
+  blocks.push(firstTreeFamilyMap());
+
+  return blocks.join("\n\n");
+}
+
+function firstTreeFamilyMap(): string {
+  return `## First Tree Family
+
+Skill \`description\` fields drive progressive disclosure — the runtime
+loads the full skill when you mention its domain. This map is the
+curated routing index for the First Tree family; for general / harness
+skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`, …) trust
+the auto-injected list.
+
+| Skill | Load when |
+|---|---|
+| \`first-tree\`             | communication principles / pre-task hygiene / CLI namespace map |
+| \`first-tree-context\`     | what's a Context Tree node / ownership / navigation |
+| \`first-tree-onboarding\`  | "bind this repo / workspace to a tree" — one-shot |
+| \`first-tree-sync\`        | "is the tree up to date?" — broad drift audit, no source |
+| \`first-tree-write\`       | "reflect this PR / doc / note into the tree" — specific source |
+| \`first-tree-github-scan\` | handling a single GitHub notification spawned by \`github scan\` |
+| \`attention\`              | asking a human well — waking the right person, expectations |
+| \`github-scan\`            | running / operating the \`github scan\` daemon itself |`;
 }

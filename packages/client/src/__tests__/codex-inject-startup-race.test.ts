@@ -67,9 +67,7 @@ vi.mock("@openai/codex-sdk", () => {
 vi.mock("../runtime/bootstrap.js", () => ({
   FIRST_TREE_WORKSPACE_MARKER: ".first-tree-workspace",
   bootstrapWorkspace: vi.fn(),
-  buildChatSystemPrompt: vi.fn(() => ""),
   deepEqualIdentity: vi.fn(() => true),
-  generateToolsDoc: vi.fn(() => ""),
   installCoreSkills: vi.fn(),
   installFirstTreeIntegration: vi.fn(() => true),
   isHubWorktreeMarker: vi.fn(() => false),

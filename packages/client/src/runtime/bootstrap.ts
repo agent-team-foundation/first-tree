@@ -1,7 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -20,8 +19,6 @@ import { promisify } from "node:util";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
-import type { ChatContext } from "./chat-context.js";
-import { renderChatContextSection } from "./chat-context-section.js";
 import { getCliBinding } from "./cli-binding.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
@@ -547,13 +544,17 @@ export type BootstrapOptions = {
  * Bootstrap the agent's home directory with stable, agent-level files plus
  * the workspace-root marker.
  *
- * Writes identity.json, context/agent-instructions.md (if context tree
- * available), tools.md, and the `.first-tree-workspace` marker. Per the
+ * Writes identity.json and the `.first-tree-workspace` marker. Per the
  * agent-session-cwd-redesign (proposals/2026-05-19) **only agent-level stable
  * fields** live in identity.json; per-chat data (chatId, participants) flows
  * through the unified per-turn briefing file written by {@link
  * writeAgentBriefing} (which the handler invokes on every start/resume after
  * computing the briefing content via {@link buildAgentBriefing}).
+ *
+ * The bootstrap no longer stages AGENT.md / NODE.md copies under
+ * `.agent/context/` and no longer emits `.agent/tools.md`. The unified
+ * briefing owns all of that content; the runtime briefing is the single
+ * source of agent-level instructions on disk.
  *
  * Idempotent: safe to call on every handler start() / resume(), though in
  * the per-agent-home model the handler short-circuits this when the
@@ -562,13 +563,15 @@ export type BootstrapOptions = {
 export function bootstrapWorkspace(options: BootstrapOptions): void {
   const { workspacePath, identity, contextTreePath, serverUrl } = options;
   const agentDir = join(workspacePath, ".agent");
-  const contextDir = join(agentDir, "context");
-
-  // Clear stale context before repopulating (prevents serving outdated files).
-  if (existsSync(contextDir)) {
-    rmSync(contextDir, { recursive: true, force: true });
+  // Legacy `.agent/context/` staging directory; pruned at bootstrap so a
+  // resumed agent home that pre-dates this PR doesn't keep stale
+  // agent-instructions.md / domain-map.md / tools.md around. The unified
+  // briefing replaces them.
+  const legacyContextDir = join(agentDir, "context");
+  if (existsSync(legacyContextDir)) {
+    rmSync(legacyContextDir, { recursive: true, force: true });
   }
-  mkdirSync(contextDir, { recursive: true });
+  mkdirSync(agentDir, { recursive: true });
 
   // 1. Write identity.json — agent-level stable fields only. chatId /
   //    chatContext used to live here but are now injected per turn so a
@@ -586,28 +589,7 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
-  // 2. Copy organizational context from Context Tree (if available). The
-  //    briefing builder reads back agent-instructions.md / domain-map.md from
-  //    here when assembling AGENTS.md, so this is also the staging area for
-  //    the unified briefing's tree sections.
-  if (contextTreePath) {
-    // Agent operating instructions (AGENT.md)
-    const agentMdPath = join(contextTreePath, "AGENT.md");
-    if (existsSync(agentMdPath)) {
-      copyFileSync(agentMdPath, join(contextDir, "agent-instructions.md"));
-    }
-
-    // Organization domain map (root NODE.md)
-    const rootNodePath = join(contextTreePath, "NODE.md");
-    if (existsSync(rootNodePath)) {
-      copyFileSync(rootNodePath, join(contextDir, "domain-map.md"));
-    }
-  }
-
-  // 3. Write tools.md (static SDK reference)
-  writeFileSync(join(agentDir, "tools.md"), generateToolsDoc(), "utf-8");
-
-  // 4. Workspace-root marker — gates Codex's AGENTS.md walk-up so the agent
+  // 2. Workspace-root marker — gates Codex's AGENTS.md walk-up so the agent
   //    sees the briefing in this workspace and not whatever sits in the
   //    operator's HOME / git root.
   writeFileSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
@@ -880,236 +862,4 @@ export function deepEqualIdentity(a: unknown, b: unknown): boolean {
     }
   }
   return true;
-}
-
-export type BuildChatSystemPromptOptions = {
-  /** Absolute path to the agent home (cwd shared by every chat). */
-  agentHome: string;
-  /** Chat-level identity block; undefined when the fetch degraded. */
-  chatContext: ChatContext | undefined;
-  /**
-   * Source repos the runtime pre-materialised from `agentConfig.gitRepos`.
-   * Live at `<agentHome>/<localPath>/`, NOT under `worktrees/` — see
-   * {@link PredeclaredSourceRepo}.
-   */
-  sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
-};
-
-/**
- * Build the per-chat system-prompt text the handler appends on every turn.
- *
- * Per the per-agent-home redesign, anything chat-specific MUST be delivered
- * as a prompt fragment so two concurrent sessions don't see each other's
- * chat-context cached on disk. The block carries:
- *
- *   1. Working-directory convention (cwd, persistence).
- *   2. Predeclared source repo list at top-level paths (read-only browse).
- *   3. The on-demand `worktrees/<name>/` convention agent uses for any
- *      modification.
- *   4. The shared `renderChatContextSection` block so chat ID, title, and
- *      participants survive the move off-disk.
- *
- * The 2026-05-22 redesign explicitly does **not** pre-create any worktree
- * at session start — the agent is told to `git worktree add` on demand.
- *
- * Returns an empty string only when chatContext AND sourceRepos are both
- * empty — callers can use that to decide whether to call
- * `appendSystemPrompt` at all.
- */
-export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): string {
-  const { agentHome, chatContext, sourceRepos } = options;
-  const sections: string[] = [];
-
-  sections.push(
-    [
-      "# Working Directory Convention",
-      "",
-      `Your fixed working directory is \`${agentHome}\`. This directory is shared`,
-      "by every chat you participate in for this agent — files you create in one",
-      "chat are visible from another. Operate accordingly:",
-      "",
-      "- Refer to paths by their **absolute** form (the values listed below) so",
-      "  switching into a subdirectory does not break references.",
-      "- Treat the agent home as persistent state. Memory, caches, and notes",
-      "  accumulate across chats by design.",
-    ].join("\n"),
-  );
-
-  if (sourceRepos.length > 0) {
-    const lines: string[] = [];
-    lines.push("");
-    lines.push("## Source Repositories");
-    lines.push("");
-    lines.push(
-      "The following repositories are pre-checked-out at the top level of your",
-      "working directory. They sit on a long-lived hub-session branch that is",
-      "**not** refreshed during this chat — the code may be many commits behind",
-      "`origin/main`. Use them only for read-only orientation (grep, file layout,",
-      "`git log`); for anything that must reflect current `main` (review, analysis,",
-      "code changes), do not reuse this checkout — create a fresh worktree off",
-      "`origin/<base>` (see below). Shared across every chat of this agent; do",
-      "not modify them in place or switch their branches.",
-    );
-    lines.push("");
-    for (const repo of sourceRepos) {
-      const coords: string[] = [`url=${repo.url}`];
-      if (repo.ref) coords.push(`ref=${repo.ref}`);
-      if (repo.branch) coords.push(`branch=${repo.branch}`);
-      lines.push(`- \`${repo.absolutePath}\`  (${coords.join(", ")})`);
-    }
-    sections.push(lines.join("\n"));
-  }
-
-  // Worktree convention block is emitted regardless of whether predeclared
-  // source repos exist — the agent may also clone ad-hoc repos elsewhere
-  // and the worktrees/<name>/ convention still applies for any modification.
-  //
-  // Per proposal §⑧ R3: use absolute paths in the snippet. LLMs sometimes
-  // literal-copy `<placeholder>` strings, so only `<task-name>` and
-  // `<new-branch>` are placeholders here — the home prefix is interpolated.
-  const worktreeBlock: string[] = [];
-  worktreeBlock.push("## Creating Worktrees On Demand");
-  worktreeBlock.push("");
-  worktreeBlock.push(
-    "**No worktrees are pre-created.** Every new task starts by branching a",
-    `fresh worktree under \`${agentHome}/worktrees/<task-name>/\` off a freshly-`,
-    "fetched `origin/<base>` — do not reuse the pre-checked-out path above.",
-  );
-  worktreeBlock.push("");
-  worktreeBlock.push(
-    "```bash",
-    `# from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}`,
-    "git fetch origin",
-    `git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main`,
-    "```",
-  );
-  worktreeBlock.push("");
-  worktreeBlock.push(
-    "Replace `<task-name>`, `<new-branch>`, and `origin/main` to fit. When",
-    "finished, the operator cleans up with `git worktree remove`.",
-  );
-  sections.push(worktreeBlock.join("\n"));
-
-  const chatContextSection = renderChatContextSection(chatContext);
-  if (chatContextSection) {
-    // renderChatContextSection emits a "## Current Chat Context" block — we
-    // surface it under the same header level as the working-dir block so
-    // both render as top-level prompt sections.
-    sections.push(chatContextSection.trimEnd());
-  }
-
-  return sections.join("\n\n");
-}
-
-export function generateToolsDoc(): string {
-  // CLI binary name resolved at runtime from the channel-aware binding the
-  // CLI entrypoint installs via `setCliBinding`. Prod = "first-tree", staging
-  // = "first-tree-staging", dev = "first-tree-dev". Baking the channel-correct
-  // name into tools.md is what lets the agent's `<bin> chat send`
-  // invocations actually find the CLI on PATH —
-  // hardcoding "first-tree" used to leave staging/dev agents calling a
-  // binary that wasn't installed on the host.
-  //
-  // The long-form Sending Messages CLI usage (chat send / chat invite
-  // syntax, markdown / stdin, mention-resolution mechanics) lives in the
-  // top-level `first-tree` skill (SKILL.md + references/agent-
-  // communication.md) — the dedicated `first-tree-cloud` skill it used
-  // to live in was deleted because almost all of its content was
-  // operator-facing (login, daemon install, agent create, etc.) and
-  // never used by an in-chat agent at runtime. What stays here:
-  //   - runtime safety invariants the result-sink + silent-turn guard
-  //     depend on (final-text contract, silent-turn, Issue #389);
-  //   - the short behavioural directives (Decision guide table + Fallback
-  //     paragraph) that every agent needs regardless of whether the
-  //     `first-tree` skill is installed in its workspace.
-  // Why the second group stays inline: `first-tree` is in
-  // `TREE_SKILL_NAMES` (only installed alongside a Context Tree binding),
-  // not `CORE_SKILL_NAMES`. A tree-less agent (contextTreePath: null —
-  // explicitly supported per CLAUDE.md "Context Tree integration is
-  // optional") would otherwise be pointed at a skill that doesn't exist
-  // on its disk and silently lose the decision guide.
-  const bin = getCliBinding().binName;
-  return `# First Tree Agent Runtime
-
-You are running inside **First Tree**, a messaging platform for agent teams.
-
-- Messages from other team members arrive as your prompt input. Each message has a
-  \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
-- **Your final response text is delivered to the chat for human observers to read.
-  It does NOT wake other agents.** To make another agent take action, run
-  \`${bin} chat send <name>\` explicitly.
-- **Stay silent when you have nothing to add.** Not every message needs a reply.
-  If you have nothing new for the recipient, output nothing and the runtime ends the turn.
-- **Content rules (Issue #389):** pass content as a **raw string** — never
-  \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes produces a
-  literal \`"@x ...\\n..."\` row that the UI cannot render as markdown.
-
-## Communication Rules
-
-Decision guide (based on participant \`type\` in the Current Chat Context block):
-
-- Target is a **human** in this chat → your final text is enough; do not
-  redundantly \`chat send\` (it just adds noise).
-- Target is an **agent** in this chat → they will NOT see your final text
-  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them to act.
-- No specific target (just narrating progress / thinking aloud) → final
-  text only; no send needed.
-
-**Fallback** (if the Current Chat Context block is missing — context
-injection may have failed): use conservative mode — all cross-agent
-collaboration goes through explicit \`chat send\`; do not rely on final
-text to wake anyone.
-
-## Workspace Collaboration
-
-For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
-stdin, reaching non-members, mention resolution — load the top-level
-**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
-The skill's \`description\` triggers progressive disclosure whenever the user
-mentions chat, daemon, agent config, or anything related to First Tree.
-
-Substitute \`${bin}\` for the literal \`first-tree\` in any examples you read
-there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less agents**
-(no Context Tree binding) won't have \`first-tree\` installed on disk;
-the Communication Rules above are inline here for exactly that reason — the
-sunk content is the long CLI mechanics, not the routing rules.
-
-## When You Need a Human
-
-Asking a human is [pending redesign, 自行判断].
-
-## Naming this Chat (Topic)
-
-The workspace chat list uses each chat's \`topic\` as its label. A good topic
-is a short (≤ 30 chars) phrase that tells a teammate at a glance what this
-chat is about — e.g. "调研 chat rename 方案" or "本周 ship 计划".
-
-The current value is shown in the "Current Chat Context" block above as
-either an explicit \`Topic: <value>\` or the sentinel \`Topic: (unset ...)\`.
-
-**Two hard rules:**
-
-1. **Topic is unset → set one before ending this turn.**
-   When the context block shows \`Topic: (unset ...)\`, run:
-
-       ${bin} chat set-topic "<short phrase>"
-
-   The fallback label the workspace would otherwise show ("first 50 chars
-   of the first message" / "alice, bob-bot") is rarely distinctive across
-   many chats — naming the chat is a cheap win.
-
-2. **Topic is set but no longer matches what this chat is about → update it.**
-   Use judgment: don't churn the topic for minor digressions. Only run
-   \`${bin} chat set-topic "<new phrase>"\` when a teammate scanning the
-   workspace list would be misled by the current value.
-
-**Exception: GitHub-sourced topics — leave them alone.**
-
-Topics that look like \`PR repo#307: title\`, \`Issue repo#42\`, \`PR Review
-repo#X: ...\`, \`Discussion repo#X\`, or \`Commit repo@sha\` were auto-set
-by First Tree when the chat was minted from a GitHub event, and First Tree keeps them in
-sync with the upstream PR/issue title. Overriding them with your own label
-loses the repo / entity-id anchor that makes the chat list useful. **Do
-not run \`set-topic\` on a chat whose topic already has that shape.**
-`;
 }

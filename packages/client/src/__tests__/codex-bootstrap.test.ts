@@ -116,23 +116,36 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       [],
     );
 
-    expect(briefing).toContain("# Agent Identity");
+    // Section names follow the AGENTS.md restructure: `# Identity`,
+    // `## Agent-Specific Prompt`, `# Working in First Tree`, etc.
+    expect(briefing).toContain("# Identity");
     expect(briefing).toContain("Codex Developer");
-    expect(briefing).toContain("## Agent-Specific Behavior");
+    expect(briefing).toContain("## Agent-Specific Prompt");
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
-    expect(briefing).toContain("# First Tree Agent Runtime");
+    expect(briefing).toContain("# Working in First Tree");
     // The long-form Sending Messages CLI usage lives in the top-level
-    // first-tree skill; the Communication Rules decision guide + the
+    // first-tree skill; the Communication decision guide + the
     // Fallback paragraph stay inline because first-tree is not in
     // CORE_SKILL_NAMES (tree-less agents would otherwise lose them).
-    expect(briefing).toContain("## Communication Rules");
+    expect(briefing).toContain("## Communication");
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("`first-tree` skill");
     expect(briefing).toContain("first-tree-staging chat send");
     expect(briefing).toContain("does NOT wake other agents");
-    expect(briefing).not.toContain("`.agent/tools.md` for the");
+    // The new Skill Map and Context Tree section are now part of every
+    // briefing — pin both so a regenerator dropping them doesn't slip past
+    // review.
+    expect(briefing).toContain("# Context Tree");
+    expect(briefing).toContain("## Reading the Tree");
+    expect(briefing).toContain("## Writing the Tree");
+    expect(briefing).toContain("# Skills");
+    expect(briefing).toContain("## First Tree Family");
     // Stale pointer at the retired first-tree-cloud skill must stay gone.
     expect(briefing).not.toContain("first-tree-cloud");
+    // Section headers that the restructure renamed must not linger.
+    expect(briefing).not.toContain("# First Tree Agent Runtime");
+    expect(briefing).not.toContain("# Working Directory Convention");
+    expect(briefing).not.toContain("## Agent-Specific Behavior");
   });
 });
