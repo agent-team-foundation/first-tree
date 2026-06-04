@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CLAUDE_SETTINGS_PATH,
+  CODEX_CONFIG_PATH,
   CODEX_HOOKS_PATH,
   ensureAgentContextHooks,
   INJECT_CONTEXT_COMMAND,
+  removeAgentContextHooks,
 } from "../src/commands/tree/agent-context-hooks.js";
 import { writeTreeState } from "../src/commands/tree/binding-state.js";
 import { runTreeReview } from "../src/commands/tree/review-helper.js";
@@ -197,6 +199,294 @@ describe("ensureAgentContextHooks legacy migration", () => {
     expect(codexContent).toContain(INJECT_CONTEXT_COMMAND);
     expect(codexContent).not.toContain(LEGACY_TREE_FRAGMENT);
   });
+});
+
+describe("agent hooks scope to workspace-root only", () => {
+  function writeBinding(
+    root: string,
+    bindingMode: "workspace-root" | "workspace-member" | "shared-source" | "standalone-source",
+  ): void {
+    const entrypointByMode: Record<typeof bindingMode, string> = {
+      "workspace-root": "/workspaces/liuchao-staff",
+      "workspace-member": "/workspaces/liuchao-staff/repos/product-repo",
+      "shared-source": "/repos/product-repo",
+      "standalone-source": "/",
+    };
+    writeFileSync(
+      join(root, "AGENTS.md"),
+      `${buildSourceIntegrationBlock("context-tree", {
+        bindingMode,
+        entrypoint: entrypointByMode[bindingMode],
+        treeMode: "shared",
+        treeRepoName: "context-tree",
+        ...(bindingMode === "workspace-root" || bindingMode === "workspace-member"
+          ? { workspaceId: "liuchao-staff" }
+          : {}),
+      })}\n`,
+    );
+  }
+
+  it("workspace-root: installs hooks", () => {
+    const root = makeTempDir("first-tree-hooks-ws-root-");
+    writeBinding(root, "workspace-root");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("source");
+    expect(summary.hookSync.claudeSettings).toBe("created");
+    expect(summary.hookSync.codexHooks).toBe("created");
+    expect(summary.hookSync.codexConfig).toBe("created");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(true);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+  });
+
+  it("workspace-member: does not install hooks (no-op when none exist)", () => {
+    const root = makeTempDir("first-tree-hooks-ws-member-");
+    writeBinding(root, "workspace-member");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("source");
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(summary.hookSync.codexConfig).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+    expect(existsSync(join(root, CODEX_HOOKS_PATH))).toBe(false);
+  });
+
+  it("workspace-member: strips legacy managed hooks installed by older versions", () => {
+    const root = makeTempDir("first-tree-hooks-ws-member-strip-");
+    // Pretend an older version had installed hooks here recursively.
+    ensureAgentContextHooks(root);
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(true);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+
+    writeBinding(root, "workspace-member");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("removed");
+    expect(summary.hookSync.codexHooks).toBe("removed");
+    // codex_hooks flag is left alone — it gates the user's own hooks too.
+    expect(summary.hookSync.codexConfig).toBe("unchanged");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(readFileSync(join(root, CODEX_HOOKS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(readFileSync(join(root, CODEX_CONFIG_PATH), "utf-8")).toMatch(/codex_hooks\s*=\s*true/);
+  });
+
+  it("shared-source: does not install hooks", () => {
+    const root = makeTempDir("first-tree-hooks-shared-");
+    writeBinding(root, "shared-source");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+  });
+
+  it("standalone-source: does not install hooks", () => {
+    const root = makeTempDir("first-tree-hooks-standalone-");
+    writeBinding(root, "standalone-source");
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.hookSync.claudeSettings).toBe("unchanged");
+    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
+  });
+
+  it("tree repo upgrade: strips legacy hooks, never installs", () => {
+    const root = makeTempDir("first-tree-hooks-tree-strip-");
+    writeTreeState(root, {
+      treeId: "context-tree",
+      treeMode: "shared",
+      treeRepoName: "context-tree",
+    });
+    // Simulate a tree repo that an older version had installed hooks into.
+    ensureAgentContextHooks(root);
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toContain(INJECT_CONTEXT_COMMAND);
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("tree");
+    expect(summary.hookSync.claudeSettings).toBe("removed");
+    expect(summary.hookSync.codexHooks).toBe("removed");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
+  });
+
+  it("removeAgentContextHooks preserves user-added hooks in the same file", () => {
+    const root = makeTempDir("first-tree-hooks-preserve-user-");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    // User-added Stop hook in .claude/settings.json alongside the first-tree managed hook.
+    writeFileSync(
+      join(root, CLAUDE_SETTINGS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: "command", command: INJECT_CONTEXT_COMMAND }] },
+              { hooks: [{ type: "command", command: "echo my-own-hook" }] },
+            ],
+            Stop: [{ hooks: [{ type: "command", command: "echo stop-hook" }] }],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = removeAgentContextHooks(root);
+
+    expect(result.claudeSettings).toBe("removed");
+    const after = readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8");
+    expect(after).not.toContain(INJECT_CONTEXT_COMMAND);
+    expect(after).toContain("echo my-own-hook");
+    expect(after).toContain("echo stop-hook");
+  });
+
+  it("removeAgentContextHooks is a no-op when no managed hooks are present", () => {
+    const root = makeTempDir("first-tree-hooks-remove-noop-");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, CLAUDE_SETTINGS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            Stop: [{ hooks: [{ type: "command", command: "echo stop-hook" }] }],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const before = readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8");
+
+    const result = removeAgentContextHooks(root);
+
+    expect(result.claudeSettings).toBe("unchanged");
+    expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toBe(before);
+  });
+
+  it(
+    "removeAgentContextHooks is a byte-for-byte no-op when SessionStart contains only user hooks " +
+      "(does not reformat the file)",
+    () => {
+      // Regression: an earlier draft of stripSessionStartManagedDocument would
+      // JSON.stringify the parsed root whenever hooks.SessionStart existed,
+      // turning a compact / differently-indented user file into pretty-printed
+      // form and reporting "removed" for a pure formatting change.
+      const root = makeTempDir("first-tree-hooks-user-sessionstart-noop-");
+      mkdirSync(join(root, ".claude"), { recursive: true });
+      // Compact JSON (one line). If strip rewrites, the output would be
+      // multi-line pretty-printed.
+      const compact = `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo my-own-hook"}]}]}}\n`;
+      writeFileSync(join(root, CLAUDE_SETTINGS_PATH), compact);
+
+      const result = removeAgentContextHooks(root);
+
+      expect(result.claudeSettings).toBe("unchanged");
+      expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).toBe(compact);
+    },
+  );
+
+  it("removeAgentContextHooks strips real v0.4.x legacy literals in .claude/settings.json", () => {
+    // Real v0.4.x literal — the rename from `tree inject-context` to `tree
+    // inject` happened in Phase 1B. The ensure path translates the legacy
+    // literal in flight; the strip path must catch it as managed too.
+    // Assembled from parts so a grep guard does not flag this test fixture.
+    const LEGACY_SUBCOMMAND = `inject${"-"}context`;
+    const LEGACY_CLAUDE_COMMAND = `npx -p first-tree first-tree tree ${LEGACY_SUBCOMMAND}`;
+    const root = makeTempDir("first-tree-hooks-strip-v04x-claude-");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, CLAUDE_SETTINGS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: "command", command: LEGACY_CLAUDE_COMMAND }] },
+              { hooks: [{ type: "command", command: "echo user-hook" }] },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = removeAgentContextHooks(root);
+    const after = readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8");
+
+    expect(result.claudeSettings).toBe("removed");
+    expect(after).not.toContain(LEGACY_SUBCOMMAND);
+    expect(after).toContain("echo user-hook");
+  });
+
+  it("removeAgentContextHooks strips real v0.4.x legacy literals in .codex/hooks.json", () => {
+    const LEGACY_SUBCOMMAND = `inject${"-"}context`;
+    const LEGACY_CODEX_COMMAND = `npx -p first-tree first-tree tree ${LEGACY_SUBCOMMAND}`;
+    const root = makeTempDir("first-tree-hooks-strip-v04x-codex-");
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    writeFileSync(
+      join(root, CODEX_HOOKS_PATH),
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              {
+                matcher: "startup|resume",
+                hooks: [{ type: "command", command: LEGACY_CODEX_COMMAND, statusMessage: "Loading" }],
+              },
+              {
+                matcher: "startup|resume",
+                hooks: [{ type: "command", command: "echo user-codex-hook" }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = removeAgentContextHooks(root);
+    const after = readFileSync(join(root, CODEX_HOOKS_PATH), "utf-8");
+
+    expect(result.codexHooks).toBe("removed");
+    expect(after).not.toContain(LEGACY_SUBCOMMAND);
+    expect(after).toContain("echo user-codex-hook");
+  });
+
+  it(
+    "removeAgentContextHooks leaves codex_hooks flag and user .codex/hooks.json entries " +
+      "intact when only first-tree managed entries are stripped",
+    () => {
+      // Regression: removing the [features].codex_hooks flag would silently
+      // disable any user hook installations in the same .codex/hooks.json.
+      const root = makeTempDir("first-tree-hooks-codex-flag-preserved-");
+      ensureAgentContextHooks(root); // sets up flag + first-tree managed hook
+      // Add a user hook entry alongside the managed one.
+      const codexHooks = JSON.parse(readFileSync(join(root, CODEX_HOOKS_PATH), "utf-8")) as {
+        hooks: { SessionStart: unknown[] };
+      };
+      codexHooks.hooks.SessionStart.push({
+        matcher: "startup|resume",
+        hooks: [{ type: "command", command: "echo user-codex-hook" }],
+      });
+      writeFileSync(join(root, CODEX_HOOKS_PATH), `${JSON.stringify(codexHooks, null, 2)}\n`);
+
+      const result = removeAgentContextHooks(root);
+      const codexHooksAfter = readFileSync(join(root, CODEX_HOOKS_PATH), "utf-8");
+      const codexConfigAfter = readFileSync(join(root, CODEX_CONFIG_PATH), "utf-8");
+
+      expect(result.codexHooks).toBe("removed");
+      expect(result.codexConfig).toBe("unchanged");
+      expect(codexHooksAfter).not.toContain(INJECT_CONTEXT_COMMAND);
+      expect(codexHooksAfter).toContain("echo user-codex-hook");
+      expect(codexConfigAfter).toMatch(/codex_hooks\s*=\s*true/);
+    },
+  );
 });
 
 describe("runTreeReview", () => {

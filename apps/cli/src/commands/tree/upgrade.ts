@@ -5,7 +5,12 @@ import type { Command } from "commander";
 
 import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
+import type { AgentContextHookSyncResult } from "./agent-context-hooks.js";
+import {
+  ensureAgentContextHooks,
+  formatAgentContextHookMessages,
+  removeAgentContextHooks,
+} from "./agent-context-hooks.js";
 import { readSourceBindingContract } from "./binding-contract.js";
 import { removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
 import type { Tier0RuleLayerSummary } from "./rule-layer.js";
@@ -22,6 +27,7 @@ import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity
 
 type UpgradeSummary = {
   bundledSkillVersion: string;
+  hookSync: AgentContextHookSyncResult;
   targetKind: "source" | "tree";
   targetRoot: string;
   tier0RuleLayer?: Tier0RuleLayerSummary;
@@ -63,10 +69,19 @@ function upgradeSourceRoot(targetRoot: string, bundledSkillVersion: string): Upg
     workspaceId: sourceBinding.workspaceId,
   });
   removeSourceState(targetRoot);
-  ensureAgentContextHooks(targetRoot);
+
+  // Agent hooks only belong at the agent's startup cwd — the workspace root.
+  // Child repos (`workspace-member`) and legacy single-repo / shared-source
+  // bindings are not agent startup locations; we strip any managed hooks that
+  // earlier versions may have installed.
+  const hookSync =
+    sourceBinding.bindingMode === "workspace-root"
+      ? ensureAgentContextHooks(targetRoot)
+      : removeAgentContextHooks(targetRoot);
 
   return {
     bundledSkillVersion,
+    hookSync,
     targetKind: "source",
     targetRoot,
   };
@@ -85,10 +100,14 @@ function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): Upgra
   const tier0RuleLayer = ensureTier0RuleLayer(targetRoot);
   syncTreeIdentityFiles(targetRoot, treeIdentity);
   syncTreeSourceRepoIndex(targetRoot);
-  ensureAgentContextHooks(targetRoot);
+
+  // Tree repos are never an agent startup cwd. Strip any managed hooks that
+  // earlier versions installed; never inject new ones.
+  const hookSync = removeAgentContextHooks(targetRoot);
 
   return {
     bundledSkillVersion,
+    hookSync,
     targetKind: "tree",
     targetRoot,
     tier0RuleLayer,
@@ -117,7 +136,7 @@ function runUpgradeCommand(context: CommandContext): void {
   try {
     const targetRoot = resolveTargetRoot(context.command);
     const summary = upgradeTargetRoot(targetRoot);
-    const hookMessages = formatAgentContextHookMessages(ensureAgentContextHooks(targetRoot));
+    const hookMessages = formatAgentContextHookMessages(summary.hookSync);
 
     if (context.options.json) {
       console.log(JSON.stringify(summary, null, 2));
