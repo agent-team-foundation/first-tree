@@ -45,6 +45,12 @@ export function StepConnectComputer() {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+      {/* State-aware subtitle (the shell's static `why` is empty for this step):
+          "run the command below" only holds while waiting; once connected we
+          swap to a neutral line so it doesn't reference a command that's gone. */}
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+        {connectedClient ? COPY.connectComputer.whyConnected : COPY.connectComputer.whyWaiting}
+      </p>
       {!connectedClient ? (
         <>
           <CommandBox command={cliCommand} />

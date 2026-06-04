@@ -218,7 +218,7 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
  * advanced invitees into the picker, where they'd successfully select repos
  * and only discover the missing install when the agent's first git op
  * failed with 403. We hard-stop here instead, with a "remind admin"
- * affordance and a "start chatting anyway" bailout so the invitee is never
+ * affordance and a "Meet your agent" bailout so the invitee is never
  * truly blocked.
  */
 export type InviteeKickoffState = "waiting" | "no-installation" | "confirm" | "picker";
