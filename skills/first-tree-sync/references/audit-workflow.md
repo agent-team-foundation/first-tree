@@ -196,8 +196,9 @@ table for the user.
 ## Boundaries
 
 - Do not audit a tree that is not bound to the current source/workspace.
-  Sync that requires reading code from the right repos — point the user at
-  `first-tree-onboarding` first.
+  Sync requires reading code from the right repos — if the workspace is
+  unbound, surface to a human (binding a workspace is an operator action
+  taken from the web console, not an in-agent flow).
 - Do not produce any fix in the audit phase. Fixes go to the fix workflow
   (`references/fix-workflow.md`), where ownership and human-review rules
   apply.

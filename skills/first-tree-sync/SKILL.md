@@ -45,7 +45,7 @@ Each phase has a dedicated reference; follow them in order.
 | Use this skill                                       | Use a different skill                                                                |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-context`           |
-| Audit drift since a release                          | Repo is unbound → `first-tree-onboarding` first                                      |
+| Audit drift since a release                          | Repo is unbound → surface to a human (workspace binding is an operator action)        |
 
 ## The Six Drift Types
 

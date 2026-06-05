@@ -4,9 +4,33 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTreeState } from "../commands/tree/binding-state.js";
-import { buildSourceIntegrationBlock } from "../commands/tree/source-integration.js";
 import { syncTreeIdentityFiles } from "../commands/tree/tree-identity.js";
 import type { CommandContext } from "../commands/types.js";
+
+/**
+ * Inline replacement for the retired `buildSourceIntegrationBlock` writer
+ * (deleted along with the rest of the `first-tree tree` namespace —
+ * source-integration writes no longer have a caller). The marker format
+ * matches what `readSourceBindingContract` still parses, so verify can
+ * keep detecting "this looks like a source repo, not a tree repo" via
+ * the AGENTS.md managed block.
+ */
+function fixtureSourceIntegrationBlock(): string {
+  return [
+    "<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->",
+    "## First Tree integration",
+    "",
+    "<!--",
+    "FIRST-TREE-BINDING-CONTRACT: managed-block-v1",
+    "FIRST-TREE-SOURCE-INTEGRATION: source repo bound to shared tree repo `context-tree`",
+    "FIRST-TREE-TREE-REPO: `context-tree`",
+    "FIRST-TREE-TREE-MODE: `shared`",
+    "FIRST-TREE-BINDING-MODE: `shared-source`",
+    "FIRST-TREE-TREE-REPO-URL: `https://github.com/acme/context-tree.git`",
+    "-->",
+    "<!-- END FIRST-TREE-SOURCE-INTEGRATION -->",
+  ].join("\n");
+}
 
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
@@ -139,15 +163,7 @@ describe("tree verify command", () => {
   it("explains when verify is run from a source integration instead of the tree repo", async () => {
     const root = makeTempDir("ft-tree-verify-source-");
     makeGitRepo(root);
-    writeFileSync(
-      join(root, "AGENTS.md"),
-      buildSourceIntegrationBlock("context-tree", {
-        bindingMode: "shared-source",
-        treeMode: "shared",
-        treeRepoName: "context-tree",
-        treeRepoUrl: "https://github.com/acme/context-tree.git",
-      }),
-    );
+    writeFileSync(join(root, "AGENTS.md"), fixtureSourceIntegrationBlock());
     const { verifyCommand } = await import("../commands/tree/verify.js");
 
     verifyCommand.action(context(commandWithOptions({ treePath: root }), false));

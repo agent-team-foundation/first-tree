@@ -103,21 +103,10 @@ describe("CLI command registration", () => {
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 
     const tree = command(root, "tree");
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
-      "automation",
-      "claude-hook",
-      "codeowners",
-      "help",
-      "init",
-      "inject",
-      "migrate-to-w1",
-      "review",
-      "skill",
-      "status",
-      "upgrade",
-      "verify",
-    ]);
-    expect(subcommands(tree, "skill")).toEqual(["doctor", "install", "install-core", "link", "list", "upgrade"]);
+    // Only `verify` survives — the rest of the namespace was retired in
+    // the 2026-06 cleanup (cloud now owns workspace + tree provisioning;
+    // client runtime inlines its own skill payload install).
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["verify"]);
   });
 
   it("keeps important options on high-risk commands", () => {

@@ -1,11 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { syncTreeIdentityFiles } from "../commands/tree/tree-identity.js";
-import type { CommandContext } from "../commands/types.js";
 
 const clientMocks = vi.hoisted(() => ({
   applyClientLoggerConfig: vi.fn(),
@@ -50,32 +44,6 @@ const originalCwd = process.cwd();
 const originalHome = process.env.FIRST_TREE_HOME;
 const originalJson = process.env.FIRST_TREE_JSON;
 const originalLogLevel = process.env.FIRST_TREE_LOG_LEVEL;
-let tempDirs: string[] = [];
-
-function makeTempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function commandWithOptions(options: Record<string, unknown>): Command {
-  const command = new Command("test");
-  for (const [key, value] of Object.entries(options)) {
-    command.setOptionValue(key, value);
-  }
-  return command;
-}
-
-function context(command: Command, json = false): CommandContext {
-  return { command, options: { debug: false, json, quiet: false } };
-}
-
-function writeTreeIdentityRoot(root: string): void {
-  mkdirSync(join(root, ".first-tree"), { recursive: true });
-  writeFileSync(join(root, "NODE.md"), "# Context Tree\n");
-  writeFileSync(join(root, "AGENTS.md"), "BEGIN CONTEXT-TREE FRAMEWORK\n");
-  syncTreeIdentityFiles(root, { treeMode: "shared", treeRepoName: "context-tree" });
-}
 
 beforeEach(() => {
   vi.resetModules();
@@ -97,8 +65,6 @@ afterEach(() => {
   else process.env.FIRST_TREE_JSON = originalJson;
   if (originalLogLevel === undefined) delete process.env.FIRST_TREE_LOG_LEVEL;
   else process.env.FIRST_TREE_LOG_LEVEL = originalLogLevel;
-  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
-  tempDirs = [];
 });
 
 describe("CLI entry and public exports", () => {
@@ -167,93 +133,5 @@ describe("CLI entry and public exports", () => {
     expect(api.HubUrlDerivationError).toBeDefined();
     expect(api.ClientRuntime).toBeDefined();
     expect(api.rotateClientIdWithBackup).toBeTypeOf("function");
-  });
-});
-
-describe("tree bootstrap, upgrade, and codeowners actions", () => {
-  it("bootstraps a tree root and writes the expected scaffolding", async () => {
-    const { bootstrapTreeRoot } = await import("../commands/tree/bootstrap.js");
-    const root = makeTempDir("ft-bootstrap-action-");
-
-    const summary = bootstrapTreeRoot(root, { treeMode: "shared" });
-    expect(summary).toMatchObject({ root, treeMode: "shared" });
-    expect(readFileSync(join(root, "NODE.md"), "utf8")).toContain("Context Tree");
-  });
-
-  it("runs tree upgrade command for tree roots, source roots, and invalid roots", async () => {
-    const { buildSourceIntegrationBlock } = await import("../commands/tree/source-integration.js");
-    const { upgradeCommand } = await import("../commands/tree/upgrade.js");
-    const tree = makeTempDir("ft-upgrade-tree-");
-    writeTreeIdentityRoot(tree);
-
-    upgradeCommand.action(context(commandWithOptions({ treePath: tree }), true));
-    if (vi.mocked(console.log).mock.calls.length === 0) {
-      throw new Error(
-        `upgrade failed: ${vi
-          .mocked(console.error)
-          .mock.calls.map((call) => String(call[0]))
-          .join("\n")}`,
-      );
-    }
-    const treePayload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as {
-      targetKind: string;
-      targetRoot: string;
-    };
-    expect(treePayload).toMatchObject({ targetKind: "tree", targetRoot: tree });
-
-    // PR-C: upgrade on a W1 workspace-member source root continues to
-    // succeed. Pre-W1 source bindings (`shared-source` /
-    // `standalone-source`) now throw a migrate-to-w1 pointer; the
-    // reject path itself is exercised in tree-maintenance.test.ts.
-    const source = makeTempDir("ft-upgrade-source-");
-    writeFileSync(
-      join(source, "AGENTS.md"),
-      buildSourceIntegrationBlock("context-tree", { bindingMode: "workspace-member" }),
-    );
-    writeFileSync(
-      join(source, "CLAUDE.md"),
-      buildSourceIntegrationBlock("context-tree", { bindingMode: "workspace-member" }),
-    );
-    process.chdir(source);
-    upgradeCommand.action(context(commandWithOptions({}), false));
-    expect(
-      vi
-        .mocked(console.log)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain("Context Tree Upgrade");
-
-    process.exitCode = undefined;
-    const invalid = makeTempDir("ft-upgrade-invalid-");
-    upgradeCommand.action(context(commandWithOptions({ treePath: invalid }), false));
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("collects codeowners edge cases and maps command exit codes", async () => {
-    const { collectEntries, formatOwners, generateCodeowners, parseOwners, resolveNodeOwners } = await import(
-      "../commands/tree/codeowners-lib.js"
-    );
-    const { runCodeownersCommand } = await import("../commands/tree/codeowners.js");
-    const root = makeTempDir("ft-codeowners-extra-");
-    writeFileSync(join(root, "NODE.md"), "---\nowners: [alice, @bob]\n---\n# Root\n");
-    mkdirSync(join(root, "domains", "api"), { recursive: true });
-    writeFileSync(join(root, "domains", "NODE.md"), "---\nowners: []\n---\n# Domains\n");
-    writeFileSync(join(root, "domains", "api", "NODE.md"), "---\nowners: [*]\n---\n# API\n");
-    writeFileSync(join(root, "domains", "api", "feature.md"), "---\nowners: [carol, alice]\n---\n# Feature\n");
-    mkdirSync(join(root, "node_modules", "ignored"), { recursive: true });
-    writeFileSync(join(root, "node_modules", "ignored", "NODE.md"), "---\nowners: [ignored]\n---\n# Ignored\n");
-
-    expect(parseOwners(join(root, "missing.md"))).toBeNull();
-    expect(parseOwners(join(root, "domains", "api", "NODE.md"))).toEqual(["*"]);
-    expect(formatOwners(["@@alice", "alice", "", "@bob"])).toBe("@alice @bob");
-    expect(resolveNodeOwners(join(root, "domains"), root, new Map())).toEqual(["alice", "@bob"]);
-    expect(collectEntries(root).some(([pattern]) => pattern.includes("node_modules"))).toBe(false);
-
-    expect(generateCodeowners(root, { check: true })).toBe(1);
-
-    process.chdir(root);
-    const command = commandWithOptions({ check: true, alwaysInclude: ["first-tree-gate"] });
-    runCodeownersCommand(context(command));
-    expect(process.exitCode).toBe(1);
   });
 });

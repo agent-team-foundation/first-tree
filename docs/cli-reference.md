@@ -340,25 +340,19 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree onboarding, validation, automation, and skill management.
+Context Tree structural validation. **`verify` is the only surviving
+`tree` subcommand** — the rest of the namespace (`init` / `migrate` /
+`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review`
+/ `automation` / `skill` groups) was retired in the 2026-06 cleanup
+because the cloud now owns workspace + tree provisioning and the client
+runtime inlines its own skill payload install (see PR following #844).
 
 ```
 first-tree tree
-├── status                                  # workspace status
-├── init                                    # onboard a workspace root to a Context Tree
-├── migrate-to-w1                           # migrate a legacy multi-mode layout to W1
-├── verify                                  # validate a Context Tree repo
-├── upgrade                                 # refresh integration and metadata
-├── codeowners                              # generate CODEOWNERS from ownership data
-├── claude-hook                             # install the Claude Code hook
-├── inject                                  # emit SessionStart payload from NODE.md
-├── review                                  # tree PR review helper
-├── automation install                      # install Context Tree GitHub automation
-└── skill <install|upgrade|list|doctor|link>  # manage installed first-tree skill payloads
+└── verify [--tree-path PATH]                # validate a Context Tree repo
 ```
 
-Run `first-tree tree help` for the in-CLI topic index, or
-`first-tree tree <verb> --help` for each subcommand's options.
+Run `first-tree tree verify --help` for options.
 
 ## Environment variables
 

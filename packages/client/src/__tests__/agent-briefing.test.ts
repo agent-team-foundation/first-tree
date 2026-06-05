@@ -337,36 +337,34 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const writingBlock = briefing.slice(briefing.indexOf("## Writing the Tree"));
 
-    // The three rows must point at shipped skills.
+    // The surviving rows must point at shipped skills.
     expect(writingBlock).toContain("`first-tree-context`");
     expect(writingBlock).toContain("`first-tree-sync`");
-    expect(writingBlock).toContain("`first-tree-onboarding`");
 
-    // The retired `first-tree-write` payload (folded into `first-tree-context`
-    // under the simplify-context-skill pass) and the pre-revision
-    // `first-tree-github-scan` row must not regress.
+    // Retired skills must not appear:
+    //   - `first-tree-write` was folded into `first-tree-context` under
+    //     the simplify-context-skill pass (PR #843).
+    //   - `first-tree-onboarding` was retired with the rest of the
+    //     `first-tree tree` namespace deletion (this PR).
+    //   - `first-tree-github-scan` predates both and never shipped.
     expect(writingBlock).not.toContain("`first-tree-write`");
+    expect(writingBlock).not.toContain("`first-tree-onboarding`");
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 
-  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human (no skill names in the stub)", () => {
+  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     // Section header still emitted so the briefing's # Context Tree always
     // contains all four subsections — predictable for the agent and for
     // section-order assertions above.
     expect(briefing).toContain("## Tree Location");
-    // Narrow the no-skill-name assertion to just the Tree Location block,
-    // not the whole briefing. `## Writing the Tree` is generic guidance
-    // and may legitimately name `first-tree-onboarding` in its routing
-    // table even for tree-less agents (so the agent knows what skill the
-    // routing points at, even if it has to surface the work to a human
-    // to actually run it). The Tree Location *stub* is what must not
-    // direct a tree-less agent to load an unshipped skill.
     const treeLocationStart = briefing.indexOf("## Tree Location");
     const stub = briefing.slice(treeLocationStart);
     expect(stub).toContain("This agent has no Context Tree bound");
     expect(stub).toContain("surface that\ngap to a human");
     expect(stub).toContain("operator action");
+    // The retired onboarding skill must not be named — there is no
+    // in-agent flow to bind a workspace anymore.
     expect(stub).not.toContain("first-tree-onboarding");
   });
 });

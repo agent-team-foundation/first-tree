@@ -338,7 +338,6 @@ guidance:
 |---|---|
 | Reflect one specific PR / doc / note into the tree | \`first-tree-context\` (Writing the Tree) |
 | Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
-| Bind an unbound repo or workspace to a tree        | \`first-tree-onboarding\` |
 
 Do not invent ad-hoc tree edits without loading the skill — the
 operating guide covers staging, review routing, and ownership rules
@@ -353,13 +352,12 @@ The Context Tree for this workspace is at:
 
 Read its root \`NODE.md\` first to map the domains before you act.`);
   } else {
-    // Tree-less stub: do NOT name `first-tree-onboarding` here. The
-    // onboarding skill is in `TREE_SKILL_NAMES`, which `tree skill
-    // install` only deploys alongside a Context Tree binding — a
-    // tree-less agent has no First Tree skills on disk and would 404
-    // trying to load that name. Binding a workspace is an operator
-    // action anyway (web console / human at the terminal), so surface
-    // the gap to a human instead of telling the agent to load a skill.
+    // Tree-less stub. Binding a workspace to a tree is an operator
+    // action (web console / human at the terminal), not something an
+    // agent can self-serve — so surface the gap to a human instead of
+    // suggesting any in-agent action. (The retired `first-tree-onboarding`
+    // skill used to live here; PR following #844 deleted the skill +
+    // the entire `first-tree tree` CLI namespace it depended on.)
     blocks.push(`## Tree Location
 
 This agent has no Context Tree bound. If a task needs cross-domain
@@ -419,10 +417,9 @@ the auto-injected list.
 
 | Skill | Load when |
 |---|---|
-| \`first-tree\`            | communication principles / pre-task hygiene / CLI namespace map |
-| \`first-tree-context\`    | read context before acting OR write tree updates from a specific PR / doc / note |
-| \`first-tree-onboarding\` | "bind this repo / workspace to a tree" — one-shot |
-| \`first-tree-sync\`       | "is the tree up to date?" — broad drift audit, no source |`;
+| \`first-tree\`         | communication principles / pre-task hygiene / CLI namespace map |
+| \`first-tree-context\` | read context before acting OR write tree updates from a specific PR / doc / note |
+| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |`;
 }
 
 /**
@@ -437,6 +434,5 @@ the auto-injected list.
 export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree",
   "first-tree-context",
-  "first-tree-onboarding",
   "first-tree-sync",
 ] as const;
