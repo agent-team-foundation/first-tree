@@ -1461,7 +1461,7 @@ describe("web DOM interaction coverage", () => {
       setTreeUrl,
       markTreeAutoInitDone,
     });
-    await waitForText("Start building your Context Tree", adminAutoDetect.container);
+    await waitForText("Start your Context Tree", adminAutoDetect.container);
     expect(markTreeAutoInitDone).toHaveBeenCalled();
     expect(setTreeMode).toHaveBeenCalledWith("existing");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
