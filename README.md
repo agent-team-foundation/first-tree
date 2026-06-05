@@ -44,10 +44,7 @@ context, and every useful outcome can make the next task smarter.
   <tr>
     <td align="center"><strong>Works<br/>with</strong></td>
     <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/claude-code-dark.svg"><img src="assets/logos/claude-code-light.svg" width="32" alt="Claude Code" /></picture><br/><sub>Claude Code</sub></td>
-    <td align="center"><img src="assets/logos/openclaw.png" width="32" alt="OpenClaw" /><br/><sub>OpenClaw</sub></td>
     <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/codex-dark.svg"><img src="assets/logos/codex-light.svg" width="32" alt="Codex" /></picture><br/><sub>Codex</sub></td>
-    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/cursor-dark.svg"><img src="assets/logos/cursor-light.svg" width="32" alt="Cursor" /></picture><br/><sub>Cursor</sub></td>
-    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/gemini-dark.svg"><img src="assets/logos/gemini-light.svg" width="32" alt="Gemini CLI" /></picture><br/><sub>Gemini CLI</sub></td>
     <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/github-dark.svg"><img src="assets/logos/github-light.svg" width="32" alt="GitHub" /></picture><br/><sub>GitHub</sub></td>
     <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/mcp-dark.svg"><img src="assets/logos/mcp-light.svg" width="32" alt="MCP" /></picture><br/><sub>MCP</sub></td>
   </tr>
