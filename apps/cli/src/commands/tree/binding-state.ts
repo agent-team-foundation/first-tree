@@ -17,7 +17,34 @@ export type { RootKind } from "./shared.js";
 
 export type TreeMode = "dedicated" | "shared";
 
-export type SourceBindingMode = "standalone-source" | "shared-source" | "workspace-root" | "workspace-member";
+/**
+ * PR-C split (audit Finding 7): `SourceBindingMode` carried four values
+ * but only two of them are valid on W1 paths. The legacy values
+ * (`standalone-source`, `shared-source`) describe pre-0.6.0 layouts
+ * and only exist on disk in repos that have not yet been
+ * migrate-to-w1'd. Fresh `tree init` / `tree status` / `tree verify` /
+ * `tree upgrade --tree-root` only ever produce W1 values; the migrate
+ * parser (`apps/cli/src/core/migrate-workspace.ts`) is the only caller
+ * that still needs to recognize the legacy strings.
+ *
+ * - `W1BindingMode`     — what fresh code paths produce and consume.
+ * - `LegacyBindingMode` — what the migrate parser recognizes on disk.
+ *                         `upgradeSourceRoot` also uses it, but only
+ *                         to refuse to run on a pre-W1 source repo
+ *                         (it points the user at `migrate-to-w1`).
+ * - `SourceBindingMode` — the union, kept as a re-export for the
+ *                         small set of code paths that have to handle
+ *                         both shapes (the binding-contract parser,
+ *                         `describeBinding`/`describeScope` legacy
+ *                         fallbacks, and the migrate cleanup logic).
+ */
+export type W1BindingMode = "workspace-root" | "workspace-member";
+export type LegacyBindingMode = "standalone-source" | "shared-source";
+export type SourceBindingMode = W1BindingMode | LegacyBindingMode;
+
+export function isLegacyBindingMode(mode: SourceBindingMode | string): mode is LegacyBindingMode {
+  return mode === "standalone-source" || mode === "shared-source";
+}
 
 export type SourceScope = "repo" | "workspace";
 

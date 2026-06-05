@@ -25,9 +25,6 @@ import { collectEntries, formatOwners, generateCodeowners, parseOwners } from ".
 import { collectSkillDiagnosis, SKILL_NAMES, type SkillName } from "../commands/tree/skill-lib.js";
 import {
   buildSourceIntegrationBlock,
-  ensureWhitepaperSymlink,
-  readManagedWhitepaperTarget,
-  removeManagedWhitepaper,
   upsertLocalTreeGitIgnore,
   upsertSourceIntegrationFiles,
 } from "../commands/tree/source-integration.js";
@@ -67,12 +64,18 @@ describe("tree helper coverage", () => {
   it("updates source integration files, gitignore entries, and managed whitepaper links", () => {
     const root = makeTempDir("ft-tree-source-integration-extra-");
 
+    // PR-C: `deriveSourceIntegrationDetails` no longer falls back to
+    // a legacy `bindingMode` default; pass a W1 value explicitly. The
+    // wording assertion below shifts from "shared tree repo" (the
+    // pre-W1 phrasing tied to the standalone-source describe branch)
+    // to the workspace-bound phrasing that the W1 paths produce.
     const sharedBlock = buildSourceIntegrationBlock("context-tree", {
+      bindingMode: "workspace-member",
       sourceStatePath: ".first-tree/source.json",
       treeMode: "shared",
       treeRepoUrl: "https://github.com/acme/context-tree.git",
     });
-    expect(sharedBlock).toContain("source repo bound to shared tree repo");
+    expect(sharedBlock).toContain("workspace member bound to shared tree repo");
     expect(sharedBlock).toContain(".first-tree/source.json");
     expect(sharedBlock).toContain("acme/context-tree");
 
@@ -99,10 +102,14 @@ describe("tree helper coverage", () => {
     write(root, ".gitignore", "dist/\n");
     expect(upsertLocalTreeGitIgnore(root)).toEqual({ action: "updated", file: ".gitignore" });
 
-    expect(readManagedWhitepaperTarget(root)).toBeNull();
-    expect(ensureWhitepaperSymlink(root)).toBe("created");
-    expect(readManagedWhitepaperTarget(root)).toBe(join(".agents", "skills", "first-tree-context", "SKILL.md"));
-    removeManagedWhitepaper(root);
+    // PR-C: ensureWhitepaperSymlink / readManagedWhitepaperTarget /
+    // removeManagedWhitepaper were removed when upgradeSourceRoot
+    // started rejecting pre-W1 bindings (audit Finding 2 + 7). The
+    // assertion now is the simpler workspace-layout invariant: no
+    // First Tree code path produces a WHITEPAPER.md at this kind of
+    // root anymore. If a future PR brings back any helper, this
+    // expectation will fail and the author can audit whether it
+    // belongs.
     expect(existsSync(join(root, "WHITEPAPER.md"))).toBe(false);
   });
 

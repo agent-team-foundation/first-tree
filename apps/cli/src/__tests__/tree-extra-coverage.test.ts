@@ -426,8 +426,6 @@ describe("tree init", () => {
     const { initCommand, initializeWorkspaceRoot } = await import("../commands/tree/init.js");
 
     const summary = initializeWorkspaceRoot(workspace, {
-      scope: "workspace",
-      treeMode: "dedicated",
       treePath: `./${treeName}`,
     });
 
@@ -439,7 +437,7 @@ describe("tree init", () => {
     expect(summary.workspaceManifest.sources).toContain("packages-api");
     expect(readFileSync(join(workspace, "AGENTS.md"), "utf8")).toContain("workspace");
 
-    initCommand.action(context(commandWithOptions({ scope: "workspace", treePath: `./${treeName}` }), true));
+    initCommand.action(context(commandWithOptions({ treePath: `./${treeName}` }), true));
     const payload = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as { bindingMode: string };
     expect(payload.bindingMode).toBe("workspace-root");
   });
@@ -449,7 +447,7 @@ describe("tree init", () => {
     process.chdir(workspace);
     const { initCommand } = await import("../commands/tree/init.js");
 
-    initCommand.action(context(commandWithOptions({ scope: "workspace", treePath: "." }), false));
+    initCommand.action(context(commandWithOptions({ treePath: "." }), false));
     expect(process.exitCode).toBe(1);
     expect(
       vi
@@ -459,16 +457,25 @@ describe("tree init", () => {
     ).toContain("workspace root and tree repo resolved to the same path");
   });
 
-  it("rejects --scope repo with a pointer at the workspace recipe", async () => {
-    const workspace = makeTempDir("ft-tree-init-repo-scope-");
-    const { initializeWorkspaceRoot } = await import("../commands/tree/init.js");
+  // PR-C: `--scope` is no longer accepted at all. PR-B's REPO_SCOPE_GUIDANCE
+  // path went away with the parser flag. Any caller that still passes
+  // `--scope repo` now gets a clear "unknown option" error from commander,
+  // which is the right signal (the flag does not exist). The previous
+  // "workspace-scope recipe" test is removed; the no-flag-at-all assertion
+  // below pins the new shape.
+  it("--scope flag is removed; commander surfaces it as unknown option", async () => {
+    const workspace = makeTempDir("ft-tree-init-no-scope-flag-");
+    process.chdir(workspace);
+    const { Command } = await import("commander");
+    const { initCommand } = await import("../commands/tree/init.js");
 
-    expect(() =>
-      initializeWorkspaceRoot(workspace, {
-        scope: "repo",
-        treeMode: "dedicated",
-        treePath: "./tree",
-      }),
-    ).toThrow("workspace-scope recipe");
+    // Build the same shape `configureInitCommand` produces — no --scope.
+    const root = new Command();
+    const sub = root.command("init").exitOverride();
+    initCommand.configure?.(sub);
+
+    expect(() => root.parse(["node", "ft", "init", "--scope", "repo"], { from: "node" })).toThrow(
+      /unknown option .*--scope/iu,
+    );
   });
 });

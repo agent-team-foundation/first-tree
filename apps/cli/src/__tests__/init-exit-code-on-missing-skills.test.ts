@@ -57,8 +57,6 @@ describe("tree init — exit code when bundled skills payload is missing", () =>
 
     expect(() =>
       initializeWorkspaceRoot(workspaceRoot, {
-        scope: "workspace",
-        treeMode: "dedicated",
         treePath: "./tree",
       }),
     ).toThrow("Could not locate bundled `skills/` payloads");
@@ -77,13 +75,10 @@ describe("tree init — exit code when bundled skills payload is missing", () =>
       process.exitCode = undefined;
 
       const command = new Command();
-      command.option("--scope <scope>");
-      command.option("--tree-mode <mode>");
       command.option("--tree-path <path>");
       command.option("--tree-url <url>");
-      command.option("--tree-name <name>");
       command.option("--workspace-id <id>");
-      command.parse(["--scope", "workspace", "--tree-mode", "dedicated", "--tree-path", "./tree"], { from: "user" });
+      command.parse(["--tree-path", "./tree"], { from: "user" });
 
       const stubContext = {
         command,
