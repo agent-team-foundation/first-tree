@@ -115,7 +115,7 @@ describe("runStatusCommand", () => {
     expect(process.exitCode).toBe(1);
     const stderr = err.mock.calls.map((call) => String(call[0])).join("\n");
     expect(stderr).toContain("No First Tree workspace found");
-    expect(stderr).toContain("tree init --scope workspace");
+    expect(stderr).toContain("tree init --tree-path");
     expect(stderr).toContain("migrate-to-w1");
 
     process.exitCode = undefined;

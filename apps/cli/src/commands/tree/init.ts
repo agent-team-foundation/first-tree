@@ -34,24 +34,26 @@ type InitSummary = {
   };
 };
 
-export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--tree-name NAME] [--tree-mode dedicated|shared] [--scope workspace] [--workspace-id ID]
+export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--workspace-id ID]
 
 Onboard a workspace root to a Context Tree.
 
 Options:
   --tree-path PATH    use an explicit local tree repo path
   --tree-url URL      bind to an existing remote tree repo
-  --tree-name NAME    override the default sibling tree repo name
-  --tree-mode MODE    dedicated or shared
-  --scope MODE        workspace (the only supported value under W1)
   --workspace-id ID   workspace identifier for shared workspace onboarding
-  --help              show this help message`;
+  --help              show this help message
+
+Deprecated (accepted, ignored, no-op under W1):
+  --tree-name NAME    [deprecated, use --tree-path]
+  --tree-mode MODE    [deprecated, no behavioral effect under W1]
+  --scope MODE        [deprecated, only "workspace" was ever valid under W1]`;
 
 const REPO_SCOPE_GUIDANCE = [
   "`tree init --scope repo` is removed under W1. Use the workspace-scope recipe:",
   "  1. From the source repo's parent: `mkdir <workspace>` and `mv <source> <workspace>/`.",
   "  2. `cd <workspace>`.",
-  "  3. `first-tree tree init --scope workspace --tree-path ./<tree> --tree-mode dedicated --workspace-id <slug>`.",
+  "  3. `first-tree tree init --tree-path ./<tree> --workspace-id <slug>`.",
   "See the `first-tree-onboarding` skill (Phase B) for the full recipe.",
 ].join("\n");
 
@@ -59,10 +61,20 @@ function configureInitCommand(command: Command): void {
   command
     .option("--tree-path <path>", "use an explicit local tree repo path")
     .option("--tree-url <url>", "bind to an existing remote tree repo")
-    .option("--tree-name <name>", "override the default sibling tree repo name")
-    .option("--tree-mode <mode>", "dedicated or shared")
-    .option("--scope <scope>", "workspace (the only supported value under W1)")
-    .option("--workspace-id <id>", "workspace identifier for shared workspace onboarding");
+    .option("--workspace-id <id>", "workspace identifier for shared workspace onboarding")
+    // PR-B (audit Findings 4/5/6): three vestigial flags accepted but
+    // deprecated. Parser still takes them so older skill payloads and
+    // user scripts do not break across the staging auto-publish window
+    // where (new CLI ✕ old bundled skill) can briefly coexist. PR-C
+    // hard-deletes the parser path one release cycle later, once
+    // nothing in the bundle still passes them.
+    .option("--tree-name <name>", "[deprecated, use --tree-path] override the default sibling tree repo name")
+    .option("--tree-mode <mode>", "[deprecated, no behavioral effect under W1] dedicated or shared")
+    .option("--scope <scope>", '[deprecated, only "workspace" was ever valid under W1]');
+}
+
+function warnDeprecatedFlag(message: string): void {
+  console.error(`tree init: ${message}`);
 }
 
 function readScopeOption(value: unknown): "repo" | "workspace" | undefined {
@@ -83,6 +95,31 @@ function readStringOption(value: unknown): string | undefined {
 
 function readInitOptions(command: Command): InitOptions {
   const options: Record<string, unknown> = command.opts();
+
+  // PR-B: stderr warn when a deprecated flag is passed. Parsing logic
+  // below keeps working so existing scripts / older skill payloads do
+  // not break in the staging auto-publish window. Each warning is
+  // tailored to the flag — `--scope` and `--tree-mode` are observably
+  // no-ops on W1 paths (the latter only after PR-B's `resolveTreeMode`
+  // derives the mode from `--tree-url` presence), while `--tree-name`
+  // still has behavioral effect (`resolveTreeRoot` consults it when
+  // `--tree-path` is absent) so its warning advises the equivalent
+  // explicit flag rather than telling the user the option does
+  // nothing.
+  if (options.scope !== undefined) {
+    warnDeprecatedFlag("--scope has no behavioral effect under W1; remove it from your scripts.");
+  }
+  if (options.treeMode !== undefined) {
+    warnDeprecatedFlag(
+      "--tree-mode has no behavioral effect under W1; the layout infers scaffold-vs-clone from --tree-url presence. Remove it from your scripts.",
+    );
+  }
+  if (options.treeName !== undefined) {
+    warnDeprecatedFlag(
+      "--tree-name is being retired; use --tree-path to select the tree directory explicitly. --tree-name still works for compatibility but will be removed in a future release.",
+    );
+  }
+
   return {
     scope: readScopeOption(options.scope),
     treeMode: readTreeModeOption(options.treeMode),
@@ -94,7 +131,18 @@ function readInitOptions(command: Command): InitOptions {
 }
 
 function resolveTreeMode(options: InitOptions): "dedicated" | "shared" {
-  return options.treeMode ?? "shared";
+  // Explicit flag wins (still accepted for compat; PR-C hard-deletes it).
+  if (options.treeMode !== undefined) {
+    return options.treeMode;
+  }
+  // Under W1 the only behavioral split is "clone from --tree-url" vs
+  // "scaffold locally". The legacy default ("shared") was misleading
+  // because dropping `--tree-mode dedicated` from the lone-source
+  // recipe (PR-B skill cleanup) would silently flip the recorded mode
+  // from "dedicated" to "shared" even though we were still scaffolding
+  // locally. Derive from URL presence so the recorded state matches
+  // the actual scaffold-vs-clone intent.
+  return options.treeUrl !== undefined ? "shared" : "dedicated";
 }
 
 function resolveTreeRoot(workspaceRoot: string, options: InitOptions): string {

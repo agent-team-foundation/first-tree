@@ -20,7 +20,7 @@ type CommandWithUnknownCommand = Command & {
 const TREE_ONBOARDING_GUIDE = `first-tree tree help onboarding
 
 1. Run \`first-tree tree status\` to see the current binding (if any).
-2. Run \`first-tree tree init --scope workspace ...\` to onboard a repo or workspace.
+2. Run \`first-tree tree init --tree-path <path>\` to onboard a repo or workspace.
 3. For pre-W1 layouts, follow with \`first-tree tree migrate-to-w1\`.
 4. Use \`first-tree tree verify\` to validate the resulting tree.
 `;

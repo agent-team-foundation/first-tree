@@ -198,7 +198,7 @@ run_direct_cli_smoke() {
     cd "$workspace_root"
     log "Running direct CLI onboarding smoke in $workspace_root"
 
-    node "$FT_CLI" tree init --json --scope workspace --tree-path "./${source_name}-tree" --tree-mode dedicated >"$init_json"
+    node "$FT_CLI" tree init --json --tree-path "./${source_name}-tree" >"$init_json"
     tree_root="$(json_value "$init_json" treeRoot)"
     [[ -n "$tree_root" ]] || fail "tree init did not report a treeRoot"
 

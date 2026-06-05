@@ -17,7 +17,7 @@ import { type LocalGitFixture, makeLocalGitFixture } from "../framework/local-gi
  *
  * Sequence:
  *   1. mv source repo into a freshly-created workspace dir
- *   2. tree init --scope workspace → emits treeRoot (child of workspace root)
+ *   2. tree init --tree-path ./<tree> → emits treeRoot (child of workspace root)
  *   3. tree status                 → reports the W1 workspace shape
  *   4. tree verify                 → ok === true
  *   5. tree automation install --tier 2 --dry-run → stage === `write_rule_layer`
@@ -69,17 +69,7 @@ describe("direct CLI onboarding — local fixture, no external clone", () => {
     const init = await runCliJson<InitResult>({
       ...cliEnv,
       cwd: workspaceRoot,
-      args: [
-        "tree",
-        "init",
-        "--json",
-        "--scope",
-        "workspace",
-        "--tree-path",
-        `./${treeName}`,
-        "--tree-mode",
-        "dedicated",
-      ],
+      args: ["tree", "init", "--json", "--tree-path", `./${treeName}`],
     });
     expect(init.json.treeRoot, "tree init should report a treeRoot path").toBeTruthy();
     const treeRoot = init.json.treeRoot;

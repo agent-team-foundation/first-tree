@@ -52,21 +52,19 @@ mv <source-repo> <workspace-name>/
 
 #   Step 2: cd into the workspace and init
 cd <workspace-name>
-first-tree tree init --scope workspace \
+first-tree tree init \
   --tree-path ./<tree-name> \
-  --tree-mode dedicated \
   --workspace-id <slug>
 # Or for an existing remote tree:
-first-tree tree init --scope workspace \
+first-tree tree init \
   --tree-path ./<tree-name> \
   --tree-url <url> \
-  --tree-mode shared \
   --workspace-id <slug>
 
 # Workspace-level init (cwd is already the workspace root; tree is a
 # child of cwd). Same shape, default --tree-path inferred.
-first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug>
-first-tree tree init --scope workspace --tree-url <url> --tree-mode shared --workspace-id <slug>
+first-tree tree init --workspace-id <slug>
+first-tree tree init --tree-url <url> --workspace-id <slug>
 ```
 
 `init` writes the workspace-root framework (skills under
@@ -123,8 +121,8 @@ Phase C is agent-driven, not CLI-driven. The only commands invoked are
 
 For lone-single-repo onboarding the canonical path is **not** to
 hand-create the manifest — use the Phase B recipe above (`mkdir
-<workspace>` + `mv <source>` + `init --scope workspace`). That recipe
-writes the manifest directly and avoids any legacy state.
+<workspace>` + `mv <source>` + `tree init --tree-path ./<tree>`).
+That recipe writes the manifest directly and avoids any legacy state.
 
 Hand-create `<workspaceRoot>/.first-tree/workspace.json` only when
 recovering from a corrupted manifest in an existing workspace (e.g.
