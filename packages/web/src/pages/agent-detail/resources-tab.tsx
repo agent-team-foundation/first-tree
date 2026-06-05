@@ -175,7 +175,7 @@ function AddCapabilityMenu(props: {
     <Popover
       align="end"
       trigger={({ open, toggle }) => (
-        <Button size="xs" variant="outline" aria-expanded={open} disabled={props.pending} onClick={toggle}>
+        <Button size="xs" variant="outline" aria-expanded={open} onClick={toggle}>
           <Plus className="h-3.5 w-3.5" /> {typeLabelSingular(props.type)}
         </Button>
       )}
@@ -198,6 +198,7 @@ function AddCapabilityMenu(props: {
               {props.enableable.map((resource) => (
                 <MenuButton
                   key={resource.id}
+                  disabled={props.pending}
                   onClick={() => {
                     props.onEnable(resource);
                     close();
@@ -234,11 +235,12 @@ function MenuLabel({ children }: { children: ReactNode }) {
   );
 }
 
-function MenuButton(props: { children: ReactNode; muted?: boolean; onClick: () => void }) {
+function MenuButton(props: { children: ReactNode; muted?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
-      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+      disabled={props.disabled}
+      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50"
       style={{
         gap: "var(--sp-2)",
         padding: "var(--sp-1_5) var(--sp-2)",
