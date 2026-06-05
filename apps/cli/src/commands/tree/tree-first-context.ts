@@ -2,10 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { discoverWorkspaceRoot, readWorkspaceManifest } from "../../core/workspace.js";
 import { readSourceBindingContract } from "./binding-contract.js";
-import { TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
-import { buildSourceRepoIndexTable } from "./source-repo-index.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
-import { listKnownTreeCodeRepos } from "./tree-repo-registry.js";
+import { buildSourceRepoIndexTable, listKnownTreeCodeRepos } from "./tree-repo-registry.js";
 
 const ROOT_NODE_FILE = "NODE.md";
 
@@ -173,7 +171,6 @@ function buildRepoContextSection(
     "## Tree-First Cross-Repo Working Context",
     "",
     "- Repo index source: managed code-repo registry block in `AGENTS.md` / `CLAUDE.md`",
-    `- Human-readable index: \`${TREE_SOURCE_REPOS_FILE}\` when present`,
     `- Current entrypoint: \`${currentEntrypoint ?? entrypointLabel}\``,
     "",
     "## Managed Code Repos",

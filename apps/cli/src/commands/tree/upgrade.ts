@@ -21,7 +21,6 @@ import {
   upsertLocalTreeGitIgnore,
   upsertSourceIntegrationFiles,
 } from "./source-integration.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { describeTemplateWriteResult } from "./template-write.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 
@@ -94,12 +93,10 @@ function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): Upgra
   }
 
   copyCanonicalSkills(targetRoot);
-  ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
   writeFileSync(join(targetRoot, TREE_VERSION_FILE), `${bundledSkillVersion}\n`);
   const tier0RuleLayer = ensureTier0RuleLayer(targetRoot);
   syncTreeIdentityFiles(targetRoot, treeIdentity);
-  syncTreeSourceRepoIndex(targetRoot);
 
   // Tree repos are never an agent startup cwd. Strip any managed hooks that
   // earlier versions installed; never inject new ones.

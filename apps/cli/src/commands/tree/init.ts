@@ -10,7 +10,6 @@ import { bootstrapTreeRoot } from "./bootstrap.js";
 import { isGitRepoRoot, parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot, runCommand } from "./shared.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
 import { upsertLocalTreeGitIgnore, upsertSourceIntegrationFiles } from "./source-integration.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 import { upsertTreeCodeRepoRegistry } from "./tree-repo-registry.js";
 
@@ -188,7 +187,6 @@ export function initializeWorkspaceRoot(workspaceRoot: string, options: InitOpti
   if (workspaceRemoteUrl && parseGitHubRemoteUrl(workspaceRemoteUrl) !== null) {
     upsertTreeCodeRepoRegistry(treeRoot, workspaceRemoteUrl);
   }
-  syncTreeSourceRepoIndex(treeRoot);
 
   const manifest = writeWorkspaceManifestFromState(workspaceRoot, treeRoot);
 

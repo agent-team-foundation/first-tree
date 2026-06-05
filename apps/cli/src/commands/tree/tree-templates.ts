@@ -47,52 +47,6 @@ export function renderDefaultMemberNode(memberTitle = "Owner"): string {
   ].join("\n");
 }
 
-export function renderDeveloperAgentTemplate(): string {
-  return [
-    "name: developer",
-    "prompt: |",
-    "  Default First Tree developer agent.",
-    "  Use First Tree context before changing cross-repo decisions or ownership.",
-    "skills:",
-    "  - .agents/skills/first-tree",
-    "  - .agents/skills/first-tree-sync",
-    "  - .agents/skills/first-tree-write",
-    "runtime: codex",
-    "workspace:",
-    "  kind: worktree",
-    "env: {}",
-    "auth:",
-    "  github:",
-    "    provider: env",
-    "    variable: GITHUB_TOKEN",
-    "mcp: []",
-    "",
-  ].join("\n");
-}
-
-export function renderCodeReviewerAgentTemplate(): string {
-  return [
-    "name: code-reviewer",
-    "prompt: |",
-    "  Default First Tree code review agent.",
-    "  Focus on review quality, tree implications, and when human escalation is required.",
-    "skills:",
-    "  - .agents/skills/first-tree",
-    "  - .agents/skills/first-tree-sync",
-    "  - .agents/skills/first-tree-write",
-    "runtime: codex",
-    "workspace:",
-    "  kind: worktree",
-    "env: {}",
-    "auth:",
-    "  github:",
-    "    provider: env",
-    "    variable: GITHUB_TOKEN",
-    "mcp: []",
-    "",
-  ].join("\n");
-}
-
 export function renderOrgConfigPlaceholder(): string {
   return [
     "agents: []",

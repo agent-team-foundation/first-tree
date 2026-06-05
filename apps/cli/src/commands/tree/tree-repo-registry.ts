@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { listTreeBindings, TREE_CODE_REPOS_FILE, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
+import { listTreeBindings, TREE_CODE_REPOS_FILE } from "./binding-state.js";
 import { ensureTrailingNewline, parseGitHubRemoteUrl } from "./shared.js";
 
 const CODE_REPOS_SCHEMA_VERSION = 1;
@@ -259,6 +259,34 @@ export function upsertTreeCodeRepoRegistry(treeRoot: string, repoUrl: string): S
   return syncTreeCodeRepoRegistry(treeRoot, [...listKnownTreeCodeRepos(treeRoot).map((entry) => entry.url), repo.url]);
 }
 
-export function buildTreeCodeRepoIndexNote(): string {
-  return `- If \`${TREE_SOURCE_REPOS_FILE}\` exists in the tree root, use it as the quickest index of managed code repos and their GitHub URLs.`;
+function formatRemoteCell(repo: ManagedTreeCodeRepo): string {
+  const github = parseGitHubRemoteUrl(repo.url);
+
+  if (github === null || github.host !== "github.com") {
+    return `\`${repo.url}\``;
+  }
+
+  const webUrl = `https://${github.host}/${github.owner}/${github.repo}`;
+  return `[${github.owner}/${github.repo}](${webUrl})`;
+}
+
+/**
+ * Render the `## Managed Code Repos` table that
+ * `tree-first-context.ts` embeds in the agent-context payload. Lives
+ * here because it operates on `ManagedTreeCodeRepo[]` which this
+ * module owns; previously lived in the now-removed
+ * `source-repo-index.ts` writer module.
+ */
+export function buildSourceRepoIndexTable(repos: ManagedTreeCodeRepo[]): string[] {
+  if (repos.length === 0) {
+    return ["No managed code repos have been recorded yet."];
+  }
+
+  const lines = ["| Source | GitHub |", "| --- | --- |"];
+
+  for (const repo of repos) {
+    lines.push([`| \`${repo.name}\``, `${formatRemoteCell(repo)} |`].join(" | "));
+  }
+
+  return lines;
 }

@@ -6,13 +6,10 @@ import type { Tier0RuleLayerSummary } from "./rule-layer.js";
 import { ensureTier0RuleLayer } from "./rule-layer.js";
 import { isGitRepoRoot, repoNameForRoot, runCommand } from "./shared.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
-import { ensureWhitepaperSymlink, upsertLocalTreeGitIgnore } from "./source-integration.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
+import { upsertLocalTreeGitIgnore } from "./source-integration.js";
 import { syncTreeIdentityFiles } from "./tree-identity.js";
 import {
-  renderCodeReviewerAgentTemplate,
   renderDefaultMemberNode,
-  renderDeveloperAgentTemplate,
   renderMembersDomainNode,
   renderOrgConfigPlaceholder,
   renderRootNode,
@@ -56,17 +53,11 @@ export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions
 
   ensureGitRepo(targetRoot);
   copyCanonicalSkills(targetRoot);
-  ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
 
   writeIfMissing(join(targetRoot, "NODE.md"), renderRootNode("Context Tree"));
   writeIfMissing(join(targetRoot, "members", "NODE.md"), renderMembersDomainNode());
   writeIfMissing(join(targetRoot, "members", "owner", "NODE.md"), renderDefaultMemberNode());
-  writeIfMissing(join(targetRoot, ".first-tree", "agent-templates", "developer.yaml"), renderDeveloperAgentTemplate());
-  writeIfMissing(
-    join(targetRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"),
-    renderCodeReviewerAgentTemplate(),
-  );
   writeIfMissing(join(targetRoot, ".first-tree", "org.yaml"), renderOrgConfigPlaceholder());
   writeIfMissing(join(targetRoot, TREE_VERSION_FILE), "0.4.0-alpha.1");
   writeIfMissing(join(targetRoot, TREE_PROGRESS_FILE), renderTreeProgress());
@@ -89,8 +80,6 @@ export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions
     treeMode,
     treeRepoName,
   });
-
-  syncTreeSourceRepoIndex(targetRoot);
 
   return {
     root: targetRoot,
