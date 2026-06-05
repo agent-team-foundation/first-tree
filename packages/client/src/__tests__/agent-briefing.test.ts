@@ -338,12 +338,14 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const writingBlock = briefing.slice(briefing.indexOf("## Writing the Tree"));
 
     // The three rows must point at shipped skills.
-    expect(writingBlock).toContain("`first-tree-write`");
+    expect(writingBlock).toContain("`first-tree-context`");
     expect(writingBlock).toContain("`first-tree-sync`");
     expect(writingBlock).toContain("`first-tree-onboarding`");
 
-    // The pre-revision row pointed at the unshipped `first-tree-github-scan`
-    // skill payload — must not regress.
+    // The retired `first-tree-write` payload (folded into `first-tree-context`
+    // under the simplify-context-skill pass) and the pre-revision
+    // `first-tree-github-scan` row must not regress.
+    expect(writingBlock).not.toContain("`first-tree-write`");
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 

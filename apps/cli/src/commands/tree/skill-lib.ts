@@ -30,7 +30,6 @@ export const TREE_SKILL_NAMES = [
   "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
-  "first-tree-write",
 ] as const;
 
 /**
@@ -86,24 +85,13 @@ const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
 export type ManagedFileAction = "created" | "updated" | "unchanged" | "skipped";
 
 /**
- * Files required for `first-tree-context`. The Context Tree concept and
- * principle references migrated from `first-tree/` to `first-tree-context/`
- * in the skill-topology restructure (proposal: skill-restructure.20260602);
- * the top-level `first-tree` skill no longer carries references — it is a
- * routing/hygiene entry point only.
+ * Files every shipped skill must carry. `first-tree-context` used to require
+ * a `references/` subtree (Context Tree concepts split across multiple
+ * files), but in the skill-simplification pass (proposal:
+ * simplify-context-skill.20260605) all of that content folded back into
+ * `first-tree-context/SKILL.md` — so the same minimal manifest now covers
+ * every skill.
  */
-const FIRST_TREE_CONTEXT_REFERENCE_FILES = [
-  "SKILL.md",
-  "VERSION",
-  join("agents", "openai.yaml"),
-  join("references", "structure.md"),
-  join("references", "functions.md"),
-  join("references", "anti-patterns.md"),
-  join("references", "maintenance.md"),
-  join("references", "cli-manual.md"),
-  join("references", "llms.txt"),
-] as const;
-
 const STANDARD_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION", join("agents", "openai.yaml")] as const;
 
 const WHITEPAPER_FILE = "WHITEPAPER.md";
@@ -129,10 +117,6 @@ function allSkillLayouts(): readonly SkillLayout[] {
 
 function coreSkillLayouts(): readonly SkillLayout[] {
   return CORE_SKILL_NAMES.map(layoutForSkill);
-}
-
-function requiredFilesForSkill(name: SkillName): readonly string[] {
-  return name === "first-tree-context" ? FIRST_TREE_CONTEXT_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
 }
 
 export function bundledSkillsRootFrom(startDir: string): string {
@@ -451,7 +435,7 @@ export function collectSkillDiagnosis(targetRoot: string): readonly SkillDiagnos
     if (agents.kind === "missing") {
       problems.push(`missing: ${layout.agentsPath}`);
     } else {
-      for (const requiredFile of requiredFilesForSkill(layout.name)) {
+      for (const requiredFile of STANDARD_SKILL_REQUIRED_FILES) {
         if (!existsSync(join(agentsFull, requiredFile))) {
           problems.push(`${layout.agentsPath}/${requiredFile} does not exist`);
         }

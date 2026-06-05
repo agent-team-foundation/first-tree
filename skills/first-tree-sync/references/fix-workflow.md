@@ -6,7 +6,7 @@ per finding, whether to:
 - **auto-fix** — open a tree-repo PR with the correction (structural
   edits only; never decision prose)
 - **write-handoff** — surface the source pointer and invoke
-  `first-tree-write`
+  `first-tree-context`
 - **needs-human** — leave a label or comment for human disambiguation
 - **skip** — the finding is a false positive or out of scope
 
@@ -83,7 +83,7 @@ Always log the skip reason. Skipped findings should still appear in the
 `drifts[]` output with `route: "skip"` so downstream tooling can audit the
 audit.
 
-## Hand-Off To `first-tree-write`
+## Hand-Off To `first-tree-context`
 
 Every `code-not-synced/substantive` finding hands off to write — this is
 the default route, not an opt-in. Mechanics:
@@ -92,7 +92,7 @@ the default route, not an opt-in. Mechanics:
    candidates" header. Each entry shows `sourcePointer` and `summary`.
 2. Print one invocation suggestion per finding:
    ```
-   /first-tree-write source=<sourcePointer>
+   /first-tree-context source=<sourcePointer>
    ```
 3. Stop. Do not auto-invoke write — that would bypass write's "default
    to not writing" filter and the user's review of which gaps are

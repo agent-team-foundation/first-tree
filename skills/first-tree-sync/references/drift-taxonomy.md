@@ -89,7 +89,7 @@ follow-up source pointer.
 A merged PR / doc / `AGENTS.md` section establishes a decision,
 constraint, or rationale that the tree does not record. Adding this
 requires **authorship**, not registration — the "default to not writing"
-filter and node-shape rules from `first-tree-write` apply.
+filter and node-shape rules from `first-tree-context` apply.
 
 **Signals:**
 
@@ -103,9 +103,9 @@ filter and node-shape rules from `first-tree-write` apply.
 **Example:** the source repo's `AGENTS.md` adds a new section on the
 agent's memory-management policy; no tree node references it. Sync emits
 a finding with the section heading and line range as `sourcePointer`,
-and routes to `first-tree-write`. Sync never drafts the substance itself.
+and routes to `first-tree-context`. Sync never drafts the substance itself.
 
-**Fix bias:** always hand off to `first-tree-write` with the source
+**Fix bias:** always hand off to `first-tree-context` with the source
 pointer. Sync surfaces what should be written and stops. See
 `references/boundary.md`.
 
@@ -149,7 +149,7 @@ are a high-trust operation — flag for human approval rather than auto-PR.
 - If you cannot classify, the finding is not yet a drift — it is a
   question. Ask the user before reporting it.
 - "The tree could be more detailed" about an existing topic is **not**
-  drift. Use `first-tree-write` to deepen existing nodes. But a missing
+  drift. Use `first-tree-context` to deepen existing nodes. But a missing
   skeleton entry for source structure that demonstrably exists **is**
   drift — that is `code-not-synced/structural` and sync fixes it.
 - Use `code-not-synced/structural` for registration (skeleton, stub,
