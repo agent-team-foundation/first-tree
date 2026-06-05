@@ -32,9 +32,20 @@ const asDefaultMode = (v: string): DefaultMode => DEFAULT_MODES.find((d) => d ==
 const asTransport = (v: string): Transport => TRANSPORTS.find((t) => t === v) ?? "stdio";
 
 const DEFAULT_OPTIONS: SelectOption[] = [
-  { value: "available", label: "Available", hint: "Agents opt in" },
-  { value: "recommended", label: "Recommended", hint: "On by default" },
+  { value: "recommended", label: "On by default", hint: "Enabled for every agent" },
+  { value: "available", label: "Opt-in", hint: "Agents enable it themselves" },
 ];
+
+/**
+ * Human label for a resource's `defaultEnabled` mode. Single source of truth so
+ * the editor dropdown and the list / preview badges never drift apart. The raw
+ * enum (`recommended` / `available`) reads as a soft suggestion or mere
+ * existence; these phrasings name the actual behaviour (default-on vs opt-in).
+ */
+export function defaultEnabledLabel(value: DefaultMode | null): string {
+  if (value === null) return "";
+  return value === "recommended" ? "On by default" : "Opt-in";
+}
 const TRANSPORT_OPTIONS: SelectOption[] = TRANSPORTS.map((t) => ({ value: t, label: t }));
 // Mirrors MCP_NAME_PATTERN (agent-runtime-config.ts). Validated explicitly in
 // JS rather than via the HTML `pattern` attr — `pattern` is compiled with the
@@ -293,7 +304,7 @@ function FieldShell({ id, label, children }: { id: string; label: string; childr
 
 function DefaultModeField({ value, onChange }: { value: DefaultMode; onChange: (v: DefaultMode) => void }) {
   return (
-    <FieldShell id="resource-default" label="Default">
+    <FieldShell id="resource-default" label="Default for agents">
       <Select
         id="resource-default"
         aria-label="Default mode"
@@ -619,9 +630,14 @@ function ModalEditor({
     if (v) return;
     save.requestSave(payload());
   };
+  // prompt / skill carry a large markdown Body — widen to match the read-only
+  // preview dialog (max-w-2xl ≈ 80 monospace cols at the body font size) so
+  // editing the source isn't narrower than viewing it. repo / mcp are short
+  // forms; the default max-w-lg fits them without leaving dead space.
+  const wide = state.type === "prompt" || state.type === "skill";
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent aria-describedby={undefined} className={wide ? "max-w-2xl" : undefined}>
         <DialogHeader>
           <DialogTitle>{titleFor(state)}</DialogTitle>
         </DialogHeader>
