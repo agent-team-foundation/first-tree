@@ -73,9 +73,8 @@ function configureInitCommand(command: Command): void {
     .option("--scope <scope>", '[deprecated, only "workspace" was ever valid under W1]');
 }
 
-function warnDeprecatedFlag(flag: string, suffix = ""): void {
-  const tail = suffix === "" ? "" : ` ${suffix}`;
-  console.error(`tree init: ${flag} is deprecated and has no effect under W1; remove it from your scripts.${tail}`);
+function warnDeprecatedFlag(message: string): void {
+  console.error(`tree init: ${message}`);
 }
 
 function readScopeOption(value: unknown): "repo" | "workspace" | undefined {
@@ -99,15 +98,26 @@ function readInitOptions(command: Command): InitOptions {
 
   // PR-B: stderr warn when a deprecated flag is passed. Parsing logic
   // below keeps working so existing scripts / older skill payloads do
-  // not break in the staging auto-publish window.
+  // not break in the staging auto-publish window. Each warning is
+  // tailored to the flag — `--scope` and `--tree-mode` are observably
+  // no-ops on W1 paths (the latter only after PR-B's `resolveTreeMode`
+  // derives the mode from `--tree-url` presence), while `--tree-name`
+  // still has behavioral effect (`resolveTreeRoot` consults it when
+  // `--tree-path` is absent) so its warning advises the equivalent
+  // explicit flag rather than telling the user the option does
+  // nothing.
   if (options.scope !== undefined) {
-    warnDeprecatedFlag("--scope");
+    warnDeprecatedFlag("--scope has no behavioral effect under W1; remove it from your scripts.");
   }
   if (options.treeMode !== undefined) {
-    warnDeprecatedFlag("--tree-mode");
+    warnDeprecatedFlag(
+      "--tree-mode has no behavioral effect under W1; the layout infers scaffold-vs-clone from --tree-url presence. Remove it from your scripts.",
+    );
   }
   if (options.treeName !== undefined) {
-    warnDeprecatedFlag("--tree-name", "Use --tree-path instead.");
+    warnDeprecatedFlag(
+      "--tree-name is being retired; use --tree-path to select the tree directory explicitly. --tree-name still works for compatibility but will be removed in a future release.",
+    );
   }
 
   return {
@@ -121,7 +131,18 @@ function readInitOptions(command: Command): InitOptions {
 }
 
 function resolveTreeMode(options: InitOptions): "dedicated" | "shared" {
-  return options.treeMode ?? "shared";
+  // Explicit flag wins (still accepted for compat; PR-C hard-deletes it).
+  if (options.treeMode !== undefined) {
+    return options.treeMode;
+  }
+  // Under W1 the only behavioral split is "clone from --tree-url" vs
+  // "scaffold locally". The legacy default ("shared") was misleading
+  // because dropping `--tree-mode dedicated` from the lone-source
+  // recipe (PR-B skill cleanup) would silently flip the recorded mode
+  // from "dedicated" to "shared" even though we were still scaffolding
+  // locally. Derive from URL presence so the recorded state matches
+  // the actual scaffold-vs-clone intent.
+  return options.treeUrl !== undefined ? "shared" : "dedicated";
 }
 
 function resolveTreeRoot(workspaceRoot: string, options: InitOptions): string {

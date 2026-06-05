@@ -69,7 +69,7 @@ function buildContext(command: Command) {
 function findDeprecationWarning(flag: string): string | undefined {
   for (const call of errSpy.mock.calls) {
     const msg = String(call[0] ?? "");
-    if (msg.includes(`tree init: ${flag} is deprecated`)) {
+    if (msg.startsWith(`tree init: ${flag} `)) {
       return msg;
     }
   }
@@ -85,7 +85,7 @@ describe("tree init — deprecated init flags emit stderr warning but keep worki
     initCommand.action(buildContext(buildCommand(["--tree-mode", "dedicated", "--tree-path", "./tree"])));
 
     expect(process.exitCode).toBeFalsy();
-    expect(findDeprecationWarning("--tree-mode")).toMatch(/no effect under W1/u);
+    expect(findDeprecationWarning("--tree-mode")).toMatch(/no behavioral effect under W1/u);
     // Parser still accepts the value; init still writes the manifest.
     // No throw means readTreeModeOption did not reject "dedicated".
   });
@@ -98,10 +98,10 @@ describe("tree init — deprecated init flags emit stderr warning but keep worki
     initCommand.action(buildContext(buildCommand(["--scope", "workspace", "--tree-path", "./tree"])));
 
     expect(process.exitCode).toBeFalsy();
-    expect(findDeprecationWarning("--scope")).toMatch(/no effect under W1/u);
+    expect(findDeprecationWarning("--scope")).toMatch(/no behavioral effect under W1/u);
   });
 
-  it("--tree-name foo warns + the suffix mentions --tree-path", () => {
+  it("--tree-name foo warns + the message tells the user to use --tree-path", () => {
     const workspaceRoot = makeTempDir("first-tree-init-deprecated-tree-name-");
     makeGitRepo(join(workspaceRoot, "source-a"));
     process.chdir(workspaceRoot);
@@ -109,7 +109,12 @@ describe("tree init — deprecated init flags emit stderr warning but keep worki
     initCommand.action(buildContext(buildCommand(["--tree-name", "my-tree", "--workspace-id", "demo"])));
 
     expect(process.exitCode).toBeFalsy();
-    expect(findDeprecationWarning("--tree-name")).toMatch(/--tree-path/u);
+    const warning = findDeprecationWarning("--tree-name");
+    // Warning steers the user toward the explicit replacement and is
+    // explicit that the flag still works for now (it is NOT a no-op,
+    // unlike --tree-mode / --scope under W1).
+    expect(warning).toMatch(/use --tree-path/u);
+    expect(warning).toMatch(/still works for compatibility/u);
   });
 
   it("running with NO deprecated flags emits no warning", () => {

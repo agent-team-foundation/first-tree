@@ -109,4 +109,36 @@ describe("initializeWorkspaceRoot", () => {
       }),
     ).toThrow("workspace-scope recipe");
   });
+
+  it("derives tree-mode=dedicated when no --tree-url is given (PR-B regression PIN)", () => {
+    // Lone-source recipe after PR-B no longer passes `--tree-mode
+    // dedicated`. The CLI must infer the same mode from URL absence so
+    // the tree state on disk does not silently flip to `shared`.
+    const workspaceRoot = makeTempDir("first-tree-init-default-mode-no-url-");
+    makeGitRepo(join(workspaceRoot, "source-a"));
+
+    const summary = initializeWorkspaceRoot(workspaceRoot, {
+      treePath: "./tree",
+    });
+
+    expect(summary.treeMode).toBe("dedicated");
+  });
+
+  it("derives tree-mode=shared when --tree-url is given (PR-B regression PIN)", () => {
+    // Symmetric pin: when binding to a remote tree, the mode is
+    // "shared" regardless of whether --tree-mode is passed.
+    const workspaceRoot = makeTempDir("first-tree-init-default-mode-url-");
+    makeGitRepo(join(workspaceRoot, "source-a"));
+    // Pre-create the tree subdir so init does not attempt a real clone
+    // (the test infra has no network access).
+    const treeRoot = join(workspaceRoot, "tree");
+    makeGitRepo(treeRoot);
+
+    const summary = initializeWorkspaceRoot(workspaceRoot, {
+      treePath: "./tree",
+      treeUrl: "https://github.com/acme/tree.git",
+    });
+
+    expect(summary.treeMode).toBe("shared");
+  });
 });
