@@ -14,6 +14,7 @@ import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { getMeDoc } from "../api/me-docs.js";
 import { docPreviewPathFromHref } from "../lib/doc-preview-links.js";
+import { isNavigableWebHref } from "../lib/safe-href.js";
 import { useAgentSlugToIdMap } from "../lib/use-agent-name-map.js";
 import { cn } from "../lib/utils.js";
 import { type DocSnapshotEntry, docSnapshotQueryKey } from "../pages/workspace/center/chat-view.js";
@@ -245,6 +246,13 @@ export function DocPreviewDrawer() {
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
+        // issue 831: neutralise dead links (local filesystem paths / unknown
+        // schemes) that would 404 against the cloud origin. Doc-preview `.md`
+        // paths resolve first so in-doc cross-links keep their click handler.
+        const docPreviewPath = typeof href === "string" ? docPreviewPathFromHref(href, resolvedDocPath) : null;
+        if (!docPreviewPath && !isNavigableWebHref(href)) {
+          return <>{children}</>;
+        }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
           if (
             !href ||

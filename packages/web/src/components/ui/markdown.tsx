@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { isNavigableWebHref } from "../../lib/safe-href.js";
 import { cn } from "../../lib/utils.js";
 
 type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
@@ -42,9 +43,19 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
         remarkPlugins={[remarkGfm, remarkBreaks]}
         rehypePlugins={rehypePlugins}
         components={{
-          a: ({ node, ...props }) => {
+          a: ({ node, href, children, ...props }) => {
             void node;
-            return <a {...props} target="_blank" rel="noopener noreferrer" />;
+            // issue 831: never render a local filesystem path / unknown-scheme href
+            // as a live anchor — it has no route on the cloud origin and 404s
+            // when clicked. Show the link text instead of a dead link.
+            if (!isNavigableWebHref(href)) {
+              return <>{children}</>;
+            }
+            return (
+              <a {...props} href={href} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            );
           },
           ...components,
         }}
