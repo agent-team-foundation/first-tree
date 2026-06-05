@@ -8,6 +8,7 @@ import { writeTreeState } from "../commands/tree/binding-state.js";
 import { buildSourceIntegrationBlock } from "../commands/tree/source-integration.js";
 import { syncTreeIdentityFiles } from "../commands/tree/tree-identity.js";
 import type { CommandContext } from "../commands/types.js";
+import { writeWorkspaceManifest } from "../core/workspace.js";
 
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
@@ -142,6 +143,138 @@ describe("tree first context bundle", () => {
       treeRoot: fallback,
     });
     expect(buildTreeFirstContextBundle(makeTempDir("ft-tree-context-empty-"))).toBeNull();
+  });
+
+  // Regression — until now, `resolveTreeContextRoot` only looked for the tree
+  // as a sibling of the cwd (`dirname(cwd)/<treeName>`). Under W1 the tree
+  // lives **inside** the workspace at `<workspaceRoot>/<manifest.tree>`, so
+  // `tree inject` returned 0 bytes from any W1 workspace cwd. The fix
+  // resolves via the workspace manifest first.
+  it("resolves the tree via .first-tree/workspace.json under the W1 layout", async () => {
+    const { buildTreeFirstContextBundle } = await import("../commands/tree/tree-first-context.js");
+
+    const workspaceRoot = makeTempDir("ft-w1-resolver-ws-");
+    const treeRoot = join(workspaceRoot, "my-workspace-tree");
+    mkdirSync(treeRoot, { recursive: true });
+    writeTreeRoot(treeRoot, { repoName: "my-workspace-tree" });
+    writeWorkspaceManifest(workspaceRoot, { tree: "my-workspace-tree", sources: [] });
+
+    // Case A: cwd === workspace root. workspace-root binding contract is
+    // present; entrypoint comes from the binding ("/").
+    writePromptFiles(
+      workspaceRoot,
+      buildSourceIntegrationBlock("my-workspace-tree", {
+        bindingMode: "workspace-root",
+        entrypoint: "/",
+        workspaceId: "acme",
+      }),
+    );
+    const wsBundle = buildTreeFirstContextBundle(workspaceRoot);
+    expect(wsBundle?.treeRoot).toBe(treeRoot);
+    expect(wsBundle?.additionalContext).toContain("# Root Context");
+    expect(wsBundle?.additionalContext).toContain("Current entrypoint: `/`");
+
+    // Case B: cwd is a workspace-member subdir with its own binding contract.
+    // Walk-up still finds the manifest; entrypoint comes from the member's
+    // binding ("/repos/product-repo").
+    const memberRoot = join(workspaceRoot, "repos", "product-repo");
+    mkdirSync(memberRoot, { recursive: true });
+    writePromptFiles(
+      memberRoot,
+      buildSourceIntegrationBlock("my-workspace-tree", {
+        bindingMode: "workspace-member",
+        entrypoint: "/repos/product-repo",
+        workspaceId: "acme",
+      }),
+    );
+    const memberBundle = buildTreeFirstContextBundle(memberRoot);
+    expect(memberBundle?.treeRoot).toBe(treeRoot);
+    expect(memberBundle?.additionalContext).toContain("Current entrypoint: `/repos/product-repo`");
+
+    // Case C: cwd is some other directory inside the workspace with no
+    // binding contract of its own (e.g. a scratch dir). Walk-up still
+    // resolves; entrypoint is derived from the filesystem relative path.
+    const scratch = join(workspaceRoot, "scratch", "play");
+    mkdirSync(scratch, { recursive: true });
+    const scratchBundle = buildTreeFirstContextBundle(scratch);
+    expect(scratchBundle?.treeRoot).toBe(treeRoot);
+    expect(scratchBundle?.additionalContext).toContain("Current entrypoint: `/scratch/play`");
+  });
+
+  it("falls back to the legacy sibling layout when no workspace manifest is present", async () => {
+    // Pre-W1 layout still in the wild — cwd has a binding contract but no
+    // workspace.json above it; tree sits next to the source as a sibling.
+    const { buildTreeFirstContextBundle } = await import("../commands/tree/tree-first-context.js");
+
+    const enclosing = makeTempDir("ft-legacy-sibling-");
+    const source = join(enclosing, "source");
+    const tree = join(enclosing, "context-tree");
+    mkdirSync(source, { recursive: true });
+    mkdirSync(tree, { recursive: true });
+    writeTreeRoot(tree);
+    writePromptFiles(
+      source,
+      buildSourceIntegrationBlock("context-tree", {
+        bindingMode: "workspace-member",
+        entrypoint: "/source",
+      }),
+    );
+
+    const bundle = buildTreeFirstContextBundle(source);
+    expect(bundle?.treeRoot).toBe(tree);
+    expect(bundle?.additionalContext).toContain("Current entrypoint: `/source`");
+  });
+
+  it("prefers the workspace manifest tree over a legacy sibling when both would match", async () => {
+    const { buildTreeFirstContextBundle } = await import("../commands/tree/tree-first-context.js");
+
+    const enclosing = makeTempDir("ft-w1-vs-legacy-");
+    const workspaceRoot = join(enclosing, "workspace");
+    const w1Tree = join(workspaceRoot, "my-workspace-tree");
+    const legacySibling = join(enclosing, "my-workspace-tree");
+    mkdirSync(w1Tree, { recursive: true });
+    mkdirSync(legacySibling, { recursive: true });
+    writeTreeRoot(w1Tree, { repoName: "my-workspace-tree" });
+    writeTreeRoot(legacySibling, { repoName: "my-workspace-tree" });
+    writeWorkspaceManifest(workspaceRoot, { tree: "my-workspace-tree", sources: [] });
+    writePromptFiles(
+      workspaceRoot,
+      buildSourceIntegrationBlock("my-workspace-tree", {
+        bindingMode: "workspace-root",
+        entrypoint: "/",
+        workspaceId: "acme",
+      }),
+    );
+
+    expect(buildTreeFirstContextBundle(workspaceRoot)?.treeRoot).toBe(w1Tree);
+  });
+
+  it("falls through to legacy / fallback paths when the workspace manifest points at a non-tree", async () => {
+    // workspace.json exists but its `tree` path is not actually a tree.
+    // The legacy fallback should still kick in if the source binding can
+    // find a sibling tree.
+    const { buildTreeFirstContextBundle } = await import("../commands/tree/tree-first-context.js");
+
+    const enclosing = makeTempDir("ft-w1-malformed-");
+    const workspaceRoot = join(enclosing, "workspace");
+    const stub = join(workspaceRoot, "not-a-tree");
+    const realSibling = join(enclosing, "context-tree");
+    mkdirSync(stub, { recursive: true });
+    mkdirSync(realSibling, { recursive: true });
+    writeTreeRoot(realSibling);
+    writeWorkspaceManifest(workspaceRoot, { tree: "not-a-tree", sources: [] });
+    writePromptFiles(
+      workspaceRoot,
+      buildSourceIntegrationBlock("context-tree", {
+        bindingMode: "workspace-root",
+        entrypoint: "/",
+        workspaceId: "acme",
+      }),
+    );
+
+    // W1 path can't resolve `not-a-tree` → falls through to legacy sibling
+    // resolution which finds `context-tree` next to the workspace.
+    expect(buildTreeFirstContextBundle(workspaceRoot)?.treeRoot).toBe(realSibling);
   });
 });
 
