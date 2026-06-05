@@ -75,6 +75,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Asking Humans",
       "## Chat Topic",
       "## CLI Overview",
+      "# Required Reading",
       "# Context Tree",
       "## Core Model",
       "## Reading the Tree",
@@ -130,6 +131,115 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     const realPayload = { ...emptyPayload, prompt: { append: "Follow the local implementation plan." } };
     const briefing = buildAgentBriefing(makeOpts({ payload: realPayload }));
     expect(briefing).toContain("## Agent-Specific Prompt\n\nFollow the local implementation plan.");
+  });
+});
+
+describe("buildAgentBriefing — # Required Reading (unconditional skill-load mandate)", () => {
+  // The inline briefing is a routing index, not a substitute for the
+  // skill payloads. `# Required Reading` is the hard mandate that
+  // guarantees `first-tree` and `first-tree-context` get loaded on
+  // every task — otherwise progressive disclosure (keyword-triggered)
+  // can silently skip them and the agent acts without the rules in
+  // those skills (daemon lifecycle, hard write rules, etc.).
+
+  it("emits the # Required Reading section for tree-bound agents with MUST framing and both skill names", () => {
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
+
+    expect(briefing).toContain("# Required Reading");
+    // Hard-mandate anchors — progressive disclosure is opt-in by
+    // default; this block makes the two routing-critical skills
+    // mandatory regardless of what the user types.
+    expect(briefing).toMatch(/you MUST\s+load both skills below/);
+    expect(briefing).toContain("**`first-tree`**");
+    expect(briefing).toContain("**`first-tree-context`**");
+    // Reminds the agent that the inline briefing intentionally does
+    // not duplicate the skill bodies — so it can't rationalise
+    // skipping the load.
+    expect(briefing).toMatch(/intentionally NOT duplicated[\s\n]+inline/);
+    expect(briefing).toMatch(/minimum mechanics you need to operate at all/);
+    // Calls out the on-demand-only sibling so the agent doesn't
+    // over-load every First Tree family skill on every task.
+    expect(briefing).toContain("`first-tree-sync`");
+  });
+
+  it("places # Required Reading immediately after # Working in First Tree (its CLI Overview tail) and before # Context Tree", () => {
+    // Placement rationale: the agent first reads the inline
+    // workspace-collab basics (chat send, working directory,
+    // communication) it needs to operate at all, then hits the hard
+    // mandate to load `first-tree` + `first-tree-context` before any
+    // real work. The mandate sits adjacent to `# Context Tree` because
+    // the two skills cover the read/write rules for that section.
+    const payload = {
+      kind: "claude-code" as const,
+      model: "",
+      prompt: { append: "You are staff: design, implement, and coordinate review." },
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "" as const,
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload, contextTreePath: "/tree" }));
+
+    const identityIdx = briefing.indexOf("# Identity");
+    const agentPromptIdx = briefing.indexOf("## Agent-Specific Prompt");
+    const workingIdx = briefing.indexOf("# Working in First Tree");
+    const cliOverviewIdx = briefing.indexOf("## CLI Overview");
+    const requiredIdx = briefing.indexOf("# Required Reading");
+    const contextTreeIdx = briefing.indexOf("# Context Tree");
+
+    expect(identityIdx).toBeGreaterThanOrEqual(0);
+    expect(agentPromptIdx).toBeGreaterThan(identityIdx);
+    expect(workingIdx).toBeGreaterThan(agentPromptIdx);
+    // CLI Overview is the last subsection of `# Working in First Tree`,
+    // so Required Reading must land after it.
+    expect(cliOverviewIdx).toBeGreaterThan(workingIdx);
+    expect(requiredIdx).toBeGreaterThan(cliOverviewIdx);
+    // And immediately before `# Context Tree` — no other top-level
+    // section may slip between them.
+    expect(contextTreeIdx).toBeGreaterThan(requiredIdx);
+  });
+
+  it("omits # Required Reading for tree-less agents (the skill payloads are not installed on disk for them)", () => {
+    // `installFirstTreeIntegration` is short-circuited when
+    // `contextTreePath === null`, so the SKILL.md payloads under
+    // `<workspace>/.agents/skills/` never get materialised. Mandating
+    // a load would point at files that aren't there. The Tree
+    // Location stub already surfaces the gap to a human.
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
+    expect(briefing).not.toContain("# Required Reading");
+  });
+
+  it("flags `first-tree` and `first-tree-context` as unconditional in the ## First Tree Family map (consistent with # Required Reading)", () => {
+    // The Skill Map's framing has to match the # Required Reading
+    // mandate, otherwise the agent gets contradictory signals
+    // (progressive-disclosure-only vs. unconditional). Pin both
+    // rows' new "unconditional" label and the head paragraph that
+    // calls them out.
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
+    const familyMap = briefing.slice(briefing.indexOf("## First Tree Family"));
+
+    // Head paragraph explicitly names both unconditional skills and
+    // points back at the # Required Reading anchor.
+    expect(familyMap).toMatch(
+      /`first-tree` and `first-tree-context` are \*\*unconditional\*\* — load\s+them on every task per `# Required Reading` above\./,
+    );
+
+    // Both unconditional rows must carry the "unconditional" label
+    // inline so the table is self-explanatory even when read in
+    // isolation.
+    const firstTreeRow = familyMap.match(/\|\s*`first-tree`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(firstTreeRow).toContain("unconditional");
+    expect(firstTreeRow).toContain("`# Required Reading`");
+
+    const contextRow = familyMap.match(/\|\s*`first-tree-context`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(contextRow).toContain("unconditional");
+    expect(contextRow).toContain("`# Required Reading`");
+
+    // On-demand rows must NOT pick up the unconditional label by
+    // accident — they're triggered by keyword / task signal.
+    const syncRow = familyMap.match(/\|\s*`first-tree-sync`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(syncRow).not.toContain("unconditional");
   });
 });
 
