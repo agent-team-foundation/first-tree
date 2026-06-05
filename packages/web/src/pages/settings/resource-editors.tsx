@@ -12,7 +12,6 @@ import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Popover } from "../../components/ui/popover.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 
@@ -59,7 +58,7 @@ export function typeLabelPlural(type: ResourceType): string {
   return "MCP";
 }
 
-function typeLabelSingular(type: ResourceType): string {
+export function typeLabelSingular(type: ResourceType): string {
   if (type === "repo") return "Repo";
   if (type === "prompt") return "Instructions";
   if (type === "skill") return "Skill";
@@ -113,46 +112,18 @@ export type EditorState =
   | { mode: "edit"; type: ResourceType; resource: ResourceRow };
 
 // ─────────────────────────────────────────────────────────────────────────
-// Add-resource menu — single, type-first entry (admin only)
+// Add control — one compact "+ <Type>" button per section (admin only). The
+// section-local entry replaces the former single page-header "Add resource"
+// menu: each section owns its own create action, so the type is implicit and
+// empty sections (e.g. MCP) get a direct, in-context affordance instead of a
+// dead end. Settings and the agent Capabilities tab share this trigger shape.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function AddResourceMenu({ onPick }: { onPick: (type: ResourceType) => void }) {
+export function AddResourceButton({ type, onClick }: { type: ResourceType; onClick: () => void }) {
   return (
-    <Popover
-      align="end"
-      trigger={({ open, toggle }) => (
-        <Button size="sm" variant="cta" aria-expanded={open} onClick={toggle}>
-          <Plus className="h-3.5 w-3.5" /> Add resource
-        </Button>
-      )}
-    >
-      {({ close }) => (
-        <div style={{ padding: "var(--sp-1)", minWidth: "var(--sp-45)" }}>
-          {RESOURCE_TYPES.map((type) => (
-            <button
-              key={type}
-              type="button"
-              className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
-              style={{
-                gap: "var(--sp-2)",
-                padding: "var(--sp-1_5) var(--sp-2)",
-                borderRadius: "var(--radius-chip)",
-                border: 0,
-                background: "transparent",
-                color: "var(--fg)",
-                cursor: "pointer",
-              }}
-              onClick={() => {
-                onPick(type);
-                close();
-              }}
-            >
-              {typeLabelSingular(type)}
-            </button>
-          ))}
-        </div>
-      )}
-    </Popover>
+    <Button size="xs" variant="outline" onClick={onClick}>
+      <Plus className="h-3.5 w-3.5" /> {typeLabelSingular(type)}
+    </Button>
   );
 }
 
