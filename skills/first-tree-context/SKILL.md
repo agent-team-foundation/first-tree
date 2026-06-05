@@ -68,8 +68,9 @@ How to read:
 - Start at the tree's root `NODE.md`. If the root also contains an
   `AGENT.md`, read that too — it carries org-wide rules every agent
   must follow before acting.
-- Use `first-tree tree list` to see the tree's structure, then `Read`
-  the specific nodes your task touches.
+- Map the tree's structure with whatever exploration tool fits — `ls`,
+  `Read` on `NODE.md`, or `Grep` for a keyword — then `Read` the
+  specific nodes your task touches.
 - Follow `soft_links` to neighbouring domains; they exist exactly so
   you don't have to re-derive a cross-domain decision.
 - Read **eagerly, not lazily** — acting before reading is the #1
@@ -224,17 +225,18 @@ Does not belong: the specific vulnerabilities or how they were patched.
 
 ## CLI Surface
 
-The Context-management CLI is intentionally minimal — three commands:
+The Context-management CLI you actually depend on while reading or
+writing is small. Today only one command is operationally required:
 
-- `first-tree tree list` — list tree nodes, used during read to map
-  structure before reading specific files
-- `first-tree tree verify` — validate frontmatter and node structure,
-  the gate before commit
-- `first-tree tree upgrade` — one-shot upgrade when the tree
-  structural conventions change
+- `first-tree tree verify` — validate frontmatter and node structure;
+  the Hard Rule 6 gate that must pass before any commit.
 
-Everything else (opening PRs, fetching code, reading the workspace
-binding) goes through standard tools (`git`, `gh`, `Read`, etc.).
+A simplified CLI surface (a structural `list`, a `verify`, and an
+`upgrade`) is the design target; until that lands, map the tree with
+standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
+the write gate. Everything else (opening PRs, fetching code, reading
+the workspace binding) goes through standard tools (`git`, `gh`,
+`Read`, etc.).
 
 ## Hand-Off
 

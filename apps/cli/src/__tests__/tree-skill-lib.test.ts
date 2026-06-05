@@ -16,8 +16,11 @@ import {
   bundledSkillsRootFrom,
   collectSkillDiagnosis,
   collectSkillStatus,
+  copyCanonicalSkills,
   copyCoreSkills,
   inspectSkillEntry,
+  pruneRetiredSkills,
+  RETIRED_SKILL_NAMES,
   readBundledSkillVersion,
   repairClaudeSkillLinks,
   resolveBundledSkillsRoot,
@@ -273,5 +276,85 @@ describe("tree skill library", () => {
     } finally {
       rmSync(isolated, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retired-skill cleanup
+//
+// `first-tree-write` was retired by the simplify-context-skill pass
+// (PR #843). Already-installed workspaces would otherwise keep a stale
+// `.agents/skills/first-tree-write` + `.claude/skills/first-tree-write`
+// symlink whose old description still triggers progressive disclosure.
+// `pruneRetiredSkills` (called by `copyCanonicalSkills`) removes them.
+// ---------------------------------------------------------------------------
+
+describe("pruneRetiredSkills", () => {
+  it("removes a stale retired-skill .agents directory and its conventional .claude symlink", () => {
+    // Seed the legacy install shape directly with fs (no installSkill helper
+    // — it is typed against `SkillName`, which no longer includes the
+    // retired name).
+    const retired = RETIRED_SKILL_NAMES[0];
+    const agentsRoot = join(root, ".agents", "skills", retired);
+    mkdirSync(join(agentsRoot, "agents"), { recursive: true });
+    writeFileSync(join(agentsRoot, "SKILL.md"), "# legacy\n");
+    writeFileSync(join(agentsRoot, "VERSION"), "0.0.1\n");
+    writeFileSync(join(agentsRoot, "agents", "openai.yaml"), "name: legacy\n");
+
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(claudeDir, { recursive: true });
+    symlinkSync(join("..", "..", ".agents", "skills", retired), join(claudeDir, retired));
+
+    const result = pruneRetiredSkills(root);
+
+    expect(result.removed).toEqual(
+      expect.arrayContaining([join(".agents", "skills", retired), join(".claude", "skills", retired)]),
+    );
+    expect(result.skipped).toEqual([]);
+    expect(existsSync(agentsRoot)).toBe(false);
+    expect(existsSync(join(claudeDir, retired))).toBe(false);
+  });
+
+  it("leaves a foreign .claude entry alone (non-symlink directory or symlink with unexpected target)", () => {
+    const retired = RETIRED_SKILL_NAMES[0];
+
+    // No .agents install, just a user-owned .claude entry that happens
+    // to share the retired skill name — must be left untouched.
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(join(claudeDir, retired), { recursive: true });
+    writeFileSync(join(claudeDir, retired, "custom.md"), "user content\n");
+
+    const result = pruneRetiredSkills(root);
+
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([join(".claude", "skills", retired)]);
+    expect(existsSync(join(claudeDir, retired, "custom.md"))).toBe(true);
+  });
+
+  it("is a no-op when no retired skill is installed", () => {
+    const result = pruneRetiredSkills(root);
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("copyCanonicalSkills prunes retired skills as part of the install/upgrade pass", () => {
+    const retired = RETIRED_SKILL_NAMES[0];
+    const agentsRoot = join(root, ".agents", "skills", retired);
+    mkdirSync(agentsRoot, { recursive: true });
+    writeFileSync(join(agentsRoot, "SKILL.md"), "# legacy\n");
+
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(claudeDir, { recursive: true });
+    symlinkSync(join("..", "..", ".agents", "skills", retired), join(claudeDir, retired));
+
+    const result = copyCanonicalSkills(root);
+
+    expect(result.removed).toEqual(
+      expect.arrayContaining([join(".agents", "skills", retired), join(".claude", "skills", retired)]),
+    );
+    // After upgrade the retired skill is gone but the current skills are present.
+    expect(existsSync(agentsRoot)).toBe(false);
+    expect(existsSync(join(claudeDir, retired))).toBe(false);
+    expect(existsSync(join(root, ".agents", "skills", "first-tree-context", "SKILL.md"))).toBe(true);
   });
 });

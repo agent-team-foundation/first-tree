@@ -8,11 +8,13 @@ description: Audit and repair drift between merged code and the Context Tree in 
 
 # First Tree Sync
 
-Read these first:
+Read this first:
 
-- `../first-tree-context/SKILL.md`
-- `../first-tree-context/references/functions.md`
-- `../first-tree-context/references/maintenance.md`
+- `../first-tree-context/SKILL.md` — the Context Tree operating guide
+  (concepts, source-system boundary, read + write sections). Under the
+  simplify-context-skill pass, the `functions` / `maintenance` /
+  `structure` references were folded back into this single file, so
+  loading the SKILL.md is enough.
 
 ## What This Skill Does
 
