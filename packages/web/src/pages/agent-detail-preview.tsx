@@ -96,7 +96,8 @@ const RESOURCES: AgentResourcesOutput = {
         defaultEnabled: "recommended",
         payload: null,
         repo: null,
-        promptBody: "Follow the team house style when reviewing diffs.",
+        promptBody:
+          "Follow the team house style when reviewing diffs.\n\n- Prefer small, focused changes.\n- Call out missing tests and error handling.\n- Flag any public-API change for a second reviewer.\n- Keep comments about the code, not the author.",
         unavailableReason: null,
         order: 0,
       },
@@ -264,7 +265,8 @@ const CONFIG: AgentRuntimeConfig = {
   payload: {
     kind: "claude-code",
     prompt: {
-      append: "Follow the team house style when reviewing diffs.\n\nAlways summarize tradeoffs before recommending.",
+      append:
+        "Follow the team house style when reviewing diffs.\n\n- Prefer small, focused changes.\n- Call out missing tests and error handling.\n- Flag any public-API change for a second reviewer.\n- Keep comments about the code, not the author.\n\nAlways summarize tradeoffs before recommending.",
     },
     model: "sonnet",
     reasoningEffort: "high",
