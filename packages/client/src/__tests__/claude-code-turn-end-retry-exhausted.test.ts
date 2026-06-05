@@ -95,6 +95,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-retry"),
       markCompleted,
+      markMessagesCompleted: () => markCompleted(),
     };
 
     await handler.start(

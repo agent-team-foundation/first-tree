@@ -74,7 +74,7 @@ describe("ClientConnection — malformed inbox:deliver frame", () => {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 
-  it("best-effort acks the entryId so the next bind reset doesn't replay the unparseable frame", async () => {
+  it("does not ack a malformed frame even when entryId is usable", async () => {
     const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     const setup: ServerSetup = {
       ackedEntryIds: [],
@@ -100,20 +100,8 @@ describe("ClientConnection — malformed inbox:deliver frame", () => {
     await connection.connect();
     expect(connection.isConnected).toBe(true);
 
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("ack not received within 2s")), 2_000);
-      const check = (): void => {
-        if (setup.ackedEntryIds.includes(9999)) {
-          clearTimeout(timer);
-          resolve();
-          return;
-        }
-        setTimeout(check, 25);
-      };
-      check();
-    });
-
-    expect(setup.ackedEntryIds).toEqual([9999]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(setup.ackedEntryIds).toEqual([]);
 
     await connection.disconnect();
   }, 10_000);

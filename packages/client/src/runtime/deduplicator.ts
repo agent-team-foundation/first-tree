@@ -60,6 +60,13 @@ export class Deduplicator {
     this.order.push(...kept);
   }
 
+  /** Drop one recorded id if present. */
+  drop(id: string): void {
+    if (!this.seen.delete(id)) return;
+    const index = this.order.indexOf(id);
+    if (index >= 0) this.order.splice(index, 1);
+  }
+
   get size(): number {
     return this.seen.size;
   }

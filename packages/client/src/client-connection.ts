@@ -1254,30 +1254,13 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
-        // Best-effort ack: without it the entry stays `delivered`
-        // server-side and the next `agent:bind` resets it back to
-        // `pending` and re-pushes the same frame (see
-        // inflight-message-recovery-design.md §4) — which this build is
-        // guaranteed to drop again, so we'd loop on every reconnect. By
-        // acking we close the row out: a malformed frame this build
-        // cannot parse will never be parseable. `entryId` is a top-level
-        // field and usually survives when inner `message` validation is
-        // what failed (see frameKeys). Logged separately as
-        // `entryIdAcked` so operators can correlate.
+        // Do not ack malformed deliver frames. `inbox:ack` is ack-through
+        // now, so using it here could commit earlier delivered rows whose
+        // handler work has not completed. Leave the row delivered; the next
+        // bind reset will replay it and surface the schema drift again.
         const rawEntryId = msg.entryId;
-        // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
-        // check alone would let NaN / Infinity / floats slip through and ack
-        // would silently no-op on the server side (rejected by its own schema).
-        const entryIdAcked =
+        const entryIdDropped =
           typeof rawEntryId === "number" && Number.isInteger(rawEntryId) && rawEntryId >= 0 ? rawEntryId : null;
-        if (entryIdAcked !== null) {
-          this.sendInboxAck(entryIdAcked).catch((err) => {
-            this.wsLogger.warn(
-              { entryId: entryIdAcked, err: err instanceof Error ? err.message : String(err) },
-              "malformed inbox:deliver best-effort ack failed",
-            );
-          });
-        }
         // Per-issue path/message + the receiving frame keys so we can pinpoint
         // shape drift between server build and client schema during gradual
         // rollouts. Frame body intentionally not logged in full — message
@@ -1292,7 +1275,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             })),
             frameKeys: Object.keys(msg),
             messageKeys: msg.message && typeof msg.message === "object" ? Object.keys(msg.message) : null,
-            entryIdAcked,
+            entryIdDropped,
           },
           "malformed inbox:deliver frame — dropping",
         );

@@ -155,6 +155,7 @@ describe("claude-code handler — transient stream-error retry replays user mess
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-stream-retry"),
       markCompleted,
+      markMessagesCompleted: () => markCompleted(),
     };
 
     await handler.start(

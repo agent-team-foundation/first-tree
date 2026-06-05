@@ -23,6 +23,8 @@ export function mockCtxPlumbing(
 ): {
   forwardResult: (text: string) => Promise<void>;
   markCompleted: () => void;
+  markMessagesCompleted: (messages: SessionMessage | readonly SessionMessage[]) => void;
+  markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
   buildAgentEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   formatInboundContent: (msg: SessionMessage) => Promise<string>;
   resolveSenderLabel: (senderId: string) => Promise<string>;
@@ -33,6 +35,8 @@ export function mockCtxPlumbing(
     },
     // Default stub: tests that care about ack timing override via spies.
     markCompleted: () => {},
+    markMessagesCompleted: () => {},
+    markMessagesRetryable: () => {},
     buildAgentEnv: (env) => env,
     formatInboundContent: async (msg) => {
       const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);

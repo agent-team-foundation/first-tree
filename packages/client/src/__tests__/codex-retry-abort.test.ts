@@ -151,6 +151,7 @@ function makeContext(
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-retry-abort"),
     markCompleted,
+    markMessagesCompleted: (messages) => markCompleted(Array.isArray(messages) ? messages.length : 1),
   };
 }
 

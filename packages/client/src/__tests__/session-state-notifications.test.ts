@@ -154,7 +154,8 @@ describe("SessionManager: state notifications", () => {
     // chat-a starts (active), chat-b preempts chat-a (suspended → active)
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
-    // chat-a resumes, preempting chat-b
+    // After bind reset, chat-a may resume and preempt chat-b.
+    sm.noteBindRecoveryComplete();
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-a" }));
 
     const chatAChanges = stateChanges.filter((c) => c.chatId === "chat-a");

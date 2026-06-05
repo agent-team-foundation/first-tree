@@ -66,34 +66,29 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Ack `count` in-flight inbox entries for this chat — the runtime holds
-   * a FIFO queue per chat populated at `dispatch()` time. Each call shifts
-   * `count` entries off the head of that queue and acks them; the default
-   * `count = 1` matches the "one user message → one assistant turn" model
-   * that claude-code's streaming-input path produces.
-   *
-   * Call this once the handler has finished a turn (forwardResult success,
-   * silent turn, SDK reported "no result", or a permanent error the
-   * runtime surfaces via `emitEvent`). The runtime does NOT auto-ack on
-   * `forwardResult` because not every "turn done" path produces text.
-   *
-   * **`count` for batched / fused turns**: codex's `mergeAndRun` fuses N
-   * `inject()`-queued messages into a single `runTurn` that emits one
-   * `forwardResult`. Pass `count = N` so all N entries are acked atomically
-   * with the turn. Mis-counting under-acks (entries leak server-side, stay
-   * `delivered` until next bind reset) or over-acks (entries for the
-   * *next* turn get acked while still in-flight, risking loss on crash) —
-   * keep `count` in lockstep with the SDK's actual fused-message tally.
-   *
-   * Idempotent — shifting from an empty queue is a no-op. NOT to be
-   * called on transient errors that the handler intends to retry; leaving
-   * the entries queued keeps the server-side `delivered` state until the
-   * retry's eventual success (or until the client crashes and the next
-   * `agent:bind` resets them back to `pending`).
-   *
-   * See docs/inflight-message-recovery-design.md §4.
+   * Mark a single-message turn complete. Built-in handlers should prefer
+   * `markMessagesCompleted(messageOrBatch)` so the runtime can ack-through
+   * the exact inbox entry the handler actually consumed.
    */
-  markCompleted: (count?: number) => void;
+  markCompleted: () => void;
+
+  /**
+   * Mark the concrete message or fused message batch a handler has actually
+   * consumed. The runtime sends one `inbox:ack` for the last message's
+   * `inboxEntryId`; the server interprets it as ack-through for the chat's
+   * delivered prefix. This replaces the old `markCompleted(count)` FIFO
+   * pairing, which could ack an older queued entry while the completed entry
+   * remained unacked.
+   */
+  markMessagesCompleted: (messages: SessionMessage | readonly SessionMessage[]) => void;
+
+  /**
+   * Mark a concrete message or batch as abandoned by a retryable path
+   * (suspend, abort, timeout). The runtime must not let a later message in
+   * the same chat ack-through these entries, so it fails closed until the
+   * next bind reset redelivers from the server's oldest unacked entry.
+   */
+  markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the `first-tree`
@@ -125,6 +120,8 @@ export type SessionContext = HandlerContext & {
 
 /** Message content extracted from an inbox entry (no entry metadata). */
 export type SessionMessage = {
+  /** Inbox entry id that delivered this message to the current agent. */
+  inboxEntryId?: number;
   /** Message ID (UUID v7). */
   id: string;
   /** Chat this message belongs to. */

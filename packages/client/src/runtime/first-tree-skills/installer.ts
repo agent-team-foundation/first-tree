@@ -58,7 +58,6 @@ export const TREE_SKILL_NAMES = [
   "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
-  "first-tree-write",
 ] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];

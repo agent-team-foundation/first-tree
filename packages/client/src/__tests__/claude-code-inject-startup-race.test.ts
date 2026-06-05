@@ -129,6 +129,7 @@ function makeContext(
     ...mockCtxPlumbing({ sendMessage }, "chat-claude-startup-race"),
     ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
     markCompleted,
+    markMessagesCompleted: () => markCompleted(),
   };
 }
 

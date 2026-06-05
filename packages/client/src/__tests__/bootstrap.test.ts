@@ -391,13 +391,7 @@ function makeFixtureSkillsRoot(
 }
 
 describe("installFirstTreeIntegration (inline skill installer)", () => {
-  const TREE_SKILLS = [
-    "first-tree",
-    "first-tree-context",
-    "first-tree-onboarding",
-    "first-tree-sync",
-    "first-tree-write",
-  ];
+  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-onboarding", "first-tree-sync"];
 
   function expectSkillInstalled(workspace: string, name: string): void {
     const agentsDir = join(workspace, ".agents", "skills", name);
@@ -488,7 +482,6 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
       { name: "first-tree-context", version: "1.0.0" },
       { name: "first-tree-onboarding", version: "1.0.0" },
       { name: "first-tree-sync", version: "1.0.0" },
-      { name: "first-tree-write", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
@@ -531,9 +524,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // first-tree installs successfully, the others all fail.
     expectSkillInstalled(workspace, "first-tree");
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-sync"))).toBe(false);
-    expect(logs.join("\n")).toContain(
-      "failed first-tree-context, first-tree-onboarding, first-tree-sync, first-tree-write",
-    );
+    expect(logs.join("\n")).toContain("failed first-tree-context, first-tree-onboarding, first-tree-sync");
     expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-context)");
   });
 
@@ -902,13 +893,7 @@ describe("deepEqualIdentity", () => {
  * giving it a complete vs incomplete bundled-skills layout.
  */
 describe("CLI-version pin contract (handler invariants)", () => {
-  const TREE_SKILLS = [
-    "first-tree",
-    "first-tree-context",
-    "first-tree-onboarding",
-    "first-tree-sync",
-    "first-tree-write",
-  ];
+  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-onboarding", "first-tree-sync"];
 
   it("does not overwrite the existing pin when integrate fails — next start retries", () => {
     const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");

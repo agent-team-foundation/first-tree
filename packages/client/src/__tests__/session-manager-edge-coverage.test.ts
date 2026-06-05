@@ -36,7 +36,7 @@ type SessionManagerInternals = {
   // entryId tracking moved out of PendingMessage and into a per-chat
   // FIFO (`inFlightEntries`) per the in-flight message recovery PR.
   pendingQueue: Array<{ message: SessionMessage; chatId: string }>;
-  inFlightEntries: Map<string, number[]>;
+  inFlightEntries: Map<string, Array<{ entryId: number; messageId: string; dedupKey: string }>>;
   _activeCount: number;
   acquireActiveSlot(chatId: string, message: SessionMessage): boolean;
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
@@ -48,7 +48,6 @@ type SessionManagerInternals = {
   notifySessionState(chatId: string, state: SessionState): void;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
-  ackInFlightEntries(chatId: string, count: number): void;
   drainAllInFlightEntries(chatId: string): void;
 };
 
@@ -269,11 +268,9 @@ describe("SessionManager edge coverage", () => {
     await sm.handleCommand("missing", "session:terminate");
     await sm.handleCommand("chat-active", "session:suspend");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-active" }));
-    // Post inflight-message-recovery: dispatch defers ack until the
-    // handler calls `ctx.markCompleted()` (or session-manager drains on
-    // terminate / permanent failure). The entry sits in the per-chat
-    // FIFO `inFlightEntries`. Verify that's where it lands.
-    expect(internals(sm).inFlightEntries.get("chat-active")).toContain(2);
+    // Ack-through fail-closed: suspending abandons unfinished delivered
+    // entries and blocks same-chat delivery until bind reset/redelivery.
+    expect(internals(sm).inFlightEntries.has("chat-active")).toBe(false);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
     internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });

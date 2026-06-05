@@ -601,6 +601,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    */
   let chatContextForPrompt: ChatContext | undefined;
   const queuedInjectedMessages: SessionMessage[] = [];
+  const pendingAckMessages: SessionMessage[] = [];
   let injectDrainInProgress = false;
   /**
    * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
@@ -820,18 +821,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Single helper for "turn closed → ack the in-flight inbox entry AND
+   * Single helper for "turn closed → ack the pending inbox message AND
    * drop the replay stash". The two operations are paired everywhere a
    * turn finishes (success / sniff-permanent / forward-error / no-result /
    * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
    * one call keeps the invariant "stash lives only as long as the turn
    * still might need a replay" enforced in one place. Use the raw
-   * `markCompleted(count)` directly for per-entry acks (e.g. inject's
-   * `toSDKUserMessage` catch) where the semantics is "ack this single
-   * inbox entry, NOT close the active turn".
+   * `markMessagesCompleted(message)` directly for per-message terminal
+   * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
+   * "commit this single inbox message, NOT close the active SDK turn".
    */
   function ackTurnClose(sessionCtx: SessionContext): void {
-    sessionCtx.markCompleted();
+    const message = pendingAckMessages.shift();
+    if (message) {
+      sessionCtx.markMessagesCompleted(message);
+    } else {
+      sessionCtx.markCompleted();
+    }
     stashedSdkMessage = null;
   }
 
@@ -850,14 +856,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       stashedSdkMessage = sdkMsg;
       inputController?.push(sdkMsg);
+      pendingAckMessages.push(message);
     } catch (err) {
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
       // `toSDKUserMessage` failed before the SDK ever saw the
       // message, so no `result` event will ever fire to pair this
-      // entry with a `markCompleted()`. Ack here — re-handling on
+      // entry with an SDK result. Ack here — re-handling on
       // redelivery would re-hit the same conversion error
       // (permanent failure semantics, design §4).
-      sessionCtx.markCompleted(1);
+      sessionCtx.markMessagesCompleted(message);
     }
   }
 
@@ -1547,6 +1554,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(sdkMsg);
+      pendingAckMessages.push(message);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -1608,6 +1616,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
           inputController?.push(sdkMsg);
+          if (message) pendingAckMessages.push(message);
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
@@ -1651,6 +1660,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
+          if (message) pendingAckMessages.push(message);
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
@@ -1666,6 +1676,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
+        if (message) pendingAckMessages.push(message);
       }
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
@@ -1709,6 +1720,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // which re-stashes from its own argument.
       stashedSdkMessage = null;
       queuedInjectedMessages.length = 0;
+      pendingAckMessages.length = 0;
       injectDrainInProgress = false;
     },
 

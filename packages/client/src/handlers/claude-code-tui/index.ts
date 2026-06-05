@@ -317,7 +317,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     }
   }
 
-  async function runTurn(text: string, sessionCtx: SessionContext, ackCount = 1): Promise<void> {
+  async function runTurn(text: string, sessionCtx: SessionContext, messages: readonly SessionMessage[]): Promise<void> {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
@@ -440,7 +440,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
     if (disposition.ack) {
-      sessionCtx.markCompleted(ackCount);
+      sessionCtx.markMessagesCompleted(messages);
+    } else {
+      const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
+      sessionCtx.markMessagesRetryable(messages, reason);
     }
     sessionCtx.setRuntimeState(disposition.runtimeState);
     resetProcessor();
@@ -469,8 +472,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           sessionCtx.log(`tui inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      if (inputs.length === 0) return;
-      await runTurn(inputs.join("\n\n"), sessionCtx, drained.length);
+      if (inputs.length === 0) {
+        sessionCtx.markMessagesCompleted(drained);
+        return;
+      }
+      await runTurn(inputs.join("\n\n"), sessionCtx, drained);
     })();
     currentTurnPromise = promise;
     void promise
@@ -553,7 +559,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
 
         const inputText = await sessionCtx.formatInboundContent(message);
-        currentTurnPromise = runTurn(inputText, sessionCtx, 1);
+        currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
         try {
           await currentTurnPromise;
         } finally {
@@ -599,7 +605,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
         if (message) {
           const inputText = await sessionCtx.formatInboundContent(message);
-          currentTurnPromise = runTurn(inputText, sessionCtx, 1);
+          currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
           try {
             await currentTurnPromise;
           } finally {
