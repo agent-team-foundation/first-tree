@@ -3,7 +3,7 @@ name: first-tree-context
 version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree". For drift audits with no specific source attached, use `first-tree-sync`.
+description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
 ---
 
 # First Tree — Context
@@ -84,8 +84,8 @@ How to read:
 ## Writing the Tree
 
 Writing is **source-driven** — a specific PR, design doc, meeting note,
-or pasted text motivates a specific edit. Without a source, there is
-no write task; the right tool is then `first-tree-sync`.
+or pasted text motivates a specific edit. Without a source there is
+no write task; stop and ask the user for one.
 
 ### Hard Rules
 
@@ -96,13 +96,17 @@ follow them.
    missing node: a missing node is a question, a noisy node is a trap.
    Apply the Double Test (below) and if it does not pass cleanly,
    write nothing and tell the user why.
-2. **Read before you write.** Before drafting any edit, read every
-   related tree node — the target node, every `soft_links` neighbour,
-   the parent domain `NODE.md`, and any ownership-adjacent
-   `members/<id>/NODE.md` — and read the motivating source artefact
-   in full (PR diff + linked issue + review comments, or the doc
-   end-to-end). Confirm the draft does not contradict an existing
-   decision before editing.
+2. **Read before you write — unless you already know it.** Before
+   drafting any edit, read every related tree node — the target node,
+   every `soft_links` neighbour, the parent domain `NODE.md`, and any
+   ownership-adjacent `members/<id>/NODE.md` — that you do not
+   already have in your working context, and confirm the draft does
+   not contradict an existing decision. The source artefact has the
+   same rule: if you are the agent that just shipped the source PR
+   (or just authored the doc / note), you already have it end-to-end
+   and do not need to re-read; otherwise read it in full — PR diff +
+   linked issue + review comments, or the doc end-to-end. The point
+   is "no surprises", not "always re-read".
 3. **Smallest correct edit.** Editing an existing node beats adding
    a leaf; adding a leaf beats opening a new domain. Opening a new
    top-level domain is a high-bar move that needs explicit
@@ -112,15 +116,12 @@ follow them.
    signatures, class names, request shapes, retry constants live in
    the source repo. The tree records *what was decided and why*; the
    diff lives in the source PR.
-5. **Every change links its source.** A tree node with no link back
-   to its motivating PR / doc / note has no provenance and cannot be
-   audited. Add the link.
-6. **`first-tree tree verify` must pass before commit.** Non-zero
+5. **`first-tree tree verify` must pass before commit.** Non-zero
    exit blocks the commit. Fix the structure problem before opening
    a PR; do not paper over it.
-7. **Ownership changes go through humans.** Do not unilaterally edit
+6. **Ownership changes go through humans.** Do not unilaterally edit
    `owners`. Flag the change to the listed owner and let them decide.
-8. **`decisionLocksCode: true` reverses the default.** Most drift
+7. **`decisionLocksCode: true` reverses the default.** Most drift
    resolves by updating the tree to match the code. A node carrying
    `decisionLocksCode: true` reverses that — the tree wins and any
    code drift escalates to a human. Set the flag only on explicit
@@ -186,7 +187,7 @@ decisionLocksCode: false
 - `lastReviewed` — date an owner sanity-checked the node. Sync sets
   this; do not touch it during a write.
 - `decisionLocksCode` — reverses the default conflict-resolution rule
-  (see Hard Rule 8).
+  (see Hard Rule 7).
 
 Body sections, in this order, omit any you do not need:
 
@@ -229,7 +230,7 @@ The Context-management CLI you actually depend on while reading or
 writing is small. Today only one command is operationally required:
 
 - `first-tree tree verify` — validate frontmatter and node structure;
-  the Hard Rule 6 gate that must pass before any commit.
+  the Hard Rule 5 gate that must pass before any commit.
 
 A simplified CLI surface (a structural `list`, a `verify`, and an
 `upgrade`) is the design target; until that lands, map the tree with
@@ -237,10 +238,3 @@ standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
 the write gate. Everything else (opening PRs, fetching code, reading
 the workspace binding) goes through standard tools (`git`, `gh`,
 `Read`, etc.).
-
-## Hand-Off
-
-- Drift audit with no specific source attached → `first-tree-sync`
-  (still owns broad audit; will be revisited separately).
-- Binding an unbound repo / workspace to a tree → operator action,
-  not an agent task.
