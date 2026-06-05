@@ -107,6 +107,7 @@ import {
   parseFailedDocHref,
   wrapFailedDocMentions,
 } from "../../../lib/doc-preview-links.js";
+import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
@@ -383,6 +384,16 @@ function TextRow({
               </span>
             );
           }
+        }
+        // issue 831: a markdown link whose href is neither a workspace doc-preview
+        // path nor a navigable web URL (e.g. an agent-written worktree path
+        // like `/Users/…/worktrees/<task>`) has no route on the cloud origin
+        // and 404s when clicked. Render the link text as plain text instead of
+        // a dead link. Doc-preview paths are checked first so snapshot-backed
+        // `.md` mentions keep their click-to-preview anchor.
+        const docPreviewPath = typeof href === "string" ? docPreviewPathFromHref(href) : null;
+        if (!docPreviewPath && !isNavigableWebHref(href)) {
+          return <>{children}</>;
         }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
           if (

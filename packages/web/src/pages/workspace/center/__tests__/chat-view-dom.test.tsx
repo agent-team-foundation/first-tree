@@ -774,4 +774,41 @@ describe("ChatView", () => {
     expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
     await act(async () => empty.root.unmount());
   });
+
+  it("renders an agent worktree-path link as plain text while keeping real web links (issue 831)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const worktree = "/Users/u/.first-tree/data/workspaces/a/worktrees/build-tree";
+    // An agent reporting tree-build progress: a markdown link to its local
+    // worktree directory (a 404 trap) alongside a genuine external URL.
+    const page = messages([
+      message({
+        id: "msg-worktree",
+        senderId: "agent-1",
+        source: "api",
+        content: `Built the tree at [${worktree}](${worktree}). Docs: https://example.com/guide`,
+        createdAt: "2026-05-28T11:59:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail(), page);
+      },
+      "/",
+    );
+
+    await waitForText(container, "Built the tree at");
+
+    const anchorHrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    // The worktree directory path has no web route — it must NOT be a live
+    // anchor (clicking would 404 against the cloud origin), but the path text
+    // is preserved as plain text.
+    expect(container.querySelector(`a[href="${worktree}"]`)).toBeNull();
+    expect(anchorHrefs).not.toContain(worktree);
+    expect(container.textContent).toContain("worktrees/build-tree");
+    // A genuine external link in the same message still renders as an anchor.
+    expect(anchorHrefs).toContain("https://example.com/guide");
+
+    await act(async () => root.unmount());
+  });
 });
