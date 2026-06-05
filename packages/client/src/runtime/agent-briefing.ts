@@ -332,17 +332,17 @@ PR** — otherwise other agents keep acting on the old tree.
 Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its
-workflow:
+guidance:
 
 | Task | Skill |
 |---|---|
-| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` |
+| Reflect one specific PR / doc / note into the tree | \`first-tree-context\` (Writing the Tree) |
 | Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
 | Bind an unbound repo or workspace to a tree        | \`first-tree-onboarding\` |
 
-Do not invent ad-hoc tree edits without loading the skill — the workflow
-covers staging, review routing, and ownership rules you will not
-remember by default.`);
+Do not invent ad-hoc tree edits without loading the skill — the
+operating guide covers staging, review routing, and ownership rules
+you will not remember by default.`);
 
   if (contextTreePath) {
     blocks.push(`## Tree Location
@@ -420,10 +420,9 @@ the auto-injected list.
 | Skill | Load when |
 |---|---|
 | \`first-tree\`            | communication principles / pre-task hygiene / CLI namespace map |
-| \`first-tree-context\`    | what's a Context Tree node / ownership / navigation |
+| \`first-tree-context\`    | read context before acting OR write tree updates from a specific PR / doc / note |
 | \`first-tree-onboarding\` | "bind this repo / workspace to a tree" — one-shot |
-| \`first-tree-sync\`       | "is the tree up to date?" — broad drift audit, no source |
-| \`first-tree-write\`      | "reflect this PR / doc / note into the tree" — specific source |`;
+| \`first-tree-sync\`       | "is the tree up to date?" — broad drift audit, no source |`;
 }
 
 /**
@@ -440,5 +439,4 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
-  "first-tree-write",
 ] as const;

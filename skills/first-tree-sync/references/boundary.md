@@ -1,4 +1,4 @@
-# Boundary With `first-tree-write`
+# Boundary With `first-tree-context`
 
 Sync and write both end up changing the tree, so the boundary matters.
 
@@ -50,8 +50,8 @@ When sync wants write to take over a finding (always for
 1. Stop the fix loop on that finding.
 2. Surface the source pointer (PR, commit, doc, AGENTS.md section, RFC
    path) to the user. Be specific — line range, heading, or sha.
-3. Suggest invoking `first-tree-write` with that pointer:
-   `/first-tree-write source=<pointer>`.
+3. Suggest invoking `first-tree-context` with that pointer:
+   `/first-tree-context source=<pointer>`.
 4. Do not preemptively start drafting the tree update inside sync.
 5. Do not chain into write automatically — let the user / orchestrating
    agent decide which substantive findings are tree-worthy.

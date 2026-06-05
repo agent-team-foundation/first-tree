@@ -16,8 +16,11 @@ import {
   bundledSkillsRootFrom,
   collectSkillDiagnosis,
   collectSkillStatus,
+  copyCanonicalSkills,
   copyCoreSkills,
   inspectSkillEntry,
+  pruneRetiredSkills,
+  RETIRED_SKILL_NAMES,
   readBundledSkillVersion,
   repairClaudeSkillLinks,
   resolveBundledSkillsRoot,
@@ -84,24 +87,24 @@ describe("tree skill library", () => {
   });
 
   it("collects installed status with version and compatibility metadata", () => {
-    installSkill("first-tree-write", { cliCompat: ">=0.0.0 <999.0.0" });
-    linkClaudeSkill("first-tree-write");
+    installSkill("first-tree-context", { cliCompat: ">=0.0.0 <999.0.0" });
+    linkClaudeSkill("first-tree-context");
 
     const rows = collectSkillStatus(root);
-    const writeSkill = rows.find((row) => row.name === "first-tree-write");
+    const contextSkill = rows.find((row) => row.name === "first-tree-context");
     const firstTree = rows.find((row) => row.name === "first-tree");
 
     expect(rows).toHaveLength(SKILL_NAMES.length);
-    expect(writeSkill).toMatchObject({
+    expect(contextSkill).toMatchObject({
       agentsKind: "directory",
       claudeKind: "symlink",
       cliCompat: ">=0.0.0 <999.0.0",
       compatible: true,
       installed: true,
-      name: "first-tree-write",
+      name: "first-tree-context",
       version: "1.2.3",
     });
-    expect(writeSkill?.claudeTarget).toBe("../../.agents/skills/first-tree-write");
+    expect(contextSkill?.claudeTarget).toBe("../../.agents/skills/first-tree-context");
     expect(firstTree).toMatchObject({
       installed: false,
       compatible: null,
@@ -110,8 +113,8 @@ describe("tree skill library", () => {
   });
 
   it("diagnoses missing files, bad frontmatter, bad symlinks, and incompatible CLI ranges", () => {
-    installSkill("first-tree-write", { includeOpenAiConfig: false });
-    linkClaudeSkill("first-tree-write", "wrong-target");
+    installSkill("first-tree-context", { includeOpenAiConfig: false });
+    linkClaudeSkill("first-tree-context", "wrong-target");
 
     installSkill("first-tree", { includeFrontmatter: false });
     linkClaudeSkill("first-tree");
@@ -125,10 +128,10 @@ describe("tree skill library", () => {
     const rows = collectSkillDiagnosis(root);
     const byName = new Map(rows.map((row) => [row.name, row]));
 
-    expect(byName.get("first-tree-write")?.problems).toEqual(
+    expect(byName.get("first-tree-context")?.problems).toEqual(
       expect.arrayContaining([
-        ".agents/skills/first-tree-write/agents/openai.yaml does not exist",
-        ".claude/skills/first-tree-write -> wrong-target, expected ../../.agents/skills/first-tree-write",
+        ".agents/skills/first-tree-context/agents/openai.yaml does not exist",
+        ".claude/skills/first-tree-context -> wrong-target, expected ../../.agents/skills/first-tree-context",
       ]),
     );
     expect(byName.get("first-tree")?.problems).toEqual(
@@ -142,31 +145,15 @@ describe("tree skill library", () => {
     );
     expect(byName.get("first-tree-onboarding")?.incompatibleCliCompat).toBe(">999.0.0");
     expect(byName.get("first-tree-onboarding")?.problems.join("\n")).toContain("requires first-tree >999.0.0");
-    expect(byName.get("first-tree-context")?.problems).toEqual(
-      expect.arrayContaining([
-        "missing: .agents/skills/first-tree-context",
-        "missing: .claude/skills/first-tree-context",
-      ]),
-    );
   });
 
-  it("accepts a complete first-tree-context skill with reference files", () => {
-    // Context Tree concept references migrated from `first-tree/` to
-    // `first-tree-context/` in the skill-topology restructure (proposal:
-    // skill-restructure.20260602). The top-level `first-tree` skill no
-    // longer carries references — it is a routing/hygiene entry point.
+  it("accepts a single-file first-tree-context skill (no references/ subtree)", () => {
+    // The Context Tree operating guide consolidated into a single
+    // `first-tree-context/SKILL.md` under the skill-simplification pass
+    // (proposal: simplify-context-skill.20260605); no `references/`
+    // subtree is required (or expected) anymore.
     const skillRoot = installSkill("first-tree-context");
-    for (const file of [
-      join("references", "structure.md"),
-      join("references", "functions.md"),
-      join("references", "anti-patterns.md"),
-      join("references", "maintenance.md"),
-      join("references", "cli-manual.md"),
-      join("references", "llms.txt"),
-    ]) {
-      mkdirSync(join(skillRoot, "references"), { recursive: true });
-      writeFileSync(join(skillRoot, file), "content\n");
-    }
+    expect(existsSync(join(skillRoot, "references"))).toBe(false);
     linkClaudeSkill("first-tree-context");
 
     const row = collectSkillDiagnosis(root).find((candidate) => candidate.name === "first-tree-context");
@@ -185,7 +172,7 @@ describe("tree skill library", () => {
 
   it("repairs Claude skill links for installed agent skills and skips missing installs", () => {
     installSkill("first-tree-sync");
-    installSkill("first-tree-write");
+    installSkill("first-tree-onboarding");
     mkdirSync(join(root, ".claude", "skills", "first-tree-sync"), { recursive: true });
 
     const result = repairClaudeSkillLinks(root);
@@ -195,20 +182,20 @@ describe("tree skill library", () => {
     expect(result.messages).toEqual(
       expect.arrayContaining([
         "linked .claude/skills/first-tree-sync -> ../../.agents/skills/first-tree-sync",
-        "linked .claude/skills/first-tree-write -> ../../.agents/skills/first-tree-write",
+        "linked .claude/skills/first-tree-onboarding -> ../../.agents/skills/first-tree-onboarding",
       ]),
     );
     expect(readlinkSync(join(root, ".claude", "skills", "first-tree-sync"))).toBe(
       "../../.agents/skills/first-tree-sync",
     );
-    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-write"))).toBe(
-      "../../.agents/skills/first-tree-write",
+    expect(readlinkSync(join(root, ".claude", "skills", "first-tree-onboarding"))).toBe(
+      "../../.agents/skills/first-tree-onboarding",
     );
   });
 
   it("leaves already-correct Claude skill links unchanged", () => {
-    installSkill("first-tree-write");
-    linkClaudeSkill("first-tree-write");
+    installSkill("first-tree-onboarding");
+    linkClaudeSkill("first-tree-onboarding");
 
     expect(repairClaudeSkillLinks(root)).toEqual({ linked: 0, skipped: SKILL_NAMES.length - 1, messages: [] });
   });
@@ -242,29 +229,29 @@ describe("tree skill library", () => {
       "Could not locate bundled `skills/` payloads",
     );
 
-    const staleClaudeDir = join(root, ".claude", "skills", "first-tree-write");
+    const staleClaudeDir = join(root, ".claude", "skills", "first-tree-onboarding");
     mkdirSync(staleClaudeDir, { recursive: true });
     writeFileSync(join(staleClaudeDir, "stale.txt"), "old\n");
 
     copyCoreSkills(root);
 
-    expect(existsSync(join(root, ".agents", "skills", "first-tree-write", "SKILL.md"))).toBe(false);
-    expect(existsSync(join(root, ".claude", "skills", "first-tree-write", "stale.txt"))).toBe(true);
+    expect(existsSync(join(root, ".agents", "skills", "first-tree-onboarding", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(root, ".claude", "skills", "first-tree-onboarding", "stale.txt"))).toBe(true);
     expect(existsSync(join(root, ".agents", "skills", "first-tree"))).toBe(false);
   });
 
   it("handles unreadable metadata and missing CLI package versions", () => {
     const isolated = mkdtempSync(join(tmpdir(), "ft-tree-skill-no-package-"));
     try {
-      installSkill("first-tree-write", { version: "" });
-      linkClaudeSkill("first-tree-write");
+      installSkill("first-tree-context", { version: "" });
+      linkClaudeSkill("first-tree-context");
       const skillRoot = join(root, ".agents", "skills", "first-tree-onboarding");
       mkdirSync(skillRoot, { recursive: true });
       writeFileSync(join(skillRoot, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: "=not-semver"\n---\n');
       writeFileSync(join(skillRoot, "VERSION"), "\n");
       linkClaudeSkill("first-tree-onboarding");
 
-      expect(collectSkillStatus(root).find((row) => row.name === "first-tree-write")).toMatchObject({
+      expect(collectSkillStatus(root).find((row) => row.name === "first-tree-context")).toMatchObject({
         compatible: true,
         version: null,
       });
@@ -273,21 +260,101 @@ describe("tree skill library", () => {
       );
 
       writeFileSync(join(isolated, "package.json"), "{ invalid json");
-      const localSkill = join(isolated, ".agents", "skills", "first-tree-write");
+      const localSkill = join(isolated, ".agents", "skills", "first-tree-context");
       mkdirSync(join(localSkill, "agents"), { recursive: true });
       writeFileSync(join(localSkill, "SKILL.md"), '---\nversion: 1.0.0\ncliCompat:\n  first-tree: ">0.0.0"\n---\n');
       writeFileSync(join(localSkill, "VERSION"), "1.0.0\n");
       writeFileSync(join(localSkill, "agents", "openai.yaml"), "name: test\n");
       mkdirSync(join(isolated, ".claude", "skills"), { recursive: true });
       symlinkSync(
-        join("..", "..", ".agents", "skills", "first-tree-write"),
-        join(isolated, ".claude", "skills", "first-tree-write"),
+        join("..", "..", ".agents", "skills", "first-tree-context"),
+        join(isolated, ".claude", "skills", "first-tree-context"),
       );
-      expect(collectSkillStatus(isolated).find((row) => row.name === "first-tree-write")?.cliVersion).toBeTypeOf(
+      expect(collectSkillStatus(isolated).find((row) => row.name === "first-tree-context")?.cliVersion).toBeTypeOf(
         "string",
       );
     } finally {
       rmSync(isolated, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retired-skill cleanup
+//
+// `first-tree-write` was retired by the simplify-context-skill pass
+// (PR #843). Already-installed workspaces would otherwise keep a stale
+// `.agents/skills/first-tree-write` + `.claude/skills/first-tree-write`
+// symlink whose old description still triggers progressive disclosure.
+// `pruneRetiredSkills` (called by `copyCanonicalSkills`) removes them.
+// ---------------------------------------------------------------------------
+
+describe("pruneRetiredSkills", () => {
+  it("removes a stale retired-skill .agents directory and its conventional .claude symlink", () => {
+    // Seed the legacy install shape directly with fs (no installSkill helper
+    // — it is typed against `SkillName`, which no longer includes the
+    // retired name).
+    const retired = RETIRED_SKILL_NAMES[0];
+    const agentsRoot = join(root, ".agents", "skills", retired);
+    mkdirSync(join(agentsRoot, "agents"), { recursive: true });
+    writeFileSync(join(agentsRoot, "SKILL.md"), "# legacy\n");
+    writeFileSync(join(agentsRoot, "VERSION"), "0.0.1\n");
+    writeFileSync(join(agentsRoot, "agents", "openai.yaml"), "name: legacy\n");
+
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(claudeDir, { recursive: true });
+    symlinkSync(join("..", "..", ".agents", "skills", retired), join(claudeDir, retired));
+
+    const result = pruneRetiredSkills(root);
+
+    expect(result.removed).toEqual(
+      expect.arrayContaining([join(".agents", "skills", retired), join(".claude", "skills", retired)]),
+    );
+    expect(result.skipped).toEqual([]);
+    expect(existsSync(agentsRoot)).toBe(false);
+    expect(existsSync(join(claudeDir, retired))).toBe(false);
+  });
+
+  it("leaves a foreign .claude entry alone (non-symlink directory or symlink with unexpected target)", () => {
+    const retired = RETIRED_SKILL_NAMES[0];
+
+    // No .agents install, just a user-owned .claude entry that happens
+    // to share the retired skill name — must be left untouched.
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(join(claudeDir, retired), { recursive: true });
+    writeFileSync(join(claudeDir, retired, "custom.md"), "user content\n");
+
+    const result = pruneRetiredSkills(root);
+
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([join(".claude", "skills", retired)]);
+    expect(existsSync(join(claudeDir, retired, "custom.md"))).toBe(true);
+  });
+
+  it("is a no-op when no retired skill is installed", () => {
+    const result = pruneRetiredSkills(root);
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("copyCanonicalSkills prunes retired skills as part of the install/upgrade pass", () => {
+    const retired = RETIRED_SKILL_NAMES[0];
+    const agentsRoot = join(root, ".agents", "skills", retired);
+    mkdirSync(agentsRoot, { recursive: true });
+    writeFileSync(join(agentsRoot, "SKILL.md"), "# legacy\n");
+
+    const claudeDir = join(root, ".claude", "skills");
+    mkdirSync(claudeDir, { recursive: true });
+    symlinkSync(join("..", "..", ".agents", "skills", retired), join(claudeDir, retired));
+
+    const result = copyCanonicalSkills(root);
+
+    expect(result.removed).toEqual(
+      expect.arrayContaining([join(".agents", "skills", retired), join(".claude", "skills", retired)]),
+    );
+    // After upgrade the retired skill is gone but the current skills are present.
+    expect(existsSync(agentsRoot)).toBe(false);
+    expect(existsSync(join(claudeDir, retired))).toBe(false);
+    expect(existsSync(join(root, ".agents", "skills", "first-tree-context", "SKILL.md"))).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree — Context"
-  short_description: "Context Tree concepts and sub-entry routing"
-  default_prompt: "Use $first-tree-context to orient me on Context Tree concepts (nodes, ownership, soft_links), and route me to onboarding / sync / write as appropriate."
+  short_description: "Context Tree operating guide: read before acting, write from a specific source"
+  default_prompt: "Use $first-tree-context to load the Context Tree operating guide before I read or write the tree."

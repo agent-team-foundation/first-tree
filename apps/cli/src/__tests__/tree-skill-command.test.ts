@@ -59,11 +59,11 @@ async function runSkillCommand(argv: string[]): Promise<void> {
 
 describe("tree skill command actions", () => {
   it("prints list output in table and JSON modes", async () => {
-    installSkill("first-tree-write");
+    installSkill("first-tree-onboarding");
 
     await runSkillCommand(["list", "--root", root]);
     expect(stdout).toContain("NAME");
-    expect(stdout).toContain("first-tree-write");
+    expect(stdout).toContain("first-tree-onboarding");
     expect(stdout).toContain("installed");
     expect(stdout).toContain("first-tree");
     expect(stdout).toContain("missing");
@@ -71,12 +71,12 @@ describe("tree skill command actions", () => {
     stdout = "";
     await runSkillCommand(["list", "--root", root, "--json"]);
     const rows = JSON.parse(stdout) as Array<{ name: string; installed: boolean }>;
-    expect(rows.find((row) => row.name === "first-tree-write")).toMatchObject({ installed: true });
+    expect(rows.find((row) => row.name === "first-tree-onboarding")).toMatchObject({ installed: true });
   });
 
   it("reports doctor failures, incompatible ranges, and repair hints", async () => {
     installSkill("first-tree-sync", { cliCompat: ">999.0.0" });
-    installSkill("first-tree-write", { link: false });
+    installSkill("first-tree-onboarding", { link: false });
 
     await runSkillCommand(["doctor", "--root", root]);
 
@@ -97,19 +97,21 @@ describe("tree skill command actions", () => {
   });
 
   it("links missing Claude aliases", async () => {
-    installSkill("first-tree-write", { link: false });
+    installSkill("first-tree-onboarding", { link: false });
     await runSkillCommand(["link", "--root", root]);
 
-    expect(stdout).toContain("linked .claude/skills/first-tree-write -> ../../.agents/skills/first-tree-write");
+    expect(stdout).toContain(
+      "linked .claude/skills/first-tree-onboarding -> ../../.agents/skills/first-tree-onboarding",
+    );
     expect(stdout).toContain("Linked 1 symlink(s)");
   });
 
   it("installs and upgrades shipped skills", async () => {
     await runSkillCommand(["install", "--root", root]);
-    expect(stdout).toContain("Installed 5 shipped first-tree skills");
+    expect(stdout).toContain("Installed 4 shipped first-tree skills");
 
     stdout = "";
     await runSkillCommand(["upgrade", "--root", root]);
-    expect(stdout).toContain("Upgraded 5 shipped first-tree skills");
+    expect(stdout).toContain("Upgraded 4 shipped first-tree skills");
   });
 });

@@ -3,16 +3,18 @@ name: first-tree-sync
 version: 0.6.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
+description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-context` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
 ---
 
 # First Tree Sync
 
-Read these first:
+Read this first:
 
-- `../first-tree-context/SKILL.md`
-- `../first-tree-context/references/functions.md`
-- `../first-tree-context/references/maintenance.md`
+- `../first-tree-context/SKILL.md` — the Context Tree operating guide
+  (concepts, source-system boundary, read + write sections). Under the
+  simplify-context-skill pass, the `functions` / `maintenance` /
+  `structure` references were folded back into this single file, so
+  loading the SKILL.md is enough.
 
 ## What This Skill Does
 
@@ -41,7 +43,7 @@ Each phase has a dedicated reference; follow them in order.
 
 | Use this skill                                       | Use a different skill                                                                |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-write`           |
+| User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-context`           |
 | Audit drift since a release                          | Repo is unbound → `first-tree-onboarding` first                                      |
 
 ## The Six Drift Types
@@ -108,11 +110,11 @@ and tree manually; the fix phase opens PRs via `gh`.
     node or registry entry.
   - **substantive** — new decision / constraint / rationale (e.g. a new
     AGENTS.md section, a merged RFC). Sync surfaces the source pointer
-    and hands off to `first-tree-write`, which applies the "default to
+    and hands off to `first-tree-context`, which applies the "default to
     not writing" filter.
 
   Sync never composes decision prose from code. "The tree could say more"
-  about an existing topic is not drift — that is `first-tree-write`'s job.
+  about an existing topic is not drift — that is `first-tree-context`'s job.
 
 ## References
 

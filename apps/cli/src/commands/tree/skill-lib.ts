@@ -30,8 +30,19 @@ export const TREE_SKILL_NAMES = [
   "first-tree-context",
   "first-tree-onboarding",
   "first-tree-sync",
-  "first-tree-write",
 ] as const;
+
+/**
+ * Skill names that the CLI used to ship but no longer does. Every install /
+ * upgrade pass runs `pruneRetiredSkills` over this list so workspaces that
+ * once installed them stop carrying stale on-disk payloads (which would
+ * otherwise keep triggering progressive-disclosure routing into a retired
+ * skill). Add a name here when retiring a skill; remove it only after every
+ * deployed workspace has had at least one upgrade pass since the rename.
+ */
+export const RETIRED_SKILL_NAMES = ["first-tree-write"] as const;
+
+export type RetiredSkillName = (typeof RETIRED_SKILL_NAMES)[number];
 
 /**
  * Union of all shipped skill payloads. Used by status / doctor / link
@@ -86,24 +97,13 @@ const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
 export type ManagedFileAction = "created" | "updated" | "unchanged" | "skipped";
 
 /**
- * Files required for `first-tree-context`. The Context Tree concept and
- * principle references migrated from `first-tree/` to `first-tree-context/`
- * in the skill-topology restructure (proposal: skill-restructure.20260602);
- * the top-level `first-tree` skill no longer carries references — it is a
- * routing/hygiene entry point only.
+ * Files every shipped skill must carry. `first-tree-context` used to require
+ * a `references/` subtree (Context Tree concepts split across multiple
+ * files), but in the skill-simplification pass (proposal:
+ * simplify-context-skill.20260605) all of that content folded back into
+ * `first-tree-context/SKILL.md` — so the same minimal manifest now covers
+ * every skill.
  */
-const FIRST_TREE_CONTEXT_REFERENCE_FILES = [
-  "SKILL.md",
-  "VERSION",
-  join("agents", "openai.yaml"),
-  join("references", "structure.md"),
-  join("references", "functions.md"),
-  join("references", "anti-patterns.md"),
-  join("references", "maintenance.md"),
-  join("references", "cli-manual.md"),
-  join("references", "llms.txt"),
-] as const;
-
 const STANDARD_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION", join("agents", "openai.yaml")] as const;
 
 const WHITEPAPER_FILE = "WHITEPAPER.md";
@@ -129,10 +129,6 @@ function allSkillLayouts(): readonly SkillLayout[] {
 
 function coreSkillLayouts(): readonly SkillLayout[] {
   return CORE_SKILL_NAMES.map(layoutForSkill);
-}
-
-function requiredFilesForSkill(name: SkillName): readonly string[] {
-  return name === "first-tree-context" ? FIRST_TREE_CONTEXT_REFERENCE_FILES : STANDARD_SKILL_REQUIRED_FILES;
 }
 
 export function bundledSkillsRootFrom(startDir: string): string {
@@ -384,8 +380,58 @@ function copySkillLayouts(targetRoot: string, layouts: readonly SkillLayout[]): 
   }
 }
 
-export function copyCanonicalSkills(targetRoot: string): void {
+export function copyCanonicalSkills(targetRoot: string): RetiredSkillPruneResult {
+  const pruneResult = pruneRetiredSkills(targetRoot);
   copySkillLayouts(targetRoot, allSkillLayouts());
+  return pruneResult;
+}
+
+export type RetiredSkillPruneResult = {
+  /** Retired-skill paths that were present and removed during this pass. */
+  readonly removed: readonly string[];
+  /** Retired-skill `.claude/skills/<name>` entries we left alone because
+   * the symlink target did not match the install convention (likely a
+   * user customisation). */
+  readonly skipped: readonly string[];
+};
+
+/**
+ * Remove on-disk traces of skills that the CLI used to ship but no longer
+ * does. Called from every `copyCanonicalSkills` pass so install / upgrade
+ * silently cleans up after a retirement. Conservative on `.claude` aliases:
+ * a foreign or user-pointed entry is left alone.
+ */
+export function pruneRetiredSkills(targetRoot: string): RetiredSkillPruneResult {
+  const removed: string[] = [];
+  const skipped: string[] = [];
+
+  for (const name of RETIRED_SKILL_NAMES) {
+    const agentsPath = join(".agents", "skills", name);
+    const agentsFull = join(targetRoot, agentsPath);
+    const agents = inspectSkillEntry(agentsFull);
+    if (agents.kind !== "missing") {
+      rmSync(agentsFull, { force: true, recursive: true });
+      removed.push(agentsPath);
+    }
+
+    const claudePath = join(".claude", "skills", name);
+    const claudeFull = join(targetRoot, claudePath);
+    const claude = inspectSkillEntry(claudeFull);
+    if (claude.kind === "missing") continue;
+
+    const expectedTarget = join("..", "..", ".agents", "skills", name);
+    if (claude.kind === "symlink" && claude.target === expectedTarget) {
+      rmSync(claudeFull, { force: true });
+      removed.push(claudePath);
+    } else {
+      // Foreign symlink target or a non-symlink directory: don't touch —
+      // it may be a user customisation that happens to share the retired
+      // name.
+      skipped.push(claudePath);
+    }
+  }
+
+  return { removed, skipped };
 }
 
 /**
@@ -451,7 +497,7 @@ export function collectSkillDiagnosis(targetRoot: string): readonly SkillDiagnos
     if (agents.kind === "missing") {
       problems.push(`missing: ${layout.agentsPath}`);
     } else {
-      for (const requiredFile of requiredFilesForSkill(layout.name)) {
+      for (const requiredFile of STANDARD_SKILL_REQUIRED_FILES) {
         if (!existsSync(join(agentsFull, requiredFile))) {
           problems.push(`${layout.agentsPath}/${requiredFile} does not exist`);
         }

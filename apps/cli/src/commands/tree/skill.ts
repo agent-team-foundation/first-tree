@@ -9,6 +9,7 @@ import {
   collectSkillStatus,
   copyCanonicalSkills,
   copyCoreSkills,
+  type RetiredSkillPruneResult,
   repairClaudeSkillLinks,
   SKILL_NAMES,
 } from "./skill-lib.js";
@@ -24,15 +25,26 @@ function readTargetRoot(command: Command): string {
   return resolve(options.root ?? process.cwd());
 }
 
+function logPrunedRetiredSkills(result: RetiredSkillPruneResult): void {
+  for (const path of result.removed) {
+    console.log(`pruned retired skill: ${path}`);
+  }
+  for (const path of result.skipped) {
+    console.log(`left foreign install alone (retired skill name): ${path}`);
+  }
+}
+
 function runInstallSkillCommand(context: CommandContext): void {
   const targetRoot = readTargetRoot(context.command);
-  copyCanonicalSkills(targetRoot);
+  const pruneResult = copyCanonicalSkills(targetRoot);
+  logPrunedRetiredSkills(pruneResult);
   console.log(`Installed ${SKILL_NAMES.length} shipped first-tree skills into ${targetRoot}.`);
 }
 
 function runUpgradeSkillCommand(context: CommandContext): void {
   const targetRoot = readTargetRoot(context.command);
-  copyCanonicalSkills(targetRoot);
+  const pruneResult = copyCanonicalSkills(targetRoot);
+  logPrunedRetiredSkills(pruneResult);
   console.log(`Upgraded ${SKILL_NAMES.length} shipped first-tree skills in ${targetRoot}.`);
 }
 

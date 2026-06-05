@@ -24,7 +24,7 @@ arms — pick the right one before acting:
 | Arm | What it does | Sub-skills |
 |---|---|---|
 | **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
-| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (concepts) · `first-tree-onboarding` · `first-tree-sync` · `first-tree-write` |
+| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (read + write operating guide) · `first-tree-onboarding` · `first-tree-sync` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
 another agent or the human in chat), then the context ops.
@@ -223,10 +223,9 @@ produces non-obvious damage.
 Once hygiene checks pass, drop into the right sub-skill:
 
 - Talk to another agent / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
-- Don't know what a Context Tree is / need ownership / node concepts → **`first-tree-context`**
+- Read context before acting, or write tree updates from a specific source (PR / doc / note) → **`first-tree-context`** (single operating guide for both read and write)
 - Bind an unbound repo to a tree, or migrate a legacy multi-mode workspace to W1 → **`first-tree-onboarding`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
-- "Reflect this PR / doc / note into the tree" (specific source given) → **`first-tree-write`**
 
 Operator tasks — `login`, `daemon install / uninstall`, `agent create`,
 `agent bind`, decommissioning a machine — are not done from inside a
