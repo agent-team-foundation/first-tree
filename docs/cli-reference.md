@@ -45,7 +45,7 @@ first-tree
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
-└── tree verify              Validate a Context Tree's structure (the only surviving `tree` subcommand)
+└── tree ...                 Validate and browse Context Trees
 ```
 
 ---
@@ -340,19 +340,40 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree structural validation. **`verify` is the only surviving
-`tree` subcommand** — the rest of the namespace (`init` / `migrate` /
-`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review`
-/ `automation` / `skill` groups) was retired in the 2026-06 cleanup
-because the cloud now owns workspace + tree provisioning and the client
-runtime inlines its own skill payload install (see PR following #844).
+Context Tree structural validation and hierarchy browsing. **`verify`
+and `tree` are the only surviving `tree` subcommands** — the rest of the
+namespace (`init` / `migrate` / `upgrade` / `status` / `codeowners` /
+`claude-hook` / `inject` / `review` / `automation` / `skill` groups) was
+retired in the 2026-06 cleanup because the cloud now owns workspace +
+tree provisioning and the client runtime inlines its own skill payload
+install (see PR following #844).
 
 ```
 first-tree tree
-└── verify [--tree-path PATH]                # validate a Context Tree repo
+├── verify [--tree-path PATH]                # validate a Context Tree repo
+└── tree [-L depth] [-P pattern]             # browse Context Tree nodes as a hierarchy
 ```
 
 Run `first-tree tree verify --help` for options.
+
+`first-tree tree tree` starts at the current directory, renders directory
+nodes from each `NODE.md`, and renders Markdown leaf nodes other than
+`NODE.md`, `AGENTS.md`, and `CLAUDE.md`. It skips hidden paths and common
+generated directories (`node_modules`, `__pycache__`, `dist`, `build`,
+`.next`, `.turbo`). Metadata comes only from YAML frontmatter; missing
+`title` or `description` prints `-`.
+
+Options:
+
+- `-L, --level <depth>` — maximum display depth, where the current directory is depth `0`.
+- `-P, --pattern <pattern>` — case-sensitive shell-style glob filter matched against relative path, filename, `title`, and `description`; matching descendants keep their ancestors visible.
+
+With global `--json` or `FIRST_TREE_JSON=1`, `first-tree tree tree`
+emits a single `{ ok: true, data }` envelope on stdout. `data.tree`
+contains the same pruned hierarchy as structured nodes with
+`kind`, `name`, `relativePath`, `depth`, `metadata`, `hasNode`, and
+`children` fields. Human tree text is written to stderr so stdout stays
+reserved for machine-readable JSON.
 
 ## Environment variables
 
