@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { pino } from "../observability/logger.js";
 import { getChildProcessRegistry } from "./child-process-registry.js";
@@ -416,10 +416,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     if (canonicalizeRepoUrl(current) !== canonicalizeRepoUrl(url)) {
       await git(["remote", "set-url", "origin", url], absTarget, 10_000);
       // The new upstream may have a different default branch name (e.g.
-      // master → main). A plain fetch does NOT refresh `refs/remotes/origin/HEAD`,
-      // so without this the no-`ref` update path would resolve the OLD repo's
-      // default branch. Best-effort — `defaultBranchShort` self-heals again later.
-      await gitOk(["remote", "set-head", "origin", "--auto"], absTarget, 30_000);
+      // master → main), leaving `refs/remotes/origin/HEAD` pointing at the OLD
+      // default. `defaultBranchShort` detects + refreshes that staleness AFTER
+      // the fetch (refreshing it here, pre-fetch, is unreliable — the target
+      // remote-tracking ref doesn't exist yet on some git versions).
       log?.info(
         { clonePath: absTarget, from: current, to: url },
         "source-repo origin URL reconciled to configured url",
@@ -467,12 +467,21 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
 
   /** Short name of the remote default branch, e.g. `main`. Null if unresolved. */
   async function defaultBranchShort(absTarget: string): Promise<string | null> {
-    // `git symbolic-ref refs/remotes/origin/HEAD` → `refs/remotes/origin/main`
+    // `git symbolic-ref refs/remotes/origin/HEAD` → `refs/remotes/origin/main`.
+    // Only TRUST it when its target remote-tracking ref actually exists — after
+    // an origin repoint to a repo with a different default branch name,
+    // origin/HEAD can be STALE (still points at the old default, whose ref no
+    // longer exists post-fetch). A stale or missing HEAD falls through to the
+    // refresh below.
     try {
       const { stdout } = await git(["symbolic-ref", "refs/remotes/origin/HEAD"], absTarget, 10_000);
-      const ref = stdout.trim();
-      const m = ref.match(/^refs\/remotes\/origin\/(.+)$/);
-      if (m?.[1]) return m[1];
+      const m = stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
+      if (
+        m?.[1] &&
+        (await gitOk(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${m[1]}`], absTarget, 10_000))
+      ) {
+        return m[1];
+      }
     } catch {
       // origin/HEAD not set — fall through to the repair below.
     }
@@ -712,7 +721,32 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     },
 
     async sweepLegacyMirrors() {
-      if (!existsSync(legacyMirrorsRoot)) return { removed: [] };
+      // `lstat` (NOT `existsSync`, which follows links): if `git-mirrors` was
+      // replaced by a symlink, `readdirSync` would enumerate the link TARGET and
+      // the per-child `rm -rf` would delete contents OUTSIDE `<dataDir>` — an
+      // escape past every other guard in this module. We only ever recurse into
+      // a real directory we own; a symlink / non-directory at the cache root is
+      // not something First Tree created, so we unlink the entry itself (never
+      // descend into a symlink target) and stop.
+      let rootStat: ReturnType<typeof lstatSync>;
+      try {
+        rootStat = lstatSync(legacyMirrorsRoot);
+      } catch {
+        return { removed: [] }; // absent
+      }
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+        try {
+          // `unlinkSync` removes the symlink (or stray file) itself and never
+          // follows into / deletes a symlink target's contents.
+          unlinkSync(legacyMirrorsRoot);
+        } catch (err) {
+          log?.warn(
+            { legacyMirrorsRoot, err: err instanceof Error ? err.message : String(err) },
+            "sweepLegacyMirrors: cache root is a symlink/non-directory — removed the entry itself, did not descend",
+          );
+        }
+        return { removed: [] };
+      }
       const removed: string[] = [];
       try {
         for (const entry of readdirSync(legacyMirrorsRoot)) {

@@ -1,5 +1,5 @@
 import { type ChildProcess, execSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -363,6 +363,24 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     const m = makeManager();
     const swept = await m.sweepLegacyMirrors();
     expect(swept.removed).toEqual([]);
+  });
+
+  it("sweepLegacyMirrors refuses to descend a symlinked cache root (no escape outside dataDir)", async () => {
+    const dataDir = newDataDir();
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000 });
+    // External dir the cache-root symlink points at — its contents MUST survive.
+    const external = mkdtempSync(join(tmpdir(), "ftt-external-"));
+    writeFileSync(join(external, "precious.txt"), "do not delete");
+    // Replace <dataDir>/git-mirrors with a symlink to the external dir.
+    symlinkSync(external, m.legacyMirrorsRoot);
+
+    const swept = await m.sweepLegacyMirrors();
+
+    expect(swept.removed).toEqual([]);
+    // Symlink target untouched; only the link entry itself is removed.
+    expect(existsSync(join(external, "precious.txt"))).toBe(true);
+    expect(existsSync(m.legacyMirrorsRoot)).toBe(false);
+    rmSync(external, { recursive: true, force: true });
   });
 });
 
