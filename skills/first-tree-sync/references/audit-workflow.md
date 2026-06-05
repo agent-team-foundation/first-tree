@@ -6,10 +6,12 @@ workflow uses `tree verify` plus manual reading.
 
 ## Inputs
 
-- one tree repo at `<workspaceRoot>/<manifest.tree>`, resolved from
-  `first-tree tree status --json`
+- one tree repo at `<workspaceRoot>/<tree>`, resolved by reading
+  `<workspaceRoot>/.first-tree/workspace.json` directly (schema:
+  `{ tree: "<dir>", sources: [...] }`). The `first-tree tree status`
+  CLI was retired in 2026-06 — the manifest is small JSON, `cat` it.
 - one or more source repos at `<workspaceRoot>/<name>` for each
-  `name` in `manifest.sources` (also exposed as `boundSources[]`).
+  `name` in `sources`.
   Phase 4 iterates over **every** bound source; for multi-source
   trees this fans out serially per repo.
 - optional `--since <ref>` to scope Phases 2–3 to changes since a commit
@@ -77,7 +79,7 @@ The reverse of Phase 2: walk source structure and ask "does the tree
 register this?". This is where `code-not-synced` drift is discovered on
 its own (not just as a side-effect of reading the tree).
 
-For each source repo in `manifest.sources` (from `tree status --json`):
+For each source repo in `sources` (from `<workspaceRoot>/.first-tree/workspace.json`):
 
 1. **Top-level directories**
 
@@ -206,8 +208,9 @@ table for the user.
   pointer for substantive gaps and stops; the prose itself is
   `first-tree-context`'s job.
 - Do not auto-bind unbound submodules discovered in Phase 4 step 2. Emit
-  a `code-not-synced/structural` finding and let the user decide via
-  `first-tree tree init`.
+  a `code-not-synced/structural` finding and surface it to a human —
+  binding a source repo to a tree is an operator action taken from the
+  web console, not from inside an agent.
 
 ## Exit Conditions
 

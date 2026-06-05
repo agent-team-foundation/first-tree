@@ -45,7 +45,7 @@ first-tree
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
-└── tree ...                 Context Tree onboarding, validation, automation
+└── tree verify              Validate a Context Tree's structure (the only surviving `tree` subcommand)
 ```
 
 ---

@@ -253,11 +253,11 @@ whose topic already has that shape.**`;
 
 function cliOverviewBlock(bin: string): string {
   // Subcommand lists are the actually-registered ones, not aspirational —
-  // see `apps/cli/src/commands/{chat,agent,daemon,tree,org}/`. Agent
-  // briefings ship `tree skill install` payloads, so every command listed
-  // here must exist or the agent will burn a turn on `unknown command`.
-  // A unit test in `agent-briefing.test.ts` pins the rendered table
-  // against the real subcommand surface.
+  // every command named here must exist or the agent burns a turn on
+  // `unknown command`. The `tree` namespace was retired in 2026-06 down
+  // to just `verify` (cloud now owns workspace + tree provisioning; the
+  // client runtime inlines its own skill payload install). The `org`
+  // namespace is operator-only and not surfaced to in-agent use.
   return `## CLI Overview
 
 The \`${bin}\` CLI spans two arms — **workspace collaboration** (talking
@@ -268,12 +268,12 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree …\`   | Context Tree — \`status\`, \`init\`, \`migrate-to-w1\`, \`verify\`, \`upgrade\`, \`inject\`, \`review\` |
-| \`${bin} org …\`    | workspace ↔ tree binding |
+| \`${bin} tree verify\` | validate a Context Tree's structure (the only surviving \`tree\` subcommand) |
 
-Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`)
-runs from the web console or a human terminal — **never from inside a
-running agent**. Full surface: \`docs/cli-reference.md\`.`;
+Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
+workspace ↔ tree binding) runs from the web console or a human terminal
+— **never from inside a running agent**. Full surface:
+\`docs/cli-reference.md\`.`;
 }
 
 // --- # Context Tree ---------------------------------------------------------

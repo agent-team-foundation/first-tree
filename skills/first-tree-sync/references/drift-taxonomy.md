@@ -71,8 +71,9 @@ invented.
   decision-relevant dependency (framework, runtime, datastore) that is
   absent from `.first-tree/org.yaml`'s `techStackConstraints`
 - a newly cloned source repo at `<workspaceRoot>/<name>` is not yet
-  in `workspace.json.sources` (surfaces as `unboundGitSiblings[]` in
-  `tree status`)
+  in `workspace.json.sources` (detect by comparing the `sources` array
+  in `<workspaceRoot>/.first-tree/workspace.json` against `ls -d
+  <workspaceRoot>/*/` that are git repos)
 - an active contributor (commits within the last 6 months) is not
   present under `members/`
 

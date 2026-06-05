@@ -259,39 +259,59 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
     // Real namespaces — each must appear inside the CLI Overview table.
+    // `tree` is now scoped to its single surviving subcommand (`verify`)
+    // rather than `tree …`; `org` is operator-only and was removed from
+    // the agent-facing table in the same edit.
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
     expect(overview).toContain("first-tree chat …");
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
-    expect(overview).toContain("first-tree tree …");
-    expect(overview).toContain("first-tree org …");
+    expect(overview).toContain("first-tree tree verify");
 
     // Retired / unregistered surface must NOT appear.
     expect(overview).not.toContain("github scan");
+    // The old `tree …` catch-all row must not have come back — agents
+    // following it would try retired subcommands.
+    expect(overview).not.toContain("first-tree tree …");
   });
 
-  it("lists only real `tree` subcommands — no fictional `read`, `write`, `publish`", () => {
+  it("CLI Overview lists only the surviving `tree` subcommand (verify) — retired commands must stay out", () => {
+    // Post-2026-06 the `tree` namespace was retired to just `verify`
+    // (cloud now owns workspace + tree provisioning; client runtime
+    // inlines its own skill payload install). The briefing's CLI
+    // Overview must NOT advertise any deleted subcommand or the agent
+    // will burn a turn on `unknown command`. This test is the runtime
+    // counterpart to the `command-registration-smoke` test that pins
+    // the actual registered surface.
     const briefing = buildAgentBriefing(makeOpts());
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
 
-    // Real subcommands (from apps/cli/src/commands/tree/index.ts +
-    // tree/migrate.ts which registers as `migrate-to-w1`, not `migrate`).
-    expect(overview).toContain("`status`");
-    expect(overview).toContain("`init`");
-    expect(overview).toContain("`migrate-to-w1`");
-    expect(overview).toContain("`verify`");
-    expect(overview).toContain("`upgrade`");
-    expect(overview).toContain("`inject`");
-    expect(overview).toContain("`review`");
+    // The survivor must be listed.
+    expect(overview).toContain("tree verify");
 
-    // Fictional subcommands the pre-revision table advertised — must stay
-    // gone or agents will burn turns on `unknown command`. `migrate` (the
-    // bare form, without the `-to-w1` suffix) was the round-2 regression —
-    // pin its absence explicitly so a future edit doesn't drop the suffix.
-    expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bread\b/);
-    expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bwrite\b/);
-    expect(overview).not.toMatch(/`tree …`\s+\|[^|]*\bpublish\b/);
-    expect(overview).not.toMatch(/`tree …`[^\n]*`migrate`/);
+    // Every retired tree subcommand must NOT appear in the CLI Overview
+    // text. Use word-boundary regex (not `.toContain`) so prose like
+    // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.
+    for (const retired of [
+      "status",
+      "init",
+      "migrate",
+      "upgrade",
+      "codeowners",
+      "claude-hook",
+      "inject",
+      "review",
+      "automation",
+      "skill",
+      "read",
+      "write",
+      "publish",
+    ]) {
+      // Match `first-tree tree <retired>` or `ft tree <retired>` followed
+      // by a word boundary (so `tree bind` does NOT match `tree binding`).
+      const re = new RegExp(`\\b(?:first-tree|ft)\\s+tree\\s+${retired}\\b`, "u");
+      expect(overview, `CLI Overview must not advertise retired \`tree ${retired}\``).not.toMatch(re);
+    }
   });
 });
 

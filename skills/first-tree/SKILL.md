@@ -155,27 +155,38 @@ downstream skills assume you have done them.
 
 ### 1. Workspace binding check
 
+The workspace-rooted layout (W1, shipped 2026-06) consolidates binding
+state into a single file at `<workspace-root>/.first-tree/workspace.json`.
+There is no longer a `first-tree tree status` CLI to read it — the `tree`
+namespace was retired down to just `verify` in 2026-06. Read the file
+yourself (it is small JSON):
+
 ```bash
-first-tree tree status --json
+# Walk up from cwd to find the workspace root + read the manifest.
+find_workspace_root() {
+  local d=$(pwd)
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/.first-tree/workspace.json" ]; then echo "$d"; return; fi
+    d=$(dirname "$d")
+  done
+  return 1
+}
+WS=$(find_workspace_root) || { echo "No First Tree workspace at or above cwd"; }
+cat "$WS/.first-tree/workspace.json"
 ```
 
-The workspace-rooted layout (W1, shipped 2026-06) consolidates all
-binding state into a single file at
-`<workspace-root>/.first-tree/workspace.json`. `tree status` walks up
-from `cwd` looking for that file, then reports:
+The manifest is `{ tree: "<dir>", sources: ["<dir>", ...] }`. Resolve:
 
 | Field | What you're looking at | Where to go next |
 |---|---|---|
-| `workspaceRoot` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
-| `manifest.tree` | the tree subdirectory name (sibling of source repos under `workspaceRoot`) | Use `<workspaceRoot>/<manifest.tree>` for any tree read or write. |
-| `manifest.sources` | bound source repo subdirectory names | Each is a sibling of the tree under `workspaceRoot`. |
-| `boundSources[].present === false` | a bound source is listed but not cloned locally | `git clone` it as a sibling of the tree, or remove from `sources` if it should not be tracked. |
-| `unboundGitSiblings[]` | a git repo under `workspaceRoot` that is not in `sources` | If it should be part of the team's context, add its name to `workspace.json.sources`. |
+| `<workspace-root>` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
+| `tree` | the tree subdirectory name (sibling of source repos under workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
+| `sources` | bound source repo subdirectory names | Each is a sibling of the tree under the workspace root. |
 
-If `status` exits with "No First Tree workspace found", the current
-cwd is unbound. Binding a workspace to a tree is an operator action
-taken from the web console, not from inside a running agent — surface
-the gap to a human instead of trying to self-bind.
+If no `workspace.json` is found at or above cwd, the workspace is
+unbound. Binding a workspace to a tree is an operator action taken
+from the web console, not from inside a running agent — surface the
+gap to a human instead of trying to self-bind.
 
 ### 2. Tree HEAD freshness
 

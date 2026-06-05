@@ -45,6 +45,6 @@ GitHub Scan is no longer part of the current CLI.
 ## What's new in v1.0.0
 
 * Single CLI binary covers Context Tree and agent collaboration.
-* Short alias `ft` for the binary (e.g. `ft tree status`).
+* Short alias `ft` for the binary (e.g. `ft tree verify --tree-path <path>`).
 * New top-level commands: `login`, `logout`, `agent`, `chat`, `org`, `daemon`,
   `config`, `status`, `doctor`, `upgrade`.
