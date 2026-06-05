@@ -321,7 +321,7 @@ run_live_validate_flow() {
     (
       cd "$workspace_root"
       node "$FT_CLI" tree skill install --root "$workspace_root" >/dev/null
-      node "$FT_CLI" tree init --json --scope workspace --tree-path "./${source_name}-tree" --tree-mode dedicated >"$init_json"
+      node "$FT_CLI" tree init --json --tree-path "./${source_name}-tree" >"$init_json"
       tree_root="$(json_value "$init_json" treeRoot)"
       [[ -n "$tree_root" ]] || fail "tree init did not report a treeRoot"
       node "$FT_CLI" tree status --json >"$status_after"

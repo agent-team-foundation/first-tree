@@ -17,7 +17,7 @@ export function runStatusCommand(context: CommandContext): void {
 
   if (workspaceRoot === undefined) {
     console.error("No First Tree workspace found at or above cwd.");
-    console.error("- For a new workspace: `first-tree tree init --scope workspace --tree-path ./<name>`");
+    console.error("- For a new workspace: `first-tree tree init --tree-path ./<name>`");
     console.error("- For a legacy multi-mode layout: `first-tree tree migrate-to-w1`");
     process.exitCode = 1;
     return;
