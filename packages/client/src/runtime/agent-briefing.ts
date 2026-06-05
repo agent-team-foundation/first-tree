@@ -431,8 +431,4 @@ the auto-injected list.
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-sync",
-] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree", "first-tree-context", "first-tree-sync"] as const;

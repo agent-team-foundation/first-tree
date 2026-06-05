@@ -20,9 +20,11 @@ import {
  * - {@link readWorkspaceManifest}: load + validate the manifest.
  * - {@link writeWorkspaceManifest}: persist a validated manifest (single
  *   `writeFileSync`; single-writer local file — no temp-and-rename).
- * - {@link computeWorkspaceStatus}: derive the report consumed by
- *   `first-tree tree status` (bound sources, unbound git siblings, missing
- *   sources).
+ * - {@link computeWorkspaceStatus}: derive the report (bound sources,
+ *   unbound git siblings, missing sources). The `first-tree tree status`
+ *   command that used to render this was retired in 2026-06; the helper
+ *   stays around for any future caller / debugging tool that wants the
+ *   same structured view.
  *
  * None of these helpers touch source repo internals or write outside the
  * workspace root's `.first-tree/` directory. Source repo state inspection
@@ -236,9 +238,10 @@ export function pickImmediateWorkspaceSources(
 }
 
 /**
- * Compute the read-only status report for a workspace. Used by
- * `first-tree tree status` to render the human-facing summary and by tests
- * to assert drift conditions.
+ * Compute the read-only status report for a workspace. Used today by
+ * tests asserting drift conditions, and by ad-hoc debugging callers
+ * that want the structured view that the retired `first-tree tree
+ * status` command used to render.
  *
  * Performs no mutations and no network calls.
  */

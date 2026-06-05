@@ -16,9 +16,15 @@ import { type WorkspaceManifest, workspaceManifestSchema } from "@first-tree/sha
 import { writeWorkspaceManifest } from "./workspace.js";
 
 /**
- * `first-tree tree migrate-to-w1` — converge a workspace from the legacy
- * multi-mode binding model onto the workspace-rooted layout (§W1) defined in
+ * Workspace migration helper (was the implementation of the retired
+ * `first-tree tree migrate-to-w1` command). Converges a workspace from
+ * the legacy multi-mode binding model onto the workspace-rooted layout
+ * (§W1) defined in:
  *   first-tree-context: first-tree-skill-cli/workspace-layout-simplification.md
+ *
+ * The CLI wrapper was retired in 2026-06 along with the rest of the
+ * `first-tree tree` namespace; this helper stays around for one-off
+ * scripted use and for legacy workspaces that need a manual run.
  *
  * The migration is one-way and non-transactional but never commits to git:
  * every change is left as a working-tree edit for the user to inspect and
