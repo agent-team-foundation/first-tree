@@ -1,7 +1,8 @@
 import type { Agent, PresenceStatus, UsageByAgentRow } from "@first-tree/shared";
-import { Bot, ChevronDown, Lock, type LucideIcon, User } from "lucide-react";
+import { Bot, ChevronDown, Link2, Lock, type LucideIcon, User } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Avatar } from "../../components/avatar.js";
+import { Button } from "../../components/ui/button.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
@@ -187,6 +188,8 @@ export type TeamTableProps = {
   /** Agent-only scope filter, surfaced in the Agent teammates header. */
   agentFilter: "all" | "mine";
   onAgentFilter: (next: "all" | "mine") => void;
+  /** Open the shared invite dialog from the Human empty-state CTA (issue 836). */
+  onInvite: () => void;
 };
 
 export function TeamTable(props: TeamTableProps) {
@@ -577,7 +580,7 @@ function StatusCell({ status, lastSeenAt }: { status: PresenceStatus; lastSeenAt
 // ─────────────────────────────────────────────────────────────────────────
 
 function HumanSection(props: TeamTableProps & { compact: boolean }) {
-  const { humans, compact, searchActive } = props;
+  const { humans, compact, searchActive, onInvite } = props;
   const [collapsed, toggle] = useCollapsed("team.collapse.humans");
   return (
     <section style={{ marginTop: "var(--sp-6)" }}>
@@ -611,9 +614,27 @@ function HumanSection(props: TeamTableProps & { compact: boolean }) {
         <div style={{ paddingLeft: SECTION_BODY_INDENT }}>
           {compact ? null : <HumanColumnHeader />}
           {humans.length === 0 ? (
-            <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
-              {searchActive ? "No humans match this search." : "No members yet."}
-            </div>
+            searchActive ? (
+              <div className="text-caption" style={{ color: "var(--fg-4)", padding: "0 var(--sp-2) var(--sp-3)" }}>
+                No humans match this search.
+              </div>
+            ) : (
+              // Issue 836: the empty roster is exactly where a user reaches for
+              // "invite" — replace the dead "No members yet." text with a live
+              // CTA that opens the shared invite dialog (any member can share).
+              <div
+                className="flex flex-col items-start"
+                style={{ gap: "var(--sp-2)", padding: "0 var(--sp-2) var(--sp-3)" }}
+              >
+                <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+                  No teammates yet — invite people to join your team.
+                </span>
+                <Button size="sm" variant="outline" onClick={onInvite}>
+                  <Link2 className="h-3.5 w-3.5" />
+                  Invite teammates
+                </Button>
+              </div>
+            )
           ) : (
             humans.map((row) => <HumanRowView key={row.id} row={row} {...props} />)
           )}

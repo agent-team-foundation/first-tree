@@ -597,7 +597,9 @@ describe("TeamPage", () => {
     await waitForText(container, "Kael");
     expect(agentMocks.listAgents).toHaveBeenCalledWith({ limit: 100 });
     expect(agentMocks.listAllAgents).not.toHaveBeenCalled();
-    expect(container.textContent).not.toContain("Invite link");
+    // Issue 836: sharing the invite link is member-level, so the "Invite link"
+    // entry is no longer admin-gated — non-admins see it too.
+    expect(container.textContent).toContain("Invite link");
     expect(container.textContent).not.toContain("Design Critique");
     expect(container.textContent).toContain("Ops Helper");
 

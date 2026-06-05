@@ -1,10 +1,11 @@
 import type { OrgBrief } from "@first-tree/shared";
-import { Check, LogOut, Plus, UserPlus } from "lucide-react";
+import { Check, Link2, LogOut, Plus, UserPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Avatar } from "./avatar.js";
+import { InviteDialog } from "./invite-dialog.js";
 import { TeamSetupModal } from "./team-setup-modal.js";
 
 /**
@@ -21,6 +22,7 @@ export function UserMenu() {
   const navigate = useNavigate();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [open, setOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -82,6 +84,10 @@ export function UserMenu() {
   const openJoin = () => {
     setOpen(false);
     setSetupAction("join");
+  };
+  const openInvite = () => {
+    setOpen(false);
+    setInviteOpen(true);
   };
 
   return (
@@ -186,6 +192,22 @@ export function UserMenu() {
                 <UserPlus className="h-3.5 w-3.5" />
                 <span>Join with invite link</span>
               </button>
+              {/* Invite teammates — the global, role-agnostic entry to share the
+                  org's invite link from any page (issue 836). Only shown when a
+                  team is selected, since the link is org-scoped; the dialog's
+                  panel role-forks (members copy, admins also rotate). */}
+              {organizationId && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={openInvite}
+                  className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                  style={{ color: "var(--fg)" }}
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  <span>Invite teammates</span>
+                </button>
+              )}
             </div>
 
             {/* User actions */}
@@ -209,6 +231,7 @@ export function UserMenu() {
       </div>
 
       <TeamSetupModal action={setupAction} onClose={() => setSetupAction(null)} />
+      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </>
   );
 }
