@@ -1,8 +1,31 @@
-# First-Tree
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png">
+    <img src="assets/banner-light.png" alt="First Tree" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://cloud.first-tree.ai"><strong>Open App</strong></a> &middot;
+  <a href="#get-started"><strong>Get Started</strong></a> &middot;
+  <a href="#how-it-works"><strong>How It Works</strong></a> &middot;
+  <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &middot;
+  <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/first-tree"><img src="https://img.shields.io/npm/v/first-tree?style=for-the-badge&color=FFD700&label=npm" alt="npm version"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/agent-team-foundation/first-tree/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License: Apache 2.0"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/stargazers"><img src="https://img.shields.io/github/stars/agent-team-foundation/first-tree?style=for-the-badge&color=blueviolet" alt="GitHub stars"></a>
+</p>
 
 <p align="center">
   English | <a href="README_zh-CN.md">中文</a>
 </p>
+
+# First-Tree
 
 **Context-grounded agentic work for teams.**
 
@@ -15,6 +38,20 @@ before they work; useful outcomes can flow back into it after the work is done.
 
 The result is a human-agent work loop where every task can start with more team
 context, and every useful outcome can make the next task smarter.
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center"><strong>Works<br/>with</strong></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/claude-code-dark.svg"><img src="assets/logos/claude-code-light.svg" width="32" alt="Claude Code" /></picture><br/><sub>Claude Code</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/codex-dark.svg"><img src="assets/logos/codex-light.svg" width="32" alt="Codex" /></picture><br/><sub>Codex</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/github-dark.svg"><img src="assets/logos/github-light.svg" width="32" alt="GitHub" /></picture><br/><sub>GitHub</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/mcp-dark.svg"><img src="assets/logos/mcp-light.svg" width="32" alt="MCP" /></picture><br/><sub>MCP</sub></td>
+  </tr>
+</table>
+</div>
+
+---
 
 ## Why First Tree
 
@@ -77,9 +114,10 @@ during, and after execution.
 
 ## Get Started
 
-Sign in at <https://first-tree.ai> or your own deployment. The guided setup
-walks you through the first run: name your team, connect a computer, create
-your first agent, connect code, and start work.
+Open the app at **<https://cloud.first-tree.ai>** (or your own deployment) and
+sign in. Learn more at <https://first-tree.ai>. The guided setup walks you
+through the first run: name your team, connect a computer, create your first
+agent, connect code, and start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
