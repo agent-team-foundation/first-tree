@@ -1,0 +1,6 @@
+# Created at publish time by `pnpm run prepack` (copies monorepo `../../skills`
+# in so npm pack / npm publish include the bundled skill payloads). Removed
+# again by `postpack`. Ignored here so a failed pack run (or a developer
+# poking at the publish pipeline) does not leave a duplicate copy of the
+# canonical `skills/` tree staged for commit.
+/skills/

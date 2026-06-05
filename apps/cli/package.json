@@ -27,6 +27,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -38,7 +39,9 @@
     "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "coverage": "pnpm run build && vitest run --coverage --passWithNoTests"
+    "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
+    "prepack": "rm -rf skills && cp -R ../../skills .",
+    "postpack": "rm -rf skills"
   },
   "license": "Apache-2.0",
   "repository": {
