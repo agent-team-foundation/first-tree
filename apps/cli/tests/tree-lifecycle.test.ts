@@ -55,12 +55,12 @@ describe("initializeWorkspaceRoot", () => {
     expect(existsSync(join(workspaceRoot, ".claude", "skills", "first-tree"))).toBe(true);
 
     expect(existsSync(join(summary.treeRoot, "NODE.md"))).toBe(true);
-    expect(readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8")).toContain(
-      "name: developer",
-    );
-    expect(
-      readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"), "utf8"),
-    ).toContain("name: code-reviewer");
+    // PR-A: agent-templates yaml + tree-root WHITEPAPER.md + source-repos.md
+    // are dead writes per the post-W1 trailing-edge audit; they must NOT be
+    // scaffolded by `tree init` anymore.
+    expect(existsSync(join(summary.treeRoot, ".first-tree", "agent-templates"))).toBe(false);
+    expect(existsSync(join(summary.treeRoot, "WHITEPAPER.md"))).toBe(false);
+    expect(existsSync(join(summary.treeRoot, "source-repos.md"))).toBe(false);
     expect(readFileSync(join(summary.treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain("humanInvolveRules:");
   });
 

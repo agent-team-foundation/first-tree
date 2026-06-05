@@ -217,10 +217,12 @@ run_direct_cli_smoke() {
     [[ -f "$workspace_root/AGENTS.md" ]] || fail "workspace root AGENTS.md was not created"
     [[ -f "$workspace_root/CLAUDE.md" ]] || fail "workspace root CLAUDE.md was not created"
     [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing from tree repo"
-    [[ -f "$tree_root/.first-tree/agent-templates/developer.yaml" ]] || fail "developer template missing from tree repo"
-    [[ -f "$tree_root/.first-tree/agent-templates/code-reviewer.yaml" ]] || fail "code-reviewer template missing from tree repo"
     [[ -f "$tree_root/.first-tree/org.yaml" ]] || fail "org config placeholder missing from tree repo"
     head -n 1 "$tree_root/.github/workflows/validate.yml" | grep -qx '# first-tree-template-version: 2' || fail "validate workflow missing managed template marker"
+    # PR-A: three dead writes must not be scaffolded.
+    [[ ! -e "$tree_root/.first-tree/agent-templates" ]] || fail "agent-templates/ dead write should be absent (removed in PR-A)"
+    [[ ! -e "$tree_root/WHITEPAPER.md" ]] || fail "tree-root WHITEPAPER.md dead write should be absent (removed in PR-A)"
+    [[ ! -e "$tree_root/source-repos.md" ]] || fail "tree-side source-repos.md dead write should be absent (removed in PR-A)"
   )
 }
 

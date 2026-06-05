@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TREE_CODE_REPOS_FILE, writeTreeBinding } from "../commands/tree/binding-state.js";
 import {
-  buildTreeCodeRepoIndexNote,
+  buildSourceRepoIndexTable,
   listKnownTreeCodeRepos,
   syncTreeCodeRepoRegistry,
   upsertTreeCodeRepoRegistry,
@@ -188,7 +188,24 @@ describe("tree code repo registry", () => {
     expect(persisted.repos.map((r) => r.slug)).toEqual(["acme/web"]);
   });
 
-  it("builds the source repo index note", () => {
-    expect(buildTreeCodeRepoIndexNote()).toContain("source-repos.md");
+  it("builds the agent-context `## Managed Code Repos` markdown table", () => {
+    expect(buildSourceRepoIndexTable([])).toEqual(["No managed code repos have been recorded yet."]);
+
+    const lines = buildSourceRepoIndexTable([
+      { name: "web", slug: "acme/web", url: "https://github.com/acme/web.git" },
+      { name: "api", slug: "acme/api", url: "https://gitlab.example.com/acme/api.git" },
+    ]);
+
+    // Header
+    expect(lines[0]).toBe("| Source | GitHub |");
+    expect(lines[1]).toBe("| --- | --- |");
+
+    // GitHub URL renders as a markdown link
+    expect(lines[2]).toContain("`web`");
+    expect(lines[2]).toContain("[acme/web](https://github.com/acme/web)");
+
+    // Non-GitHub URL falls back to a code span of the raw URL
+    expect(lines[3]).toContain("`api`");
+    expect(lines[3]).toContain("`https://gitlab.example.com/acme/api.git`");
   });
 });

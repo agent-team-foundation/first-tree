@@ -27,8 +27,10 @@ import { type LocalGitFixture, makeLocalGitFixture } from "../framework/local-gi
  *   - workspace/AGENTS.md, workspace/CLAUDE.md (workspace-root framework)
  *   - workspace/.first-tree/workspace.json (W1 manifest)
  *   - tree/.github/workflows/validate.yml (first line is the template marker)
- *   - tree/.first-tree/agent-templates/{developer,code-reviewer}.yaml
  *   - tree/.first-tree/org.yaml
+ *   - tree/.first-tree/agent-templates/ MUST NOT exist (dead write, removed in PR-A)
+ *   - tree/WHITEPAPER.md MUST NOT exist (dead write, removed in PR-A)
+ *   - tree/source-repos.md MUST NOT exist (dead write, removed in PR-A)
  */
 
 type InitResult = { treeRoot: string };
@@ -139,16 +141,22 @@ describe("direct CLI onboarding — local fixture, no external clone", () => {
       "# first-tree-template-version: 2",
     );
 
-    expect(
-      existsSync(resolve(treeRoot, ".first-tree/agent-templates/developer.yaml")),
-      "developer.yaml agent template should be written into the tree repo",
-    ).toBe(true);
-    expect(
-      existsSync(resolve(treeRoot, ".first-tree/agent-templates/code-reviewer.yaml")),
-      "code-reviewer.yaml agent template should be written into the tree repo",
-    ).toBe(true);
     expect(existsSync(resolve(treeRoot, ".first-tree/org.yaml")), "org.yaml should be written into the tree repo").toBe(
       true,
     );
+
+    // PR-A: three dead writes must NOT exist in the freshly init'd tree.
+    expect(
+      existsSync(resolve(treeRoot, ".first-tree/agent-templates")),
+      "agent-templates/ is a dead write (no production reader); removed in PR-A",
+    ).toBe(false);
+    expect(
+      existsSync(resolve(treeRoot, "WHITEPAPER.md")),
+      "tree-root WHITEPAPER.md is a dead write (per workspace-layout spec); removed in PR-A",
+    ).toBe(false);
+    expect(
+      existsSync(resolve(treeRoot, "source-repos.md")),
+      "tree-side source-repos.md index is a dead write (per workspace-layout spec); removed in PR-A",
+    ).toBe(false);
   });
 });
