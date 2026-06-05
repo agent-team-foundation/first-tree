@@ -53,24 +53,40 @@ function Detail({ label, mono, children }: { label: string; mono?: boolean; chil
   );
 }
 
+/**
+ * Long skill / prompt bodies are authored as standalone documents, so their
+ * markdown often opens with an H1 the size of a page title. Inside a dialog that
+ * dwarfs the dialog's own title and wrecks the hierarchy. Clamp every heading
+ * down to the dense in-app scale (h1 → subtitle, the rest → body) so the body
+ * reads as content nested under the dialog title, not as a competing page.
+ */
+const PROSE_COMPACT = [
+  "prose-headings:font-semibold",
+  "prose-h1:text-subtitle prose-h1:mt-0",
+  "prose-h2:text-body prose-h3:text-body prose-h4:text-body",
+  "prose-h3:text-[color:var(--fg-2)] prose-h4:text-[color:var(--fg-2)]",
+].join(" ");
+
 function BodyDetail({ body }: { body: string }) {
-  return (
-    <div className="space-y-1">
-      <p className="m-0 text-label" style={{ color: "var(--fg-3)" }}>
-        Body
-      </p>
-      {body.trim() ? (
-        <Markdown>{body}</Markdown>
-      ) : (
-        <p className="m-0 text-body" style={{ color: "var(--fg-4)" }}>
-          Empty.
-        </p>
-      )}
-    </div>
+  return body.trim() ? (
+    <Markdown className={PROSE_COMPACT}>{body}</Markdown>
+  ) : (
+    <p className="m-0 text-body" style={{ color: "var(--fg-4)" }}>
+      Empty.
+    </p>
   );
 }
 
-function PreviewFields({ resource }: { resource: ResourceRow }) {
+// Whether this resource type carries a long markdown body that warrants its own
+// scrollable region; repo / mcp are short field lists rendered in the header.
+function bodyOf(resource: ResourceRow): string | null {
+  if (resource.type === "skill" || resource.type === "prompt") {
+    return str(resource.payload, "body");
+  }
+  return null;
+}
+
+function MetaFields({ resource }: { resource: ResourceRow }) {
   const p = resource.payload;
   if (resource.type === "repo") {
     const url = str(p, "url");
@@ -149,7 +165,6 @@ function PreviewFields({ resource }: { resource: ResourceRow }) {
         </Detail>
       ) : null}
       {description ? <Detail label="Description">{description}</Detail> : null}
-      <BodyDetail body={str(p, "body")} />
       {meta.length ? (
         <Detail label="Metadata" mono>
           <div className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
@@ -166,20 +181,40 @@ function PreviewFields({ resource }: { resource: ResourceRow }) {
 }
 
 export function ResourcePreviewDialog({ resource, onClose }: { resource: ResourceRow; onClose: () => void }) {
+  const body = bodyOf(resource);
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent aria-describedby={undefined}>
-        <DialogHeader>
-          <DialogTitle>{resource.name}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+      {/* Widen past the default max-w-lg and turn the content into a flex column
+          capped at the viewport: the metadata header stays fixed while only the
+          Body region below scrolls. Drop the base grid/padding/gap so each zone
+          owns its own padding. */}
+      <DialogContent
+        aria-describedby={undefined}
+        className="flex max-w-2xl flex-col gap-0 p-0"
+        style={{ maxHeight: "80vh" }}
+      >
+        <div className="space-y-4 p-6">
+          <DialogHeader>
+            <DialogTitle className="text-title">{resource.name}</DialogTitle>
+          </DialogHeader>
           <div>
             <Badge variant={resource.defaultEnabled === "recommended" ? "secondary" : "outline"}>
               {resource.defaultEnabled}
             </Badge>
           </div>
-          <PreviewFields resource={resource} />
+          <MetaFields resource={resource} />
         </div>
+        {body !== null ? (
+          <div
+            className="min-h-0 flex-1 space-y-1 overflow-y-auto p-6 pt-4"
+            style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}
+          >
+            <p className="m-0 text-label" style={{ color: "var(--fg-3)" }}>
+              Body
+            </p>
+            <BodyDetail body={body} />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

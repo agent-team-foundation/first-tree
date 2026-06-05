@@ -86,6 +86,48 @@ const SAMPLE: ResourceRow[] = [
     },
   }),
   row({
+    id: "r5b",
+    type: "skill",
+    name: "frontend design system",
+    defaultEnabled: "recommended",
+    // A real-world long body that opens with a document-level H1 and several H2
+    // sections — the case that motivated the preview-dialog heading clamp +
+    // internal-scroll work. Lets the preview show the fixed header / scrolling
+    // body split with headings that no longer dwarf the dialog title.
+    payload: {
+      name: "frontend design system",
+      namespace: "team",
+      description:
+        "Use when changing any frontend code in packages/web — editing .tsx, .css, or Tailwind classes, or adjusting colors, spacing, sizing, radius, shadows, or font-size.",
+      body: [
+        "# Frontend Design System (packages/web)",
+        "",
+        "## Core principle",
+        "",
+        "packages/web is a token-based design system: every visual value comes from a CSS variable defined in `packages/web/src/index.css` — never a literal. `lint:tokens` is a build gate; hardcoded values fail the build. Read `packages/web/DESIGN.md` before writing any UI code, and follow it exactly.",
+        "",
+        "## Hard constraints (non-negotiable)",
+        "",
+        "- **No hardcoded visual values.** Never inline a color, size, spacing, radius, shadow, or font-size — every value references a token in `index.css`. If the token you need doesn't exist, add it; do not inline the literal.",
+        "- **Use the semantic layer only.** Use `--fg`, `--bg-*`, `--state-*`, the `text-*` scale, `--radius-*`. Do not use raw Tailwind palette/size utilities (`text-gray-500`, `bg-red-50`, `rounded-md`).",
+        "- **New base components** go in `src/components/ui/`, composed with `cva` + `cn` + Radix.",
+        "",
+        "## Before you claim done",
+        "",
+        "Run `pnpm --filter @first-tree/web typecheck` (runs `tsc` + the `lint:tokens` gate) and confirm it passes. A token violation fails the build — green is the only definition of done.",
+        "",
+        "## Common rationalizations — all wrong",
+        "",
+        "| Excuse | Reality |",
+        "|--------|---------|",
+        "| \"Just one literal, I'll tokenize later\" | `lint:tokens` fails the build now. Add the token now. |",
+        "| \"There's no token for this value\" | Add one to `index.css`. That's the workflow, not an exception. |",
+        "| \"`text-gray-500` is close enough\" | Raw palette utilities are banned. Use the semantic token. |",
+      ].join("\n"),
+      metadata: { category: "frontend", scope: "packages/web" },
+    },
+  }),
+  row({
     id: "r6",
     type: "mcp",
     name: "github",
