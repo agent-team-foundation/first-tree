@@ -41,10 +41,9 @@ For each drift routed to auto-fix:
      root list. Do **not** describe what the domain does — that's
      substantive.
    - **new submodule**: add the submodule's subdir name to
-     `workspace.json.sources` (one-line JSON edit). Do not bind
-     it as its own tree (that's a user decision via
-     `first-tree tree init` plus the lone-repo migrate flow in
-     `first-tree-onboarding`).
+     `workspace.json.sources` (one-line JSON edit). Do not bind it as
+     its own tree — that's an operator decision taken from the web
+     console, not something an agent can self-serve.
    - **new dep**: append to `.first-tree/org.yaml` `techStackConstraints`.
    - **new member**: create `members/<slug>/NODE.md` with `title`,
      `owners: []`, `type: human`, `role: contributor` frontmatter and

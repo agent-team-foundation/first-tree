@@ -24,7 +24,7 @@ arms — pick the right one before acting:
 | Arm | What it does | Sub-skills |
 |---|---|---|
 | **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
-| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (read + write operating guide) · `first-tree-onboarding` · `first-tree-sync` |
+| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-context` (read + write operating guide) · `first-tree-sync` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
 another agent or the human in chat), then the context ops.
@@ -140,8 +140,8 @@ map of which commands live where:
 | `agent …` | workspace | agent records — `status`, `session`, `config show` for self-introspection; `create` / `claim` / `bind` are operator actions taken via the web console | `docs/cli-reference.md` |
 | `chat …` | workspace | messaging (`send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
 | `config …` | workspace | local `client.yaml` (operator-edited) | `docs/cli-reference.md` |
-| `tree …` | context | Context Tree lifecycle, binding, publish, verify | `first-tree-context` + relevant sub-skills |
-| `org …` | both | workspace-tree binding metadata | `first-tree-onboarding` |
+| `tree verify` | context | Validate a Context Tree's structure (only surviving `tree` subcommand) | `first-tree-context` |
+| `org …` | both | workspace-tree binding metadata | `docs/cli-reference.md` (operator) |
 
 For exhaustive flags / env vars / behavior of each command, see
 `docs/cli-reference.md`.
@@ -155,29 +155,38 @@ downstream skills assume you have done them.
 
 ### 1. Workspace binding check
 
+The workspace-rooted layout (W1, shipped 2026-06) consolidates binding
+state into a single file at `<workspace-root>/.first-tree/workspace.json`.
+There is no longer a `first-tree tree status` CLI to read it — the `tree`
+namespace was retired down to just `verify` in 2026-06. Read the file
+yourself (it is small JSON):
+
 ```bash
-first-tree tree status --json
+# Walk up from cwd to find the workspace root + read the manifest.
+find_workspace_root() {
+  local d=$(pwd)
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/.first-tree/workspace.json" ]; then echo "$d"; return; fi
+    d=$(dirname "$d")
+  done
+  return 1
+}
+WS=$(find_workspace_root) || { echo "No First Tree workspace at or above cwd"; }
+cat "$WS/.first-tree/workspace.json"
 ```
 
-The workspace-rooted layout (W1, shipped 2026-06) consolidates all
-binding state into a single file at
-`<workspace-root>/.first-tree/workspace.json`. `tree status` walks up
-from `cwd` looking for that file, then reports:
+The manifest is `{ tree: "<dir>", sources: ["<dir>", ...] }`. Resolve:
 
 | Field | What you're looking at | Where to go next |
 |---|---|---|
-| `workspaceRoot` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
-| `manifest.tree` | the tree subdirectory name (sibling of source repos under `workspaceRoot`) | Use `<workspaceRoot>/<manifest.tree>` for any tree read or write. |
-| `manifest.sources` | bound source repo subdirectory names | Each is a sibling of the tree under `workspaceRoot`. |
-| `boundSources[].present === false` | a bound source is listed but not cloned locally | `git clone` it as a sibling of the tree, or remove from `sources` if it should not be tracked. |
-| `unboundGitSiblings[]` | a git repo under `workspaceRoot` that is not in `sources` | If it should be part of the team's context, add its name to `workspace.json.sources`. |
+| `<workspace-root>` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
+| `tree` | the tree subdirectory name (sibling of source repos under workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
+| `sources` | bound source repo subdirectory names | Each is a sibling of the tree under the workspace root. |
 
-If `status` exits with "No First Tree workspace found", the current
-cwd is unbound. Run `first-tree-onboarding` before doing context work.
-If the cwd sits inside a pre-0.6.0 layout (`.first-tree-workspace`
-marker, `<tree>/.first-tree/bindings/`, or `<source>/.first-tree/source.json`
-exist on disk), run `first-tree tree migrate-to-w1` first — `status` no
-longer recognises the legacy shape.
+If no `workspace.json` is found at or above cwd, the workspace is
+unbound. Binding a workspace to a tree is an operator action taken
+from the web console, not from inside a running agent — surface the
+gap to a human instead of trying to self-bind.
 
 ### 2. Tree HEAD freshness
 
@@ -224,8 +233,8 @@ Once hygiene checks pass, drop into the right sub-skill:
 
 - Talk to another agent / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
 - Read context before acting, or write tree updates from a specific source (PR / doc / note) → **`first-tree-context`** (single operating guide for both read and write)
-- Bind an unbound repo to a tree, or migrate a legacy multi-mode workspace to W1 → **`first-tree-onboarding`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
+- Workspace appears unbound / cwd is not under a tree → operator action: surface to a human (binding is a web-console flow, not an agent flow)
 
 Operator tasks — `login`, `daemon install / uninstall`, `agent create`,
 `agent bind`, decommissioning a machine — are not done from inside a

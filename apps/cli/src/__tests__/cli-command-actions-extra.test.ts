@@ -18,30 +18,15 @@ const statusBlockMocks = vi.hoisted(() => ({
   renderServiceBlock: vi.fn(),
 }));
 
-const reviewMock = vi.hoisted(() => vi.fn());
-
 vi.mock("../core/output.js", () => ({ print: printMocks }));
 vi.mock("../core/index.js", () => ({ printResults: doctorMocks.printResults }));
 vi.mock("../commands/_shared/doctor-checks.js", () => ({ runDaemonChecks: doctorMocks.runDaemonChecks }));
 vi.mock("../commands/_shared/status-blocks.js", () => statusBlockMocks);
-vi.mock("../commands/tree/review-helper.js", () => ({ runTreeReview: reviewMock }));
 
 function command(root: Command, name: string): Command {
   const found = root.commands.find((entry) => entry.name() === name);
   if (!found) throw new Error(`Missing command ${name}`);
   return found;
-}
-
-function commandWithOptions(options: Record<string, unknown>): Command {
-  const cmd = new Command("test");
-  for (const [key, value] of Object.entries(options)) {
-    cmd.setOptionValue(key, value);
-  }
-  return cmd;
-}
-
-function context(command: Command) {
-  return { command, options: { debug: false, json: false, quiet: false } };
 }
 
 beforeEach(() => {
@@ -78,26 +63,8 @@ describe("CLI command action coverage", () => {
     expect(doctorMocks.printResults).toHaveBeenCalledWith(results);
   });
 
-  it("runs tree review action success, nonzero, and thrown-error paths", async () => {
-    const { reviewCommand } = await import("../commands/tree/review.js");
-
-    reviewMock.mockReturnValueOnce(0);
-    reviewCommand.action(context(commandWithOptions({ diff: "pr.diff", output: "review.json" })));
-    expect(reviewMock).toHaveBeenCalledWith({ diffPath: "pr.diff", outputPath: "review.json" });
-    expect(process.exitCode).toBeUndefined();
-
-    reviewMock.mockReturnValueOnce(2);
-    reviewCommand.action(context(commandWithOptions({ diff: "pr.diff" })));
-    expect(reviewMock).toHaveBeenLastCalledWith({ diffPath: "pr.diff" });
-    expect(process.exitCode).toBe(2);
-
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    reviewMock.mockImplementationOnce(() => {
-      throw new Error("review failed");
-    });
-    process.exitCode = undefined;
-    reviewCommand.action(context(commandWithOptions({})));
-    expect(error).toHaveBeenCalledWith("review failed");
-    expect(process.exitCode).toBe(1);
-  });
+  // The `tree review` action and its three exit-code paths were exercised
+  // here pre-2026-06. The command was deleted along with the rest of the
+  // `first-tree tree` namespace (except `verify`); nothing about the
+  // remaining CLI surface still needs this coverage.
 });

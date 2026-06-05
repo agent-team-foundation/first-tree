@@ -68,7 +68,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 - `packages/web/` — `@first-tree/web` — React admin dashboard (private, bundled)
 - `apps/cli/` — `first-tree` — Unified CLI (**published**, the consumer-facing tarball; binaries `first-tree` and `ft`)
 - `docs/` — [quickstart.md](docs/quickstart.md), [onboarding-guide.md](docs/onboarding-guide.md), [cli-reference.md](docs/cli-reference.md), [observability.md](docs/observability.md), [migration/](docs/migration/), [development/](docs/development/), [troubleshooting/](docs/troubleshooting/)
-- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-context`, `first-tree-onboarding`, `first-tree-sync`)
+- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-context`, `first-tree-sync`)
 
 ## Architecture Rules
 

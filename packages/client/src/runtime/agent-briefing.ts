@@ -253,11 +253,11 @@ whose topic already has that shape.**`;
 
 function cliOverviewBlock(bin: string): string {
   // Subcommand lists are the actually-registered ones, not aspirational —
-  // see `apps/cli/src/commands/{chat,agent,daemon,tree,org}/`. Agent
-  // briefings ship `tree skill install` payloads, so every command listed
-  // here must exist or the agent will burn a turn on `unknown command`.
-  // A unit test in `agent-briefing.test.ts` pins the rendered table
-  // against the real subcommand surface.
+  // every command named here must exist or the agent burns a turn on
+  // `unknown command`. The `tree` namespace was retired in 2026-06 down
+  // to just `verify` (cloud now owns workspace + tree provisioning; the
+  // client runtime inlines its own skill payload install). The `org`
+  // namespace is operator-only and not surfaced to in-agent use.
   return `## CLI Overview
 
 The \`${bin}\` CLI spans two arms — **workspace collaboration** (talking
@@ -268,12 +268,12 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree …\`   | Context Tree — \`status\`, \`init\`, \`migrate-to-w1\`, \`verify\`, \`upgrade\`, \`inject\`, \`review\` |
-| \`${bin} org …\`    | workspace ↔ tree binding |
+| \`${bin} tree verify\` | validate a Context Tree's structure (the only surviving \`tree\` subcommand) |
 
-Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`)
-runs from the web console or a human terminal — **never from inside a
-running agent**. Full surface: \`docs/cli-reference.md\`.`;
+Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
+workspace ↔ tree binding) runs from the web console or a human terminal
+— **never from inside a running agent**. Full surface:
+\`docs/cli-reference.md\`.`;
 }
 
 // --- # Context Tree ---------------------------------------------------------
@@ -338,7 +338,6 @@ guidance:
 |---|---|
 | Reflect one specific PR / doc / note into the tree | \`first-tree-context\` (Writing the Tree) |
 | Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
-| Bind an unbound repo or workspace to a tree        | \`first-tree-onboarding\` |
 
 Do not invent ad-hoc tree edits without loading the skill — the
 operating guide covers staging, review routing, and ownership rules
@@ -353,13 +352,12 @@ The Context Tree for this workspace is at:
 
 Read its root \`NODE.md\` first to map the domains before you act.`);
   } else {
-    // Tree-less stub: do NOT name `first-tree-onboarding` here. The
-    // onboarding skill is in `TREE_SKILL_NAMES`, which `tree skill
-    // install` only deploys alongside a Context Tree binding — a
-    // tree-less agent has no First Tree skills on disk and would 404
-    // trying to load that name. Binding a workspace is an operator
-    // action anyway (web console / human at the terminal), so surface
-    // the gap to a human instead of telling the agent to load a skill.
+    // Tree-less stub. Binding a workspace to a tree is an operator
+    // action (web console / human at the terminal), not something an
+    // agent can self-serve — so surface the gap to a human instead of
+    // suggesting any in-agent action. (The retired `first-tree-onboarding`
+    // skill used to live here; PR following #844 deleted the skill +
+    // the entire `first-tree tree` CLI namespace it depended on.)
     blocks.push(`## Tree Location
 
 This agent has no Context Tree bound. If a task needs cross-domain
@@ -419,10 +417,9 @@ the auto-injected list.
 
 | Skill | Load when |
 |---|---|
-| \`first-tree\`            | communication principles / pre-task hygiene / CLI namespace map |
-| \`first-tree-context\`    | read context before acting OR write tree updates from a specific PR / doc / note |
-| \`first-tree-onboarding\` | "bind this repo / workspace to a tree" — one-shot |
-| \`first-tree-sync\`       | "is the tree up to date?" — broad drift audit, no source |`;
+| \`first-tree\`         | communication principles / pre-task hygiene / CLI namespace map |
+| \`first-tree-context\` | read context before acting OR write tree updates from a specific PR / doc / note |
+| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |`;
 }
 
 /**
@@ -434,9 +431,4 @@ the auto-injected list.
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-onboarding",
-  "first-tree-sync",
-] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree", "first-tree-context", "first-tree-sync"] as const;

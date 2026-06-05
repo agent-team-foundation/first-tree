@@ -20,30 +20,31 @@ top-level commands (`login`, `logout`, `agent`, `chat`, `org`, `daemon`,
 see [onboarding-guide.md](../onboarding-guide.md) and
 [cli-reference.md](../cli-reference.md) for the full command tree.
 
-## Command renames inside `tree`
+## `first-tree tree` namespace was retired in 2026-06
 
-Phase 1B retired four legacy `tree` subcommand names. If your scripts reference
-them, update:
+The `tree` subcommands (`init` / `migrate-to-w1` / `upgrade` / `status` /
+`codeowners` / `claude-hook` / `inject` / `review` / `automation` /
+`skill` groups) were deleted after PR #844. The cloud now owns workspace
++ tree provisioning, the client runtime inlines its own skill payload
+install, and the deleted commands had no remaining caller. The only
+surviving subcommand is `first-tree tree verify`, which still validates a
+Context Tree's structure (used by tree-side CI and by humans inspecting a
+tree by hand).
 
-| Old | New |
-|---|---|
-| `first-tree tree generate-codeowners` | `first-tree tree codeowners` |
-| `first-tree tree install-claude-code-hook` | `first-tree tree claude-hook` |
-| `first-tree tree inject-context` | `first-tree tree inject` |
+If your scripts call any of the deleted commands, replace them with:
 
-The `hub` namespace under `tree` that some 0.4.x prereleases shipped has been
-removed entirely. Functionality moved to the new top-level commands described
-above.
+- Workspace + tree provisioning → web console (operator action).
+- Skill payload install → handled automatically by the client runtime at
+  agent-session bootstrap. No CLI step required.
+- Tree structure validation → `first-tree tree verify --tree-path PATH`.
 
 ## `first-tree github scan` was retired after v1.0
 
-GitHub Scan is no longer part of the current CLI. Existing GitHub platform
-features outside that notification daemon, including GitHub automation under
-`first-tree tree automation`, remain separate.
+GitHub Scan is no longer part of the current CLI.
 
 ## What's new in v1.0.0
 
 * Single CLI binary covers Context Tree and agent collaboration.
-* Short alias `ft` for the binary (e.g. `ft tree status`).
+* Short alias `ft` for the binary (e.g. `ft tree verify --tree-path <path>`).
 * New top-level commands: `login`, `logout`, `agent`, `chat`, `org`, `daemon`,
   `config`, `status`, `doctor`, `upgrade`.

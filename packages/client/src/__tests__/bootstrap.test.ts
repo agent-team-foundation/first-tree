@@ -391,7 +391,7 @@ function makeFixtureSkillsRoot(
 }
 
 describe("installFirstTreeIntegration (inline skill installer)", () => {
-  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-onboarding", "first-tree-sync"];
+  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-sync"];
 
   function expectSkillInstalled(workspace: string, name: string): void {
     const agentsDir = join(workspace, ".agents", "skills", name);
@@ -480,7 +480,6 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     const bundledMixed = makeFixtureSkillsRoot("drift-mixed", [
       { name: "first-tree", version: "2.0.0" },
       { name: "first-tree-context", version: "1.0.0" },
-      { name: "first-tree-onboarding", version: "1.0.0" },
       { name: "first-tree-sync", version: "1.0.0" },
     ]);
 
@@ -524,7 +523,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // first-tree installs successfully, the others all fail.
     expectSkillInstalled(workspace, "first-tree");
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-sync"))).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-context, first-tree-onboarding, first-tree-sync");
+    expect(logs.join("\n")).toContain("failed first-tree-context, first-tree-sync");
     expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-context)");
   });
 
@@ -893,7 +892,7 @@ describe("deepEqualIdentity", () => {
  * giving it a complete vs incomplete bundled-skills layout.
  */
 describe("CLI-version pin contract (handler invariants)", () => {
-  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-onboarding", "first-tree-sync"];
+  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-sync"];
 
   it("does not overwrite the existing pin when integrate fails — next start retries", () => {
     const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");
@@ -904,7 +903,7 @@ describe("CLI-version pin contract (handler invariants)", () => {
     const stalePinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
     expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
 
-    // Force failure: bundled root has only first-tree, the other 4
+    // Force failure: bundled root has only first-tree, the other 3
     // tree skills are missing, so installFirstTreeIntegration returns false.
     const incomplete = makeFixtureSkillsRoot("pin-fail", [{ name: "first-tree", version: "1.0.0" }]);
     const ok = installFirstTreeIntegration({

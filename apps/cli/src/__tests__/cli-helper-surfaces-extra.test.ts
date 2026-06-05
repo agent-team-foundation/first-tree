@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,21 +67,6 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
     json: vi.fn(async () => body),
     text: vi.fn(async () => (typeof body === "string" ? body : JSON.stringify(body))),
   } as unknown as Response;
-}
-
-function commandContext(command: Command, json = false) {
-  return {
-    command,
-    options: { debug: false, json, quiet: false },
-  };
-}
-
-function commandWithOptions(options: Record<string, unknown>): Command {
-  const command = new Command("test");
-  for (const [key, value] of Object.entries(options)) {
-    command.setOptionValue(key, value);
-  }
-  return command;
 }
 
 function setRawArgs(command: Command, rawArgs: string[]): void {
@@ -252,75 +237,5 @@ describe("client org mismatch handler", () => {
       }),
     ).rejects.toMatchObject({ code: 1 });
     expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("Failed to rotate");
-  });
-});
-
-describe("tree command surfaces", () => {
-  it("formats and runs agent-context hooks, claude-hook, inject, review, and placeholder commands", async () => {
-    const { CODEX_CONFIG_PATH, CODEX_HOOKS_PATH, formatAgentContextHookMessages, ensureAgentContextHooks } =
-      await import("../commands/tree/agent-context-hooks.js");
-    const { runClaudeHookCommand } = await import("../commands/tree/claude-hook.js");
-    const { runInjectCommand } = await import("../commands/tree/inject.js");
-    const { createPlaceholderAction, createPlaceholderSubcommand } = await import("../commands/placeholder.js");
-    const { buildReviewPrompt, extractReviewJson, runTreeReview } = await import("../commands/tree/review-helper.js");
-
-    expect(
-      formatAgentContextHookMessages({ claudeSettings: "created", codexConfig: "updated", codexHooks: "unchanged" }),
-    ).toEqual([
-      "Created `.claude/settings.json` with the first-tree SessionStart hook.",
-      "Updated `.codex/config.toml` to enable `codex_hooks`.",
-    ]);
-
-    mkdirSync(join(tempDir, ".codex"), { recursive: true });
-    writeFileSync(join(tempDir, CODEX_CONFIG_PATH), "[other]\nkey = true\n[features]\ncodex_hooks = false\n[next]\n");
-    writeFileSync(
-      join(tempDir, CODEX_HOOKS_PATH),
-      JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "custom" }] }] } }),
-    );
-    const result = ensureAgentContextHooks(tempDir);
-    expect(result.codexConfig).toBe("updated");
-    expect(readFileSync(join(tempDir, CODEX_CONFIG_PATH), "utf8")).toContain("codex_hooks = true");
-    expect(readFileSync(join(tempDir, CODEX_HOOKS_PATH), "utf8")).toContain("custom");
-
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    runClaudeHookCommand(commandContext(commandWithOptions({ root: tempDir }), true));
-    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({ targetRoot: tempDir });
-
-    writeFileSync(join(tempDir, "NODE.md"), "# Local Context\n");
-    const originalCwd = process.cwd();
-    process.chdir(tempDir);
-    try {
-      runInjectCommand(commandContext(new Command("inject")));
-      expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({
-        hookSpecificOutput: { hookEventName: "SessionStart" },
-      });
-    } finally {
-      process.chdir(originalCwd);
-    }
-
-    const diff = join(tempDir, "diff.patch");
-    const reviewOut = join(tempDir, "review.json");
-    writeFileSync(diff, "diff --git a/NODE.md b/NODE.md\n");
-    expect(buildReviewPrompt(diff, tempDir)).toContain("## Diff");
-    expect(extractReviewJson('```json\n{"verdict":"APPROVE"}\n```')).toEqual({ verdict: "APPROVE" });
-    expect(extractReviewJson("not json")).toBeNull();
-    expect(runTreeReview({ diffPath: diff, outputPath: reviewOut, repoRoot: tempDir, runner: () => "no json" })).toBe(
-      1,
-    );
-    expect(
-      runTreeReview({
-        diffPath: diff,
-        outputPath: reviewOut,
-        repoRoot: tempDir,
-        runner: () => '{"verdict":"COMMENT"}',
-      }),
-    ).toBe(0);
-
-    createPlaceholderAction("coming soon")(commandContext(new Command("placeholder")));
-    expect(createPlaceholderSubcommand({ name: "soon", description: "Soon", message: "later" })).toMatchObject({
-      name: "soon",
-      alias: "",
-      summary: "",
-    });
   });
 });

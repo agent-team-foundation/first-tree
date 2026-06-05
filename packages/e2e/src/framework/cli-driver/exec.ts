@@ -54,8 +54,8 @@ export type ExecCliOptions = CliEnvOptions & {
   timeoutMs?: number;
   /**
    * Working directory the spawned CLI runs from. Defaults to `REPO_ROOT`.
-   * Commands that resolve files via `process.cwd()` (e.g. `tree inspect`,
-   * `tree init` against a local source repo fixture) need this.
+   * Commands that resolve files via `process.cwd()` (e.g. `tree verify`
+   * against a local tree-repo fixture) need this.
    */
   cwd?: string;
 };

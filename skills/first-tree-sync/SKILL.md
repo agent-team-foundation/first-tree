@@ -45,7 +45,7 @@ Each phase has a dedicated reference; follow them in order.
 | Use this skill                                       | Use a different skill                                                                |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-context`           |
-| Audit drift since a release                          | Repo is unbound → `first-tree-onboarding` first                                      |
+| Audit drift since a release                          | Repo is unbound → surface to a human (workspace binding is an operator action)        |
 
 ## The Six Drift Types
 
@@ -75,21 +75,22 @@ Definitions, signals, and worked examples in
 | Repair drift                  | [references/fix-workflow.md](references/fix-workflow.md)     |
 | Choose sync vs source-driven write | [references/boundary.md](references/boundary.md)             |
 
-The CLI surface this skill uses today:
+The CLI / filesystem surface this skill uses today:
 
-- `first-tree tree status --json` — confirm the workspace binding and
-  resolve the tree path + bound source list from
-  `<workspaceRoot>/.first-tree/workspace.json`. Read
-  `manifest.tree` to locate the tree subdir and iterate
-  `manifest.sources` (or `boundSources[].name`) for the code side of
-  the audit.
+- **Workspace binding** — read `<workspaceRoot>/.first-tree/workspace.json`
+  directly (the schema is `{ tree: "<dir>", sources: ["<dir>", ...] }`).
+  The `first-tree tree status` CLI that used to wrap this read was
+  retired in 2026-06 along with the rest of the `tree` namespace; the
+  manifest is small JSON, just `cat` / `jq` it. Walk up from cwd to
+  find the workspace root.
 - `first-tree tree verify` — run from inside the tree subdir to
-  surface broken `soft_links` and structure issues.
+  surface broken `soft_links` and structure issues. (The only
+  surviving `tree` subcommand.)
 - `git log <ref>..HEAD -- <path>` — recent-change sweep over each
   bound source repo.
 - `gh pr create` — open the auto-fix tree PR.
 
-There is no `first-tree tree audit` command yet. The audit phase reads code
+There is no `first-tree tree audit` command. The audit phase reads code
 and tree manually; the fix phase opens PRs via `gh`.
 
 ## Hard Rules
