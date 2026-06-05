@@ -112,17 +112,21 @@ export type EditorState =
   | { mode: "edit"; type: ResourceType; resource: ResourceRow };
 
 // ─────────────────────────────────────────────────────────────────────────
-// Add control — one compact "+ <Type>" button per section (admin only). The
-// section-local entry replaces the former single page-header "Add resource"
-// menu: each section owns its own create action, so the type is implicit and
-// empty sections (e.g. MCP) get a direct, in-context affordance instead of a
-// dead end. Settings and the agent Capabilities tab share this trigger shape.
+// Add control — one quiet "+" icon per section (admin only). The section-local
+// entry replaces the former single page-header "Add resource" menu: each section
+// owns its own create action, so the type is implicit (the icon sits beside its
+// section title) and empty sections (e.g. MCP) still get a direct, in-context
+// affordance instead of a dead end. Rendered as a ghost icon — not a bordered
+// "+ <Type>" button — so a page of sections doesn't read as a column of loud
+// buttons; the type is carried by aria-label + tooltip. Settings and the agent
+// Capabilities tab share this trigger shape.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function AddResourceButton({ type, onClick }: { type: ResourceType; onClick: () => void }) {
+  const label = `Add ${typeLabelSingular(type)}`;
   return (
-    <Button size="xs" variant="outline" onClick={onClick}>
-      <Plus className="h-3.5 w-3.5" /> {typeLabelSingular(type)}
+    <Button size="xs" variant="ghost" aria-label={label} title={label} onClick={onClick}>
+      <Plus className="h-4 w-4" />
     </Button>
   );
 }

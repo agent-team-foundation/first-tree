@@ -204,8 +204,8 @@ afterEach(() => {
 describe("resource editors", () => {
   it("creates a repo via the type-first add menu", async () => {
     const { root } = await render();
-    // Section-local entry: each section's "+ <Type>" button opens that type's editor.
-    await click(byText("Repo"));
+    // Section-local entry: each section's "+" icon (aria "Add <Type>") opens that type's editor.
+    await click(byAria("Add Repo"));
 
     const name = document.getElementById("repo-name");
     const url = document.getElementById("repo-url");
@@ -277,7 +277,7 @@ describe("resource editors", () => {
 
   it("creates a stdio mcp with command + args", async () => {
     const { root } = await render();
-    await click(byText("MCP"));
+    await click(byAria("Add MCP"));
     await setInputValue(input("mcp-name"), "github");
     await setInputValue(input("mcp-command"), "npx");
     await click(byText("Add")); // add an args row
@@ -295,7 +295,7 @@ describe("resource editors", () => {
 
   it("creates an http mcp with url and no headers key (no-secret schema)", async () => {
     const { root } = await render();
-    await click(byText("MCP"));
+    await click(byAria("Add MCP"));
     await selectOption("mcp-transport", "http");
     await setInputValue(input("mcp-name"), "remote");
     await setInputValue(input("mcp-url"), "https://x.example.com/sse");
@@ -309,7 +309,7 @@ describe("resource editors", () => {
 
   it("creates a skill with body and metadata", async () => {
     const { root } = await render();
-    await click(byText("Skill"));
+    await click(byAria("Add Skill"));
     await setInputValue(input("skill-name"), "rel");
     const body = document.getElementById("skill-body");
     if (!(body instanceof HTMLTextAreaElement)) throw new Error("skill-body");
@@ -329,7 +329,7 @@ describe("resource editors", () => {
 
   it("blocks an invalid mcp server name client-side (no API call)", async () => {
     const { root } = await render();
-    await click(byText("MCP"));
+    await click(byAria("Add MCP"));
     await setInputValue(input("mcp-name"), "my server"); // space → invalid server id
     await setInputValue(input("mcp-command"), "npx");
     await click(byText("Create"));
@@ -343,8 +343,8 @@ describe("resource editors", () => {
   it("hides add / edit / retire affordances for members but keeps preview", async () => {
     authMock.value = { role: "member", organizationId: "org-1", meLoaded: true };
     const { root } = await render();
-    // No per-section add button (e.g. the MCP section's "+ MCP") for members.
-    expect(byText("MCP")).toBeUndefined();
+    // No per-section add button (e.g. the MCP section's "+" / "Add MCP") for members.
+    expect(byAria("Add MCP")).toBeUndefined();
     expect(byAria("Edit github")).toBeUndefined();
     expect(byAria("Retire github")).toBeUndefined();
     // Read-only preview is available to every member.

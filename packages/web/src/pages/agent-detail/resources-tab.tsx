@@ -174,11 +174,14 @@ function AddCapabilityMenu(props: {
   return (
     <Popover
       align="end"
-      trigger={({ open, toggle }) => (
-        <Button size="xs" variant="outline" aria-expanded={open} onClick={toggle}>
-          <Plus className="h-3.5 w-3.5" /> {typeLabelSingular(props.type)}
-        </Button>
-      )}
+      trigger={({ open, toggle }) => {
+        const label = `Add ${typeLabelSingular(props.type)}`;
+        return (
+          <Button size="xs" variant="ghost" aria-expanded={open} aria-label={label} title={label} onClick={toggle}>
+            <Plus className="h-4 w-4" />
+          </Button>
+        );
+      }}
     >
       {({ close }) => (
         <div style={{ padding: "var(--sp-1)", minWidth: "var(--sp-45)" }}>
