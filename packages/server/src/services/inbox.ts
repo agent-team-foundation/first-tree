@@ -144,10 +144,10 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
 /**
  * Shared payload assembler for already-claimed `inbox_entries` rows.
  *
- * Both the debug `GET /inbox` path (`pollInbox`) and the WS push path
- * (`claimAndBuildForPush`) call this with rows they have just `UPDATE`d to
+ * `pollInbox`, the production WS backlog drain, and the exact-message
+ * prefix-claim helper call this with rows they have just `UPDATE`d to
  * `status='delivered'`. Keeping the silent-context bundling in one place is
- * the only way to keep the two paths from drifting (proposal
+ * the only way to keep delivery paths from drifting (proposal
  * hub-inbox-ws-data-plane §3.2 risk #1).
  *
  * Steps:
@@ -225,9 +225,15 @@ export async function bundleDeliveryWithSilentContext(
 }
 
 /**
- * WS-push helper for a just-fired `NOTIFY (inboxId:messageId)`: find the
- * pending target entry, then atomically claim the same-chat pending prefix
- * through that target.
+ * Exact-message prefix-claim helper: find the pending target entry for a
+ * `messageId`, then atomically claim the same-chat pending prefix through
+ * that target.
+ *
+ * Production WS delivery no longer exact-claims NOTIFY message ids; it treats
+ * NOTIFY as a wake-up hint and drains backlog oldest-first through
+ * `claimBacklogForPush()`. This helper remains for direct tests and any
+ * explicit exact-message claim callers that need the same ack-through prefix
+ * safety.
  *
  * Returns `[]` if no row matches — benign race with another server instance
  * (or the debug `GET /inbox` endpoint) that already claimed the entry.
@@ -235,9 +241,8 @@ export async function bundleDeliveryWithSilentContext(
  *
  * Ack-through safety depends on this prefix behavior: a newer entry must not
  * be claimed/sent while an older same-chat pending entry remains invisible to
- * the client attempt. The production WS handler additionally serializes
- * delivery per agent before sending frames, so the claimed prefix is emitted
- * oldest-first on the socket.
+ * the client attempt. Callers that send the returned frames must preserve the
+ * returned oldest-first order.
  */
 export async function claimAndBuildForPush(
   db: Database,
