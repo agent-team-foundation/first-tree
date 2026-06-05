@@ -430,7 +430,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     expect(logs.join("\n")).toContain("installed first-tree");
   });
 
-  it("skips skills whose on-disk VERSION matches bundled VERSION (fast path)", () => {
+  it("skips skills whose on-disk VERSION + SKILL.md content both match bundled (fast path)", () => {
     const workspace = join(tmpBase, "integrate-skip");
     mkdirSync(workspace, { recursive: true });
     const bundledSkillsRoot = makeFixtureSkillsRoot(
@@ -441,12 +441,14 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // First install populates the workspace.
     installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
 
-    // Mark each installed SKILL.md so we can detect whether the second
-    // install rewrote it. A skip path leaves the marker; a re-copy
-    // overwrites it back to fixture content.
+    // Drop a non-content marker into each installed skill so we can detect
+    // whether the second install ran a full rm+cp (which wipes the marker)
+    // or took the fast skip path (which preserves it). Using a NON-SKILL.md
+    // file is important — touching SKILL.md would itself trigger the
+    // content-drift defense and force a reinstall, which is what the
+    // separate "content drift" test below covers.
     for (const name of TREE_SKILLS) {
-      const marker = join(workspace, ".agents", "skills", name, "SKILL.md");
-      writeFileSync(marker, "SENTINEL_DO_NOT_OVERWRITE\n");
+      writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
     }
 
     const logs: string[] = [];
@@ -458,8 +460,10 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
 
     expect(result, logs.join("\n")).toBe(true);
     for (const name of TREE_SKILLS) {
-      const marker = readFileSync(join(workspace, ".agents", "skills", name, "SKILL.md"), "utf-8");
-      expect(marker, `${name} should have been skipped`).toBe("SENTINEL_DO_NOT_OVERWRITE\n");
+      expect(
+        existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
+        `${name} should have been skipped`,
+      ).toBe(true);
     }
     expect(logs.join("\n")).toContain("up-to-date");
   });
@@ -473,8 +477,9 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     );
     installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledV1, log: () => {} });
 
+    // Marker file (NOT SKILL.md) detects which skills got re-copied.
     for (const name of TREE_SKILLS) {
-      writeFileSync(join(workspace, ".agents", "skills", name, "SKILL.md"), "SENTINEL\n");
+      writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
     }
 
     // New bundled root: bump only first-tree to 2.0.0; the rest stay at 1.0.0.
@@ -494,14 +499,15 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     });
     expect(result, logs.join("\n")).toBe(true);
 
-    // first-tree should have been re-copied (sentinel gone, fixture content back).
-    const firstTreeContent = readFileSync(join(workspace, ".agents", "skills", "first-tree", "SKILL.md"), "utf-8");
-    expect(firstTreeContent).not.toContain("SENTINEL");
+    // first-tree should have been re-copied (marker gone, fixture content back).
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(false);
 
-    // Others should have been skipped (sentinel preserved).
+    // Others should have been skipped (marker preserved).
     for (const name of TREE_SKILLS.filter((n) => n !== "first-tree")) {
-      const content = readFileSync(join(workspace, ".agents", "skills", name, "SKILL.md"), "utf-8");
-      expect(content, `${name} should have been skipped`).toBe("SENTINEL\n");
+      expect(
+        existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
+        `${name} should have been skipped`,
+      ).toBe(true);
     }
 
     expect(logs.join("\n")).toContain("installed first-tree");
@@ -548,15 +554,93 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     rmSync(join(workspace, ".claude", "skills", "first-tree"), { force: true, recursive: true });
     writeFileSync(join(workspace, ".claude", "skills", "first-tree"), "clobbered");
 
-    // Pin agents/.../SKILL.md so we can detect whether the .agents copy ran.
-    writeFileSync(join(workspace, ".agents", "skills", "first-tree", "SKILL.md"), "SENTINEL\n");
+    // Pin a NON-content file in .agents so we can detect whether the
+    // skill dir was re-copied. Touching SKILL.md would conflict with the
+    // installer's content-drift defense (which would correctly treat
+    // SKILL.md drift as a reinstall trigger).
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"), "marker\n");
 
     const result = installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
     expect(result).toBe(true);
     // Symlink was repaired.
     expectSkillInstalled(workspace, "first-tree");
-    // .agents was NOT re-copied — sentinel preserved.
-    expect(readFileSync(join(workspace, ".agents", "skills", "first-tree", "SKILL.md"), "utf-8")).toBe("SENTINEL\n");
+    // .agents was NOT re-copied — sentinel marker preserved.
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(true);
+  });
+
+  it("treats SKILL.md content drift as a reinstall trigger even when VERSION matches (defense in depth)", () => {
+    // Regression for PR #844 review (yuezengwu MINOR finding): the
+    // previous fast path skipped reinstall on VERSION match alone, so a
+    // developer who edited SKILL.md but forgot to bump VERSION would
+    // silently serve stale skills. The content-drift defense catches
+    // this by comparing bundled vs installed SKILL.md content even when
+    // VERSION agrees.
+    const workspace = join(tmpBase, "integrate-content-drift");
+    mkdirSync(workspace, { recursive: true });
+    const bundledSkillsRoot = makeFixtureSkillsRoot(
+      "content-drift",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+
+    // Simulate "developer edited SKILL.md on disk but VERSION never
+    // changed" — same VERSION on both sides, but the installed
+    // SKILL.md has drifted from what the bundled payload now contains.
+    const installedSkillPath = join(workspace, ".agents", "skills", "first-tree", "SKILL.md");
+    writeFileSync(installedSkillPath, "STALE_CONTENT\n");
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      bundledSkillsRoot,
+      log: (m) => logs.push(m),
+    });
+    expect(result, logs.join("\n")).toBe(true);
+
+    // The stale content was overwritten by the bundled fixture content
+    // (not the SENTINEL anymore), confirming the installer detected the
+    // drift and ran a full reinstall instead of taking the fast path.
+    expect(readFileSync(installedSkillPath, "utf-8")).not.toContain("STALE_CONTENT");
+    expect(logs.join("\n")).toContain("installed first-tree");
+  });
+
+  it("falls through to reinstall when bundled VERSION is missing (cannot prove match)", () => {
+    // Edge case yuezengwu flagged: if one side has a VERSION file and the
+    // other doesn't, the fast-path equality check can't fire. Installer
+    // must treat the missing fingerprint as "unknown" and do a full copy
+    // rather than silently skipping.
+    const workspace = join(tmpBase, "integrate-missing-version");
+    mkdirSync(workspace, { recursive: true });
+
+    // First install: bundled has VERSION.
+    const bundledWith = makeFixtureSkillsRoot(
+      "missing-version-with",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledWith, log: () => {} });
+
+    // Drop sentinel into installed skill so we can detect re-copy.
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"), "marker\n");
+
+    // Second install: bundled root has NO VERSION file for any skill.
+    const bundledWithout = makeFixtureSkillsRoot(
+      "missing-version-without",
+      TREE_SKILLS.map((n) => ({ name: n })),
+    );
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      bundledSkillsRoot: bundledWithout,
+      log: (m) => logs.push(m),
+    });
+    expect(result, logs.join("\n")).toBe(true);
+
+    // Sentinel gone — full reinstall ran because the fingerprint match
+    // could not be proven.
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(false);
+    expect(logs.join("\n")).toContain("installed first-tree");
   });
 });
 

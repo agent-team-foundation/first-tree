@@ -64,9 +64,10 @@ const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>
 
 /**
  * Resolved Context Tree binding the runtime threads through every layer:
- * the local checkout path AND the upstream coordinates `first-tree tree
- * integrate` needs to write a complete `local-tree.json` (without the URL
- * the skill cannot pull/push later).
+ * the local checkout path AND the upstream coordinates. The URL is
+ * surfaced in the agent briefing so the LLM can reference the upstream
+ * repo when describing the tree to humans, even though Client-side
+ * read-only sync only needs the local path.
  */
 export type ContextTreeBinding = {
   path: string;

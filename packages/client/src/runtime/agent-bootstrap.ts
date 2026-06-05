@@ -74,10 +74,12 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
 /**
  * Run the agent-home bootstrap that every handler shares: stable `.agent/`
  * layout, unified briefing rewrite (AGENTS.md + CLAUDE.md symlink), core-skill
- * install, and (for Context-Tree-bound agents) `first-tree tree skill install`.
- * Gated by the stage-2 sentinel + Context-Tree-HEAD / CLI-version drift
- * detection so a changed tree or a `first-tree upgrade` forces a refresh,
- * while the steady-state path is a cheap identity check.
+ * install, and (for Context-Tree-bound agents) the inline first-tree skill
+ * install (`installFirstTreeIntegration`, which copies bundled skill payloads
+ * straight from `@first-tree/client`'s own `skills/` directory). Gated by the
+ * stage-2 sentinel + Context-Tree-HEAD / Client-version drift detection so a
+ * changed tree or a client upgrade forces a refresh, while the steady-state
+ * path is a cheap identity check.
  *
  * The unified briefing is **always rewritten** on every call, irrespective of
  * drift — it carries per-chat content (chat ID, participants, source-repo

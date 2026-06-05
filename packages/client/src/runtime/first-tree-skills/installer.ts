@@ -22,6 +22,7 @@
 //     skill failed. Caller logs the failure and continues — the agent
 //     session still starts, the skill just isn't on disk.
 
+import { randomBytes } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -29,9 +30,11 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +141,22 @@ function readVersionFile(dir: string): string | null {
   }
 }
 
+/**
+ * Read the skill's SKILL.md content for fast-path content-drift detection.
+ * Returns null when the file is missing or unreadable — callers treat null
+ * as "unknown" and fall through to a full reinstall rather than asserting
+ * equality on a missing fingerprint.
+ */
+function readSkillMd(dir: string): string | null {
+  const skillPath = join(dir, "SKILL.md");
+  if (!existsSync(skillPath)) return null;
+  try {
+    return readFileSync(skillPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 type SymlinkInspection =
   | { kind: "missing" }
   | { kind: "symlink"; target: string }
@@ -156,15 +175,49 @@ function inspectPath(p: string): SymlinkInspection {
   return { kind: "file" };
 }
 
+/**
+ * Make `<workspacePath>/.claude/skills/<name>` a relative symlink to the
+ * matching `.agents/skills/<name>` directory.
+ *
+ * Uses the same temp-path + rename atomic-swap pattern as
+ * `ensureClaudeMdSymlink` in `bootstrap.ts` (PR #797 nit) so two
+ * concurrent same-agent session starts cannot race the unlink/symlink
+ * pair into an `EEXIST`. We materialise the new link at a unique
+ * sibling path then `rename` it onto the target — POSIX makes that
+ * atomic, and rename overwrites any existing file or symlink in place.
+ * The temp file is cleaned up on any failure so a crashed write does
+ * not leak siblings.
+ *
+ * Skips the swap entirely when the existing entry already points at
+ * the correct target (the steady-state fast path on every session
+ * start). Replaces anything else — a stale symlink, a clobbered
+ * regular file, or even a directory that ended up there by mistake.
+ */
 function ensureClaudeSymlink(workspacePath: string, layout: SkillLayout): void {
   const claudeFull = join(workspacePath, layout.claudeRelPath);
   mkdirSync(dirname(claudeFull), { recursive: true });
   const existing = inspectPath(claudeFull);
   if (existing.kind === "symlink" && existing.target === layout.claudeSymlinkTarget) return;
-  if (existing.kind !== "missing") {
-    rmSync(claudeFull, { force: true, recursive: true });
+
+  const tempPath = `${claudeFull}.${randomBytes(6).toString("hex")}.tmp`;
+  symlinkSync(layout.claudeSymlinkTarget, tempPath);
+  try {
+    // `renameSync` overwrites a regular file or symlink in place atomically
+    // on POSIX; on a directory it returns ENOTDIR / EISDIR depending on
+    // platform. Pre-remove the directory case explicitly so the atomic
+    // swap below has a uniform target shape.
+    if (existing.kind === "directory") {
+      rmSync(claudeFull, { force: true, recursive: true });
+    }
+    renameSync(tempPath, claudeFull);
+  } catch (err) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Best-effort cleanup — surface the original rename failure.
+    }
+    throw err;
   }
-  symlinkSync(layout.claudeSymlinkTarget, claudeFull);
 }
 
 /**
@@ -187,10 +240,25 @@ export function installOneSkill(workspacePath: string, layout: SkillLayout): "in
   const agentsFull = join(workspacePath, layout.agentsRelPath);
   const installedVersion = inspectPath(agentsFull).kind === "directory" ? readVersionFile(agentsFull) : null;
 
-  // Fast path: same version on both sides AND the claude symlink looks
-  // right. If only the symlink is wrong, fall through so we rewrite it
+  // Fast path: same VERSION on both sides AND SKILL.md content matches
+  // AND the claude symlink looks right. Comparing SKILL.md content as
+  // well as VERSION is a defense-in-depth against the human-forgot-to-
+  // bump-VERSION failure mode (PR #844 review — yuezengwu): without it,
+  // a developer who edits SKILL.md but leaves VERSION at the previous
+  // value would silently serve stale skills to every running agent. The
+  // SKILL.md read is a few KB per skill per session start — negligible.
+  // If only the claude symlink is wrong, fall through so we rewrite it
   // without a full re-copy.
-  if (bundledVersion !== null && installedVersion !== null && bundledVersion === installedVersion) {
+  const fingerprintsAgree =
+    bundledVersion !== null &&
+    installedVersion !== null &&
+    bundledVersion === installedVersion &&
+    (() => {
+      const bundledSkill = readSkillMd(layout.sourceDir);
+      const installedSkill = readSkillMd(agentsFull);
+      return bundledSkill !== null && installedSkill !== null && bundledSkill === installedSkill;
+    })();
+  if (fingerprintsAgree) {
     const claudeFull = join(workspacePath, layout.claudeRelPath);
     const claudeState = inspectPath(claudeFull);
     if (claudeState.kind === "symlink" && claudeState.target === layout.claudeSymlinkTarget) {

@@ -24,10 +24,6 @@
     "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests",
     "smoke:codex-sandbox": "node scripts/codex-sandbox-smoke.mjs"
   },
-  "files": [
-    "dist/",
-    "skills/"
-  ],
   "engines": {
     "node": ">=22.16.0"
   },
