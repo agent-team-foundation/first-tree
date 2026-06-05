@@ -39,7 +39,11 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
   "connect-code": {
     title: "Connect your code",
-    why: "Connect your GitHub projects so your agent can work on them.",
+    // Answer "why connect a repo?" in value terms (the issue-834 UR gap): connecting
+    // isn't just access — it's how the agent learns the project and turns it
+    // into the team's shared context. The second clause reassures the user the
+    // agent won't touch their code unsupervised.
+    why: "Connect a project — your agent learns it and turns it into shared context. It never changes your code without your okay.",
   },
   "connect-computer": {
     title: "Connect your computer",
@@ -207,14 +211,18 @@ export const COPY = {
     // admin — new Context Tree (default when the team has none yet). This is
     // the first time the user meets "Context Tree", so lead with a plain
     // one-line gloss of what it is + why it helps before saying what happens.
-    newTitle: "Start building your Context Tree",
+    // Approval is phrased concretely ("nothing's saved unless you say yes")
+    // instead of "walking you through each change to approve" — the latter
+    // reads vague about what is actually being approved (per issue-834 copy review).
+    newTitle: "Start your Context Tree",
     newWhy:
-      "A Context Tree is a living map of how your team works, so your agent starts with real context instead of guessing. You're all set — your agent builds it with you in the chat, walking you through each change to approve.",
+      "Your Context Tree is your team's shared memory — what agents need to work like they already know your project. Your agent drafts the first pieces with you in the chat, and nothing's saved unless you say yes.",
     haveExisting: "I already have a Context Tree",
-    // admin — existing Context Tree (auto-detected from team settings, or pasted)
+    // admin — existing Context Tree (auto-detected from team settings, or pasted).
+    // Same gloss as newWhy so both kickoff paths teach the concept identically.
     existingTitle: "Use your team's Context Tree",
     existingWhy:
-      "Your team already has a Context Tree — your agent will build on it, walking you through each change to approve in the chat.",
+      "Your Context Tree is your team's shared memory — what agents need to work like they already know your project. Your team already has one; your agent builds on it with you in the chat, and nothing's saved unless you say yes.",
     existingUrlLabel: "Context Tree link",
     autoDetectedNote: "Your team already has one — your agent will build on it. Edit the link or create a new one.",
     createInstead: "Create new instead",
