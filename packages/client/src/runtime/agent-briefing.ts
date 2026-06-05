@@ -120,11 +120,13 @@ function requiredReadingSection(contextTreePath: string | null): string | null {
   return `# Required Reading
 
 Before responding to any non-trivial instruction in this chat, you MUST
-load both skills below — even before the pre-task hygiene checks they
-describe. The \`# Working in First Tree\` section above carries the
-minimum mechanics you need to operate at all (final-text contract,
-chat send, working directory, CLI surface); the skills below carry
-the durable rules that are intentionally NOT duplicated inline.
+load both skills below — loading them **is** the first step of the
+pre-task hygiene the \`first-tree\` skill itself describes. The
+\`# Working in First Tree\` section above carries the minimum
+mechanics you need to operate at all (final-text contract, chat send,
+working directory, CLI surface); the skills below carry the durable
+rules in full, with the inline briefing only summarising the slices
+needed for those workspace-collab basics.
 
 1. **\`first-tree\`** — what First Tree is, the three-principal model
    (Server / Client / Agent), the Communication Principles in full,
@@ -139,10 +141,11 @@ These two are unconditional. The remaining First Tree skill
 (\`first-tree-sync\`) loads on demand based on the task signal as
 listed in the First Tree Family map below.
 
-Skipping either skill costs you daemon-lifecycle constraints,
-communication contracts, or write-side hard rules that are not
-duplicated in this briefing — acting without them is the #1 source
-of advice that conflicts with reality.`;
+Skipping either skill costs you the daemon-lifecycle invariants, the
+full Communication Principles, the source-system boundary, and the
+write-side Hard Rules + Double Test — content the inline briefing
+either omits or only summarises. Acting without them is the #1
+source of advice that conflicts with reality.`;
 }
 
 // --- # Working in First Tree -------------------------------------------------
