@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   BINDING_CONTRACT_MARKER,
@@ -19,7 +19,7 @@ import {
 } from "./binding-contract.js";
 import type { SourceBindingMode, TreeMode } from "./binding-state.js";
 import { ensureTrailingNewline } from "./shared.js";
-import { type ManagedFileAction, upsertWhitepaperFile } from "./skill-lib.js";
+import type { ManagedFileAction } from "./skill-lib.js";
 
 export type SourceIntegrationFile = "AGENTS.md" | "CLAUDE.md";
 
@@ -104,7 +104,19 @@ function deriveSourceIntegrationDetails(
   scopeText: string;
   sourceStatePathValue?: string;
 } {
-  const bindingMode = options?.bindingMode ?? "standalone-source";
+  // PR-C (audit Finding 7): the previous fallback default was
+  // "standalone-source" — a legacy value that no W1 caller should ever
+  // produce. After `upgradeSourceRoot` rejects pre-W1 bindings up
+  // front, every reachable caller passes a `bindingMode` of
+  // `workspace-root` or `workspace-member`. A reachable
+  // `bindingMode === undefined` here is a bug; surface it loudly so
+  // we don't silently rebuild legacy artifacts.
+  if (options?.bindingMode === undefined) {
+    throw new Error(
+      "deriveSourceIntegrationDetails called without a bindingMode; W1 callers must pass workspace-root or workspace-member.",
+    );
+  }
+  const bindingMode = options.bindingMode;
   const treeMode = options?.treeMode ?? "dedicated";
   const entrypoint = options?.entrypoint ?? "/";
   const sourceStatePathValue = options?.sourceStatePath;
@@ -335,26 +347,15 @@ export function upsertLocalTreeGitIgnore(root: string): GitIgnoreUpdate {
   return { action: exists ? "updated" : "created", file: ".gitignore" };
 }
 
-export function ensureWhitepaperSymlink(root: string): ManagedFileAction {
-  return upsertWhitepaperFile(root);
-}
-
-export function readManagedWhitepaperTarget(root: string): string | null {
-  const fullPath = join(root, "WHITEPAPER.md");
-  try {
-    const stat = lstatSync(fullPath);
-    if (!stat.isSymbolicLink()) {
-      return null;
-    }
-    return readlinkSync(fullPath);
-  } catch {
-    return null;
-  }
-}
-
-export function removeManagedWhitepaper(root: string): void {
-  const fullPath = join(root, "WHITEPAPER.md");
-  if (readManagedWhitepaperTarget(root) !== null) {
-    rmSync(fullPath, { force: true });
-  }
-}
+// PR-C (audit Finding 2): `ensureWhitepaperSymlink`,
+// `readManagedWhitepaperTarget`, and `removeManagedWhitepaper` were
+// the source/tree-root WHITEPAPER.md plumbing for the pre-W1 layout.
+// PR-A removed the tree-root call sites (init + upgrade-tree path),
+// PR-A round 2 closed the upgrade-tree-root path, and PR-C closes the
+// last reachable caller by making `upgradeSourceRoot` reject legacy
+// bindings. With nothing in the live tree calling these helpers, the
+// definitions go too. Callers that want to verify a tree subdir does
+// NOT contain WHITEPAPER.md can check via plain `existsSync`. The
+// migrate cleanup path in `apps/cli/src/core/migrate-workspace.ts`
+// has always used its own `tryRemove` against `WHITEPAPER.md` and is
+// unaffected.

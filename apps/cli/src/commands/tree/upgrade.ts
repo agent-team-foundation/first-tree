@@ -12,15 +12,11 @@ import {
   removeAgentContextHooks,
 } from "./agent-context-hooks.js";
 import { readSourceBindingContract } from "./binding-contract.js";
-import { removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
+import { isLegacyBindingMode, removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
 import type { Tier0RuleLayerSummary } from "./rule-layer.js";
 import { ensureTier0RuleLayer, validateWorkflowPath } from "./rule-layer.js";
 import { copyCanonicalSkills, readBundledSkillVersion } from "./skill-lib.js";
-import {
-  ensureWhitepaperSymlink,
-  upsertLocalTreeGitIgnore,
-  upsertSourceIntegrationFiles,
-} from "./source-integration.js";
+import { upsertLocalTreeGitIgnore, upsertSourceIntegrationFiles } from "./source-integration.js";
 import { describeTemplateWriteResult } from "./template-write.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 
@@ -55,8 +51,28 @@ function upgradeSourceRoot(targetRoot: string, bundledSkillVersion: string): Upg
     throw new Error("No First Tree source/workspace binding was found in `AGENTS.md` or `CLAUDE.md`.");
   }
 
+  // PR-C (audit Finding 7 + 2b): pre-W1 source repos cannot be kept
+  // alive by `tree skill upgrade`. The workspace-layout decision
+  // committed to "workspace-rooted only", and continuing to refresh
+  // `WHITEPAPER.md` / `.agents/skills/` / `AGENTS.md` framework blocks
+  // on a `standalone-source` / `shared-source` binding silently
+  // preserves the old shape rather than driving the user toward the
+  // migration. Refuse the upgrade up front, with a clear pointer at
+  // `first-tree tree migrate-to-w1`. This also implicitly closes
+  // Finding 2b (source-root WHITEPAPER) because the call chain from
+  // here to `ensureWhitepaperSymlink` is now unreachable on legacy
+  // bindings.
+  if (sourceBinding.bindingMode !== undefined && isLegacyBindingMode(sourceBinding.bindingMode)) {
+    throw new Error(
+      [
+        `\`tree skill upgrade\` is not supported on pre-W1 source repos (binding mode: ${sourceBinding.bindingMode}).`,
+        "Run `first-tree tree migrate-to-w1` from the workspace root first, then retry the upgrade.",
+        "See workspace-layout.md for the workspace-rooted layout this CLI now expects.",
+      ].join("\n"),
+    );
+  }
+
   copyCanonicalSkills(targetRoot);
-  ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
   upsertSourceIntegrationFiles(targetRoot, sourceBinding.treeRepoName, {
     binName: channelConfig.binName,

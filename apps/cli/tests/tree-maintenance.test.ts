@@ -49,12 +49,12 @@ describe("buildSourceIntegrationBlock", () => {
 });
 
 describe("upgradeTargetRoot", () => {
-  it("upgrades a bound source root", () => {
+  it("upgrades a W1 workspace-member source root", () => {
     const sourceRoot = makeTempDir("first-tree-upgrade-source-");
     writeFileSync(
       join(sourceRoot, "AGENTS.md"),
       `${buildSourceIntegrationBlock("context-tree", {
-        bindingMode: "shared-source",
+        bindingMode: "workspace-member",
         entrypoint: "/repos/product-repo",
         treeMode: "shared",
         treeRepoName: "context-tree",
@@ -64,6 +64,27 @@ describe("upgradeTargetRoot", () => {
     const summary = upgradeTargetRoot(sourceRoot);
 
     expect(summary.targetKind).toBe("source");
+  });
+
+  it("refuses to upgrade a pre-W1 source root and points the user at migrate-to-w1 (PR-C)", () => {
+    // PR-C audit Finding 7 + 2b: `tree skill upgrade` on a pre-W1 source
+    // repo no longer silently refreshes the legacy injection — it
+    // throws up front so the user runs `migrate-to-w1` first. Exercise
+    // both legacy binding modes.
+    for (const bindingMode of ["standalone-source", "shared-source"] as const) {
+      const sourceRoot = makeTempDir(`first-tree-upgrade-legacy-${bindingMode}-`);
+      writeFileSync(
+        join(sourceRoot, "AGENTS.md"),
+        `${buildSourceIntegrationBlock("context-tree", {
+          bindingMode,
+          entrypoint: "/",
+          treeMode: "shared",
+          treeRepoName: "context-tree",
+        })}\n`,
+      );
+
+      expect(() => upgradeTargetRoot(sourceRoot)).toThrowError(/migrate-to-w1/u);
+    }
   });
 
   it("upgrades a tree root", () => {
@@ -274,25 +295,23 @@ describe("agent hooks scope to workspace-root only", () => {
     expect(readFileSync(join(root, CODEX_CONFIG_PATH), "utf-8")).toMatch(/codex_hooks\s*=\s*true/);
   });
 
-  it("shared-source: does not install hooks", () => {
+  it("shared-source: upgrade refuses (PR-C) — no hook plumbing executes", () => {
+    // PR-C audit Finding 7: legacy bindings now hit the early-return
+    // reject. The original behavioral pin (no hooks installed) is
+    // preserved structurally: nothing runs, so nothing writes. Pin the
+    // refusal directly.
     const root = makeTempDir("first-tree-hooks-shared-");
     writeBinding(root, "shared-source");
 
-    const summary = upgradeTargetRoot(root);
-
-    expect(summary.hookSync.claudeSettings).toBe("unchanged");
-    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(() => upgradeTargetRoot(root)).toThrowError(/migrate-to-w1/u);
     expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
   });
 
-  it("standalone-source: does not install hooks", () => {
+  it("standalone-source: upgrade refuses (PR-C) — no hook plumbing executes", () => {
     const root = makeTempDir("first-tree-hooks-standalone-");
     writeBinding(root, "standalone-source");
 
-    const summary = upgradeTargetRoot(root);
-
-    expect(summary.hookSync.claudeSettings).toBe("unchanged");
-    expect(summary.hookSync.codexHooks).toBe("unchanged");
+    expect(() => upgradeTargetRoot(root)).toThrowError(/migrate-to-w1/u);
     expect(existsSync(join(root, CLAUDE_SETTINGS_PATH))).toBe(false);
   });
 

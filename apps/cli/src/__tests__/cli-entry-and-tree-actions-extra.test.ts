@@ -201,14 +201,18 @@ describe("tree bootstrap, upgrade, and codeowners actions", () => {
     };
     expect(treePayload).toMatchObject({ targetKind: "tree", targetRoot: tree });
 
+    // PR-C: upgrade on a W1 workspace-member source root continues to
+    // succeed. Pre-W1 source bindings (`shared-source` /
+    // `standalone-source`) now throw a migrate-to-w1 pointer; the
+    // reject path itself is exercised in tree-maintenance.test.ts.
     const source = makeTempDir("ft-upgrade-source-");
     writeFileSync(
       join(source, "AGENTS.md"),
-      buildSourceIntegrationBlock("context-tree", { bindingMode: "shared-source" }),
+      buildSourceIntegrationBlock("context-tree", { bindingMode: "workspace-member" }),
     );
     writeFileSync(
       join(source, "CLAUDE.md"),
-      buildSourceIntegrationBlock("context-tree", { bindingMode: "shared-source" }),
+      buildSourceIntegrationBlock("context-tree", { bindingMode: "workspace-member" }),
     );
     process.chdir(source);
     upgradeCommand.action(context(commandWithOptions({}), false));

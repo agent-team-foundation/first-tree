@@ -98,17 +98,12 @@ describe("initializeWorkspaceRoot", () => {
     expect(existsSync(join(sourcePath, ".first-tree", "source.json"))).toBe(false);
   });
 
-  it("rejects scope=repo with guidance pointing at the workspace recipe", () => {
-    const workspaceRoot = makeTempDir("first-tree-init-repo-scope-");
-
-    expect(() =>
-      initializeWorkspaceRoot(workspaceRoot, {
-        scope: "repo",
-        treeMode: "dedicated",
-        treePath: "./tree",
-      }),
-    ).toThrow("workspace-scope recipe");
-  });
+  // PR-C: the previous "rejects scope=repo with guidance" test went
+  // away with InitOptions.scope. The user-facing `--scope` flag is no
+  // longer a parser option (commander surfaces it as "unknown option");
+  // see `tree-extra-coverage.test.ts` for that regression PIN. The
+  // programmatic-API surface no longer accepts `scope` either, so
+  // there is no W1 caller that can produce the old failure mode.
 
   it("derives tree-mode=dedicated when no --tree-url is given (PR-B regression PIN)", () => {
     // Lone-source recipe after PR-B no longer passes `--tree-mode
