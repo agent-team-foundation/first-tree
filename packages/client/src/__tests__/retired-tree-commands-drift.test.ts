@@ -139,6 +139,55 @@ function findRetiredHitsInBash(file: string): Array<{ subcommand: string; line: 
   return hits;
 }
 
+/**
+ * Skill metadata files (composer UI prompts, agent default prompts) live
+ * under `skills/<name>/agents/*.yaml` and `skills/<name>/agents/*.yml`.
+ * They are NOT bash blocks but they tell composer / runtime what to
+ * route an agent at. PR #848 review (baixiaohang R2) caught a stale
+ * routing line in `skills/first-tree-context/agents/openai.yaml` that
+ * the markdown-only scan missed — this list of retired skill names is
+ * the drift-guard contract for those files.
+ */
+const RETIRED_SKILL_NAMES = [
+  "first-tree-onboarding",
+  "first-tree-write",
+  "first-tree-github-scan",
+  "first-tree-cloud",
+] as const;
+
+function listAgentMetadataFiles(skillsRoot: string): string[] {
+  const out: string[] = [];
+  function walk(dir: string): void {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = join(dir, name);
+      let stat: ReturnType<typeof statSync>;
+      try {
+        stat = statSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        walk(full);
+      } else if (stat.isFile() && (name.endsWith(".yaml") || name.endsWith(".yml"))) {
+        out.push(full);
+      }
+    }
+  }
+  // Only scan `agents/` subtrees — that's the composer-facing metadata
+  // surface. Other YAML in the repo (CI workflows, vitest configs) isn't
+  // about skill routing.
+  for (const name of SHIPPED_SKILLS) {
+    walk(join(skillsRoot, name, "agents"));
+  }
+  return out;
+}
+
 describe("retired tree subcommand drift guard", () => {
   it("no shipped skill bash block tells an agent to run a retired `tree` subcommand", () => {
     const skillsRoot = join(repoRoot, "skills");
@@ -201,6 +250,40 @@ describe("retired tree subcommand drift guard", () => {
       // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.
       const re = new RegExp(`\\b(?:first-tree|ft)\\s+tree\\s+${sub}\\b`, "u");
       expect(overview, `CLI Overview must not advertise retired \`tree ${sub}\``).not.toMatch(re);
+    }
+  });
+
+  it("no shipped skill agent metadata YAML routes to a retired skill", () => {
+    // Composer reads `skills/<name>/agents/*.yaml` to render the
+    // composer UI's "Resources" pickers and to seed the default agent
+    // prompt. Any reference to a retired skill name (e.g. the previous
+    // `first-tree-onboarding` payload) routes users at something that
+    // is no longer on disk; PR #848 review (baixiaohang R2) flagged
+    // exactly this class of drift in `first-tree-context/agents/
+    // openai.yaml`. The repo-root markdown / bash drift guard above
+    // missed it because the file is YAML, not markdown.
+    const skillsRoot = join(repoRoot, "skills");
+    const failures: Array<{ file: string; skill: string; line: number; snippet: string }> = [];
+    for (const yamlPath of listAgentMetadataFiles(skillsRoot)) {
+      const lines = readFileSync(yamlPath, "utf-8").split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i] ?? "";
+        for (const skill of RETIRED_SKILL_NAMES) {
+          // Word-boundary match so a comment that says "first-tree-onboarding
+          // was retired" inside a literal explainer would still fail —
+          // skill metadata should not name a retired skill at all.
+          const re = new RegExp(`\\b${skill}\\b`, "u");
+          if (re.test(line)) {
+            failures.push({ file: relative(repoRoot, yamlPath), skill, line: i + 1, snippet: line.trim() });
+          }
+        }
+      }
+    }
+    if (failures.length > 0) {
+      const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.skill}\` — ${f.snippet}`).join("\n");
+      throw new Error(
+        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-sync\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
+      );
     }
   });
 });
