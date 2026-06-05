@@ -346,12 +346,12 @@ describe("ResourcesTab and SaveBar", () => {
     expect(container.textContent).not.toContain("Prompts");
     expect(container.textContent).toContain("Team repo");
     expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
-    // Each editable section gets a "+ <Type>" add control.
-    expect(buttonByText(container, "Repo")).toBeTruthy();
+    // Each editable section gets a quiet "+" add control (aria "Add <Type>").
+    expect(container.querySelector('button[aria-label="Add Repo"]')).toBeTruthy();
 
     // Enable an opt-in team skill via the skill section's add menu. The menu
     // panel portals to document.body, so query the item there.
-    await click(buttonByText(container, "Skill"));
+    await click(container.querySelector('button[aria-label="Add Skill"]'));
     await click(buttonByText(document.body, "Available skill"));
     expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
       expectedVersion: 3,
@@ -370,9 +370,9 @@ describe("ResourcesTab and SaveBar", () => {
     await waitForText(container, "Integrations (MCP)");
 
     // The MCP section is empty and the team offers nothing to enable — but the
-    // "+ MCP" menu must still be actionable: it explains the source and routes
-    // to Settings → Resources instead of leaving a dead end.
-    await click(buttonByText(container, "MCP"));
+    // "+" (Add MCP) menu must still be actionable: it explains the source and
+    // routes to Settings → Resources instead of leaving a dead end.
+    await click(container.querySelector('button[aria-label="Add MCP"]'));
     expect(document.body.textContent).toContain("No team MCP integrations to enable yet");
     expect(document.body.textContent).toContain("Manage in Settings → Resources");
   });
