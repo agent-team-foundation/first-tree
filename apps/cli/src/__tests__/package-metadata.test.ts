@@ -35,6 +35,12 @@ describe("npm package metadata", () => {
     expect(files).toEqual(expect.arrayContaining(["dist", "README.md", "LICENSE"]));
   });
 
+  it("includes bundled skills in the tarball allow-list", () => {
+    const files = packageFiles(readJson(join(CLI_ROOT, "package.json")));
+
+    expect(files).toEqual(expect.arrayContaining(["skills"]));
+  });
+
   it("keeps a package-local README for the npm registry page", () => {
     const readmePath = join(CLI_ROOT, "README.md");
 

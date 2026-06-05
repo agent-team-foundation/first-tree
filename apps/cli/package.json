@@ -40,7 +40,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
-    "prepack": "rm -rf skills && cp -R ../../skills .",
+    "package:stage-skills": "node scripts/stage-bundled-skills.mjs",
+    "prepack": "node scripts/stage-bundled-skills.mjs",
     "postpack": "rm -rf skills"
   },
   "license": "Apache-2.0",

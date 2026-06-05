@@ -159,6 +159,10 @@ jobs:
 
       - run: pnpm typecheck
 
+      - name: Stage bundled CLI skills
+        working-directory: apps/cli
+        run: npm run package:stage-skills
+
       - name: Publish to npm
         working-directory: apps/cli
         run: npm publish --tag latest --access public
@@ -314,6 +318,11 @@ jobs:
 
       - if: steps.version.outputs.publish == 'true'
         run: pnpm build
+
+      - name: Stage bundled CLI skills
+        if: steps.version.outputs.publish == 'true'
+        working-directory: apps/cli
+        run: npm run package:stage-skills
 
       - name: Publish to npm
         if: steps.version.outputs.publish == 'true'
