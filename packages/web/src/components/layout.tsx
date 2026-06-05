@@ -16,6 +16,12 @@ const navTabs = [
   { to: "/settings", label: "Settings", end: false },
 ];
 
+// Parent brand site. The dashboard is the cloud / collaboration layer of First
+// Tree, so the header brand links out to the marketing site. Naming mirrors the
+// landing `footer.tsx` constant of the same value. Opens in a new tab so the
+// click never interrupts the user's in-app work.
+const PARENT_URL = "https://first-tree.ai";
+
 export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -96,13 +102,21 @@ export function Layout() {
         {/* Brand cluster: logo + name welded together, then the optional chip. */}
         {dropBrand ? null : (
           <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
-            <span className="flex items-center" style={{ gap: 10, flexShrink: 0 }}>
+            {/* Brand links out to the parent marketing site in a new tab. */}
+            <a
+              href={PARENT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="First Tree — open first-tree.ai in a new tab"
+              className="flex items-center cursor-pointer"
+              style={{ gap: 10, flexShrink: 0 }}
+            >
               <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
               {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
               <span className="text-title" style={{ color: "var(--fg)" }}>
                 First Tree
               </span>
-            </span>
+            </a>
             <DisconnectChip />
           </div>
         )}
