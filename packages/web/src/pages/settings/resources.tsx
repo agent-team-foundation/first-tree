@@ -20,6 +20,7 @@ import { useToast } from "../../components/ui/toast.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import {
   AddResourceMenu,
+  defaultEnabledLabel,
   type EditorState,
   RESOURCE_TYPES,
   ResourceEditor,
@@ -74,7 +75,7 @@ export function SettingsResourcesPage() {
     <>
       <PageHeader
         title="Resources"
-        subtitle="Team defaults and available resources used by agents at runtime."
+        subtitle="Team defaults and opt-in resources used by agents at runtime."
         right={isAdmin ? <AddResourceMenu onPick={(type) => setEditor({ mode: "create", type })} /> : undefined}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
@@ -174,7 +175,7 @@ function ResourceListRow(props: {
             {props.resource.name}
           </p>
           <Badge variant={props.resource.defaultEnabled === "recommended" ? "secondary" : "outline"}>
-            {props.resource.defaultEnabled}
+            {defaultEnabledLabel(props.resource.defaultEnabled)}
           </Badge>
         </div>
         {detail ? (

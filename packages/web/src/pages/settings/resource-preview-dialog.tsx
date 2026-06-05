@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Badge } from "../../components/ui/badge.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/ui/markdown.js";
+import { defaultEnabledLabel } from "./resource-editors.js";
 
 /**
  * Read-only detail view for a single team resource. Opened from the eye icon on
@@ -203,7 +204,7 @@ export function ResourcePreviewDialog({ resource, onClose }: { resource: Resourc
           </DialogHeader>
           <div>
             <Badge variant={resource.defaultEnabled === "recommended" ? "secondary" : "outline"}>
-              {resource.defaultEnabled}
+              {defaultEnabledLabel(resource.defaultEnabled)}
             </Badge>
           </div>
           <MetaFields resource={resource} />
