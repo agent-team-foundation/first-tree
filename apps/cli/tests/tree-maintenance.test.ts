@@ -315,6 +315,24 @@ describe("agent hooks scope to workspace-root only", () => {
     expect(readFileSync(join(root, CLAUDE_SETTINGS_PATH), "utf-8")).not.toContain(INJECT_CONTEXT_COMMAND);
   });
 
+  it("tree repo upgrade: does NOT scaffold tree-root WHITEPAPER.md (PR-A finding 2a)", () => {
+    // Companion to bootstrap.ts:59's removal. `upgradeTargetRoot` on a tree
+    // repo previously called `ensureWhitepaperSymlink(targetRoot)` at
+    // `upgrade.ts:96`, which silently re-created the dead write that
+    // `tree init` no longer produces. Pin the upgrade path's behavior too.
+    const root = makeTempDir("first-tree-upgrade-tree-no-whitepaper-");
+    writeTreeState(root, {
+      treeId: "context-tree",
+      treeMode: "shared",
+      treeRepoName: "context-tree",
+    });
+
+    const summary = upgradeTargetRoot(root);
+
+    expect(summary.targetKind).toBe("tree");
+    expect(existsSync(join(root, "WHITEPAPER.md"))).toBe(false);
+  });
+
   it("removeAgentContextHooks preserves user-added hooks in the same file", () => {
     const root = makeTempDir("first-tree-hooks-preserve-user-");
     mkdirSync(join(root, ".claude"), { recursive: true });

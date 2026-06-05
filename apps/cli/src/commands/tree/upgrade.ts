@@ -93,7 +93,6 @@ function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): Upgra
   }
 
   copyCanonicalSkills(targetRoot);
-  ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
   writeFileSync(join(targetRoot, TREE_VERSION_FILE), `${bundledSkillVersion}\n`);
   const tier0RuleLayer = ensureTier0RuleLayer(targetRoot);
