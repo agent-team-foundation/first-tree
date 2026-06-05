@@ -311,6 +311,19 @@ export function Select({
         createPortal(
           <div
             ref={panelRef}
+            // The panel is portaled to `document.body`, which sits OUTSIDE any
+            // open modal (Radix `Dialog`/`Popover` set `pointer-events: none`
+            // on the body and only re-enable it inside their own content). Two
+            // fixes are needed so the panel works inside a modal:
+            //   1. `pointerEvents: "auto"` re-enables clicks on this subtree,
+            //      overriding the inherited `none` from the body.
+            //   2. stop `pointerdown` from bubbling to the document so the host
+            //      modal's dismiss-on-outside-interaction listener doesn't see
+            //      an option click as an "outside" click and close itself.
+            // Our own outside-click handler listens on the document too, but it
+            // already early-returns for panel-contained targets, so swallowing
+            // these events here is safe.
+            onPointerDown={(e) => e.stopPropagation()}
             className="fixed z-50 flex flex-col overflow-hidden rounded-[var(--radius-input)]"
             style={{
               top: rect.top,
@@ -320,6 +333,7 @@ export function Select({
               background: "var(--bg-raised)",
               border: "var(--hairline) solid var(--border)",
               boxShadow: "var(--shadow-md)",
+              pointerEvents: "auto",
             }}
           >
             {searchable && (
