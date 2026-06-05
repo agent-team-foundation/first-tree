@@ -480,6 +480,17 @@ export function createToolCallProcessor(
             // than throwing on `.slice`. The event is still emitted in that
             // case, so an empty `text` preserves the lightweight "Thinking…"
             // UI indicator.
+            //
+            // Source fidelity (this processor is shared by two callers):
+            //   - claude-code SDK handler: feeds the LIVE assistant message,
+            //     whose thinking block carries the real reasoning text — so
+            //     `text` is populated whenever the model actually thinks (note
+            //     adaptive thinking means trivial prompts may legitimately emit
+            //     no thinking block at all).
+            //   - claude-code-tui handler: feeds Claude Code's persisted JSONL
+            //     transcript, where the thinking text is REDACTED to "" (only a
+            //     `signature` survives). The TUI path therefore reports presence
+            //     but always an empty `text` — a source limitation, not a bug.
             const thinkingText = typeof block.thinking === "string" ? block.thinking : "";
             emit({
               kind: "thinking",

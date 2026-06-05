@@ -494,6 +494,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // we wrote in bootstrap, so `AGENTS.md` is read from this workspace
       // instead of leaking up to the operator's repo or HOME.
       project_root_markers: [FIRST_TREE_WORKSPACE_MARKER],
+      // Surface the model's reasoning as `reasoning` thread items so the
+      // `thinking` session event can carry `payload.text`. Without this, codex
+      // reasons internally (usage shows `reasoning_output_tokens > 0`) but emits
+      // NO `reasoning` item, so the handler has nothing to report. Verified at
+      // runtime: default => 0 reasoning items; `"auto"` => one reasoning item
+      // with text per reasoning turn. `"auto"` keeps summaries concise.
+      model_reasoning_summary: "auto",
     };
     if (payload.mcpServers.length === 0) return cfg;
 
