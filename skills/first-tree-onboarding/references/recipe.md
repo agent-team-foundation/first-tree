@@ -143,16 +143,14 @@ mv <source-repo> $WORKSPACE/
 cd $WORKSPACE
 
 # Dedicated tree (new tree scaffolded locally):
-first-tree tree init --scope workspace \
+first-tree tree init \
   --tree-path ./$TREE \
-  --tree-mode dedicated \
   --workspace-id $SLUG
 
 # Or, for an existing remote tree:
-first-tree tree init --scope workspace \
+first-tree tree init \
   --tree-path ./$TREE \
   --tree-url <url> \
-  --tree-mode shared \
   --workspace-id $SLUG
 
 # Step 4: verify
@@ -178,9 +176,9 @@ the existing layout.
 ### Workspace root (multiple sibling source repos)
 
 ```bash
-first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug>
+first-tree tree init --workspace-id <slug>
 # OR clone an existing tree
-first-tree tree init --scope workspace --tree-url <url> --tree-mode shared --workspace-id <slug>
+first-tree tree init --tree-url <url> --workspace-id <slug>
 ```
 
 After init, `first-tree tree status` will report the workspace + tree,
