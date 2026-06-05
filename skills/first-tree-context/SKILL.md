@@ -66,8 +66,9 @@ requirements, and constraints that make acting on it correct.
 How to read:
 
 - Start at the tree's root `NODE.md`. If the root also contains an
-  `AGENT.md`, read that too — it carries org-wide rules every agent
-  must follow before acting.
+  `AGENTS.md` (the unified per-tree briefing — `CLAUDE.md` is the
+  paired symlink), read that too — it carries org-wide rules every
+  agent must follow before acting.
 - Map the tree's structure with whatever exploration tool fits — `ls`,
   `Read` on `NODE.md`, or `Grep` for a keyword — then `Read` the
   specific nodes your task touches.
