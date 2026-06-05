@@ -1,31 +1,33 @@
 # Boundary With `first-tree-context`
 
-Sync and write both end up changing the tree, so the boundary matters.
+Sync and source-driven tree writes both end up changing the tree, so the
+boundary matters.
 
 ## One-Line Rule
 
 - **Sync** discovers what changed, fixes **structural** gaps directly,
-  and hands off **substantive** gaps to write.
-- **Write** is given a specific source and turns it into a specific tree
-  update — applying the "default to not writing" filter.
+  and hands off **substantive** gaps to `first-tree-context`.
+- **`first-tree-context`** is given a specific source and turns it into
+  a specific tree update — applying the "default to not writing" filter.
 
 Sync starts from the tree (Phase 2–3) **and** the code (Phase 4); it
-asks "what disagrees?" and "what isn't registered?". Write starts from a
-PR / doc / note and asks "what should the tree say about this?"
+asks "what disagrees?" and "what isn't registered?". A
+`first-tree-context` write starts from a PR / doc / note and asks "what
+should the tree say about this?"
 
 ## Decision Table
 
-| Situation                                                                               | Skill                                              |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| User asks "is the tree up to date?"                                                     | sync                                               |
-| User asks "audit drift since last release"                                              | sync                                               |
-| User asks "does the tree cover everything in the code repos?"                           | sync (Phase 4 is the answer)                       |
-| Fresh tree just onboarded; user wants initial alignment pass                            | sync                                               |
-| User says "PR #123 changed how auth works — reflect it in the tree"                     | write                                              |
-| User pastes a meeting note about an architecture decision                               | write                                              |
-| Sync finds a `code-not-synced/structural` gap (new dir / repo / dep / member)           | sync auto-fixes (skeleton edit)                    |
-| Sync finds a `code-not-synced/substantive` gap (new RFC / AGENTS.md section / decision) | hand off to write (always, not optional)           |
-| Write notices the same domain has other drift the user did not mention                  | finish the write task; suggest sync as a follow-up |
+| Situation                                                                               | Route                                                                  |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| User asks "is the tree up to date?"                                                     | sync                                                                   |
+| User asks "audit drift since last release"                                              | sync                                                                   |
+| User asks "does the tree cover everything in the code repos?"                           | sync (Phase 4 is the answer)                                           |
+| Fresh tree just onboarded; user wants initial alignment pass                            | sync                                                                   |
+| User says "PR #123 changed how auth works — reflect it in the tree"                     | `first-tree-context` with the PR as source                             |
+| User pastes a meeting note about an architecture decision                               | `first-tree-context` with the note as source                           |
+| Sync finds a `code-not-synced/structural` gap (new dir / repo / dep / member)           | sync auto-fixes (skeleton edit)                                        |
+| Sync finds a `code-not-synced/substantive` gap (new RFC / AGENTS.md section / decision) | hand off to `first-tree-context` (always, not optional)                 |
+| `first-tree-context` notices adjacent drift the user did not mention                    | finish the requested write task; suggest sync as a follow-up           |
 
 ## Why It Matters
 
@@ -34,16 +36,17 @@ becomes a content producer with no specific human-pointed source, and the
 result is hard to review. The structural/substantive split preserves this:
 sync only ever **registers** existing source structure (skeletons,
 stubs, list entries); the moment a fix would require composing prose,
-sync hands the source pointer to write and stops.
+sync hands the source pointer to `first-tree-context` and stops.
 
-If write starts auditing, it stops being a focused author — it broadens
-into a sweep the user did not request.
+If a source-driven `first-tree-context` write starts auditing, it stops
+being a focused author — it broadens into a sweep the user did not
+request.
 
 Keep the roles tight.
 
 ## Hand-Off Mechanics
 
-When sync wants write to take over a finding (always for
+When sync wants `first-tree-context` to take over a finding (always for
 `code-not-synced/substantive`, optionally for `tree-stale` /
 `tree-wrong` with a clear source pointer):
 
@@ -53,12 +56,13 @@ When sync wants write to take over a finding (always for
 3. Suggest invoking `first-tree-context` with that pointer:
    `/first-tree-context source=<pointer>`.
 4. Do not preemptively start drafting the tree update inside sync.
-5. Do not chain into write automatically — let the user / orchestrating
-   agent decide which substantive findings are tree-worthy.
+5. Do not chain into `first-tree-context` automatically — let the user /
+   orchestrating agent decide which substantive findings are tree-worthy.
 
-When write wants sync to follow up on adjacent drift:
+When a source-driven `first-tree-context` write wants sync to follow up
+on adjacent drift:
 
-1. Finish the write task the user asked for.
+1. Finish the tree update the user asked for.
 2. In the final summary, list the adjacent findings as "consider running
    sync over <domain>".
 3. Do not chain into sync automatically.
@@ -72,4 +76,4 @@ When write wants sync to follow up on adjacent drift:
 - They both must use `tree verify` before a final commit.
 
 The shared parts let `first-tree-context` own the methodology; sync and
-write own the _when_ and _what_ of applying it.
+the source-driven write path own the _when_ and _what_ of applying it.
