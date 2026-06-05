@@ -20,6 +20,7 @@ import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import { getCliBinding } from "./cli-binding.js";
+import { installCoreSkills as installCoreSkillsImpl, installFirstTreeSkills } from "./first-tree-skills/installer.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
 
@@ -63,9 +64,10 @@ const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>
 
 /**
  * Resolved Context Tree binding the runtime threads through every layer:
- * the local checkout path AND the upstream coordinates `first-tree tree
- * integrate` needs to write a complete `local-tree.json` (without the URL
- * the skill cannot pull/push later).
+ * the local checkout path AND the upstream coordinates. The URL is
+ * surfaced in the agent briefing so the LLM can reference the upstream
+ * repo when describing the tree to humans, even though Client-side
+ * read-only sync only needs the local path.
  */
 export type ContextTreeBinding = {
   path: string;
@@ -595,210 +597,97 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   writeFileSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
 }
 
-export type InstallFirstTreeIntegrationExec = (
-  command: string,
-  args: string[],
-  options: { cwd: string; timeout: number },
-) => void;
-
 export type InstallFirstTreeIntegrationOptions = {
   workspacePath: string;
-  contextTreePath: string;
-  workspaceId: string;
-  treeRepoUrl?: string;
   log: (msg: string) => void;
   /**
-   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
-   * ESM-module spying limitations.
+   * Override the bundled-skills lookup root. Tests use this to point at a
+   * fixture skills/ directory; production leaves it undefined and the
+   * installer walks up from its own module URL to the @first-tree/client
+   * package root.
    */
-  exec?: InstallFirstTreeIntegrationExec;
+  bundledSkillsRoot?: string;
 };
 
 export type InstallCoreSkillsOptions = {
   workspacePath: string;
   log: (msg: string) => void;
-  /**
-   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
-   * ESM-module spying limitations.
-   */
-  exec?: InstallFirstTreeIntegrationExec;
+  /** See {@link InstallFirstTreeIntegrationOptions.bundledSkillsRoot}. */
+  bundledSkillsRoot?: string;
 };
 
 /**
- * Test-mode override for `defaultInstallExec`. Set via {@link __setTestInstallExec}
- * from `vitest.setup.ts` to a no-op so handler-level tests that go through
- * `handler.start()` do not actually shell out to the channel binary or `npx`
- * for `installCoreSkills` / `installFirstTreeIntegration`. Production leaves
- * this `null` and `defaultInstallExec` runs `execFileSync` normally.
- */
-let testInstallExecOverride: InstallFirstTreeIntegrationExec | null = null;
-
-/**
- * Install (or clear) a global test override for the install-exec backend.
- * Only call this from test setup files — the override is process-wide and
- * persists until cleared with `null`.
- */
-export function __setTestInstallExec(exec: InstallFirstTreeIntegrationExec | null): void {
-  testInstallExecOverride = exec;
-}
-
-// Kept synchronous (cf. the `execFileAsync` migration in this file): runs on
-// the per-session bootstrap path inside the handler, not the per-agent-bind
-// boot hot path, so even if `npx -y <package>@latest` stalls (cold download
-// can be 10s+) it cannot pile up across the 6-slot startup window the way
-// `syncContextTreeRepo` did. Re-evaluate if `installFirstTreeIntegration` is
-// ever moved to a code path that runs N times in parallel at process start.
-function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
-  if (testInstallExecOverride) {
-    testInstallExecOverride(command, args, options);
-    return;
-  }
-  execFileSync(command, args, {
-    cwd: options.cwd,
-    stdio: "pipe",
-    timeout: options.timeout,
-    encoding: "utf-8",
-  });
-}
-
-/**
- * Install the shipped first-tree skill payloads into the workspace by shelling
- * out to the channel-resolved CLI's `tree skill install --root <workspacePath>`.
+ * Install the shipped first-tree skill payloads into the workspace.
  *
- * Resolution order for the CLI binary (binName/packageName are channel-aware,
- * see {@link getCliBinding}):
- *   1. `<binName>` on PATH — preferred for runtime images that pre-install it.
- *   2. `npx -y <packageName>@latest` — fallback that downloads on first run.
- *      Skipped for the dev channel (`packageName === null`) because dev
- *      binaries are not published to npm.
+ * Copies each tree skill (see {@link TREE_SKILL_NAMES}) from the npm
+ * package's bundled `skills/` directory into
+ * `<workspacePath>/.agents/skills/<name>/` and makes
+ * `<workspacePath>/.claude/skills/<name>` a relative symlink to it.
  *
- * Framework files (workspace.json, AGENTS.md / CLAUDE.md) are written once at
- * onboarding by `tree init`, not re-emitted per session — this hook only
- * refreshes the on-disk skill payloads under `.agents/skills/` and
- * `.claude/skills/` so each session picks up the latest shipped versions.
+ * Per-skill VERSION gate: when the on-disk VERSION matches the bundled
+ * VERSION, the rm+cp+symlink-replace is skipped (fast path on every
+ * session start). Mismatched or missing → full reinstall of just that
+ * skill.
  *
- * Graceful degradation: returns false on failure and logs. The session still
- * starts; the agent just doesn't have the first-tree skill wired up.
+ * Returns `false` if ANY skill failed; caller logs the failure and
+ * continues. The agent session still starts — the missing skill just
+ * isn't reachable on disk.
+ *
+ * Pre-2026-06 history: this used to shell out to `first-tree tree skill
+ * install --root <workspacePath>`. The CLI dependency was removed when
+ * the @first-tree/client package started bundling skill payloads
+ * directly (see `scripts/copy-bundled-skills.mjs`). No more `npx -y
+ * first-tree@latest` cold-download on first run, no more `binName` PATH
+ * resolution, no more channel-aware fallback dance.
  */
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
-  const { workspacePath, log } = options;
-  const exec = options.exec ?? defaultInstallExec;
-  const { binName, packageName } = getCliBinding();
-
-  const installArgs = ["tree", "skill", "install", "--root", workspacePath];
-
-  const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: binName, args: installArgs, label: `${binName} (PATH)` },
-    // Dev channel publishes no npm tarball, so skip the npx fallback entirely
-    // — there is nothing to fetch. Falls through to "PATH attempt failed →
-    // graceful degradation" which is the right behaviour for dev anyway:
-    // the developer is expected to have the in-tree CLI installed via
-    // scripts/dev-install.sh.
-    ...(packageName
-      ? [
-          {
-            command: "npx",
-            args: ["-y", `${packageName}@latest`, ...installArgs],
-            label: `npx ${packageName}@latest`,
-          },
-        ]
-      : []),
-  ];
-
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
-    if (!attempt) continue;
-    try {
-      exec(attempt.command, attempt.args, {
-        cwd: workspacePath,
-        timeout: 120_000,
-      });
-      log(`First-tree integration installed via ${attempt.label}`);
-      return true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Reasons the PATH attempt should fall through to npx@latest:
-      //   - the binary isn't on PATH at all (ENOENT / "command not found")
-      //   - the installed binary is older than the flags/subcommands we use
-      //     (Commander rejects unknown options with `error: unknown option`
-      //     and unknown subcommands with `error: unknown command`). Without
-      //     this, an outdated `first-tree` on PATH wedges the integration
-      //     in a silent-fail state — npx@latest would have worked.
-      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
-      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
-      const shouldRetry = binaryMissing || unsupportedByThisCli;
-      const isLastAttempt = index === attempts.length - 1;
-      if (shouldRetry && !isLastAttempt) {
-        log(`First-tree integration via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
-        continue;
-      }
-      log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
-      return false;
+  const { workspacePath, log, bundledSkillsRoot } = options;
+  try {
+    const result = installFirstTreeSkills({ workspacePath, bundledSkillsRoot });
+    const parts: string[] = [];
+    if (result.installed.length > 0) parts.push(`installed ${result.installed.join(", ")}`);
+    if (result.skipped.length > 0) parts.push(`up-to-date ${result.skipped.join(", ")}`);
+    if (result.failed.length > 0) parts.push(`failed ${result.failed.map((f) => f.name).join(", ")}`);
+    log(`First-tree skills: ${parts.join("; ") || "no skills configured"}`);
+    for (const f of result.failed) {
+      log(`First-tree skill install failed (${f.name}): ${f.reason.slice(0, 200)}`);
     }
+    return result.ok;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`First-tree skills install skipped: ${msg.slice(0, 200)}`);
+    return false;
   }
-
-  return false;
 }
 
 /**
- * Install the **core** (Context-Tree-independent) first-tree skill payloads
- * into the workspace by shelling out to `<bin> tree skill install-core`.
- * Called unconditionally by every session bootstrap so any on-disk core
- * skill payload resolves even for agents without a Context Tree binding.
- * (The core skill set is currently empty, so this is effectively a no-op;
- * the wiring is kept so re-introducing a core skill needs no bootstrap
- * change.)
+ * Install the **core** (Context-Tree-independent) first-tree skill payloads.
+ * Currently a no-op because `CORE_SKILL_NAMES` is empty — the wiring stays
+ * so re-introducing a core skill needs no bootstrap edit.
  *
- * Resolution and degradation match `installFirstTreeIntegration`: try the
- * channel-resolved binary on PATH, fall back to `npx -y <pkg>@latest` when
- * a published package exists, log + return false on terminal failure.
+ * Same inline-from-bundled-payload model as
+ * {@link installFirstTreeIntegration}: no shell-out, no CLI dependency.
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
-  const { workspacePath, log } = options;
-  const exec = options.exec ?? defaultInstallExec;
-  const { binName, packageName } = getCliBinding();
-
-  const args = ["tree", "skill", "install-core", "--root", workspacePath];
-
-  const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: binName, args, label: `${binName} (PATH)` },
-    ...(packageName
-      ? [
-          {
-            command: "npx",
-            args: ["-y", `${packageName}@latest`, ...args],
-            label: `npx ${packageName}@latest`,
-          },
-        ]
-      : []),
-  ];
-
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
-    if (!attempt) continue;
-    try {
-      exec(attempt.command, attempt.args, {
-        cwd: workspacePath,
-        timeout: 60_000,
-      });
-      log(`Core skills installed via ${attempt.label}`);
-      return true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
-      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
-      const shouldRetry = binaryMissing || unsupportedByThisCli;
-      const isLastAttempt = index === attempts.length - 1;
-      if (shouldRetry && !isLastAttempt) {
-        log(`Core skill install via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
-        continue;
-      }
-      log(`Core skill install skipped (${attempt.label}): ${msg.slice(0, 200)}`);
-      return false;
+  const { workspacePath, log, bundledSkillsRoot } = options;
+  try {
+    const result = installCoreSkillsImpl({ workspacePath, bundledSkillsRoot });
+    if (result.installed.length > 0 || result.skipped.length > 0 || result.failed.length > 0) {
+      const parts: string[] = [];
+      if (result.installed.length > 0) parts.push(`installed ${result.installed.join(", ")}`);
+      if (result.skipped.length > 0) parts.push(`up-to-date ${result.skipped.join(", ")}`);
+      if (result.failed.length > 0) parts.push(`failed ${result.failed.map((f) => f.name).join(", ")}`);
+      log(`Core skills: ${parts.join("; ")}`);
     }
+    for (const f of result.failed) {
+      log(`Core skill install failed (${f.name}): ${f.reason.slice(0, 200)}`);
+    }
+    return result.ok;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`Core skill install skipped: ${msg.slice(0, 200)}`);
+    return false;
   }
-
-  return false;
 }
 
 /**

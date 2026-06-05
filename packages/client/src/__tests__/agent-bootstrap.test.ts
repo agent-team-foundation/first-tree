@@ -83,8 +83,6 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       workspace,
       sessionCtx: fakeSessionCtx(),
       contextTreePath: "/tree",
-      contextTreeRepoUrl: null,
-      agentName: "agent-1",
       briefing: "# Agent Identity\n\nstub briefing\n",
     };
 
@@ -108,8 +106,6 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       workspace,
       sessionCtx: fakeSessionCtx(),
       contextTreePath: null,
-      contextTreeRepoUrl: null,
-      agentName: "agent-1",
       briefing: "# Agent Identity\n\nstub briefing\n",
     };
     ensureAgentBootstrap(params);

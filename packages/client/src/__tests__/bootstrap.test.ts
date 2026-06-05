@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -8,7 +17,6 @@ import {
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
   deepEqualIdentity,
-  type InstallFirstTreeIntegrationExec,
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
@@ -345,409 +353,316 @@ describe("bootstrapWorkspace", () => {
   });
 });
 
-type ExecCall = {
-  command: string;
-  args: string[];
-  options: { cwd: string; timeout: number };
-};
-
-function makeRecordingExec(impl: (call: ExecCall) => void = () => {}): {
-  exec: InstallFirstTreeIntegrationExec;
-  calls: ExecCall[];
-} {
-  const calls: ExecCall[] = [];
-  const exec: InstallFirstTreeIntegrationExec = (command, args, options) => {
-    const call: ExecCall = { command, args, options };
-    calls.push(call);
-    impl(call);
-  };
-  return { exec, calls };
+/**
+ * Build a fixture `skills/` root under `tmpBase` whose layout matches the
+ * shape `bundledSkillsRoot` expects: `<root>/<name>/SKILL.md` + optional
+ * `VERSION`. The marker file `first-tree/SKILL.md` is mandatory because
+ * `resolveBundledSkillsRoot()` (and the override path) both probe for it
+ * to disambiguate the bundled-skills dir from random siblings — without
+ * it the installer treats the root as unfindable.
+ */
+function makeFixtureSkillsRoot(
+  name: string,
+  skills: Array<{ name: string; version?: string; extraFile?: { rel: string; content: string } }>,
+): string {
+  const root = join(tmpBase, `bundled-skills-${name}`);
+  mkdirSync(root, { recursive: true });
+  // first-tree/SKILL.md is the probe marker resolveBundledSkillsRoot()
+  // walks up looking for — include it even if "first-tree" is not in the
+  // requested skill list, so the override resolves.
+  if (!skills.some((s) => s.name === "first-tree")) {
+    mkdirSync(join(root, "first-tree"), { recursive: true });
+    writeFileSync(join(root, "first-tree", "SKILL.md"), "---\nname: first-tree\n---\n");
+  }
+  for (const skill of skills) {
+    const dir = join(root, skill.name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${skill.name}\n---\nfixture for ${skill.name}\n`);
+    if (skill.version !== undefined) {
+      writeFileSync(join(dir, "VERSION"), skill.version);
+    }
+    if (skill.extraFile) {
+      const path = join(dir, skill.extraFile.rel);
+      mkdirSync(join(dir, ...skill.extraFile.rel.split("/").slice(0, -1)), { recursive: true });
+      writeFileSync(path, skill.extraFile.content);
+    }
+  }
+  return root;
 }
 
-describe("installFirstTreeIntegration", () => {
-  it("shells out to `first-tree tree skill install --root <workspace>` with the expected arguments", () => {
+describe("installFirstTreeIntegration (inline skill installer)", () => {
+  const TREE_SKILLS = [
+    "first-tree",
+    "first-tree-context",
+    "first-tree-onboarding",
+    "first-tree-sync",
+    "first-tree-write",
+  ];
+
+  function expectSkillInstalled(workspace: string, name: string): void {
+    const agentsDir = join(workspace, ".agents", "skills", name);
+    const claudeLink = join(workspace, ".claude", "skills", name);
+    expect(existsSync(join(agentsDir, "SKILL.md")), `${name} SKILL.md should exist`).toBe(true);
+    expect(existsSync(claudeLink), `${name} claude symlink should exist`).toBe(true);
+    // Reading the link target verifies it's a symlink — fs.readlinkSync throws
+    // on non-symlinks, so the assertion captures both 'is symlink' and 'target'.
+    const link = readlinkSync(claudeLink);
+    expect(link).toBe(`../../${join(".agents", "skills", name)}`);
+  }
+
+  it("copies all tree skills from the bundled root + creates relative .claude symlinks", () => {
     const workspace = join(tmpBase, "integrate-happy");
-    const treePath = join(tmpBase, "ctx-tree");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
+    const bundledSkillsRoot = makeFixtureSkillsRoot(
+      "happy",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
 
-    const { exec, calls } = makeRecordingExec();
     const logs: string[] = [];
-
     const result = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "chat-xyz",
-      treeRepoUrl: "https://github.com/org/tree",
+      bundledSkillsRoot,
       log: (m) => logs.push(m),
-      exec,
     });
 
+    expect(result, logs.join("\n")).toBe(true);
+    for (const name of TREE_SKILLS) expectSkillInstalled(workspace, name);
+    expect(logs.join("\n")).toContain("installed first-tree");
+  });
+
+  it("skips skills whose on-disk VERSION + SKILL.md content both match bundled (fast path)", () => {
+    const workspace = join(tmpBase, "integrate-skip");
+    mkdirSync(workspace, { recursive: true });
+    const bundledSkillsRoot = makeFixtureSkillsRoot(
+      "skip",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+
+    // First install populates the workspace.
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+
+    // Drop a non-content marker into each installed skill so we can detect
+    // whether the second install ran a full rm+cp (which wipes the marker)
+    // or took the fast skip path (which preserves it). Using a NON-SKILL.md
+    // file is important — touching SKILL.md would itself trigger the
+    // content-drift defense and force a reinstall, which is what the
+    // separate "content drift" test below covers.
+    for (const name of TREE_SKILLS) {
+      writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
+    }
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      bundledSkillsRoot,
+      log: (m) => logs.push(m),
+    });
+
+    expect(result, logs.join("\n")).toBe(true);
+    for (const name of TREE_SKILLS) {
+      expect(
+        existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
+        `${name} should have been skipped`,
+      ).toBe(true);
+    }
+    expect(logs.join("\n")).toContain("up-to-date");
+  });
+
+  it("reinstalls only the skills whose VERSION drifted", () => {
+    const workspace = join(tmpBase, "integrate-drift");
+    mkdirSync(workspace, { recursive: true });
+    const bundledV1 = makeFixtureSkillsRoot(
+      "drift-v1",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledV1, log: () => {} });
+
+    // Marker file (NOT SKILL.md) detects which skills got re-copied.
+    for (const name of TREE_SKILLS) {
+      writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
+    }
+
+    // New bundled root: bump only first-tree to 2.0.0; the rest stay at 1.0.0.
+    const bundledMixed = makeFixtureSkillsRoot("drift-mixed", [
+      { name: "first-tree", version: "2.0.0" },
+      { name: "first-tree-context", version: "1.0.0" },
+      { name: "first-tree-onboarding", version: "1.0.0" },
+      { name: "first-tree-sync", version: "1.0.0" },
+      { name: "first-tree-write", version: "1.0.0" },
+    ]);
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      bundledSkillsRoot: bundledMixed,
+      log: (m) => logs.push(m),
+    });
+    expect(result, logs.join("\n")).toBe(true);
+
+    // first-tree should have been re-copied (marker gone, fixture content back).
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(false);
+
+    // Others should have been skipped (marker preserved).
+    for (const name of TREE_SKILLS.filter((n) => n !== "first-tree")) {
+      expect(
+        existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
+        `${name} should have been skipped`,
+      ).toBe(true);
+    }
+
+    expect(logs.join("\n")).toContain("installed first-tree");
+    expect(logs.join("\n")).toContain("up-to-date");
+  });
+
+  it("returns false when a bundled skill source is missing", () => {
+    const workspace = join(tmpBase, "integrate-missing");
+    mkdirSync(workspace, { recursive: true });
+    // Bundled root has only first-tree; the other 4 tree skills are missing.
+    const bundledSkillsRoot = makeFixtureSkillsRoot("missing", [{ name: "first-tree", version: "1.0.0" }]);
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      bundledSkillsRoot,
+      log: (m) => logs.push(m),
+    });
+
+    expect(result).toBe(false);
+    // first-tree installs successfully, the others all fail.
+    expectSkillInstalled(workspace, "first-tree");
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-sync"))).toBe(false);
+    expect(logs.join("\n")).toContain(
+      "failed first-tree-context, first-tree-onboarding, first-tree-sync, first-tree-write",
+    );
+    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-context)");
+  });
+
+  it("repairs a clobbered .claude symlink without re-copying the .agents tree", () => {
+    const workspace = join(tmpBase, "integrate-relink");
+    mkdirSync(workspace, { recursive: true });
+    const bundledSkillsRoot = makeFixtureSkillsRoot(
+      "relink",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+
+    // Operator clobbered .claude/skills/first-tree with a regular file.
+    // rmSync without `recursive` follows symlink-to-directory on macOS
+    // (Node behavior is OS-dependent), so we pass recursive: true to
+    // unconditionally remove whatever's there.
+    rmSync(join(workspace, ".claude", "skills", "first-tree"), { force: true, recursive: true });
+    writeFileSync(join(workspace, ".claude", "skills", "first-tree"), "clobbered");
+
+    // Pin a NON-content file in .agents so we can detect whether the
+    // skill dir was re-copied. Touching SKILL.md would conflict with the
+    // installer's content-drift defense (which would correctly treat
+    // SKILL.md drift as a reinstall trigger).
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"), "marker\n");
+
+    const result = installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
     expect(result).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.command).toBe("first-tree");
-    expect(calls[0]?.args).toEqual(["tree", "skill", "install", "--root", workspace]);
-    expect(calls[0]?.options.cwd).toBe(workspace);
-    expect(logs.join("\n")).toContain("first-tree (PATH)");
+    // Symlink was repaired.
+    expectSkillInstalled(workspace, "first-tree");
+    // .agents was NOT re-copied — sentinel marker preserved.
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(true);
   });
 
-  it("falls back to `npx first-tree@latest` when the binary is missing from PATH", () => {
-    const workspace = join(tmpBase, "integrate-fallback");
-    const treePath = join(tmpBase, "ctx-fb");
+  it("treats SKILL.md content drift as a reinstall trigger even when VERSION matches (defense in depth)", () => {
+    // Regression for PR #844 review (yuezengwu MINOR finding): the
+    // previous fast path skipped reinstall on VERSION match alone, so a
+    // developer who edited SKILL.md but forgot to bump VERSION would
+    // silently serve stale skills. The content-drift defense catches
+    // this by comparing bundled vs installed SKILL.md content even when
+    // VERSION agrees.
+    const workspace = join(tmpBase, "integrate-content-drift");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
+    const bundledSkillsRoot = makeFixtureSkillsRoot(
+      "content-drift",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
 
-    let call = 0;
-    const { exec, calls } = makeRecordingExec(() => {
-      call += 1;
-      if (call === 1) {
-        const err = new Error("spawn first-tree ENOENT") as Error & { code?: string };
-        err.code = "ENOENT";
-        throw err;
-      }
-    });
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+
+    // Simulate "developer edited SKILL.md on disk but VERSION never
+    // changed" — same VERSION on both sides, but the installed
+    // SKILL.md has drifted from what the bundled payload now contains.
+    const installedSkillPath = join(workspace, ".agents", "skills", "first-tree", "SKILL.md");
+    writeFileSync(installedSkillPath, "STALE_CONTENT\n");
 
     const logs: string[] = [];
     const result = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "chat-fb",
+      bundledSkillsRoot,
       log: (m) => logs.push(m),
-      exec,
     });
-
-    expect(result).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.command).toBe("npx");
-    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
-    expect(logs.join("\n")).toContain("npx first-tree@latest");
-  });
-
-  it("returns false and logs without throwing when both attempts fail", () => {
-    const workspace = join(tmpBase, "integrate-fail");
-    const treePath = join(tmpBase, "ctx-fail");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    const { exec } = makeRecordingExec(() => {
-      throw new Error("spawn npx ENOENT");
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "chat-fail",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result).toBe(false);
-    expect(logs.join("\n")).toContain("First-tree integration skipped");
-  });
-
-  it("falls back to npx when the PATH first-tree rejects --tree-url as unknown option", () => {
-    // Regression for the silent-fail when an outdated CLI is on PATH:
-    // Commander prints "error: unknown option '--tree-url'" + exits 1.
-    // Without retry, integration was permanently skipped on those machines.
-    const workspace = join(tmpBase, "integrate-old-cli");
-    const treePath = join(tmpBase, "ctx-old-cli");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    let call = 0;
-    const { exec, calls } = makeRecordingExec(() => {
-      call += 1;
-      if (call === 1) {
-        throw new Error("Command failed: first-tree tree integrate ...\nerror: unknown option '--tree-url'");
-      }
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-a",
-      treeRepoUrl: "https://example.com/tree.git",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
     expect(result, logs.join("\n")).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.command).toBe("npx");
-    expect(logs.join("\n")).toContain("falling back");
+
+    // The stale content was overwritten by the bundled fixture content
+    // (not the SENTINEL anymore), confirming the installer detected the
+    // drift and ran a full reinstall instead of taking the fast path.
+    expect(readFileSync(installedSkillPath, "utf-8")).not.toContain("STALE_CONTENT");
+    expect(logs.join("\n")).toContain("installed first-tree");
   });
 
-  it("falls back to npx when the PATH first-tree returns 'unknown command'", () => {
-    const workspace = join(tmpBase, "integrate-old-subcmd");
-    const treePath = join(tmpBase, "ctx-old-subcmd");
+  it("falls through to reinstall when bundled VERSION is missing (cannot prove match)", () => {
+    // Edge case yuezengwu flagged: if one side has a VERSION file and the
+    // other doesn't, the fast-path equality check can't fire. Installer
+    // must treat the missing fingerprint as "unknown" and do a full copy
+    // rather than silently skipping.
+    const workspace = join(tmpBase, "integrate-missing-version");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
 
-    let call = 0;
-    const { exec, calls } = makeRecordingExec(() => {
-      call += 1;
-      if (call === 1) {
-        throw new Error("Command failed: first-tree tree integrate ...\nerror: unknown command 'integrate'");
-      }
-    });
+    // First install: bundled has VERSION.
+    const bundledWith = makeFixtureSkillsRoot(
+      "missing-version-with",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
+    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledWith, log: () => {} });
+
+    // Drop sentinel into installed skill so we can detect re-copy.
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"), "marker\n");
+
+    // Second install: bundled root has NO VERSION file for any skill.
+    const bundledWithout = makeFixtureSkillsRoot(
+      "missing-version-without",
+      TREE_SKILLS.map((n) => ({ name: n })),
+    );
 
     const logs: string[] = [];
     const result = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-a",
-      treeRepoUrl: "https://example.com/tree.git",
+      bundledSkillsRoot: bundledWithout,
       log: (m) => logs.push(m),
-      exec,
     });
-
     expect(result, logs.join("\n")).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.command).toBe("npx");
-  });
 
-  it("does NOT retry on legitimate run-time errors (e.g. integration failure unrelated to CLI version)", () => {
-    // Distinguish "CLI doesn't understand us" (retry) from "CLI ran but
-    // refused this input" (don't retry — retrying just doubles the time
-    // before the operator sees the real error).
-    const workspace = join(tmpBase, "integrate-legit-err");
-    const treePath = join(tmpBase, "ctx-legit-err");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    const { exec, calls } = makeRecordingExec(() => {
-      throw new Error("Command failed: first-tree tree integrate ...\nfatal: not a git repository");
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-a",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(logs.join("\n")).toContain("First-tree integration skipped");
-  });
-
-  it("logs non-Error integration failures without retrying", () => {
-    const workspace = join(tmpBase, "integrate-string-error");
-    const treePath = join(tmpBase, "ctx-string-error");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    const { exec, calls } = makeRecordingExec(() => {
-      throw "plain failure";
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-a",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(logs.join("\n")).toContain("plain failure");
-  });
-
-  it("omits --tree-url when no URL is provided", () => {
-    const workspace = join(tmpBase, "integrate-no-url");
-    const treePath = join(tmpBase, "ctx-no-url");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    const { exec, calls } = makeRecordingExec();
-
-    installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "chat-no-url",
-      log: () => {},
-      exec,
-    });
-
-    expect(calls[0]?.args).not.toContain("--tree-url");
-  });
-
-  it("uses the staging binName + npx packageName when the CLI binding points at the staging channel", () => {
-    // Regression for the multi-env follow-up: bootstrap used to hardcode
-    // "first-tree", which on staging hosts called a non-existent binary
-    // (only `first-tree-staging` is installed there). Both the PATH attempt
-    // and the npx fallback must follow the channel binding.
-    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-
-    const workspace = join(tmpBase, "integrate-staging");
-    const treePath = join(tmpBase, "ctx-staging");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    let call = 0;
-    const { exec, calls } = makeRecordingExec(() => {
-      call += 1;
-      if (call === 1) {
-        const err = new Error("spawn first-tree-staging ENOENT") as Error & { code?: string };
-        err.code = "ENOENT";
-        throw err;
-      }
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-staging",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result, logs.join("\n")).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.command).toBe("first-tree-staging");
-    expect(calls[1]?.command).toBe("npx");
-    expect(calls[1]?.args.slice(0, 2)).toEqual(["-y", "first-tree-staging@latest"]);
-    expect(logs.join("\n")).toContain("first-tree-staging (PATH)");
-    expect(logs.join("\n")).toContain("npx first-tree-staging@latest");
-  });
-
-  it("skips the npx fallback for the dev channel because dev binaries are not published", () => {
-    // Dev channel sets `packageName: null` in `channelConfig` — there is
-    // no `first-tree-dev` tarball on npm. The PATH attempt must still run
-    // (developers install via scripts/dev-install.sh), but if it fails the
-    // helper must NOT try `npx null@latest` or `npx first-tree-dev@latest`.
-    setCliBinding({ binName: "first-tree-dev", packageName: null });
-
-    const workspace = join(tmpBase, "integrate-dev");
-    const treePath = join(tmpBase, "ctx-dev");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-
-    const { exec, calls } = makeRecordingExec(() => {
-      const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
-      err.code = "ENOENT";
-      throw err;
-    });
-
-    const logs: string[] = [];
-    const result = installFirstTreeIntegration({
-      workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-dev",
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.command).toBe("first-tree-dev");
-    expect(logs.join("\n")).not.toContain("npx");
+    // Sentinel gone — full reinstall ran because the fingerprint match
+    // could not be proven.
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree", ".sentinel"))).toBe(false);
+    expect(logs.join("\n")).toContain("installed first-tree");
   });
 });
 
-describe("installCoreSkills", () => {
-  it("shells out to `first-tree tree skill install-core --root <workspace>`", () => {
-    const workspace = join(tmpBase, "core-skills-happy");
+describe("installCoreSkills (no-op for current empty core list)", () => {
+  it("returns true without writing anything because CORE_SKILL_NAMES is empty", () => {
+    const workspace = join(tmpBase, "core-noop");
     mkdirSync(workspace, { recursive: true });
-
-    const { exec, calls } = makeRecordingExec();
-    const logs: string[] = [];
-
-    const result = installCoreSkills({
-      workspacePath: workspace,
-      log: (m) => logs.push(m),
-      exec,
-    });
-
-    expect(result).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.command).toBe("first-tree");
-    expect(calls[0]?.args).toEqual(["tree", "skill", "install-core", "--root", workspace]);
-    expect(calls[0]?.options.cwd).toBe(workspace);
-    expect(logs.join("\n")).toContain("Core skills installed via first-tree (PATH)");
-  });
-
-  it("falls back to npx when the channel binary is missing", () => {
-    const workspace = join(tmpBase, "core-skills-fallback");
-    mkdirSync(workspace, { recursive: true });
-
-    let call = 0;
-    const { exec, calls } = makeRecordingExec(() => {
-      call += 1;
-      if (call === 1) {
-        const err = new Error("spawn first-tree ENOENT") as Error & { code?: string };
-        err.code = "ENOENT";
-        throw err;
-      }
-    });
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-noop", []);
 
     const logs: string[] = [];
     const result = installCoreSkills({
       workspacePath: workspace,
+      bundledSkillsRoot,
       log: (m) => logs.push(m),
-      exec,
     });
 
     expect(result).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.command).toBe("npx");
-    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
-    expect(calls[1]?.args.slice(3)).toEqual(["skill", "install-core", "--root", workspace]);
-  });
-
-  it("uses the channel-resolved binary name", () => {
-    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-    try {
-      const workspace = join(tmpBase, "core-skills-staging");
-      mkdirSync(workspace, { recursive: true });
-
-      const { exec, calls } = makeRecordingExec();
-      const result = installCoreSkills({
-        workspacePath: workspace,
-        log: () => {},
-        exec,
-      });
-
-      expect(result).toBe(true);
-      expect(calls[0]?.command).toBe("first-tree-staging");
-      expect(calls[0]?.args).toContain("install-core");
-    } finally {
-      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
-    }
-  });
-
-  it("returns false and logs gracefully when the binary itself is missing on dev channel (no npx fallback)", () => {
-    setCliBinding({ binName: "first-tree-dev", packageName: null });
-    try {
-      const workspace = join(tmpBase, "core-skills-dev-miss");
-      mkdirSync(workspace, { recursive: true });
-
-      const { exec } = makeRecordingExec(() => {
-        const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
-        err.code = "ENOENT";
-        throw err;
-      });
-
-      const logs: string[] = [];
-      const result = installCoreSkills({
-        workspacePath: workspace,
-        log: (m) => logs.push(m),
-        exec,
-      });
-
-      expect(result).toBe(false);
-      expect(logs.join("\n")).toContain("Core skill install skipped");
-      expect(logs.join("\n")).not.toContain("npx");
-    } finally {
-      setCliBinding({ binName: "first-tree", packageName: "first-tree" });
-    }
+    // No .agents/skills/ should have been created.
+    expect(existsSync(join(workspace, ".agents"))).toBe(false);
+    expect(existsSync(join(workspace, ".claude"))).toBe(false);
+    // No log line when nothing was installed/skipped/failed.
+    expect(logs).toEqual([]);
   });
 });
 
@@ -980,34 +895,37 @@ describe("deepEqualIdentity", () => {
  * succeeded. Pinning on failure would silently mask the gap and the
  * next start would skip the retry the drift trigger exists to perform.
  *
- * These mirror the gate logic in `ensureAgentBootstrap` (claude-code +
- * codex handlers) — we drive `installFirstTreeIntegration` directly with
- * a mocked `InstallFirstTreeIntegrationExec` because the handler's gate
- * is a four-line composition: `if (ok) writeBundledCliVersion(...)`.
- * If a future change drops that guard, these tests fail; that is the
- * intent.
+ * Mirrors the gate in `ensureAgentBootstrap`. We drive
+ * `installFirstTreeIntegration` directly with the inline installer (no
+ * shell-out mocking anymore — the implementation is in-process) by
+ * pointing it at a fixture skills root. Success / failure is forced by
+ * giving it a complete vs incomplete bundled-skills layout.
  */
 describe("CLI-version pin contract (handler invariants)", () => {
+  const TREE_SKILLS = [
+    "first-tree",
+    "first-tree-context",
+    "first-tree-onboarding",
+    "first-tree-sync",
+    "first-tree-write",
+  ];
+
   it("does not overwrite the existing pin when integrate fails — next start retries", () => {
     const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");
-    const treePath = join(tmpBase, "cli-pin-failure-tree");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
 
     // Pre-existing pin from an earlier successful bootstrap.
     writeBundledCliVersion(workspace, "0.5.2");
     const stalePinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
     expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
 
-    const { exec } = makeRecordingExec(() => {
-      throw new Error("spawn npx ENOENT");
-    });
+    // Force failure: bundled root has only first-tree, the other 4
+    // tree skills are missing, so installFirstTreeIntegration returns false.
+    const incomplete = makeFixtureSkillsRoot("pin-fail", [{ name: "first-tree", version: "1.0.0" }]);
     const ok = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-x",
+      bundledSkillsRoot: incomplete,
       log: () => {},
-      exec,
     });
     expect(ok).toBe(false);
 
@@ -1019,21 +937,20 @@ describe("CLI-version pin contract (handler invariants)", () => {
 
   it("advances the pin to the new version when integrate succeeds", () => {
     const workspace = join(tmpBase, "cli-pin-success-advances");
-    const treePath = join(tmpBase, "cli-pin-success-tree");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
 
     writeBundledCliVersion(workspace, "0.5.2");
     const pinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
     expect(readFileSync(pinPath, "utf-8")).toBe("0.5.2");
 
-    const { exec } = makeRecordingExec();
+    const complete = makeFixtureSkillsRoot(
+      "pin-success",
+      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+    );
     const ok = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath: treePath,
-      workspaceId: "agent-x",
+      bundledSkillsRoot: complete,
       log: () => {},
-      exec,
     });
     expect(ok).toBe(true);
 

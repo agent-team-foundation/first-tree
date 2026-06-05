@@ -1500,7 +1500,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
     // and TUI handlers share one briefing / core-skill / drift-pin contract
     // rather than each maintaining a partial copy.
-    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName, briefing });
+    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, briefing });
   }
 
   const handler: AgentHandler = {

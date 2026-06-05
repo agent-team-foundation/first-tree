@@ -401,12 +401,14 @@ function skillsSection(
 }
 
 function firstTreeFamilyMap(): string {
-  // Listed skills MUST match what `first-tree tree skill install` actually
-  // deploys (`apps/cli/src/commands/tree/skill-lib.ts` →
+  // Listed skills MUST match what `installFirstTreeIntegration` actually
+  // deploys (`runtime/first-tree-skills/installer.ts` →
   // `TREE_SKILL_NAMES`). Adding an aspirational row here would tell every
   // tree-bound agent to load a skill the runtime never puts on disk. A
   // unit test in `agent-briefing.test.ts` walks the repo's `skills/`
-  // directory and asserts the names listed below match the shipped set.
+  // directory and asserts the names listed below match the shipped set;
+  // `bundled-skill-list-sync.test.ts` additionally locks the installer
+  // list against the prebuild copy script.
   return `## First Tree Family
 
 Skill \`description\` fields drive progressive disclosure — the runtime
@@ -427,8 +429,11 @@ the auto-injected list.
 /**
  * Names of the First Tree skill payloads listed in the Skill Map. Exported
  * so the unit test can cross-check against the on-disk `skills/` directory
- * (and against `TREE_SKILL_NAMES` in `apps/cli/.../skill-lib.ts` if anyone
- * ever consolidates the two lists).
+ * AND against `TREE_SKILL_NAMES` in
+ * `runtime/first-tree-skills/installer.ts` (the single source of truth for
+ * what the inline installer actually copies into the workspace). Drift
+ * between these two lists would tell agents to load a skill that isn't
+ * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
 export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree",

@@ -16,7 +16,9 @@
     }
   },
   "scripts": {
+    "prebuild": "node scripts/copy-bundled-skills.mjs",
     "build": "tsdown src/index.ts src/observability/index.ts --format esm --no-dts",
+    "pretest": "node scripts/copy-bundled-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests",

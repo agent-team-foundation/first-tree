@@ -546,8 +546,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           workspace: cwd,
           sessionCtx,
           contextTreePath,
-          contextTreeRepoUrl,
-          agentName,
           briefing: buildBriefing(sessionCtx, payload, cwd),
         });
         markWorkspaceInitComplete(cwd);
@@ -593,8 +591,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           workspace: cwd,
           sessionCtx,
           contextTreePath,
-          contextTreeRepoUrl,
-          agentName,
           briefing: buildBriefing(sessionCtx, payload, cwd),
         });
         markWorkspaceInitComplete(cwd);
