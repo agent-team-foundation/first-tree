@@ -12,13 +12,13 @@ import type { pino } from "../observability/logger.js";
  * to a different process group, or simply not tracked by the SDK. The orphan
  * keeps the cwd open, keeps writing cache files (`.vite/deps/...`,
  * `node_modules/.cache/...`) under the just-deleted directory, and on the next
- * session start the rebuilt path collides with the D13 guard in
- * `createWorktree` because there's a non-empty dir but no `.git` marker.
+ * session start the rebuilt path collides with the conflict guard in
+ * `ensureSourceRepo` because there's a non-empty dir but no managed `.git` clone.
  *
  * Two consumers:
- *   - `removeWorktree` calls `killProcessesHoldingPath` BEFORE `git worktree
- *     remove --force` so the rmdir actually sticks.
- *   - `createWorktree` calls `killProcessesHoldingPath` then `rmSync` when a
+ *   - `removeSourceRepo` calls `killProcessesHoldingPath` BEFORE `rm -rf` of
+ *     the clone so the rmdir actually sticks.
+ *   - `ensureSourceRepo` calls `killProcessesHoldingPath` then `rmSync` when a
  *     non-managed leftover sits in a path under a First Tree-managed root — see the
  *     `hubManagedRoots` option on `GitMirrorManager`.
  *

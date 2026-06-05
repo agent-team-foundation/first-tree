@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
@@ -10,11 +9,11 @@ import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, ty
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, isHubWorktreeMarker, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
+import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
-import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
+import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -23,8 +22,11 @@ import type {
   SessionMessage,
 } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
+import {
+  prepareSourceRepos as prepareSourceReposShared,
+  releaseSourceReposForSession,
+} from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
 
 /**
@@ -38,7 +40,7 @@ type CodexConfigObject = { [key: string]: CodexConfigValue };
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
-type Worktree = { url: string; path: string; branchName: string };
+type Worktree = { clonePath: string };
 
 /**
  * Turn-level retry budget for transient codex failures.
@@ -549,68 +551,18 @@ export const createCodexHandler: HandlerFactory = (config) => {
     workspaceCwd: string,
     sessionCtx: SessionContext,
   ): Promise<void> {
-    // Reset the prompt-facing list so a config change between sessions is
-    // reflected on the next `buildAgentBriefing` call.
-    sourceReposForPrompt = [];
-    if (!gitMirrorManager) return;
-
-    const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
-    for (const repo of payload.gitRepos) {
-      const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
-      if (!localPath) continue;
-      // Per agent-session-cwd-redesign (2026-05-22 redesign): predeclared
-      // source repos live at the TOP LEVEL of the agent home — NOT under
-      // `worktrees/`. The `worktrees/` subdir is reserved for on-demand
-      // worktrees the agent itself creates per task.
-      const targetPath = resolveGitRepoTargetPath(workspaceCwd, localPath);
-      try {
-        await gitMirrorManager.ensureMirror(repo.url);
-        await gitMirrorManager.fetchMirror(repo.url);
-
-        // Mirror claude-code's reuse contract (PR #506 review B2): only
-        // reuse when the target IS a First Tree-managed worktree, and surface a
-        // deterministic branchName so the prompt block stays consistent
-        // across sessions. Without the `isHubWorktreeMarker` check, an
-        // operator-placed directory would be silently reused; without the
-        // deterministic branch derivation, codex's "Source Repositories"
-        // prompt section would lose the `branch=` field on every reuse.
-        const branchName = await withWorktreePathLock(targetPath, async () => {
-          if (existsSync(targetPath)) {
-            if (isHubWorktreeMarker(targetPath)) {
-              sessionCtx.log(`Git: reusing existing source repo at ${localPath}`);
-              return deriveSessionBranchName(branchAgentKey, branchAgentKey, repo.url);
-            }
-            // Path occupied by something we didn't create — log so the
-            // operator can find this in the codex log when `createWorktree`
-            // throws on the next line (S1 in PR #506 review).
-            sessionCtx.log(
-              `Git: source-repo target ${localPath} occupied by a non-First Tree directory; ` +
-                "createWorktree will likely fail",
-            );
-          }
-          const created = await gitMirrorManager.createWorktree({
-            url: repo.url,
-            ref: repo.ref,
-            targetPath,
-            sessionKey: branchAgentKey,
-            agentName: branchAgentKey,
-          });
-          return created.branchName;
-        });
-
-        // Shared resource — DO NOT track in ownedWorktrees (which the legacy
-        // shutdown path used to schedule removal).
-        sourceReposForPrompt.push({
-          absolutePath: targetPath,
-          url: repo.url,
-          ...(repo.ref ? { ref: repo.ref } : {}),
-          branch: branchName,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`codex git materialisation failed for ${repo.url}: ${msg}`);
-      }
-    }
+    // Delegate to the shared helper (runtime/source-repos.ts) so the
+    // standalone-clone materialisation + per-clone lock + decision-B in-use
+    // refcount stay in one place across the SDK, TUI, and codex handlers. The
+    // returned list feeds the per-session AGENTS.md "Source Repositories" block
+    // on the next `buildAgentBriefing` call.
+    sourceReposForPrompt = await prepareSourceReposShared({
+      workspace: workspaceCwd,
+      payload,
+      sessionCtx,
+      gitMirrorManager,
+      agentName,
+    });
   }
 
   function emitToolCall(
@@ -1246,12 +1198,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // intentionally skip `ownedWorktrees.push`) get torn down here. Future
       // ad-hoc worktree creation sites can opt in by pushing to
       // `ownedWorktrees`.
+      if (ctx) releaseSourceReposForSession(ctx);
       if (gitMirrorManager) {
         for (const wt of ownedWorktrees) {
           try {
-            await gitMirrorManager.removeWorktree({ url: wt.url, path: wt.path, branchName: wt.branchName });
+            await gitMirrorManager.removeSourceRepo({ clonePath: wt.clonePath });
           } catch (err) {
-            ctx?.log(`codex worktree cleanup failed (${wt.path}): ${err instanceof Error ? err.message : String(err)}`);
+            ctx?.log(
+              `codex worktree cleanup failed (${wt.clonePath}): ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
         ownedWorktrees.length = 0;

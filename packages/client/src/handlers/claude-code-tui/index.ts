@@ -9,7 +9,7 @@ import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
-import { prepareSourceRepos } from "../../runtime/source-repos.js";
+import { prepareSourceRepos, releaseSourceReposForSession } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
@@ -34,7 +34,7 @@ const TURN_POLL_MS = 250;
 const TURN_GRACE_MS = 1500;
 const READY_TIMEOUT_MS = 30_000;
 
-type Worktree = { url: string; path: string; branchName: string };
+type Worktree = { clonePath: string };
 
 /**
  * Module-level lazy sweep: on first handler instantiation in this process, kill
@@ -669,12 +669,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       // against. Source repos are also intentionally left in place
       // (proposals/agent-session-cwd-redesign §⑤). On-demand worktrees the
       // agent created under `<cwd>/worktrees/<name>/` belong to the agent.
+      if (ctx) releaseSourceReposForSession(ctx);
       if (gitMirrorManager) {
         for (const wt of ownedWorktrees) {
           try {
-            await gitMirrorManager.removeWorktree({ url: wt.url, path: wt.path, branchName: wt.branchName });
+            await gitMirrorManager.removeSourceRepo({ clonePath: wt.clonePath });
           } catch (err) {
-            ctx?.log(`tui worktree cleanup failed (${wt.path}): ${err instanceof Error ? err.message : String(err)}`);
+            ctx?.log(
+              `tui worktree cleanup failed (${wt.clonePath}): ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
         ownedWorktrees.length = 0;

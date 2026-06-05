@@ -29,7 +29,10 @@ import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } fro
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import { prepareSourceRepos as prepareSourceReposShared } from "../runtime/source-repos.js";
+import {
+  prepareSourceRepos as prepareSourceReposShared,
+  releaseSourceReposForSession,
+} from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
@@ -592,8 +595,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedConfigVersion = 0;
   let appliedModel = "";
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
-  /** Worktrees materialised for this session — each entry removed on shutdown. */
-  const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
+  /**
+   * On-demand worktrees materialised for this session — each entry `rm -rf`'d on
+   * shutdown via `removeSourceRepo`. INVARIANT: only ever push paths under
+   * `<agentHome>/worktrees/` here. NEVER push a predeclared source-repo path —
+   * those are agent-scoped persistent clones shared across chats, and cleanup
+   * would delete another chat's checkout. (Currently nothing pushes here.)
+   */
+  const ownedWorktrees: Array<{ clonePath: string }> = [];
   /**
    * Latest chat-context snapshot for the active session. Used to build the
    * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
@@ -1365,13 +1374,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    *
    * Idempotent across sessions: with the per-agent-home model the checkout
    * is **shared** across every chat for this agent. First call clones the
-   * bare mirror + creates the working tree; subsequent calls fetch (so the
-   * bare mirror picks up upstream changes) and reuse the existing checkout
-   * in place — no reset, so any pending state the LLM left behind survives.
+   * repo as a standalone clone; subsequent calls fetch and — when the
+   * checkout is clean and not in use by another live session — bring it to
+   * the latest default branch. A dirty or in-use checkout is left at its
+   * current commit, so pending state the LLM left behind survives.
    *
-   * Concurrency: per-process per-path mutex (`withWorktreePathLock`) so two
-   * sessions starting at the same time don't race `git worktree add` for the
-   * same path. See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
+   * Concurrency: the manager serialises per clone path so two sessions
+   * starting at the same time don't race a clone / update for the same path.
+   * See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
    *
    * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
    * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
@@ -1399,15 +1409,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /** Tear down all worktrees this session owns; best-effort. */
   async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
+    // Drop this session's live-use references on shared source-repo checkouts so
+    // a later session is free to bring them to the latest default branch.
+    releaseSourceReposForSession(sessionCtx);
     if (!gitMirrorManager) return;
     while (ownedWorktrees.length > 0) {
       const entry = ownedWorktrees.pop();
       if (!entry) continue;
       try {
-        await gitMirrorManager.removeWorktree(entry);
+        await gitMirrorManager.removeSourceRepo(entry);
       } catch (err) {
         sessionCtx.log(
-          `Git: removeWorktree(${entry.path}) failed — ${err instanceof Error ? err.message : String(err)}`,
+          `Git: removeSourceRepo(${entry.clonePath}) failed — ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }

@@ -70,9 +70,9 @@ export class ClientRuntime {
   private readonly connection: ClientConnection;
   /**
    * One GitMirrorManager per runtime — every slot gets the same instance.
-   * The manager's per-URL serial queue is what stops two agents on the same
-   * chat from racing on `git worktree add` against the shared bare mirror's
-   * `config`; one manager per slot would defeat the lock.
+   * The manager's per-clone-path serial queue is what stops two sessions of the
+   * same agent from racing a clone / update on the same source-repo checkout;
+   * one manager per slot would defeat the lock.
    */
   private readonly gitMirrorManager: GitMirrorManager;
   private readonly agents: AgentEntry[] = [];
@@ -234,23 +234,18 @@ export class ClientRuntime {
   }
 
   async start(): Promise<void> {
-    // Sweep orphan `hub-session-*` branches left over from previous runs
-    // before any slot can race a `git worktree add`. Sessions suspend on idle
-    // rather than terminate, so the cleanup path that normally runs
-    // `branch -D` (handler.shutdown → cleanupGitWorktrees → removeWorktree)
-    // fires only on explicit terminate/eviction. Without this sweep, every
-    // crash or `branch -D` failure leaks a `[branch "..."]` segment in the
-    // shared bare mirror's `config` forever.
+    // One-time cleanup of the legacy shared `<dataDir>/git-mirrors/` tree left
+    // by the pre-per-agent-source-repo bare-mirror model. Pure cache, no state.
     try {
-      const sweep = await this.gitMirrorManager.gcOrphanSessionBranches();
-      if (sweep.scanned > 0) {
+      const sweep = await this.gitMirrorManager.sweepLegacyMirrors();
+      if (sweep.removed.length > 0) {
         print.status(
           "[git-mirror]",
-          `swept orphan session branches — scanned=${sweep.scanned} deleted=${sweep.deleted} failed=${sweep.failed}`,
+          `removed legacy shared git-mirrors tree (${sweep.removed.length} entr${sweep.removed.length === 1 ? "y" : "ies"})`,
         );
       }
     } catch (err) {
-      print.status("⚠️", `git-mirror orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      print.status("⚠️", `legacy git-mirrors sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Attach before connecting so the first welcome frame on a stale client

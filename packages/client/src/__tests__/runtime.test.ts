@@ -31,7 +31,7 @@ type MockRuntimeState = {
   slots: FakeSlot[];
   connections: FakeConnection[];
   gitManager: {
-    gcOrphanSessionBranches: ReturnType<typeof vi.fn<() => Promise<{ scanned: number }>>>;
+    sweepLegacyMirrors: ReturnType<typeof vi.fn<() => Promise<{ removed: string[] }>>>;
   };
   logger: {
     info: ReturnType<typeof vi.fn>;
@@ -111,8 +111,8 @@ function makeUpdateHooks(): UpdateHooks {
 
 function installRuntimeMocks(options?: {
   slotBehavior?: Record<string, SlotBehavior>;
-  gcResult?: { scanned: number };
-  gcError?: Error;
+  sweepResult?: { removed: string[] };
+  sweepError?: Error;
   snapshots?: Record<string, { activeCount: number; lastActivityMs: number }>;
   stopPromise?: Promise<void>;
 }): MockRuntimeState {
@@ -122,9 +122,9 @@ function installRuntimeMocks(options?: {
     slots: [],
     connections: [],
     gitManager: {
-      gcOrphanSessionBranches: vi.fn(async () => {
-        if (options?.gcError) throw options.gcError;
-        return options?.gcResult ?? { scanned: 0 };
+      sweepLegacyMirrors: vi.fn(async () => {
+        if (options?.sweepError) throw options.sweepError;
+        return options?.sweepResult ?? { removed: [] };
       }),
     },
     logger: {
@@ -277,7 +277,7 @@ describe("AgentRuntime", () => {
 
   it("starts, attaches updates, reports partial slot failures, and shuts down on SIGINT", async () => {
     const state = installRuntimeMocks({
-      gcResult: { scanned: 2 },
+      sweepResult: { removed: ["abc", "def"] },
       slotBehavior: { beta: "reject" },
       snapshots: {
         alpha: { activeCount: 1, lastActivityMs: 10 },
@@ -298,8 +298,8 @@ describe("AgentRuntime", () => {
     const started = runtime.start();
     await vi.waitFor(() => expect(signals.getSigint()).not.toBeNull());
 
-    expect(state.gitManager.gcOrphanSessionBranches).toHaveBeenCalledTimes(1);
-    expect(state.logger.info).toHaveBeenCalledWith({ scanned: 2 }, "swept orphan session branches");
+    expect(state.gitManager.sweepLegacyMirrors).toHaveBeenCalledTimes(1);
+    expect(state.logger.info).toHaveBeenCalledWith({ removed: 2 }, "removed legacy shared git-mirrors tree");
     expect(state.updateAttach).toHaveBeenCalledTimes(1);
     expect(state.updateOptions?.getQuietGateSnapshot()).toEqual({ activeCount: 3, lastActivityMs: 30 });
     state.updateOptions?.log("info", "update log line");
@@ -335,7 +335,7 @@ describe("AgentRuntime", () => {
   });
 
   it("logs GC failures and can shut down through SIGTERM without update hooks", async () => {
-    const state = installRuntimeMocks({ gcError: new Error("gc failed") });
+    const state = installRuntimeMocks({ sweepError: new Error("gc failed") });
     const signals = captureProcessSignals();
     const { AgentRuntime } = await import("../runtime/runtime.js");
     const runtime = new AgentRuntime({
@@ -351,7 +351,7 @@ describe("AgentRuntime", () => {
     await expect(started).resolves.toBeUndefined();
     expect(state.logger.warn).toHaveBeenCalledWith(
       { err: new Error("gc failed") },
-      "gcOrphanSessionBranches threw — continuing startup",
+      "sweepLegacyMirrors threw — continuing startup",
     );
     expect(state.updateAttach).not.toHaveBeenCalled();
     expect(state.updateDispose).not.toHaveBeenCalled();

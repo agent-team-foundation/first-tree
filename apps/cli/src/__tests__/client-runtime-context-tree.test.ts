@@ -56,7 +56,7 @@ const watchMockProbe = importedWatch;
 const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
-const sweepMock = vi.fn(async () => ({ scanned: 0, deleted: 0, failed: 0 }));
+const sweepMock = vi.fn(async () => ({ removed: [] as string[] }));
 let connectionMaxListeners = 10;
 const connectionMock = {
   clientId: "client-test",
@@ -111,13 +111,10 @@ vi.mock("@first-tree/client", () => {
     },
     UpdateManager: { attach: vi.fn(() => ({ dispose: disposeMock })) },
     createGitMirrorManager: vi.fn(() => ({
-      ensureMirror: vi.fn(),
-      fetchMirror: vi.fn(),
-      createWorktree: vi.fn(),
-      removeWorktree: vi.fn(),
-      gcMirrors: vi.fn(async () => ({ removed: [] })),
-      gcOrphanSessionBranches: sweepMock,
-      mirrorsRoot: "/tmp/fake-mirrors",
+      ensureSourceRepo: vi.fn(),
+      removeSourceRepo: vi.fn(),
+      sweepLegacyMirrors: sweepMock,
+      legacyMirrorsRoot: "/tmp/fake-mirrors",
     })),
     createLogger: vi.fn(() => ({
       info: vi.fn(),
@@ -184,7 +181,7 @@ describe("ClientRuntime context-tree wiring", () => {
     disposeMock.mockClear();
     killAllMock.mockClear();
     sweepMock.mockReset();
-    sweepMock.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
+    sweepMock.mockResolvedValue({ removed: [] });
   });
 
   afterEach(() => {
@@ -282,7 +279,7 @@ describe("ClientRuntime context-tree wiring", () => {
   it("handles connection events, update hooks, and graceful stop", async () => {
     const { print } = await import("../core/output.js");
     const client = await import("@first-tree/client");
-    sweepMock.mockResolvedValueOnce({ scanned: 3, deleted: 2, failed: 1 });
+    sweepMock.mockResolvedValueOnce({ removed: ["abc", "def"] });
     slotInstances.length = 0;
 
     const update = {
@@ -311,10 +308,7 @@ describe("ClientRuntime context-tree wiring", () => {
       getQuietGateSnapshot: () => { activeCount: number; lastActivityMs: number };
     };
     expect(updateOptions.getQuietGateSnapshot()).toEqual({ activeCount: 2, lastActivityMs: 400 });
-    expect(print.status).toHaveBeenCalledWith(
-      "[git-mirror]",
-      "swept orphan session branches — scanned=3 deleted=2 failed=1",
-    );
+    expect(print.status).toHaveBeenCalledWith("[git-mirror]", "removed legacy shared git-mirrors tree (2 entries)");
 
     connectionMock.isPaused.mockReturnValue(true);
     connectionMock.getPausedReason.mockReturnValue("auth_refresh_failed");
@@ -346,7 +340,7 @@ describe("ClientRuntime context-tree wiring", () => {
 
     await rt.start();
 
-    expect(print.status).toHaveBeenCalledWith("⚠️", "git-mirror orphan sweep failed: gc failed");
+    expect(print.status).toHaveBeenCalledWith("⚠️", "legacy git-mirrors sweep failed: gc failed");
     expect(print.status).toHaveBeenCalledWith("", "no agents configured yet.");
     expect(print.status).toHaveBeenCalledWith(
       "",

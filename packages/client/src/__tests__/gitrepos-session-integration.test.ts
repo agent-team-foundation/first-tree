@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfig } from "@first-tree/shared";
@@ -144,8 +144,8 @@ describe("claude-code handler gitRepos wiring (PRD §5.1.5)", () => {
     expect(existsSync(sourceRepoPath)).toBe(true);
     expect(existsSync(join(sourceRepoPath, "README.md"))).toBe(true);
     expect(readFileSync(join(sourceRepoPath, "README.md"), "utf-8")).toContain("fixture repo");
-    // A worktree-style checkout has a .git FILE (not directory) pointing at the bare mirror.
-    expect(existsSync(join(sourceRepoPath, ".git"))).toBe(true);
+    // A standalone clone has a real `.git` DIRECTORY (not a worktree `.git` file).
+    expect(statSync(join(sourceRepoPath, ".git")).isDirectory()).toBe(true);
     // The `worktrees/` subdir is NOT pre-created — it's the agent's on-demand
     // space, populated only when the agent runs `git worktree add` itself.
     expect(existsSync(join(workspaceRoot, "worktrees"))).toBe(false);
@@ -156,8 +156,8 @@ describe("claude-code handler gitRepos wiring (PRD §5.1.5)", () => {
     await handler.shutdown();
     expect(existsSync(sourceRepoPath)).toBe(true);
     expect(existsSync(workspaceRoot)).toBe(true);
-    // Bare mirror is shared across sessions — must survive session cleanup.
-    expect(existsSync(gitMirrorManager.mirrorsRoot)).toBe(true);
+    // No shared bare-mirror tree exists in the per-agent-clone model.
+    expect(existsSync(gitMirrorManager.legacyMirrorsRoot)).toBe(false);
   });
 
   it("aborts session creation when a gitRepo URL is unreachable (PRD D10)", async () => {
@@ -220,11 +220,8 @@ describe("claude-code handler gitRepos wiring (PRD §5.1.5)", () => {
       ctx,
     );
 
-    // No mirror should have been created since no repos.
-    if (existsSync(gitMirrorManager.mirrorsRoot)) {
-      const { readdirSync } = await import("node:fs");
-      expect(readdirSync(gitMirrorManager.mirrorsRoot)).toHaveLength(0);
-    }
+    // No source repos configured → nothing materialised, and no legacy mirror tree.
+    expect(existsSync(gitMirrorManager.legacyMirrorsRoot)).toBe(false);
 
     await handler.shutdown();
   });

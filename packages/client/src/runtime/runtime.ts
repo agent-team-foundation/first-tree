@@ -136,19 +136,16 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
-    // Sweep orphan `hub-session-*` branches left over from previous runs
-    // before any slot can race a `git worktree add`. The session-branch
-    // config segments would otherwise accumulate forever — First Tree sessions
-    // suspend on idle rather than terminate, so `removeWorktree` (which
-    // deletes branches) only fires on explicit terminate/eviction.
+    // One-time cleanup of the legacy shared `<dataDir>/git-mirrors/` tree left
+    // by the pre-per-agent-source-repo bare-mirror model. Pure cache, no state.
     // Failures are advisory: log and continue startup.
     try {
-      const sweep = await this.gitMirrorManager.gcOrphanSessionBranches();
-      if (sweep.scanned > 0) {
-        this.logger.info(sweep, "swept orphan session branches");
+      const sweep = await this.gitMirrorManager.sweepLegacyMirrors();
+      if (sweep.removed.length > 0) {
+        this.logger.info({ removed: sweep.removed.length }, "removed legacy shared git-mirrors tree");
       }
     } catch (err) {
-      this.logger.warn({ err }, "gcOrphanSessionBranches threw — continuing startup");
+      this.logger.warn({ err }, "sweepLegacyMirrors threw — continuing startup");
     }
 
     // Attach before connecting so the first welcome frame on a stale Client
