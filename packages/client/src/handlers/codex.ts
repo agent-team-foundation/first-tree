@@ -36,6 +36,7 @@ type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexCo
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
+const THINKING_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
 type Worktree = { url: string; path: string; branchName: string };
@@ -746,9 +747,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
         return "";
       }
       case "reasoning": {
-        // Hide reasoning content for parity with how claude-code suppresses
-        // thinking blocks; surface a presence-only marker instead.
-        sessionCtx.emitEvent({ kind: "thinking", payload: {} });
+        // Surface the reasoning summary (head-truncated) so behavioural
+        // analysis can see *why* the agent acted, mirroring claude-code's
+        // thinking handling. Still emitted even when empty so the "Thinking…"
+        // indicator is preserved.
+        sessionCtx.emitEvent({
+          kind: "thinking",
+          payload: { text: item.text.slice(0, THINKING_TEXT_EVENT_LIMIT) },
+        });
         return "";
       }
       case "error": {

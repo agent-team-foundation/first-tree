@@ -139,9 +139,25 @@ describe("sessionEventSchema", () => {
   });
 
   describe("thinking", () => {
-    it("parses a thinking marker with empty payload", () => {
+    it("parses a thinking marker with empty payload (pre-feature / redacted block)", () => {
       const r = sessionEventSchema.safeParse({ kind: "thinking", payload: {} });
       expect(r.success).toBe(true);
+    });
+
+    it("parses a thinking marker carrying reasoning text", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "thinking",
+        payload: { text: "the agent's reasoning" },
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it("rejects thinking text over the 8000-char cap", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "thinking",
+        payload: { text: "a".repeat(8001) },
+      });
+      expect(r.success).toBe(false);
     });
   });
 

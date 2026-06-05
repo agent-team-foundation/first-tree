@@ -267,7 +267,7 @@ describe("createToolCallProcessor", () => {
     expect(ev.payload.text.length).toBe(8000);
   });
 
-  it("emits a thinking marker (no content) for thinking blocks", () => {
+  it("emits a thinking marker carrying head-truncated reasoning text", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit);
 
@@ -275,15 +275,52 @@ describe("createToolCallProcessor", () => {
       type: "assistant",
       message: {
         role: "assistant",
-        content: [{ type: "thinking", thinking: "private reasoning the UI must not see" }],
+        content: [{ type: "thinking", thinking: "reasoning the analysis layer wants to see" }],
       },
     });
 
     expect(emit).toHaveBeenCalledTimes(1);
     const ev = emit.mock.calls[0]?.[0];
     if (!ev || ev.kind !== "thinking") throw new Error("expected thinking event");
-    // Payload is intentionally empty — thinking content is never persisted.
-    expect(ev.payload).toEqual({});
+    expect(ev.payload.text).toBe("reasoning the analysis layer wants to see");
+  });
+
+  it("head-truncates over-long thinking text to 8000 chars", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit);
+
+    processor.onMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "a".repeat(9000) }],
+      },
+    });
+
+    const ev = emit.mock.calls[0]?.[0];
+    if (!ev || ev.kind !== "thinking") throw new Error("expected thinking event");
+    expect(ev.payload.text).toHaveLength(8000);
+  });
+
+  it("does not throw on a thinking block whose `thinking` is not a string", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit);
+
+    expect(() =>
+      processor.onMessage({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          // Contract-violating shape: type is "thinking" but the field is not a
+          // string. Must degrade to "" rather than crashing the message loop.
+          content: [{ type: "thinking", thinking: { unexpected: "object" } }],
+        },
+      }),
+    ).not.toThrow();
+
+    const ev = emit.mock.calls[0]?.[0];
+    if (!ev || ev.kind !== "thinking") throw new Error("expected thinking event");
+    expect(ev.payload.text).toBe("");
   });
 });
 

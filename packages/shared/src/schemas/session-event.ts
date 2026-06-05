@@ -57,11 +57,24 @@ export const assistantTextEventPayload = z.object({
 export type AssistantTextEventPayload = z.infer<typeof assistantTextEventPayload>;
 
 /**
- * Marker emitted when the model produces a `thinking` content block.
- * We intentionally do NOT persist the thinking content — only a presence
- * signal so the UI can render a lightweight "Thinking…" status indicator.
+ * Marker emitted when the model produces a `thinking` (Claude) / `reasoning`
+ * (Codex) content block.
+ *
+ * `text` carries the reasoning content, head-truncated to 8000 chars (same cap
+ * as `assistant_text`). It exists so behavioural analysis can see *why* the
+ * agent acted — e.g. distinguishing "deliberately did not call the tool" from
+ * "was cut off". Head truncation keeps the framing/approach that opens a
+ * reasoning block; the tail (often the final decision) is dropped on overflow.
+ *
+ * `text` is OPTIONAL on purpose: a thinking event is still emitted even when the
+ * block is empty / redacted (the lightweight "Thinking…" UI indicator depends on
+ * the event existing, not on its content), and pre-feature clients emit a bare
+ * `{}` payload — the server strict-parses every inbound event, so the field must
+ * tolerate absence rather than reject the event.
  */
-export const thinkingEventPayload = z.object({});
+export const thinkingEventPayload = z.object({
+  text: z.string().max(8000).optional(),
+});
 export type ThinkingEventPayload = z.infer<typeof thinkingEventPayload>;
 
 /**

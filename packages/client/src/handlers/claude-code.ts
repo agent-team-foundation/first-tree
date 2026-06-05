@@ -106,6 +106,7 @@ export function detectStreamApiError(text: string): { message: string } | null {
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
+const THINKING_TEXT_EVENT_LIMIT = 8000;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
 type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
@@ -472,7 +473,18 @@ export function createToolCallProcessor(
               payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
             });
           } else if (isThinkingBlock(block)) {
-            emit({ kind: "thinking", payload: {} });
+            // Surface the reasoning content (head-truncated) so behavioural
+            // analysis can see *why* the agent acted. `isThinkingBlock` only
+            // narrows on `type`, so guard that `thinking` is actually a string
+            // before slicing — a malformed/absent field degrades to "" rather
+            // than throwing on `.slice`. The event is still emitted in that
+            // case, so an empty `text` preserves the lightweight "Thinking…"
+            // UI indicator.
+            const thinkingText = typeof block.thinking === "string" ? block.thinking : "";
+            emit({
+              kind: "thinking",
+              payload: { text: thinkingText.slice(0, THINKING_TEXT_EVENT_LIMIT) },
+            });
           }
         }
       } else if (type === "user") {
