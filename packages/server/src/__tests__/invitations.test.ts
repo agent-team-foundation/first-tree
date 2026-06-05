@@ -88,7 +88,7 @@ describe("Invitation lifecycle", () => {
     expect(oldRow[0]?.revokedAt).not.toBeNull();
   });
 
-  it("non-admin cannot fetch or rotate invitations", async () => {
+  it("non-admin member can fetch/share the link but cannot rotate it", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     // Demote: create a second member with role=member via raw insert
@@ -111,12 +111,25 @@ describe("Invitation lifecycle", () => {
       username: `peer-${otherUserId.slice(0, 8)}`,
     });
     const tokens = await signTokensForUser(app.config.secrets.jwtSecret, otherUserId, app.config.auth);
-    const res = await app.inject({
+
+    // Sharing the link is member-level: GET succeeds and returns the active link.
+    const fetchRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+    });
+    expect(fetchRes.statusCode).toBe(200);
+    const body = fetchRes.json<{ token: string; inviteUrl: string }>();
+    expect(body.token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(body.inviteUrl).toContain(`/invite/${body.token}`);
+
+    // Rotation is destructive and stays admin-only: member is refused.
+    const rotateRes = await app.inject({
       method: "POST",
       url: `/api/v1/orgs/${admin.organizationId}/invitations/rotate`,
       headers: { authorization: `Bearer ${tokens.accessToken}` },
     });
-    expect(res.statusCode).toBe(403);
+    expect(rotateRes.statusCode).toBe(403);
   });
 
   it("admin from org A cannot rotate invitations of org B", async () => {

@@ -20,6 +20,7 @@ import {
   AgentDeleteConfirmDialog,
   AgentSuspendConfirmDialog,
 } from "../../components/agent-lifecycle-confirm-dialog.js";
+import { InviteDialog } from "../../components/invite-dialog.js";
 import { NewAgentDialog } from "../../components/new-agent-dialog.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -28,7 +29,6 @@ import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { formatRelative } from "../../lib/utils.js";
-import { InviteLinkPanel } from "../invite-link-panel.js";
 import { type AgentRow, type HumanRow, type RowAction, TeamTable } from "./team-table.js";
 
 /**
@@ -312,13 +312,13 @@ export function TeamPage() {
               <Plus className="h-3.5 w-3.5" />
               New agent
             </Button>
-            {/* Secondary, admin-only — neutral outline, never green. */}
-            {isAdmin && (
-              <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)}>
-                <Link2 className="h-3.5 w-3.5" />
-                Invite link
-              </Button>
-            )}
+            {/* Secondary, member-level — neutral outline, never green. Sharing
+                the invite link is a member-level capability (issue 836); the
+                dialog's panel role-forks so only admins see Rotate. */}
+            <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)}>
+              <Link2 className="h-3.5 w-3.5" />
+              Invite link
+            </Button>
           </div>
         }
       />
@@ -363,18 +363,12 @@ export function TeamPage() {
             searchActive={search.length > 0}
             agentFilter={agentFilter}
             onAgentFilter={handleAgentFilterChange}
+            onInvite={() => setInviteOpen(true)}
           />
         )}
       </div>
 
-      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invite link</DialogTitle>
-          </DialogHeader>
-          <InviteLinkPanel />
-        </DialogContent>
-      </Dialog>
+      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
 
       <NewAgentDialog
         open={createOpen}

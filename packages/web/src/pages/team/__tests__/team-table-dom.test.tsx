@@ -158,6 +158,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     searchActive: false,
     agentFilter: "all",
     onAgentFilter: vi.fn(),
+    onInvite: vi.fn(),
     ...overrides,
   };
 }

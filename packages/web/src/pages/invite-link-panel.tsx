@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { api, withOrgAt } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 
 /** Render the expiry timestamp as "in N days · 2026/5/6" — both relative
  *  and absolute, so the admin doesn't have to do arithmetic. */
@@ -18,17 +17,19 @@ function formatExpiry(iso: string): string {
 }
 
 /**
- * Admin panel for the org's *current* invite link. v1 enforces "one
- * active link per org" via the `uq_invitations_active_per_org` partial
- * unique index, so the UI surfaces a single share URL with a "rotate"
- * action that revokes-and-replaces in one transaction.
+ * Body of the org's invite dialog (the surrounding chrome + title live in
+ * `InviteDialog`). v1 enforces "one active link per org" via the
+ * `uq_invitations_active_per_org` partial unique index, so the UI surfaces a
+ * single share URL.
  *
- * Links auto-expire after `INVITATION_DEFAULT_TTL_DAYS` to bound the
- * blast radius of accidental link leakage. Admin extends by clicking
- * Rotate (mints a fresh link with a fresh timer).
+ * Role-forked (issue 836): every member can read and Copy the link, since
+ * inviting people is core to every member's job; only admins see Rotate, which
+ * revokes the prior link and resets its 7-day (`INVITATION_DEFAULT_TTL_DAYS`)
+ * timer.
  */
 export function InviteLinkPanel() {
-  const { organizationId } = useAuth();
+  const { organizationId, role } = useAuth();
+  const isAdmin = role === "admin";
   const [invite, setInvite] = useState<InvitationView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,50 +62,55 @@ export function InviteLinkPanel() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Invite link</CardTitle>
-        <CardDescription>
-          Anyone with this link can join your team as a member. Links expire after {INVITATION_DEFAULT_TTL_DAYS} days;
-          rotating revokes the old link instantly and resets the timer.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {error && (
-          <div className="rounded-[var(--radius-panel)] bg-destructive/10 p-2 text-label text-destructive">{error}</div>
-        )}
-        {invite ? (
+    <div className="space-y-3">
+      <p className="text-label text-muted-foreground">
+        {isAdmin ? (
           <>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                className="flex-1 rounded-[var(--radius-panel)] border bg-muted px-2 py-1 text-label font-mono"
-                value={invite.inviteUrl}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  void navigator.clipboard.writeText(invite.inviteUrl);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                }}
-              >
-                {copied ? "Copied!" : "Copy"}
-              </Button>
+            Anyone with this link can join your team as a member. Links expire after {INVITATION_DEFAULT_TTL_DAYS} days;
+            rotating revokes the old link instantly and resets the timer.
+          </>
+        ) : (
+          <>
+            Anyone with this link can join your team as a member. Links expire after {INVITATION_DEFAULT_TTL_DAYS} days.
+          </>
+        )}
+      </p>
+      {error && (
+        <div className="rounded-[var(--radius-panel)] bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+      )}
+      {invite ? (
+        <>
+          <div className="flex gap-2">
+            <input
+              readOnly
+              className="flex-1 rounded-[var(--radius-panel)] border bg-muted px-2 py-1 text-label font-mono"
+              value={invite.inviteUrl}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void navigator.clipboard.writeText(invite.inviteUrl);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+            >
+              {copied ? "Copied!" : "Copy"}
+            </Button>
+            {isAdmin && (
               <Button size="sm" onClick={rotate} disabled={busy}>
                 {busy ? "Rotating…" : "Rotate"}
               </Button>
-            </div>
-            <p className="text-label text-muted-foreground">
-              Created {new Date(invite.createdAt).toLocaleString()}
-              {invite.expiresAt ? ` · ${formatExpiry(invite.expiresAt)}` : " · no expiry"}
-            </p>
-          </>
-        ) : (
-          <p className="text-label text-muted-foreground">Loading…</p>
-        )}
-      </CardContent>
-    </Card>
+            )}
+          </div>
+          <p className="text-label text-muted-foreground">
+            Created {new Date(invite.createdAt).toLocaleString()}
+            {invite.expiresAt ? ` · ${formatExpiry(invite.expiresAt)}` : " · no expiry"}
+          </p>
+        </>
+      ) : (
+        <p className="text-label text-muted-foreground">Loading…</p>
+      )}
+    </div>
   );
 }
