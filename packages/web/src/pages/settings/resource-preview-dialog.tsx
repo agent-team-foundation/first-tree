@@ -193,7 +193,11 @@ export function ResourcePreviewDialog({ resource, onClose }: { resource: Resourc
         className="flex max-w-2xl flex-col gap-0 p-0"
         style={{ maxHeight: "80vh" }}
       >
-        <div className="space-y-4 p-6">
+        {/* When there's no Body region (repo / mcp), the metadata zone itself
+            becomes the scroll container so a tall field list — e.g. an mcp with
+            many Args rows — can't overflow the 80vh cap off-viewport. With a
+            Body present, this stays a fixed header and the Body scrolls instead. */}
+        <div className={body === null ? "min-h-0 flex-1 space-y-4 overflow-y-auto p-6" : "space-y-4 p-6"}>
           <DialogHeader>
             <DialogTitle className="text-title">{resource.name}</DialogTitle>
           </DialogHeader>
