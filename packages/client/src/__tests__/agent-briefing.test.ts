@@ -152,11 +152,26 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/you MUST\s+load both skills below/);
     expect(briefing).toContain("**`first-tree`**");
     expect(briefing).toContain("**`first-tree-context`**");
-    // Reminds the agent that the inline briefing intentionally does
-    // not duplicate the skill bodies — so it can't rationalise
-    // skipping the load.
-    expect(briefing).toMatch(/intentionally NOT duplicated[\s\n]+inline/);
-    expect(briefing).toMatch(/minimum mechanics you need to operate at all/);
+    // Bootstrapping framing — the mandate IS the first step of the
+    // skill-described pre-task hygiene, not "even before" those
+    // checks (which would be self-contradictory: you can't run the
+    // checks before you've read the skill that lists them).
+    expect(briefing).toMatch(/loading them \*\*is\*\* the first step of the[\s\n]+pre-task hygiene/);
+    // Briefing↔skill split: minimum mechanics inline, durable rules
+    // in full in the skills. Honest about the partial summarisation
+    // (final-text contract is in the briefing's Communication block;
+    // write-side gate is in `## Writing the Tree`) — the briefing
+    // can't claim "not duplicated" without contradicting itself.
+    expect(briefing).toMatch(/minimum\s+mechanics you need to operate at all/);
+    expect(briefing).toMatch(/durable\s+rules in full/);
+    expect(briefing).toMatch(/only summarising the slices/);
+    // The cost-of-skipping list names what's actually missing from
+    // the inline briefing (the daemon-lifecycle invariants, the full
+    // Communication Principles, source-system boundary, Hard Rules +
+    // Double Test) — not a blanket "not duplicated" claim.
+    expect(briefing).toMatch(/daemon-lifecycle invariants/);
+    expect(briefing).toMatch(/Hard Rules \+ Double Test/);
+    expect(briefing).toMatch(/either omits or only summarises/);
     // Calls out the on-demand-only sibling so the agent doesn't
     // over-load every First Tree family skill on every task.
     expect(briefing).toContain("`first-tree-sync`");
