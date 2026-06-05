@@ -27,15 +27,16 @@ directions**:
 - **code→tree** — for each piece of source structure, does the tree
   register it? (catches `code-not-synced`)
 
-Classify every gap, then route each finding to auto-fix, hand-off-to-write,
-needs-human, or skip.
+Classify every gap, then route each finding to auto-fix,
+`first-tree-context` handoff, needs-human, or skip.
 
 Two phases, in order:
 
 1. **audit** — produce a `drifts[]` list. Read-only, human-paced. Combines
    a tree→code pass (Phase 1–3) with a code→tree sweep (Phase 4).
-2. **fix** — for each drift, decide auto-fix / write-handoff / needs-human
-   / skip and act on that decision.
+2. **fix** — for each drift, decide auto-fix /
+   `first-tree-context` handoff / needs-human / skip and act on that
+   decision.
 
 Each phase has a dedicated reference; follow them in order.
 
@@ -60,7 +61,8 @@ ownership-stale              — owners list no longer matches reality
 
 `code-not-synced` has two subtypes because the fix shape is different:
 structural gaps need registration (sync handles), substantive gaps need
-authorship (write handles). See `references/drift-taxonomy.md`.
+authorship (`first-tree-context` handles). See
+`references/drift-taxonomy.md`.
 
 Definitions, signals, and worked examples in
 [references/drift-taxonomy.md](references/drift-taxonomy.md).
@@ -71,7 +73,7 @@ Definitions, signals, and worked examples in
 | ----------------------------- | ------------------------------------------------------------ |
 | Find drift                    | [references/audit-workflow.md](references/audit-workflow.md) |
 | Repair drift                  | [references/fix-workflow.md](references/fix-workflow.md)     |
-| Decide between sync and write | [references/boundary.md](references/boundary.md)             |
+| Choose sync vs source-driven write | [references/boundary.md](references/boundary.md)             |
 
 The CLI surface this skill uses today:
 
@@ -103,7 +105,7 @@ and tree manually; the fix phase opens PRs via `gh`.
 - **Audit produces a list; fix takes actions.** Do not write tree updates
   inside the audit phase.
 - **Sync may add structural skeletons; substantive content goes through
-  write.** `code-not-synced` splits into two subtypes (see
+  `first-tree-context`.** `code-not-synced` splits into two subtypes (see
   `references/drift-taxonomy.md`):
   - **structural** — new dir / submodule / dependency / member that the
     tree's skeleton does not yet register. Sync may auto-fix with a stub
@@ -124,5 +126,5 @@ and tree manually; the fix phase opens PRs via `gh`.
   drift; output shape of `drifts[]`
 - [fix-workflow.md](references/fix-workflow.md) — auto-fix vs needs-human
   vs skip routing; PR mechanics
-- [boundary.md](references/boundary.md) — sync vs write decision table
-  and hand-off rules
+- [boundary.md](references/boundary.md) — sync vs source-driven write
+  decision table and hand-off rules

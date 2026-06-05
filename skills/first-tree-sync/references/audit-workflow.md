@@ -132,9 +132,10 @@ For each source repo in `manifest.sources` (from `tree status --json`):
 5. **`AGENTS.md` / `CLAUDE.md` sections**
 
    Split the file by `## ` and `### ` headings. For each section without
-   a corresponding tree node, domain entry, or `soft_links` reference,
+   a corresponding tree node, routing entry, or `soft_links` reference,
    emit `code-not-synced/substantive`. Record the heading and the
-   line-range in `sourcePointer` so write knows what to read.
+   line-range in `sourcePointer` so `first-tree-context` knows what to
+   read.
 
 6. **Decision docs**
 

@@ -5,7 +5,7 @@ per finding, whether to:
 
 - **auto-fix** — open a tree-repo PR with the correction (structural
   edits only; never decision prose)
-- **write-handoff** — surface the source pointer and invoke
+- **context-handoff** — surface the source pointer and invoke
   `first-tree-context`
 - **needs-human** — leave a label or comment for human disambiguation
 - **skip** — the finding is a false positive or out of scope
@@ -17,8 +17,8 @@ per finding, whether to:
 | `tree-stale`                  | auto-fix                                                                                                  | Code is the ground truth; mechanical update.                                                                        |
 | `tree-wrong`                  | auto-fix when the correction is small; needs-human if rationale changes                                   | Always link the offending PR / commit so reviewers see the source of truth.                                         |
 | `tree-outdated`               | needs-human                                                                                               | Superseding decisions cross domains; require an owner.                                                              |
-| `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md domain entries, `workspace.json.sources` additions, org.yaml dep registration, member stubs. |
-| `code-not-synced/substantive` | write-handoff (always)                                                                                    | Sync surfaces the source pointer and stops. Substantive write goes through write's "default to not writing" filter. |
+| `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md routing entries, `workspace.json.sources` additions, org.yaml dep registration, member stubs. |
+| `code-not-synced/substantive` | context-handoff (always)                                                                                  | Sync surfaces the source pointer and stops. Substantive content goes through `first-tree-context`'s "default to not writing" filter. |
 | `cross-domain-broken`         | auto-fix when the new target is unambiguous; needs-human when the link could go to multiple replacements. |
 | `ownership-stale`             | needs-human always                                                                                        | Ownership changes are high-trust and require a person.                                                              |
 
@@ -33,10 +33,13 @@ For each drift routed to auto-fix:
    `chore(sync)/<drift-type>/<short-slug>`.
 2. Make the smallest correct change to the tree node. Keep diffs minimal.
    For `code-not-synced/structural`:
-   - **new domain**: add a one-line entry to the parent `NODE.md` domain
-     list and create `<domain>/NODE.md` with `title`, `owners: []`
-     frontmatter and an empty body. Do **not** describe what the domain
-     does — that's substantive.
+   - **new domain / child node**: add a one-line entry to the relevant
+     routing section of the parent `NODE.md` and create
+     `<domain>/NODE.md` with `title`, `owners: []` frontmatter and an
+     empty body. At the root, preserve separate sections such as
+     `## Domains` and `## Members`; do not flatten everything into one
+     root list. Do **not** describe what the domain does — that's
+     substantive.
    - **new submodule**: add the submodule's subdir name to
      `workspace.json.sources` (one-line JSON edit). Do not bind
      it as its own tree (that's a user decision via
@@ -85,24 +88,26 @@ audit.
 
 ## Hand-Off To `first-tree-context`
 
-Every `code-not-synced/substantive` finding hands off to write — this is
-the default route, not an opt-in. Mechanics:
+Every `code-not-synced/substantive` finding hands off to
+`first-tree-context` — this is the default route, not an opt-in.
+Mechanics:
 
-1. Group the substantive findings in the audit output under a "write
+1. Group the substantive findings in the audit output under a "context
    candidates" header. Each entry shows `sourcePointer` and `summary`.
 2. Print one invocation suggestion per finding:
    ```
    /first-tree-context source=<sourcePointer>
    ```
-3. Stop. Do not auto-invoke write — that would bypass write's "default
-   to not writing" filter and the user's review of which gaps are
-   actually tree-worthy.
+3. Stop. Do not auto-invoke `first-tree-context` — that would bypass
+   its "default to not writing" filter and the user's review of which
+   gaps are actually tree-worthy.
 
 For `tree-stale` / `tree-wrong` cases where the user gave you a specific
 source PR to reflect, you can also hand off — same shape.
 
-Sync's job ends when each drift is classified and routed. Write turns
-one specific source into one tree update. See `references/boundary.md`.
+Sync's job ends when each drift is classified and routed.
+`first-tree-context` turns one specific source into one tree update.
+See `references/boundary.md`.
 
 ## What This Workflow Does NOT Do
 

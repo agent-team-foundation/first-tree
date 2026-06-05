@@ -63,12 +63,14 @@ For each output field below, apply the rule. Confidence is `high` / `medium` / `
 
 ### `<tree_root>/NODE.md`
 
-| Tree field                               | Rule                                                                                                                                                                                                                            | Confidence                                |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `## Domains` list                        | One bullet per top-level dir that looks like a domain (`apps/`, `packages/`, `services/`, `libs/`, `cmd/`, `internal/`). Skip build artifacts (`dist`, `node_modules`, `.next`, `.venv`). Use the dir name as the domain title. | medium                                    |
-| Description paragraph above `## Domains` | Verbatim from README first paragraph if it's ≤ 3 sentences. Otherwise summarize in ≤ 30 words and quote source.                                                                                                                 | high if README exists; low if synthesized |
+| Tree field            | Rule                                                                                                                                                                                                                                                                                | Confidence                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Root routing skeleton | Under `## Domains`, add one bullet per observed top-level source area worth registering as a domain candidate. Skip build artifacts (`dist`, `node_modules`, `.next`, `.venv`). Preserve supporting groups such as `## Members`; do not list them as domains. | medium                                    |
+| Description paragraph | Verbatim from README first paragraph if it's <= 3 sentences. Otherwise summarize in <= 30 words and quote source.                                                                                                                                                                  | high if README exists; low if synthesized |
 
-Do **not** invent domains that don't exist as dirs. If the repo has only `src/`, the tree has only one domain — that's correct.
+Do **not** invent domains or root groups that do not exist in the source
+signals. If the repo has only `src/`, the tree has only one domain
+candidate — that's correct.
 
 ### `<tree_root>/members/owner/NODE.md`
 

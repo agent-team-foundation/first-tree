@@ -61,8 +61,9 @@ invented.
 
 **Signals:**
 
-- a top-level source directory has no entry in the relevant `NODE.md`
-  domain list
+- source structure has no entry in the relevant tree routing surface:
+  a root section such as `## Domains`, a subsystem index, a source
+  registry, a member node, or an equivalent domain `NODE.md`
 - `.gitmodules` lists a submodule path whose subdir name is not in
   `workspace.json.sources` (the W1 manifest at
   `<workspaceRoot>/.first-tree/workspace.json`)
@@ -75,14 +76,16 @@ invented.
 - an active contributor (commits within the last 6 months) is not
   present under `members/`
 
-**Example:** the source repo's top-level `papers/` directory exists but
-the tree's `NODE.md` domain list does not mention it. Sync adds a
-one-line domain entry and an empty `papers/NODE.md` stub with `title`
-and `owners: []` frontmatter — no body prose.
+**Example:** the source repo's top-level `packages/` directory exists
+but the tree has no domain routing entry, subsystem index entry, or
+equivalent node that registers it. Sync adds the smallest skeleton entry
+in the relevant routing section and, if needed, an empty
+`packages/NODE.md` stub with `title` and `owners: []` frontmatter — no
+body prose.
 
 **Fix bias:** auto-fix with the smallest correct skeleton edit. Do not
-draft decision content for the new node — that is write's job on a
-follow-up source pointer.
+draft decision content for the new node — that is
+`first-tree-context`'s job on a follow-up source pointer.
 
 ### `code-not-synced/substantive`
 
