@@ -346,13 +346,35 @@ describe("ResourcesTab and SaveBar", () => {
     expect(container.textContent).not.toContain("Prompts");
     expect(container.textContent).toContain("Team repo");
     expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
-    expect(container.textContent).toContain("Agent repo");
+    // Each editable section gets a "+ <Type>" add control.
+    expect(buttonByText(container, "Repo")).toBeTruthy();
 
-    await click(buttonByText(container, "Enable Available skill"));
+    // Enable an opt-in team skill via the skill section's add menu. The menu
+    // panel portals to document.body, so query the item there.
+    await click(buttonByText(container, "Skill"));
+    await click(buttonByText(document.body, "Available skill"));
     expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
       expectedVersion: 3,
       bindings: [{ type: "skill", mode: "include", resourceId: "skill-available", order: 1 }],
     });
+  });
+
+  it("keeps the MCP add menu actionable with no team MCP (routes to Settings, no dead end)", async () => {
+    const layoutMocks = await import("../layout-context.js");
+    const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
+    spy.mockReturnValue(context());
+    // Default fixtures: empty effective MCP + no available team resources.
+    const { ResourcesTab } = await import("../resources-tab.js");
+
+    const container = await renderWithContext(<ResourcesTab />);
+    await waitForText(container, "Integrations (MCP)");
+
+    // The MCP section is empty and the team offers nothing to enable — but the
+    // "+ MCP" menu must still be actionable: it explains the source and routes
+    // to Settings → Resources instead of leaving a dead end.
+    await click(buttonByText(container, "MCP"));
+    expect(document.body.textContent).toContain("No team MCP integrations to enable yet");
+    expect(document.body.textContent).toContain("Manage in Settings → Resources");
   });
 
   it("renders SaveBar saved, error, conflict, saving, and jump actions", async () => {

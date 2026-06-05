@@ -19,7 +19,7 @@ import { Section } from "../../components/ui/section.js";
 import { useToast } from "../../components/ui/toast.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import {
-  AddResourceMenu,
+  AddResourceButton,
   defaultEnabledLabel,
   type EditorState,
   RESOURCE_TYPES,
@@ -34,10 +34,11 @@ import { ResourcePreviewDialog } from "./resource-preview-dialog.js";
  * surface), not on the Team roster — see the Settings IA in settings.tsx.
  *
  * Visible to all members. Everyone can open the read-only preview (the eye
- * icon); only admins see add / edit / retire affordances. Adding is type-first:
- * one "Add resource" menu picks the type, then a per-type editor opens (all
- * four render in a modal — see resource-editors.tsx). The same editors handle
- * edit, prefilled.
+ * icon); only admins see add / edit / retire affordances. Each section owns its
+ * own add control — a "+ <Type>" button (AddResourceButton) that opens that
+ * type's editor directly, so the type is implicit and empty sections still have
+ * an in-context entry. All four editors render in a modal (see
+ * resource-editors.tsx) and double as the edit form, prefilled.
  */
 export function SettingsResourcesPage() {
   const { role } = useAuth();
@@ -73,11 +74,7 @@ export function SettingsResourcesPage() {
 
   return (
     <>
-      <PageHeader
-        title="Resources"
-        subtitle="Team defaults and opt-in resources used by agents at runtime."
-        right={isAdmin ? <AddResourceMenu onPick={(type) => setEditor({ mode: "create", type })} /> : undefined}
-      />
+      <PageHeader title="Resources" subtitle="Team defaults and opt-in resources used by agents at runtime." />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         {resourcesQuery.isLoading ? (
           <p className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -89,7 +86,16 @@ export function SettingsResourcesPage() {
           </p>
         ) : (
           RESOURCE_TYPES.map((type) => (
-            <Section key={type} title={typeLabelPlural(type)} count={grouped.get(type)?.length ?? 0}>
+            <Section
+              key={type}
+              title={typeLabelPlural(type)}
+              count={grouped.get(type)?.length ?? 0}
+              action={
+                isAdmin ? (
+                  <AddResourceButton type={type} onClick={() => setEditor({ mode: "create", type })} />
+                ) : undefined
+              }
+            >
               <div>
                 {(grouped.get(type) ?? []).length === 0 ? (
                   <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>

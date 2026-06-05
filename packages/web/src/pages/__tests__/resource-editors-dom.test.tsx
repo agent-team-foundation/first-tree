@@ -204,8 +204,7 @@ afterEach(() => {
 describe("resource editors", () => {
   it("creates a repo via the type-first add menu", async () => {
     const { root } = await render();
-    // Type-first entry: open the Add menu, pick Repo → repo editor opens.
-    await click(byText("Add resource"));
+    // Section-local entry: each section's "+ <Type>" button opens that type's editor.
     await click(byText("Repo"));
 
     const name = document.getElementById("repo-name");
@@ -278,7 +277,6 @@ describe("resource editors", () => {
 
   it("creates a stdio mcp with command + args", async () => {
     const { root } = await render();
-    await click(byText("Add resource"));
     await click(byText("MCP"));
     await setInputValue(input("mcp-name"), "github");
     await setInputValue(input("mcp-command"), "npx");
@@ -297,7 +295,6 @@ describe("resource editors", () => {
 
   it("creates an http mcp with url and no headers key (no-secret schema)", async () => {
     const { root } = await render();
-    await click(byText("Add resource"));
     await click(byText("MCP"));
     await selectOption("mcp-transport", "http");
     await setInputValue(input("mcp-name"), "remote");
@@ -312,7 +309,6 @@ describe("resource editors", () => {
 
   it("creates a skill with body and metadata", async () => {
     const { root } = await render();
-    await click(byText("Add resource"));
     await click(byText("Skill"));
     await setInputValue(input("skill-name"), "rel");
     const body = document.getElementById("skill-body");
@@ -333,7 +329,6 @@ describe("resource editors", () => {
 
   it("blocks an invalid mcp server name client-side (no API call)", async () => {
     const { root } = await render();
-    await click(byText("Add resource"));
     await click(byText("MCP"));
     await setInputValue(input("mcp-name"), "my server"); // space → invalid server id
     await setInputValue(input("mcp-command"), "npx");
@@ -348,7 +343,8 @@ describe("resource editors", () => {
   it("hides add / edit / retire affordances for members but keeps preview", async () => {
     authMock.value = { role: "member", organizationId: "org-1", meLoaded: true };
     const { root } = await render();
-    expect(byText("Add resource")).toBeUndefined();
+    // No per-section add button (e.g. the MCP section's "+ MCP") for members.
+    expect(byText("MCP")).toBeUndefined();
     expect(byAria("Edit github")).toBeUndefined();
     expect(byAria("Retire github")).toBeUndefined();
     // Read-only preview is available to every member.

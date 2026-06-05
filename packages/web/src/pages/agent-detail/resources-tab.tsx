@@ -3,19 +3,23 @@ import {
   deriveRepoLocalPath,
   type EffectiveResourceRow,
   noSecretMcpServerSchema,
+  type ResourceRow,
   type ResourceType,
   skillResourcePayloadSchema,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type ReactNode, useState } from "react";
+import { useNavigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
+import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
+import { typeLabelSingular } from "../settings/resource-editors.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { sourceLabel } from "./resource-source.js";
 
@@ -77,10 +81,24 @@ export function ResourcesTab() {
           count={data.effective[resourceBucket(type)].length}
           description={type === "mcp" ? "Tools come from the MCP servers connected here." : undefined}
           action={
-            canEdit && type === "repo" ? (
-              <Button size="xs" variant="outline" onClick={() => setRepoOpen(true)}>
-                <Plus className="h-3.5 w-3.5" /> Agent repo
-              </Button>
+            canEdit ? (
+              <AddCapabilityMenu
+                type={type}
+                enableable={available.filter((resource) => resource.type === type)}
+                pending={updateMut.isPending}
+                onAddAgentRepo={() => setRepoOpen(true)}
+                onEnable={(resource) =>
+                  mutateBindings([
+                    ...currentBindings,
+                    {
+                      type: resource.type,
+                      mode: "include",
+                      resourceId: resource.id,
+                      order: currentBindings.length + 1,
+                    },
+                  ])
+                }
+              />
             ) : null
           }
         >
@@ -112,35 +130,6 @@ export function ResourcesTab() {
               ))
             )}
           </div>
-          {canEdit && available.some((resource) => resource.type === type) ? (
-            <div style={{ paddingTop: "var(--sp-3)" }}>
-              {available
-                .filter((resource) => resource.type === type)
-                .map((resource) => (
-                  <Button
-                    key={resource.id}
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={updateMut.isPending}
-                    onClick={() =>
-                      mutateBindings([
-                        ...currentBindings,
-                        {
-                          type: resource.type,
-                          mode: "include",
-                          resourceId: resource.id,
-                          order: currentBindings.length + 1,
-                        },
-                      ])
-                    }
-                    style={{ marginRight: "var(--sp-2)", marginBottom: "var(--sp-2)" }}
-                  >
-                    Enable {resource.name}
-                  </Button>
-                ))}
-            </div>
-          ) : null}
         </Section>
       ))}
       {updateMut.error ? (
@@ -160,6 +149,111 @@ export function ResourcesTab() {
         }}
       />
     </div>
+  );
+}
+
+/**
+ * Per-section add control on the agent Capabilities tab. One "+ <Type>" trigger
+ * opens a context menu:
+ *   - repo: "Add agent repo" (a private, agent-scoped repo) plus any opt-in team
+ *     repos to enable.
+ *   - skill / mcp: opt-in team resources to enable. These types have no
+ *     agent-private form (the binding model supports private repos and inline
+ *     prompts only), so when the team offers none the menu still routes the user
+ *     to Settings → Resources rather than dead-ending — every section's "+" is
+ *     always actionable.
+ */
+function AddCapabilityMenu(props: {
+  type: ResourceType;
+  enableable: ResourceRow[];
+  pending: boolean;
+  onAddAgentRepo: () => void;
+  onEnable: (resource: ResourceRow) => void;
+}) {
+  const navigate = useNavigate();
+  return (
+    <Popover
+      align="end"
+      trigger={({ open, toggle }) => (
+        <Button size="xs" variant="outline" aria-expanded={open} onClick={toggle}>
+          <Plus className="h-3.5 w-3.5" /> {typeLabelSingular(props.type)}
+        </Button>
+      )}
+    >
+      {({ close }) => (
+        <div style={{ padding: "var(--sp-1)", minWidth: "var(--sp-45)" }}>
+          {props.type === "repo" ? (
+            <MenuButton
+              onClick={() => {
+                props.onAddAgentRepo();
+                close();
+              }}
+            >
+              Add agent repo…
+            </MenuButton>
+          ) : null}
+          {props.enableable.length > 0 ? (
+            <>
+              <MenuLabel>Enable from team</MenuLabel>
+              {props.enableable.map((resource) => (
+                <MenuButton
+                  key={resource.id}
+                  disabled={props.pending}
+                  onClick={() => {
+                    props.onEnable(resource);
+                    close();
+                  }}
+                >
+                  {resource.name}
+                </MenuButton>
+              ))}
+            </>
+          ) : props.type !== "repo" ? (
+            <MenuLabel>No team {emptyNoun(props.type)} to enable yet.</MenuLabel>
+          ) : null}
+          <div style={{ borderTop: "var(--hairline) solid var(--border-faint)", margin: "var(--sp-1) 0" }} />
+          <MenuButton
+            muted
+            onClick={() => {
+              navigate("/settings/resources");
+              close();
+            }}
+          >
+            Manage in Settings → Resources
+          </MenuButton>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function MenuLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-label" style={{ color: "var(--fg-4)", margin: 0, padding: "var(--sp-1) var(--sp-2)" }}>
+      {children}
+    </p>
+  );
+}
+
+function MenuButton(props: { children: ReactNode; muted?: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={props.disabled}
+      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-1_5) var(--sp-2)",
+        borderRadius: "var(--radius-chip)",
+        border: 0,
+        background: "transparent",
+        color: props.muted ? "var(--fg-3)" : "var(--fg)",
+        cursor: "pointer",
+      }}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
   );
 }
 
