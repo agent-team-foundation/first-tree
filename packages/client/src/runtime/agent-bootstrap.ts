@@ -20,9 +20,6 @@ export type AgentBootstrapParams = {
   workspace: string;
   sessionCtx: SessionContext;
   contextTreePath: string | null;
-  contextTreeRepoUrl: string | null;
-  /** Stable workspace id for the integrate shell-out; falls back to agent id. */
-  agentName: string | null;
   /**
    * Pre-rendered briefing for this turn. Built by {@link buildAgentBriefing}
    * and written to `<workspace>/AGENTS.md` on every start/resume (CLAUDE.md is
@@ -88,7 +85,7 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
  * same agent home. See proposal §⓪.3 for the race window this accepts.
  */
 export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
-  const { workspace, sessionCtx, contextTreePath, contextTreeRepoUrl, agentName, briefing } = params;
+  const { workspace, sessionCtx, contextTreePath, briefing } = params;
 
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
   const currentTreeHead = readContextTreeHead(contextTreePath);
@@ -159,9 +156,6 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   if (contextTreePath) {
     integrationOk = installFirstTreeIntegration({
       workspacePath: workspace,
-      contextTreePath,
-      workspaceId: agentName ?? sessionCtx.agent.agentId,
-      treeRepoUrl: contextTreeRepoUrl ?? undefined,
       log: (msg) => sessionCtx.log(msg),
     });
   }

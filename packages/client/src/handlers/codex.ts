@@ -1105,8 +1105,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
       workspace,
       sessionCtx,
       contextTreePath,
-      contextTreeRepoUrl,
-      agentName,
       briefing,
     });
   }

@@ -1,0 +1,268 @@
+// Inline skill payload installer. Replaces the previous shell-out to
+// `first-tree tree skill install --root <workspace>` so the Client owns
+// the full agent-workspace bootstrap with no out-of-process dependency
+// (no need for `first-tree` on PATH, no `npx -y first-tree@latest`
+// download on first run, no channel binding to thread through).
+//
+// Design notes:
+//
+//   - Bundled skills live at `<client-pkg>/skills/<name>/`. The directory
+//     is produced by `scripts/copy-bundled-skills.mjs` (prebuild) from the
+//     repo-root `skills/`, and shipped inside the npm tarball via the
+//     `files` field of package.json. Source-of-truth is the repo-root
+//     directory; this dir is a build artifact and is .gitignore'd.
+//
+//   - Idempotency: per-skill VERSION file is compared between bundled
+//     payload and on-disk install. Equal → skip the rm+cp+symlink for
+//     that skill (cheap fast path on every session start). Missing or
+//     mismatched → full reinstall of just that skill.
+//
+//   - Failure model mirrors the old shell-out: each skill install is
+//     try/caught independently, and the function returns `false` if ANY
+//     skill failed. Caller logs the failure and continues — the agent
+//     session still starts, the skill just isn't on disk.
+
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Skills always shipped, regardless of whether the agent has a Context Tree
+ * binding. Currently empty — kept as a named list so re-introducing a core
+ * skill is a one-line change with no bootstrap-path edits.
+ */
+export const CORE_SKILL_NAMES = [] as const;
+
+/**
+ * Skills that ship for Context-Tree-bound agents. Installed by
+ * `installFirstTreeSkills()` on every bootstrap when `contextTreePath` is
+ * set. The list must stay in sync with `BUNDLED_SKILLS` in
+ * `scripts/copy-bundled-skills.mjs` — that script materialises these
+ * directories under `<client-pkg>/skills/`.
+ */
+export const TREE_SKILL_NAMES = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-onboarding",
+  "first-tree-sync",
+  "first-tree-write",
+] as const;
+
+export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
+export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];
+export type SkillName = CoreSkillName | TreeSkillName;
+
+export type InstallSkillsResult = {
+  /** `true` when every requested skill installed or was already current. */
+  ok: boolean;
+  /** Skills whose on-disk VERSION matched bundled VERSION — no re-copy needed. */
+  skipped: readonly string[];
+  /** Skills that were copied (either fresh install or version drift). */
+  installed: readonly string[];
+  /** Skills whose install raised; one entry per failure. */
+  failed: ReadonlyArray<{ name: string; reason: string }>;
+};
+
+type SkillLayout = {
+  name: string;
+  /** Absolute path of the bundled source under `<client-pkg>/skills/<name>/`. */
+  sourceDir: string;
+  /** Workspace-relative path of the installed payload. */
+  agentsRelPath: string;
+  /** Workspace-relative path of the `.claude/skills/<name>` symlink. */
+  claudeRelPath: string;
+  /** Symlink target for `.claude/skills/<name>` → `../../.agents/skills/<name>`. */
+  claudeSymlinkTarget: string;
+};
+
+/**
+ * Walk up from the running module to find the @first-tree/client package
+ * root, then return its bundled `skills/` directory. Works in both modes:
+ *
+ *   - dev (vitest, `pnpm --filter @first-tree/client dev`):
+ *       `packages/client/src/runtime/first-tree-skills/installer.ts`
+ *       → walks up to `packages/client/`
+ *   - prod (npm tarball + `dist/index.mjs`):
+ *       `packages/client/dist/index.mjs`
+ *       → walks up to `packages/client/` (which carries `skills/` via the
+ *         `files` field of package.json)
+ *
+ * Throws when no `skills/first-tree/SKILL.md` is reachable from the running
+ * module. That's a build/packaging bug — prebuild was not run, or `skills/`
+ * was excluded from the npm tarball.
+ */
+export function resolveBundledSkillsRoot(startDir?: string): string {
+  let currentDir = resolve(startDir ?? dirname(fileURLToPath(import.meta.url)));
+  while (true) {
+    const candidate = join(currentDir, "skills", "first-tree", "SKILL.md");
+    if (existsSync(candidate)) {
+      return join(currentDir, "skills");
+    }
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) {
+      throw new Error(
+        "Could not locate bundled `skills/` payloads. Run `pnpm --filter @first-tree/client prebuild` or check that the npm tarball includes `skills/`.",
+      );
+    }
+    currentDir = parentDir;
+  }
+}
+
+function layoutFor(name: string, bundledSkillsRoot: string): SkillLayout {
+  return {
+    name,
+    sourceDir: join(bundledSkillsRoot, name),
+    agentsRelPath: join(".agents", "skills", name),
+    claudeRelPath: join(".claude", "skills", name),
+    claudeSymlinkTarget: join("..", "..", ".agents", "skills", name),
+  };
+}
+
+function readVersionFile(dir: string): string | null {
+  const versionPath = join(dir, "VERSION");
+  if (!existsSync(versionPath)) return null;
+  try {
+    return readFileSync(versionPath, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+type SymlinkInspection =
+  | { kind: "missing" }
+  | { kind: "symlink"; target: string }
+  | { kind: "directory" }
+  | { kind: "file" };
+
+function inspectPath(p: string): SymlinkInspection {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(p);
+  } catch {
+    return { kind: "missing" };
+  }
+  if (stat.isSymbolicLink()) return { kind: "symlink", target: readlinkSync(p) };
+  if (stat.isDirectory()) return { kind: "directory" };
+  return { kind: "file" };
+}
+
+function ensureClaudeSymlink(workspacePath: string, layout: SkillLayout): void {
+  const claudeFull = join(workspacePath, layout.claudeRelPath);
+  mkdirSync(dirname(claudeFull), { recursive: true });
+  const existing = inspectPath(claudeFull);
+  if (existing.kind === "symlink" && existing.target === layout.claudeSymlinkTarget) return;
+  if (existing.kind !== "missing") {
+    rmSync(claudeFull, { force: true, recursive: true });
+  }
+  symlinkSync(layout.claudeSymlinkTarget, claudeFull);
+}
+
+/**
+ * Install one skill into `<workspacePath>/.agents/skills/<name>/` (real
+ * directory copy) and ensure `<workspacePath>/.claude/skills/<name>`
+ * exists as a relative symlink to it.
+ *
+ * Version gate: when the on-disk VERSION matches the bundled VERSION,
+ * skip the copy + symlink-replace (fast path). Returns "installed",
+ * "skipped", or throws on failure.
+ *
+ * @internal Exported for unit tests.
+ */
+export function installOneSkill(workspacePath: string, layout: SkillLayout): "installed" | "skipped" {
+  if (!existsSync(layout.sourceDir) || !statSync(layout.sourceDir).isDirectory()) {
+    throw new Error(`bundled skill source missing: ${layout.sourceDir}`);
+  }
+
+  const bundledVersion = readVersionFile(layout.sourceDir);
+  const agentsFull = join(workspacePath, layout.agentsRelPath);
+  const installedVersion = inspectPath(agentsFull).kind === "directory" ? readVersionFile(agentsFull) : null;
+
+  // Fast path: same version on both sides AND the claude symlink looks
+  // right. If only the symlink is wrong, fall through so we rewrite it
+  // without a full re-copy.
+  if (bundledVersion !== null && installedVersion !== null && bundledVersion === installedVersion) {
+    const claudeFull = join(workspacePath, layout.claudeRelPath);
+    const claudeState = inspectPath(claudeFull);
+    if (claudeState.kind === "symlink" && claudeState.target === layout.claudeSymlinkTarget) {
+      return "skipped";
+    }
+    ensureClaudeSymlink(workspacePath, layout);
+    return "skipped";
+  }
+
+  mkdirSync(dirname(agentsFull), { recursive: true });
+  rmSync(agentsFull, { force: true, recursive: true });
+  cpSync(layout.sourceDir, agentsFull, { recursive: true });
+  ensureClaudeSymlink(workspacePath, layout);
+  return "installed";
+}
+
+function installSkillSet(
+  workspacePath: string,
+  names: readonly string[],
+  bundledSkillsRoot: string,
+): InstallSkillsResult {
+  const skipped: string[] = [];
+  const installed: string[] = [];
+  const failed: Array<{ name: string; reason: string }> = [];
+
+  for (const name of names) {
+    const layout = layoutFor(name, bundledSkillsRoot);
+    try {
+      const action = installOneSkill(workspacePath, layout);
+      if (action === "skipped") skipped.push(name);
+      else installed.push(name);
+    } catch (err) {
+      failed.push({ name, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return {
+    ok: failed.length === 0,
+    skipped,
+    installed,
+    failed,
+  };
+}
+
+export type InstallCoreSkillsOptions = {
+  workspacePath: string;
+  /** Override the bundled-skills lookup root for tests. */
+  bundledSkillsRoot?: string;
+};
+
+export type InstallFirstTreeSkillsOptions = {
+  workspacePath: string;
+  /** Override the bundled-skills lookup root for tests. */
+  bundledSkillsRoot?: string;
+};
+
+/**
+ * Install the core skill payloads (Context-Tree-independent) into the
+ * workspace. Currently a no-op because `CORE_SKILL_NAMES` is empty;
+ * the wiring stays so re-introducing a core skill needs no bootstrap edit.
+ */
+export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
+  const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
+  return installSkillSet(options.workspacePath, CORE_SKILL_NAMES, bundledSkillsRoot);
+}
+
+/**
+ * Install the tree-aware skill payloads (`first-tree`, `first-tree-context`,
+ * etc.) into the workspace. Called by the agent bootstrap when the agent
+ * has a Context Tree binding.
+ */
+export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): InstallSkillsResult {
+  const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
+  return installSkillSet(options.workspacePath, TREE_SKILL_NAMES, bundledSkillsRoot);
+}

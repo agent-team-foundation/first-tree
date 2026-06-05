@@ -1,0 +1,6 @@
+# Build artifact: bundled skill payloads materialised by
+# scripts/copy-bundled-skills.mjs from the repo-root `skills/` directory.
+# The committed source of truth is `skills/` at the repo root; this dir is
+# regenerated on every `pnpm prebuild` and shipped inside the npm tarball
+# via the `files` field of package.json.
+skills/
