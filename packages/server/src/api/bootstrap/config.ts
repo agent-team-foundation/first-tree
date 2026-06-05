@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-export async function bootstrapConfigRoutes(_app: FastifyInstance): Promise<void> {
+export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Public endpoint — returns bootstrap prerequisites for CLI auto-discovery.
    *
@@ -9,7 +9,7 @@ export async function bootstrapConfigRoutes(_app: FastifyInstance): Promise<void
    * (see issue #255). A public bootstrap endpoint can't resolve an
    * installation without a caller, so the field is surfaced as `null`.
    */
-  _app.get("/config", async () => {
-    return { allowedOrg: null as string | null };
+  app.get("/config", async () => {
+    return { allowedOrg: null as string | null, serverCommandVersion: app.commandVersion() };
   });
 }

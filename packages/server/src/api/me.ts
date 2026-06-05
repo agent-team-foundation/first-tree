@@ -34,6 +34,7 @@ import {
 } from "../services/membership.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
+import { clientCommandVersionHint } from "./client-command-version.js";
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -458,6 +459,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       lastSeenAt: c.lastSeenAt.toISOString(),
       capabilities: clientService.extractCapabilities(c.metadata),
       lastUpdateAttempt: clientService.extractLastUpdateAttempt(c.metadata),
+      ...clientCommandVersionHint(app, c.sdkVersion),
     }));
   });
 

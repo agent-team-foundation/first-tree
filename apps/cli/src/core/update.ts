@@ -4,13 +4,16 @@ import { dirname, join, resolve } from "node:path";
 import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
 import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
+import { resolveServerUrl } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
+import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
 /** Hard ceiling on a single `npm install -g` invocation (5 min). */
 const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type InstallMode = "global" | "npx" | "source";
+export type VersionLookupResult = { ok: true; version: string } | { ok: false; reason: string };
 
 /**
  * npm package name this binary self-updates against. Derived from the
@@ -38,7 +41,7 @@ function resolveNpmCommand(): string {
  * `npm install -g <pkg>@latest` makes sense.
  *
  *  - `"global"`: launched from an `npm install -g` install. The self-update
- *    reinstalls the same package at `@latest`.
+ *    can reinstall the same package at a caller-selected spec.
  *  - `"source"`: launched from inside a git checkout (dev / monorepo). Update
  *    is a no-op; operator should `git pull`.
  *  - `"npx"` (fallback): any other path (e.g. one-shot `npx`, pnpm dlx). Auto
@@ -178,12 +181,11 @@ function looksLikeVersion(spec: string): boolean {
  * that (so the UpdateManager can attempt the restart itself while this
  * function remains side-effect-scoped).
  *
- * Why both shapes exist: the auto-update path receives `targetVersion` from
- * the server `welcome` frame and MUST install that exact version — using
- * `@latest` from auto-update would silently mis-resolve once the server
- * starts advertising alpha builds (alpha lives on a different dist-tag).
- * The manual `first-tree upgrade` CLI keeps the dist-tag form so users
- * who type the command without args still get "newest stable on npm".
+ * Why both shapes exist: the auto-update path and the default manual
+ * `first-tree upgrade` command receive an exact target version from the
+ * server and MUST install that exact version. The explicit
+ * `first-tree upgrade --latest` escape hatch keeps the dist-tag form for
+ * operators who want the freshest package directly from npm.
  */
 export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
   if (!isSafeInstallSpec(spec)) {
@@ -290,13 +292,60 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
 }
 
 /**
- * Back-compat shim: install `<pkg>@latest`. The manual `first-tree
- * update` CLI uses this so an operator-typed `update` keeps the
- * "newest stable on npm" behaviour. Auto-update prefers `installGlobalSpec`
- * with the welcome frame's `targetVersion`.
+ * Back-compat shim: install `<pkg>@latest`. Used by
+ * `first-tree upgrade --latest`; managed update paths prefer
+ * `installGlobalSpec` with the server-advertised target version.
  */
 export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
   return installGlobalSpec("latest");
+}
+
+/**
+ * Look up the server-recommended CLI version from the public bootstrap
+ * config endpoint. This is the default manual-upgrade source so operators
+ * follow the same rollout target as connected clients.
+ */
+export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<VersionLookupResult> {
+  let serverUrl: string;
+  try {
+    serverUrl = resolveServerUrl();
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+
+  let res: Response;
+  try {
+    res = await cliFetch(`${serverUrl.replace(/\/+$/, "")}/api/v1/bootstrap/config`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+
+  if (!res.ok) {
+    return { ok: false, reason: `server returned HTTP ${res.status}` };
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    return { ok: false, reason: `server returned invalid JSON: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  if (body === null || typeof body !== "object") {
+    return { ok: false, reason: "server returned invalid bootstrap config" };
+  }
+
+  const version = Reflect.get(body, "serverCommandVersion");
+  if (typeof version !== "string" || version.length === 0) {
+    return { ok: false, reason: "server did not provide serverCommandVersion" };
+  }
+  const normalized = semver.valid(version);
+  if (!normalized) {
+    return { ok: false, reason: `server returned non-semver version: ${version.slice(0, 80)}` };
+  }
+  return { ok: true, version: normalized };
 }
 
 /**
@@ -328,7 +377,7 @@ function escapeForRegex(s: string): string {
  * honored — important for corporate users routed through Verdaccio /
  * Artifactory mirrors.
  */
-export function fetchLatestVersion(timeoutMs = 10_000): { ok: true; version: string } | { ok: false; reason: string } {
+export function fetchLatestVersion(timeoutMs = 10_000): VersionLookupResult {
   if (PACKAGE_NAME === null) {
     return { ok: false, reason: "this binary's channel does not publish to npm (dev channel)." };
   }

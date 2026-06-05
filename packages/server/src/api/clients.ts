@@ -5,6 +5,7 @@ import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
 import { forceDisconnectClient } from "../services/connection-manager.js";
 import { serializeDate } from "../utils.js";
+import { clientCommandVersionHint } from "./client-command-version.js";
 
 /**
  * Class C — `/api/v1/clients/:id` and member-self utilities. A client is
@@ -33,6 +34,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       lastSeenAt: client.lastSeenAt.toISOString(),
       capabilities,
       lastUpdateAttempt: clientService.extractLastUpdateAttempt(client.metadata),
+      ...clientCommandVersionHint(app, client.sdkVersion),
     };
   });
 

@@ -97,16 +97,19 @@ red and you want a guided drill-down.
 ## upgrade
 
 ```
-first-tree upgrade [--check] [--no-restart]
+first-tree upgrade [--check] [--latest] [--no-restart]
 ```
 
-Self-update for the CLI: query npm for the latest published version,
-install it globally, refresh the systemd unit / launchd plist on top of
-the new bits, then restart the client service.
+Self-update for the CLI: query the configured server for its recommended
+Command version, install that exact version globally, refresh the systemd
+unit / launchd plist on top of the new bits, then restart the client
+service. Use `--latest` only when you intentionally want to bypass the
+server target and install npm latest directly.
 
 | Flag | Effect |
 |---|---|
 | `--check` | Only check for an available version; print "update available" or "already on latest". Do not install. |
+| `--latest` | Bypass the server target and query npm for the package's latest published version. |
 | `--no-restart` | Install the new version and refresh the unit file, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`

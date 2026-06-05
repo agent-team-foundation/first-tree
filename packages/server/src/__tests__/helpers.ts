@@ -50,13 +50,14 @@ type AgentRequestFn = (
 ) => Promise<InjectResponse>;
 
 /**
- * Optional overrides for `createTestApp` / `useTestApp`. Today only the
- * rate-limit caps are tunable — the default config sets all caps to 10000 so
- * existing tests never trip them; tests that specifically exercise limiter
- * behavior (e.g. `agent-messages-rate-limit.test.ts`) override the relevant
- * field down to a small number to keep the test loop tight.
+ * Optional overrides for `createTestApp` / `useTestApp`. The default config
+ * sets rate-limit caps to 10000 so existing tests never trip them; tests that
+ * specifically exercise limiter behavior (e.g. `agent-messages-rate-limit.test.ts`)
+ * override the relevant field down to a small number to keep the test loop tight.
  */
 export type CreateTestAppOptions = {
+  channel?: Config["channel"];
+  commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   allowedOrganizationId?: string;
   /**
@@ -86,7 +87,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     contextTreeSnapshotMax: 10000,
   };
   const config: Config = {
-    channel: "dev",
+    channel: opts.channel ?? "dev",
     database: {
       url: process.env.DATABASE_URL ?? "",
       provider: "external",
@@ -148,7 +149,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     update: {
       // Pin a deterministic version so welcome-frame tests can assert
       // exact equality without coupling to the in-tree package.json.
-      commandVersion: "test.version",
+      commandVersion: opts.commandVersion ?? "test.version",
       // Long enough that the timer never fires inside a test run — we
       // call `refresh()` manually when a test needs a forced poll.
       pollIntervalMinutes: 1440,

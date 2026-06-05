@@ -1,12 +1,15 @@
 import type { Command } from "commander";
 import * as semver from "semver";
+import { channelConfig } from "../core/channel.js";
 import {
   COMMAND_VERSION,
   detectInstallMode,
   fetchLatestVersion,
+  fetchServerCommandVersion,
   getClientServiceStatus,
   installClientService,
   installGlobalLatest,
+  installGlobalSpec,
   isServiceSupported,
   PACKAGE_NAME,
   restartClientService,
@@ -23,16 +26,19 @@ import { print } from "../core/output.js";
  * Pairs with — but does not replace — the server-driven UpdateManager
  * (packages/client/src/runtime/update-manager.ts), which fires automatically
  * when a connected client falls behind the server-bundled version. This
- * command is the manual equivalent: same install + restart sequence, but
- * triggered on the operator's terms.
+ * command is the manual equivalent by default: same server-selected target
+ * version plus the same install + restart sequence, but triggered on the
+ * operator's terms. `--latest` is the explicit npm bypass.
  */
 export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
-    .description("Upgrade first-tree to the latest published version and restart the daemon")
+    .description("Upgrade first-tree to the server-recommended version and restart the daemon")
     .option("--check", "Only check whether a newer version is available; do not install")
+    .option("--latest", "Bypass the server target and install npm latest")
     .option("--no-restart", "Install the new version but skip restarting the background service")
-    .action(async (options: { check?: boolean; restart?: boolean }) => {
+    .action(async (options: { check?: boolean; latest?: boolean; restart?: boolean }) => {
+      const binName = channelConfig.binName;
       const mode = detectInstallMode();
       if (mode === "source") {
         print.line("\n  Running from a source checkout — `upgrade` is a no-op.\n");
@@ -49,53 +55,60 @@ export function registerUpgradeCommand(program: Command): void {
         return;
       }
 
-      print.line("\n  Checking npm registry...\n");
-      const latest = fetchLatestVersion();
-      if (!latest.ok) {
-        print.line(`  Could not fetch latest version: ${latest.reason}\n\n`);
+      const useNpmLatest = options.latest === true;
+      print.line(useNpmLatest ? "\n  Checking npm registry...\n" : "\n  Checking server update target...\n");
+      const target = useNpmLatest ? fetchLatestVersion() : await fetchServerCommandVersion();
+      if (!target.ok) {
+        const targetLabel = useNpmLatest ? "latest version" : "server update target";
+        print.line(`  Could not fetch ${targetLabel}: ${target.reason}\n`);
+        if (!useNpmLatest) {
+          print.line(`  Run \`${binName} upgrade --latest\` to install npm latest instead.\n`);
+        }
+        print.line("\n");
         process.exit(1);
       }
 
       const current = COMMAND_VERSION;
-      const cmp = semver.valid(current) ? semver.compare(current, latest.version) : -1;
+      const sourceLabel = useNpmLatest ? "npm latest" : "server target";
+      const cmp = semver.valid(current) ? semver.compare(current, target.version) : -1;
       if (cmp >= 0) {
-        print.line(`  Already on ${current} (latest is ${latest.version}).\n\n`);
+        print.line(`  Already on ${current} (${sourceLabel} is ${target.version}).\n\n`);
         return;
       }
 
       if (options.check) {
-        print.line(`  Upgrade available: ${current} → ${latest.version}\n`);
-        print.line("  Run `first-tree upgrade` to install.\n\n");
+        print.line(`  Upgrade available: ${current} → ${target.version}\n`);
+        print.line(`  Run \`${binName} upgrade${useNpmLatest ? " --latest" : ""}\` to install.\n\n`);
         return;
       }
 
-      print.line(`  Upgrading ${current} → ${latest.version}...\n`);
-      const installRes = await installGlobalLatest();
+      print.line(`  Upgrading ${current} → ${target.version}...\n`);
+      const installRes = useNpmLatest ? await installGlobalLatest() : await installGlobalSpec(target.version);
       if (!installRes.ok) {
         print.line(`\n  Install failed: ${installRes.reason}\n\n`);
         process.exit(1);
       }
-      const installed = installRes.installedVersion ?? latest.version;
+      const installed = installRes.installedVersion ?? target.version;
       print.line(`  Installed ${installed}.\n`);
 
       // Restart the service so the new binary actually starts handling
       // connections. Skipped under --no-restart so power users can stage
       // the bits and time the cutover themselves.
       if (options.restart === false) {
-        print.line("  Skipping restart (--no-restart). Run `first-tree daemon restart` when ready.\n\n");
+        print.line(`  Skipping restart (--no-restart). Run \`${binName} daemon restart\` when ready.\n\n`);
         return;
       }
 
       if (!isServiceSupported()) {
         print.line(`  No service manager on ${process.platform}; restart your inline `);
-        print.line("`daemon start` process to pick up the new version.\n\n");
+        print.line(`\`${binName} daemon start\` process to pick up the new version.\n\n`);
         return;
       }
 
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("  No background service installed — nothing to restart.\n");
-        print.line("  Run `first-tree login <token>` to set one up.\n\n");
+        print.line(`  Run \`${binName} login <token>\` to set one up.\n\n`);
         return;
       }
 
@@ -120,14 +133,14 @@ export function registerUpgradeCommand(program: Command): void {
       }
 
       if (svc.state === "inactive") {
-        print.line("  Service is stopped — leaving it stopped. Use `daemon start` to bring it up.\n\n");
+        print.line(`  Service is stopped — leaving it stopped. Use \`${binName} daemon start\` to bring it up.\n\n`);
         return;
       }
 
       const restartRes = restartClientService();
       if (!restartRes.ok) {
         print.line(`\n  Service restart failed: ${restartRes.reason}\n`);
-        print.line("  Run `first-tree daemon restart` to retry.\n\n");
+        print.line(`  Run \`${binName} daemon restart\` to retry.\n\n`);
         process.exit(1);
       }
       print.line(`  Service restarted on ${installed}.\n\n`);
