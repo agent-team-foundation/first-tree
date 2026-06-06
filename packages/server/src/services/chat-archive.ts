@@ -8,11 +8,14 @@
  * Two routes share the sweep, both keyed off `chats.last_message_at` as the
  * idleness anchor:
  *
- *   Route A — chats with at least one `github_entity_chat_mappings` row.
- *     Archive (for every mapped human) once *all* bound entities are
- *     terminal (`entity_state` in `('closed','merged')`) AND the chat has
- *     been silent for `mappedIdleSeconds` (default 1h). Additionally:
- *     skip individual users whose `unread_mention_count > 0`.
+ *   Route A — github-minted chats (`chats.metadata.source = 'github'`) with
+ *     at least one `github_entity_chat_mappings` row. Archive (for every
+ *     mapped human) once *all* bound entities are terminal (`entity_state`
+ *     in `('closed','merged')`) AND the chat has been silent for
+ *     `mappedIdleSeconds` (default 1h). Additionally: skip individual users
+ *     whose `unread_mention_count > 0`. A manual chat that merely acquired a
+ *     mapping row (e.g. an `agent_created` binding) is NOT github-minted and
+ *     is never archived here (issue #745).
  *
  *   Route B — chats with no GitHub mapping and no human owner. Archive only
  *     the (chat, user) pairs where the user has no unread mentions AND the
@@ -71,8 +74,10 @@ export async function sweepChatArchive(
  * minus the per-user unread carve-out added here.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
- *  - The inner CTE picks chats whose `BOOL_AND(entity_state IN
- *    ('closed','merged'))` and idle timestamp both hold.
+ *  - The inner CTE picks chats that are github-minted (`metadata->>'source'
+ *    = 'github'`) and whose `BOOL_AND(entity_state IN ('closed','merged'))`
+ *    and idle timestamp both hold. The github-origin filter keeps a manual
+ *    chat carrying an `agent_created` mapping row out of the sweep (#745).
  *  - The outer SELECT joins back to the mapping table for the (chat,
  *    human) pairs. A second per-user guard excludes humans whose
  *    `unread_mention_count > 0` — the schema column is semantically
@@ -93,6 +98,14 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
         FROM github_entity_chat_mappings m
         JOIN chats c ON c.id = m.chat_id
        WHERE c.parent_chat_id IS NULL
+         -- issue #745: only github-minted chats are auto-archived. A manual
+         -- chat that later picked up a mapping row (e.g. an agent_created
+         -- binding when an agent opens a PR from inside it) is not
+         -- github-minted and must be left alone — the human-owner carve-out
+         -- in Route B only covers no-mapping chats, so this is the matching
+         -- guard for the mapped route. Same discriminator the conversation
+         -- list classifies on (me-chat.ts KNOWN_NON_MANUAL_PREDICATE).
+         AND c.metadata->>'source' = 'github'
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
        GROUP BY m.chat_id

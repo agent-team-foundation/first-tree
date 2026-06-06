@@ -2,9 +2,12 @@
  * Unit tests for the chat auto-archive sweeper (`sweepChatArchive`). Covers
  * the two routes the sweeper owns:
  *
- *   Route A — chats with GitHub mappings: archive when every mapped entity
- *             is terminal AND `last_message_at` is older than the mapped
- *             idle threshold.
+ *   Route A — github-minted chats (`metadata.source = 'github'`) with GitHub
+ *             mappings: archive when every mapped entity is terminal AND
+ *             `last_message_at` is older than the mapped idle threshold. A
+ *             manual chat that merely acquired a mapping row (e.g. an
+ *             `agent_created` binding) is not github-minted and is left alone
+ *             (issue #745).
  *   Route B — chats with no GitHub mapping and no human owner: archive
  *             (chat, user) pairs with no unread mentions AND
  *             `last_message_at` older than the unmapped idle threshold.
@@ -55,15 +58,35 @@ async function seedDelegateAgent(app: App, orgId: string, memberId: string): Pro
   return uuid;
 }
 
-async function seedChat(app: App, orgId: string, lastMessageAt: Date | null): Promise<string> {
+/**
+ * Seed a chat with explicit `metadata`. Defaults to an empty object —
+ * i.e. a manual-origin chat. Pass a github metadata literal to exercise the
+ * github-source route.
+ */
+async function seedChat(
+  app: App,
+  orgId: string,
+  lastMessageAt: Date | null,
+  metadata: Record<string, unknown> = {},
+): Promise<string> {
   const chatId = `chat_${randomUUID()}`;
   await app.db.insert(chats).values({
     id: chatId,
     organizationId: orgId,
     type: "direct",
     lastMessageAt,
+    metadata,
   });
   return chatId;
+}
+
+/** Seed a github-minted chat (the only kind the sweeper's Route A archives). */
+async function seedGithubChat(app: App, orgId: string, lastMessageAt: Date | null, entityKey: string): Promise<string> {
+  return seedChat(app, orgId, lastMessageAt, {
+    source: "github",
+    entityType: "pull_request",
+    entityKey,
+  });
 }
 
 async function addHumanMember(app: App, chatId: string, agentId: string): Promise<void> {
@@ -89,7 +112,7 @@ const HOURS = 60 * 60;
 const longAgo = () => new Date(Date.now() - 48 * HOURS * 1000);
 const recent = () => new Date(Date.now() - 5 * 60 * 1000);
 
-describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
+describe("sweepChatArchive — Route A (github-minted chats with GitHub mappings)", () => {
   const getApp = useTestApp();
 
   it("archives a chat when every mapped entity is terminal and idle > threshold", async () => {
@@ -97,7 +120,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#1");
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
@@ -120,7 +143,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#2");
     // One merged, one still open → BOOL_AND is false.
     await app.db.insert(githubEntityChatMappings).values([
       {
@@ -156,7 +179,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, recent());
+    const chatId = await seedGithubChat(app, admin.organizationId, recent(), "owner/repo#4");
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
@@ -179,7 +202,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#5");
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
@@ -207,7 +230,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#9");
     // Both entities are 'closed' (e.g. issue closed without a fix PR + a closed-unmerged PR).
     await app.db.insert(githubEntityChatMappings).values([
       {
@@ -243,13 +266,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const parentChatId = `chat_${randomUUID()}`;
-    await app.db.insert(chats).values({
-      id: parentChatId,
-      organizationId: admin.organizationId,
-      type: "direct",
-      lastMessageAt: longAgo(),
-    });
+    const parentChatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#parent");
     // Sub-chat: same shape, but parent_chat_id set. Matches the schema's
     // historical-only scaffolding scenario.
     const subChatId = `chat_${randomUUID()}`;
@@ -259,6 +276,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
       type: "direct",
       parentChatId,
       lastMessageAt: longAgo(),
+      metadata: { source: "github", entityType: "pull_request", entityKey: "owner/repo#11" },
     });
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
@@ -282,7 +300,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#6");
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
@@ -308,7 +326,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const h1 = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const h2 = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
-    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    const chatId = await seedGithubChat(app, admin.organizationId, longAgo(), "owner/repo#14");
     // Two mapping rows on the same chat — one per (human, delegate, entity).
     // PK includes humanAgentId, so this is permitted.
     await app.db.insert(githubEntityChatMappings).values([
@@ -350,6 +368,33 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     expect(await getEngagement(app, chatId, h1)).toBe("active");
     // h2 had no prior row — sweeper materialises one in 'archived'.
     expect(await getEngagement(app, chatId, h2)).toBe("archived");
+  });
+
+  it("does not archive a manual chat that has a github mapping (e.g. agent_created binding)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    // Manual-origin chat (no metadata.source) that later picked up a mapping
+    // row when an agent opened a PR from inside it. The mapped entity is
+    // merged and the chat is long idle — under the old "has a mapping" rule
+    // it would have been archived. It must now stay put (issue #745).
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#100",
+      chatId,
+      boundVia: "agent_created",
+      entityState: "merged",
+    });
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.mappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, chatId, human)).toBeNull();
   });
 });
 
@@ -497,7 +542,12 @@ describe("sweepChatArchive — thresholds", () => {
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
     // 30 minutes ago → under the default 1h, but a custom 10-minute threshold catches it.
-    const chatId = await seedChat(app, admin.organizationId, new Date(Date.now() - 30 * 60 * 1000));
+    const chatId = await seedGithubChat(
+      app,
+      admin.organizationId,
+      new Date(Date.now() - 30 * 60 * 1000),
+      "owner/repo#8",
+    );
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
