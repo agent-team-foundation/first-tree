@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfig } from "@first-tree/shared";
@@ -199,21 +199,23 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     expect(existsSync(sentinelPath)).toBe(true);
     expect(existsSync(sourceRepoPath)).toBe(true);
 
-    // Capture repo `.git` pointer — if bootstrap is skipped on chat 2 the
-    // worktree's mirror linkage must NOT be recreated.
-    const repoGitDir1 = readFileSync(join(sourceRepoPath, ".git"), "utf-8");
+    // The standalone clone has a real `.git` DIRECTORY (not a worktree pointer
+    // file). Drop a marker INSIDE the clone — a re-clone on chat 2 would wipe
+    // the directory and take the marker with it; reuse must preserve it.
+    expect(statSync(join(sourceRepoPath, ".git")).isDirectory()).toBe(true);
+    const reuseMarker = join(sourceRepoPath, ".reuse-marker");
+    writeFileSync(reuseMarker, "chat-A");
     await h1.shutdown();
 
     // Second chat — different chatId, same workspaceRoot.
     const h2 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
     await h2.start(makeMessage("chat-B", "msg-B1"), buildSessionCtx("chat-B"));
 
-    // The source repo path AND its underlying .git pointer must survive
-    // unchanged (sentinel-guarded bootstrap means createWorktree did NOT run
-    // a second time).
+    // The source repo AND the in-clone marker must survive (the clone was
+    // reused, not re-cloned a second time).
     expect(existsSync(sourceRepoPath)).toBe(true);
-    const repoGitDir2 = readFileSync(join(sourceRepoPath, ".git"), "utf-8");
-    expect(repoGitDir2).toBe(repoGitDir1);
+    expect(existsSync(reuseMarker)).toBe(true);
+    expect(readFileSync(reuseMarker, "utf-8")).toBe("chat-A");
     // Sentinel re-written is fine (idempotent) — the body's `completedAt`
     // refreshes — but the file must still exist.
     expect(existsSync(sentinelPath)).toBe(true);

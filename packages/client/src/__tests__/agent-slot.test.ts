@@ -262,9 +262,10 @@ async function makeSlot(options?: {
     clientConnection: connection as unknown as ClientConnection,
     // AgentSlot passes this object through to SessionManager; these tests do not exercise git mirror behavior.
     gitMirrorManager: {
-      createWorktree: vi.fn(),
-      removeWorktree: vi.fn(),
-      gcOrphanSessionBranches: vi.fn(),
+      ensureSourceRepo: vi.fn(),
+      removeSourceRepo: vi.fn(),
+      sweepLegacyMirrors: vi.fn(),
+      legacyMirrorsRoot: "/tmp/fake-mirrors",
     } as unknown as GitMirrorManager,
   };
   return { slot: new AgentSlot(config), connection, sdk, state };

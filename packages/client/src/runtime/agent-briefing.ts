@@ -210,13 +210,15 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
   const lines: string[] = ["## Source Repositories", ""];
   lines.push(
     "The following repositories are pre-checked-out at the top level of your",
-    "working directory. They sit on a long-lived hub-session branch that is",
-    "**not** refreshed during this chat — the code may be many commits behind",
-    "`origin/main`. Use them only for read-only orientation (grep, file layout,",
-    "`git log`); for anything that must reflect current `main` (review, analysis,",
-    "code changes), do not reuse this checkout — create a fresh worktree off",
-    "`origin/<base>` (see below). Shared across every chat of this agent; do",
-    "not modify them in place or switch their branches.",
+    "working directory as standalone clones. First Tree keeps each one current:",
+    "at the start of every chat it fetches and — when the checkout is clean and",
+    "not in use by another live session — brings it to the latest default branch.",
+    "So unless it was left dirty or busy, the code here already reflects current",
+    "`origin/<default>`. Use them for read-only orientation (grep, file layout,",
+    "`git log`) and as the base for new worktrees (see below). Do **not** edit",
+    "them in place or switch their branches — local changes block the auto-update,",
+    "and the `worktrees/` flow is the place for any code work. Shared across",
+    "every chat of this agent.",
   );
   lines.push("");
   for (const repo of sourceRepos) {

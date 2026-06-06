@@ -323,9 +323,11 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
-    // Pre-checked-out warning (issue #655) so the agent doesn't reuse the
-    // stale hub-session branch for new work.
-    expect(briefing).toContain("refreshed during this chat");
+    // Per-agent-source-repo: standalone clones are kept current each chat, but
+    // the agent must not edit them in place (that would block the auto-update).
+    expect(briefing).toContain("keeps each one current");
+    expect(briefing).toContain("latest default branch");
+    expect(briefing).toContain("**not** edit");
     expect(briefing).toContain("git fetch origin");
     expect(briefing).toContain("origin/main");
   });
