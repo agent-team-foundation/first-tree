@@ -347,21 +347,23 @@ any raw-archive domain your tree may have).
 section that lists the PRs which delivered the decision.**
 Pattern: the `## Source` body section is forbidden under Hard Rule
 9, but the section often hides *substantive* content — open
-follow-ups, known gaps, deferred items — that was tacked onto the
-bottom of the PR audit trail. Do not just delete the section.
+follow-ups, known gaps, deferred items, surviving rationale — that
+was tacked onto the bottom of the PR audit trail. Do not just
+delete the section.
 - *Delete*: the PR-id list, the "Shipped in #X" / "Landed in #Y"
   annotations, the "PR-by-PR audit trail" framing.
-- *Keep, rehomed*: any work item the section carried (a pending
-  fix, a deferred migration, an unresolved question, a known gap)
-  — move it into a `## Future Work` section as a present-tense
-  bullet, dropping the PR id.
-- *Keep, rehomed*: any current-state architectural fact that the
-  section happened to assert (e.g. "the rollback path lives at X")
-  — fold it into the relevant Decision / Constraints / Cross-Domain
-  section as a present-tense statement.
+- *Keep → Future Work*: any work item the section carried (a
+  pending fix, a deferred migration, an unresolved question, a
+  known gap) — move it into a `## Future Work` section as a
+  present-tense bullet, dropping the PR id.
+- *Keep → fold into body sections*: any current-state architectural
+  fact (e.g. "the rollback path lives at X") or surviving rationale
+  (e.g. "we chose Postgres because the team was familiar with it")
+  — fold it into the relevant Decision / Rationale / Constraints /
+  Cross-Domain section as a present-tense statement.
 The audit trail itself stays in `git log`; the node retains the
-durable work and current-state claims that the section was
-carrying alongside the PR list.
+durable work, current-state claims, and rationale that the section
+was carrying alongside the PR list.
 
 ## CLI Surface
 
