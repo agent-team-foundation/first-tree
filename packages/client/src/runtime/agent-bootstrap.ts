@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   bootstrapWorkspace,
   deepEqualIdentity,
+  IDENTITY_JSON_REL,
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
@@ -33,16 +34,17 @@ export type AgentBootstrapParams = {
 
 /**
  * Hash-check the existing identity.json against current agent metadata and
- * rewrite the stable `.agent/` section only when something changed. Runs OUT
+ * rewrite the stable `.first-tree-workspace/` section only when something
+ * changed. Runs OUT
  * of the sentinel gate so agent rename / inboxId / metadata edits still
  * propagate after first bootstrap (proposal R5).
  *
  * The unified briefing is rewritten by the caller via {@link
  * writeAgentBriefing} on every start/resume regardless of this check —
- * identity drift only forces the heavier `.agent/` refresh.
+ * identity drift only forces the heavier `.first-tree-workspace/` refresh.
  */
 function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, contextTreePath: string | null): void {
-  const identityPath = join(workspace, ".agent", "identity.json");
+  const identityPath = join(workspace, IDENTITY_JSON_REL);
   const desired = {
     agentId: sessionCtx.agent.agentId,
     displayName: sessionCtx.agent.displayName,
@@ -72,9 +74,10 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
 }
 
 /**
- * Run the agent-home bootstrap that every handler shares: stable `.agent/`
- * layout, unified briefing rewrite (AGENTS.md + CLAUDE.md symlink), core-skill
- * install, and (for Context-Tree-bound agents) the inline first-tree skill
+ * Run the agent-home bootstrap that every handler shares: stable
+ * `.first-tree-workspace/` layout, unified briefing rewrite (AGENTS.md +
+ * CLAUDE.md symlink), core-skill install, and (for Context-Tree-bound agents)
+ * the inline first-tree skill
  * install (`installFirstTreeIntegration`, which copies bundled skill payloads
  * straight from `@first-tree/client`'s own `skills/` directory). Gated by the
  * stage-2 sentinel + Context-Tree-HEAD / Client-version drift detection so a

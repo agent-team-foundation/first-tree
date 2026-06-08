@@ -1507,7 +1507,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    *   - Sentinel absent → full bootstrap.
    *   - Sentinel present + Tree HEAD unchanged → cheap identity refresh only.
    *   - Sentinel present + Tree HEAD drifted → full bootstrap re-runs so the
-   *     stable .agent/ layout and first-tree skill pick up the new tree state.
+   *     stable `.first-tree-workspace/` layout and first-tree skill pick up
+   *     the new tree state.
    *
    * The unified briefing is rewritten on every call regardless of the drift
    * decision — chat context and the agent payload may have changed between
@@ -1586,8 +1587,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // conversation found ...`. To preserve the agent's SDK turn history
       // across upgrade, probe the legacy chat dir first — if the transcript
       // is there, run the resume against the legacy cwd verbatim and skip
-      // every piece of agent-home setup (the legacy dir already has its
-      // own `.agent/`, CLAUDE.md, and gitRepos checkout at top-level).
+      // every piece of agent-home setup (the legacy dir already has its own
+      // legacy `.agent/`, CLAUDE.md, and gitRepos checkout at top-level).
       const legacyCwd = join(workspaceRoot, sessionCtx.chatId);
       const isLegacy = existsSync(legacyCwd) && claudeSessionFileExists(legacyCwd, sessionId);
 
@@ -1601,14 +1602,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         const chatContext = await fetchChatContextOrLog(sessionCtx);
         chatContextForPrompt = chatContext;
         // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
-        // markWorkspaceInitComplete here — those write the new agent-home
-        // layout, which would pollute the legacy chat dir's v1.x `.agent/`
-        // and `<localPath>/` source repos.
+        // markWorkspaceInitComplete here — those write the new
+        // `.first-tree-workspace/` agent-home layout, which would pollute the
+        // legacy chat dir's v1.x `.agent/` and `<localPath>/` source repos.
         //
         // We DO refresh the briefing (writeAgentBriefing only touches the
-        // AGENTS.md file + CLAUDE.md symlink, not `.agent/` or source repos)
-        // because under the unified-briefing redesign the SDK no longer has
-        // a `systemPrompt.append` path — without this rewrite a legacy resume
+        // AGENTS.md file + CLAUDE.md symlink, not `.first-tree-workspace/`,
+        // the legacy `.agent/`, or source repos) because under the
+        // unified-briefing redesign the SDK no longer has a
+        // `systemPrompt.append` path — without this rewrite a legacy resume
         // would only see the stale v1.x stable CLAUDE.md, dropping the
         // current `prompt.append`, resource-skill briefing, and Current Chat
         // Context the previous per-turn SDK append used to deliver.

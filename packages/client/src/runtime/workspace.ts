@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIRST_TREE_WORKSPACE_MARKER } from "./bootstrap.js";
+import { ensureWorkspaceRuntimeDir, FIRST_TREE_RUNTIME_DIR } from "./bootstrap.js";
 
 /** Retained as an exported constant so external callers that imported it
  *  before the per-agent-home refactor still compile. The runtime no longer
@@ -20,12 +20,13 @@ export const DEFAULT_WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * contract is: sentinel-absent ⇒ re-run `runBootstrap` (idempotent), which
  * overwrites the bootstrap-managed files in place.
  */
-export const INIT_COMPLETE_SENTINEL_REL = join(".agent", "init-complete");
+export const INIT_COMPLETE_SENTINEL_REL = join(FIRST_TREE_RUNTIME_DIR, "init-complete");
 
 /**
  * Acquire the agent's home directory (shared by every chat session for this
- * agent). Idempotent: first call creates the directory and writes the
- * boundary marker; subsequent calls just return the path.
+ * agent). Idempotent: first call creates the directory and converges the
+ * runtime state into the workspace marker directory; subsequent calls just
+ * return the path.
  *
  * Per the agent-session-cwd-redesign proposal, the cwd is **per-agent**, not
  * per-chat: same agent → same cwd across every chat. Per-chat differentiation
@@ -33,10 +34,7 @@ export const INIT_COMPLETE_SENTINEL_REL = join(".agent", "init-complete");
  */
 export function acquireAgentHome(agentHome: string): string {
   mkdirSync(agentHome, { recursive: true });
-  const markerPath = join(agentHome, FIRST_TREE_WORKSPACE_MARKER);
-  if (!existsSync(markerPath)) {
-    writeFileSync(markerPath, "", "utf-8");
-  }
+  ensureWorkspaceRuntimeDir(agentHome);
   return agentHome;
 }
 
@@ -61,7 +59,7 @@ export function acquireWorkspace(workspaceRoot: string, chatId: string): string 
  */
 export function markWorkspaceInitComplete(agentHome: string): void {
   const path = join(agentHome, INIT_COMPLETE_SENTINEL_REL);
-  mkdirSync(join(agentHome, ".agent"), { recursive: true });
+  ensureWorkspaceRuntimeDir(agentHome);
   writeFileSync(path, JSON.stringify({ completedAt: new Date().toISOString(), schemaVersion: 1 }), "utf-8");
 }
 

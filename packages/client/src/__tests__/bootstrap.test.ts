@@ -2,10 +2,12 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -17,6 +19,8 @@ import {
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
   deepEqualIdentity,
+  FIRST_TREE_RUNTIME_DIR,
+  IDENTITY_JSON_REL,
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
@@ -186,7 +190,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const identityPath = join(workspace, ".agent", "identity.json");
+    const identityPath = join(workspace, IDENTITY_JSON_REL);
     expect(existsSync(identityPath)).toBe(true);
 
     const data = JSON.parse(readFileSync(identityPath, "utf-8"));
@@ -217,7 +221,82 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    expect(existsSync(join(workspace, ".agent", "tools.md"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "tools.md"))).toBe(false);
+  });
+
+  it("migrates a legacy .agent/ runtime dir into .first-tree-workspace/", () => {
+    const workspace = join(tmpBase, "ws-migrate-legacy-agent");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, ".agent", "identity.json"), '{"agentId":"legacy-agent"}');
+    writeFileSync(join(workspace, ".first-tree-workspace"), "", "utf-8");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity({ agentId: "new-agent" }),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(existsSync(join(workspace, ".agent"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR))).toBe(true);
+    expect(existsSync(join(workspace, IDENTITY_JSON_REL))).toBe(true);
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR)).isDirectory()).toBe(true);
+    const data = JSON.parse(readFileSync(join(workspace, IDENTITY_JSON_REL), "utf-8"));
+    expect(data.agentId).toBe("new-agent");
+  });
+
+  it("prunes a migrated legacy tools.md during bootstrap", () => {
+    const workspace = join(tmpBase, "ws-prune-legacy-tools");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, ".agent", "tools.md"), "legacy tools");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "tools.md"))).toBe(false);
+  });
+
+  it("keeps current runtime entries when legacy paths collide during migration", () => {
+    const workspace = join(tmpBase, "ws-legacy-collision");
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins"), { recursive: true });
+    writeFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "target-dir");
+    writeFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins"), "target-file");
+    mkdirSync(join(workspace, ".agent", "file-wins"), { recursive: true });
+    writeFileSync(join(workspace, ".agent", "file-wins", "legacy.txt"), "legacy-dir");
+    writeFileSync(join(workspace, ".agent", "dir-wins"), "legacy-file");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins")).isDirectory()).toBe(true);
+    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "utf-8")).toBe("target-dir");
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins")).isFile()).toBe(true);
+    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins"), "utf-8")).toBe("target-file");
+    expect(existsSync(join(workspace, ".agent"))).toBe(false);
+  });
+
+  it("replaces a dangling .first-tree-workspace symlink with the runtime directory", () => {
+    const workspace = join(tmpBase, "ws-dangling-runtime-marker");
+    mkdirSync(workspace, { recursive: true });
+    symlinkSync(join(workspace, "missing-marker-target"), join(workspace, FIRST_TREE_RUNTIME_DIR));
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR)).isDirectory()).toBe(true);
+    expect(existsSync(join(workspace, IDENTITY_JSON_REL))).toBe(true);
   });
 
   it("prunes a legacy `.agent/context/` staging directory on re-bootstrap", () => {
@@ -239,7 +318,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    expect(existsSync(join(workspace, ".agent", "context"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "context"))).toBe(false);
   });
 
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
@@ -253,7 +332,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const selfPath = join(workspace, ".agent", "context", "self.md");
+    const selfPath = join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "self.md");
     expect(existsSync(selfPath)).toBe(false);
   });
 
@@ -268,7 +347,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const selfPath = join(workspace, ".agent", "context", "self.md");
+    const selfPath = join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "self.md");
     expect(existsSync(selfPath)).toBe(false);
   });
 
@@ -285,10 +364,10 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const selfPath = join(workspace, ".agent", "context", "self.md");
+    const selfPath = join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "self.md");
     expect(existsSync(selfPath)).toBe(false);
     // identity.json should still exist
-    expect(existsSync(join(workspace, ".agent", "identity.json"))).toBe(true);
+    expect(existsSync(join(workspace, IDENTITY_JSON_REL))).toBe(true);
   });
 
   it("no longer stages AGENT.md / NODE.md under `.agent/context/` (briefing references the tree path instead)", () => {
@@ -310,9 +389,9 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    expect(existsSync(join(workspace, ".agent", "context", "agent-instructions.md"))).toBe(false);
-    expect(existsSync(join(workspace, ".agent", "context", "domain-map.md"))).toBe(false);
-    expect(existsSync(join(workspace, ".agent", "context"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "agent-instructions.md"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "domain-map.md"))).toBe(false);
+    expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "context"))).toBe(false);
   });
 
   it("does not write degraded.md when contextTreePath is null (no Context Tree is normal)", () => {
@@ -326,7 +405,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const degradedPath = join(workspace, ".agent", "context", "degraded.md");
+    const degradedPath = join(workspace, FIRST_TREE_RUNTIME_DIR, "context", "degraded.md");
     expect(existsSync(degradedPath)).toBe(false);
   });
 
@@ -348,7 +427,7 @@ describe("bootstrapWorkspace", () => {
       serverUrl: "http://localhost:8000",
     });
 
-    const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
+    const data = JSON.parse(readFileSync(join(workspace, IDENTITY_JSON_REL), "utf-8"));
     expect(data.agentId).toBe("new-agent");
   });
 });
@@ -706,7 +785,7 @@ describe("Context Tree HEAD drift helpers", () => {
   it("readCachedContextTreeHead returns null when the cache file cannot be read", () => {
     const workspace = join(tmpBase, "tree-head-cache-unreadable");
     const path = join(workspace, CONTEXT_TREE_HEAD_REL);
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(path, "abc123");
     chmodSync(path, 0);
 
@@ -715,7 +794,7 @@ describe("Context Tree HEAD drift helpers", () => {
 
   it("readCachedContextTreeHead returns null for an empty cache file", () => {
     const workspace = join(tmpBase, "tree-head-cache-empty");
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(join(workspace, CONTEXT_TREE_HEAD_REL), "  \n");
 
     expect(readCachedContextTreeHead(workspace)).toBeNull();
@@ -844,7 +923,7 @@ describe("Bundled CLI version drift helpers", () => {
 
   it("trims whitespace from the cached version on read", () => {
     const workspace = join(tmpBase, "cli-version-trim");
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  0.5.3-staging.1.1  \n");
     expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3-staging.1.1");
   });
@@ -852,7 +931,7 @@ describe("Bundled CLI version drift helpers", () => {
   it("readCachedBundledCliVersion returns null when the cache file cannot be read", () => {
     const workspace = join(tmpBase, "cli-version-unreadable");
     const path = join(workspace, BUNDLED_CLI_VERSION_REL);
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(path, "0.5.3");
     chmodSync(path, 0);
 
@@ -861,7 +940,7 @@ describe("Bundled CLI version drift helpers", () => {
 
   it("readCachedBundledCliVersion returns null for an empty cache file", () => {
     const workspace = join(tmpBase, "cli-version-empty");
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  \n");
 
     expect(readCachedBundledCliVersion(workspace)).toBeNull();

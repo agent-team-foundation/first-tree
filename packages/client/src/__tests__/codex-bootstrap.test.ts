@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
@@ -45,7 +45,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     rmSync(workspacePath, { recursive: true, force: true });
   });
 
-  it("writes the .first-tree-workspace marker for every workspace", () => {
+  it("writes the .first-tree-workspace marker directory for every workspace", () => {
     bootstrapWorkspace({
       workspacePath,
       identity: {
@@ -62,6 +62,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     });
 
     expect(existsSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER))).toBe(true);
+    expect(lstatSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER)).isDirectory()).toBe(true);
   });
 
   it("bootstrapWorkspace no longer writes the briefing (callers route through writeAgentBriefing)", () => {
@@ -69,7 +70,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     // handler computes the unified briefing via `buildAgentBriefing` and
     // hands it to `writeAgentBriefing` (or to `ensureAgentBootstrap` which
     // calls writeAgentBriefing internally). `bootstrapWorkspace` is back to
-    // owning only the stable `.agent/` layout.
+    // owning only the stable `.first-tree-workspace/` layout.
     bootstrapWorkspace({
       workspacePath,
       identity: {

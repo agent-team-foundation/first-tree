@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,6 +37,19 @@ function writeWorkspace(root: string, name: string) {
   mkdirSync(join(dir, "chat-1"), { recursive: true });
   writeFileSync(join(dir, "chat-1", "noop"), "");
   return dir;
+}
+
+function writeLegacyRuntime(root: string, name: string, opts?: { markerFile?: boolean }) {
+  const workspace = writeWorkspace(root, name);
+  mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+  writeFileSync(join(workspace, ".agent", "identity.json"), '{"agentId":"legacy"}');
+  writeFileSync(join(workspace, ".agent", "cli-version"), "0.1.0\n");
+  writeFileSync(join(workspace, ".agent", "tools.md"), "legacy tools");
+  writeFileSync(join(workspace, ".agent", "context", "agent-instructions.md"), "legacy");
+  if (opts?.markerFile) {
+    writeFileSync(join(workspace, ".first-tree-workspace"), "");
+  }
+  return workspace;
 }
 
 function writeSessionFile(root: string, name: string) {
@@ -82,6 +104,25 @@ describe("migrateLocalAgentDirs", () => {
     expect(readdirSync(dirs({ root }).agentsDir).sort()).toEqual(["alice", "bob"]);
   });
 
+  it("migrates a legacy runtime dir even when the local agent dir name already matches", async () => {
+    writeAgentYaml(root, "alice", "uuid-1");
+    writeLegacyRuntime(root, "alice", { markerFile: true });
+
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+
+    expect(res).toEqual({ scanned: 1, renamed: 0, skipped: 0, errors: 0 });
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".agent"))).toBe(false);
+    expect(statSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace")).isDirectory()).toBe(true);
+    expect(
+      readFileSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "identity.json"), "utf-8"),
+    ).toBe('{"agentId":"legacy"}');
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "tools.md"))).toBe(false);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "context"))).toBe(false);
+  });
+
   it("renames config dir, workspace, and sessions file when the server name differs", async () => {
     writeAgentYaml(root, "old-alias", "uuid-1");
     writeWorkspace(root, "old-alias");
@@ -95,6 +136,23 @@ describe("migrateLocalAgentDirs", () => {
     expect(readdirSync(dirs({ root }).agentsDir)).toEqual(["alice"]);
     expect(statSync(join(dirs({ root }).workspacesDir, "alice")).isDirectory()).toBe(true);
     expect(statSync(join(dirs({ root }).sessionsDir, "alice.json")).isFile()).toBe(true);
+  });
+
+  it("migrates the legacy runtime layout during a workspace rename", async () => {
+    writeAgentYaml(root, "old-alias", "uuid-1");
+    writeLegacyRuntime(root, "old-alias", { markerFile: true });
+
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+
+    expect(res.renamed).toBe(1);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "old-alias"))).toBe(false);
+    expect(statSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace")).isDirectory()).toBe(true);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".agent"))).toBe(false);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "context"))).toBe(false);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "tools.md"))).toBe(false);
   });
 
   it("skips without clobbering when the target config dir already exists", async () => {
@@ -161,8 +219,8 @@ describe("migrateLocalAgentDirs", () => {
 
   it("leaves old workspace in place and logs when the new workspace target already exists (partial failure)", async () => {
     writeAgentYaml(root, "old-alias", "uuid-1");
-    writeWorkspace(root, "old-alias");
-    writeWorkspace(root, "alice"); // pre-existing target — rename would clobber
+    writeLegacyRuntime(root, "old-alias");
+    writeLegacyRuntime(root, "alice"); // pre-existing target — rename would clobber
     writeSessionFile(root, "old-alias");
     const res = await migrateLocalAgentDirs({
       ...dirs({ root }),
@@ -174,6 +232,10 @@ describe("migrateLocalAgentDirs", () => {
     // Both workspaces should still exist.
     const wsNames = readdirSync(dirs({ root }).workspacesDir).sort();
     expect(wsNames).toEqual(["alice", "old-alias"]);
+    expect(statSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace")).isDirectory()).toBe(true);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".agent"))).toBe(false);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "context"))).toBe(false);
+    expect(existsSync(join(dirs({ root }).workspacesDir, "alice", ".first-tree-workspace", "tools.md"))).toBe(false);
   });
 
   it("skips and logs when agent.yaml is malformed (does not abort migration for healthy siblings)", async () => {

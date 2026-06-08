@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  *       On Demand"; does NOT contain legacy "Predeclared worktrees".
  *   E5  Concurrent two-chat start mutex serialises filesystem writes —
  *       no race throws or missing checkouts.
- *   E6  `.agent/identity.json` carries agent-level stable fields only —
+ *   E6  `.first-tree-workspace/identity.json` carries agent-level stable fields only —
  *       no `chatId` / `chatContext`.
  *   E7  Legacy `<chatId>/` directories that pre-date the redesign are
  *       left untouched when a fresh session starts.
@@ -54,6 +54,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
+import { IDENTITY_JSON_REL } from "../runtime/bootstrap.js";
 import { createGitMirrorManager, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
@@ -321,7 +322,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
     await handler.start(makeMessage("chat-e6", "msg-e6"), buildSessionCtx("chat-e6"));
 
-    const identityPath = join(workspaceRoot, ".agent", "identity.json");
+    const identityPath = join(workspaceRoot, IDENTITY_JSON_REL);
     expect(existsSync(identityPath)).toBe(true);
     const identity = JSON.parse(readFileSync(identityPath, "utf-8"));
 
@@ -356,7 +357,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     await handler.start(makeMessage("chat-e7", "msg-e7"), buildSessionCtx("chat-e7"));
 
     // Fresh session creates agent home + new layout.
-    expect(existsSync(join(workspaceRoot, ".agent", "identity.json"))).toBe(true);
+    expect(existsSync(join(workspaceRoot, IDENTITY_JSON_REL))).toBe(true);
 
     // Legacy dir survives byte-identical — that's the migration story.
     expect(existsSync(legacyChatDir)).toBe(true);

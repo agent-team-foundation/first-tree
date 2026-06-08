@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,7 +69,13 @@ vi.mock("../runtime/agent-bootstrap.js", () => ({
 }));
 
 vi.mock("../runtime/bootstrap.js", () => ({
+  FIRST_TREE_RUNTIME_DIR: ".first-tree-workspace",
   FIRST_TREE_WORKSPACE_MARKER: ".first-tree-workspace",
+  ensureWorkspaceRuntimeDir: vi.fn((workspacePath: string) => {
+    const dir = join(workspacePath, ".first-tree-workspace");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }),
   writeAgentBriefing: vi.fn(),
 }));
 

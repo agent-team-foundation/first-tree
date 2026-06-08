@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { migrateLegacyRuntimeLayout } from "@first-tree/client";
 import { parse as parseYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
@@ -117,6 +118,23 @@ function readAgentId(agentYamlPath: string): string | null {
   }
 }
 
+function migrateWorkspaceRuntimeDir(workspacePath: string, agentName: string, result: AgentDirMigrationResult): void {
+  if (!existsSync(workspacePath)) return;
+  try {
+    if (!statSync(workspacePath).isDirectory()) return;
+  } catch {
+    return;
+  }
+
+  try {
+    migrateLegacyRuntimeLayout(workspacePath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    print.status("⚠️", `agent-dir migration: runtime-dir migration failed for "${agentName}": ${msg}`);
+    result.errors += 1;
+  }
+}
+
 /**
  * Walk `agentsDir`, for each local agent compare the dir name to the
  * server's canonical `name`, and rename the dir + workspaces/sessions
@@ -161,6 +179,7 @@ export async function migrateLocalAgentDirs(opts: {
 
   for (const dirName of dirNames) {
     const agentYamlPath = join(agentsDir, dirName, "agent.yaml");
+    const oldWorkspace = join(workspacesDir, dirName);
     const agentId = readAgentId(agentYamlPath);
     if (!agentId) {
       // Non-agent directory, or a malformed yaml. Log only when a yaml
@@ -196,7 +215,10 @@ export async function migrateLocalAgentDirs(opts: {
       result.skipped += 1;
       continue;
     }
-    if (serverName === dirName) continue;
+    if (serverName === dirName) {
+      migrateWorkspaceRuntimeDir(oldWorkspace, dirName, result);
+      continue;
+    }
 
     const oldDir = join(agentsDir, dirName);
     const newDir = join(agentsDir, serverName);
@@ -208,6 +230,8 @@ export async function migrateLocalAgentDirs(opts: {
       result.skipped += 1;
       continue;
     }
+
+    migrateWorkspaceRuntimeDir(oldWorkspace, dirName, result);
 
     try {
       renameSync(oldDir, newDir);
@@ -224,7 +248,6 @@ export async function migrateLocalAgentDirs(opts: {
     // on failure — the config dir is the canonical marker for "migrated",
     // so mismatched workspace/session leftovers show up as orphans (not
     // wedged state).
-    const oldWorkspace = join(workspacesDir, dirName);
     const newWorkspace = join(workspacesDir, serverName);
     if (existsSync(oldWorkspace)) {
       try {
@@ -242,6 +265,8 @@ export async function migrateLocalAgentDirs(opts: {
         result.errors += 1;
       }
     }
+
+    migrateWorkspaceRuntimeDir(newWorkspace, serverName, result);
 
     const oldSessions = join(sessionsDir, `${dirName}.json`);
     const newSessions = join(sessionsDir, `${serverName}.json`);
