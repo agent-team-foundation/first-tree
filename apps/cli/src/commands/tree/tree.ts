@@ -1,17 +1,18 @@
 import type { Dirent } from "node:fs";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
 import matter from "gray-matter";
 
 import { isJsonMode, print } from "../../core/output.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { asString, findGitRoot, isRecord } from "./shared.js";
 
 export type NodeMetadata = {
   title: string;
-  description: string;
+  description?: string;
+  owners: string[];
 };
 
 export type ContextTreeNode = {
@@ -27,25 +28,50 @@ export type ContextTreeNode = {
 type RenderContextTreeOptions = {
   maxDepth?: number;
   pattern?: string;
+  path?: string;
 };
 
 export type ReadContextTreeSnapshotOptions = {
   level?: number;
   pattern?: string;
+  path?: string;
+  target?: string;
 };
 
 export type ContextTreeSnapshot = {
   root: string;
+  target: string;
   options: ReadContextTreeSnapshotOptions;
   tree: ContextTreeNode;
+};
+
+type ParsedTreeTreeOptions = {
+  level?: number;
+  pattern?: string;
+  path: string;
+};
+
+type ResolvedTreeTarget = {
+  repoRoot: string;
+  targetRelativePath: string;
 };
 
 const NODE_FILE = "NODE.md";
 const LEAF_FILE_EXCLUDES = new Set([NODE_FILE, "AGENTS.md", "CLAUDE.md"]);
 const SKIPPED_DIRECTORY_NAMES = new Set(["node_modules", "__pycache__", "dist", "build", ".next", ".turbo"]);
-const MISSING_METADATA = "-";
 const TREE_TREE_INVALID_LEVEL = "TREE_TREE_INVALID_LEVEL";
+const TREE_TREE_INVALID_PATH = "TREE_TREE_INVALID_PATH";
 const TREE_TREE_FAILED = "TREE_TREE_FAILED";
+
+class TreeTreeCommandError extends Error {
+  constructor(
+    public readonly code: typeof TREE_TREE_INVALID_LEVEL | typeof TREE_TREE_INVALID_PATH | typeof TREE_TREE_FAILED,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TreeTreeCommandError";
+  }
+}
 
 function isHidden(name: string): boolean {
   return name.startsWith(".");
@@ -59,44 +85,78 @@ function fileHasMarkdownExtension(name: string): boolean {
   return name.endsWith(".md");
 }
 
-function readFrontmatterMetadata(path: string): NodeMetadata {
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function asNonEmptyStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+
+  const items: string[] = [];
+
+  for (const item of value) {
+    const normalized = asNonEmptyString(item);
+
+    if (normalized === undefined) {
+      return undefined;
+    }
+
+    items.push(normalized);
+  }
+
+  return items;
+}
+
+function readFrontmatterMetadata(path: string): NodeMetadata | null {
   try {
     const parsed = matter(readFileSync(path, "utf-8"));
     const data: unknown = parsed.data;
 
     if (!isRecord(data)) {
-      return { title: MISSING_METADATA, description: MISSING_METADATA };
+      return null;
+    }
+
+    const title = asNonEmptyString(data.title);
+    const owners = asNonEmptyStringArray(data.owners);
+
+    if (title === undefined || owners === undefined) {
+      return null;
     }
 
     return {
-      title: asString(data.title) ?? MISSING_METADATA,
-      description: asString(data.description) ?? MISSING_METADATA,
+      title,
+      description: asNonEmptyString(data.description),
+      owners,
     };
   } catch {
-    return { title: MISSING_METADATA, description: MISSING_METADATA };
+    return null;
   }
 }
 
-function escapeDisplayValue(value: string): string {
-  return value
-    .replace(/\\/gu, "\\\\")
-    .replace(/"/gu, '\\"')
-    .replace(/\r/gu, "\\r")
-    .replace(/\n/gu, "\\n")
-    .replace(/\t/gu, "\\t");
+function formatDisplayValue(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
-function formatMetadata(metadata: NodeMetadata): string {
-  return `title="${escapeDisplayValue(metadata.title)}" description="${escapeDisplayValue(metadata.description)}"`;
+function formatDisplayPath(node: ContextTreeNode): string {
+  if (node.relativePath.length === 0) {
+    return `${node.name}/`;
+  }
+
+  return node.kind === "directory" ? `${node.relativePath}/` : node.relativePath;
 }
 
 function formatNodeLine(node: ContextTreeNode): string {
-  if (node.kind === "file") {
-    return `${node.name} ${formatMetadata(node.metadata)}`;
-  }
+  const description =
+    node.metadata.description === undefined ? "" : ` -> ${formatDisplayValue(node.metadata.description)}`;
 
-  const nodeMarker = node.hasNode ? " [NODE.md]" : "";
-  return `${node.name}/${nodeMarker} ${formatMetadata(node.metadata)}`;
+  return `${formatDisplayPath(node)} [${formatDisplayValue(node.metadata.title)}]${description}`;
 }
 
 function compareEntryNames(left: string, right: string): number {
@@ -137,39 +197,97 @@ function readDirectoryEntries(path: string): Dirent[] {
   }
 }
 
-function buildDirectoryNode(root: string, path: string, depth: number, name: string): ContextTreeNode {
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isPathInsideOrEqual(root: string, target: string): boolean {
+  const relativePath = relative(root, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function splitRelativePath(path: string): string[] {
+  if (path.length === 0) {
+    return [];
+  }
+
+  return path.split("/").filter((segment) => segment.length > 0);
+}
+
+function formatTargetForMessage(path: string): string {
+  return path.length === 0 ? "." : path;
+}
+
+function buildDirectoryNode(
+  root: string,
+  path: string,
+  depth: number,
+  name: string,
+  targetSegments: string[],
+): ContextTreeNode | null {
   const nodePath = join(path, NODE_FILE);
   const hasNode = isFile(nodePath);
   const metadata = readFrontmatterMetadata(nodePath);
   const relativePath = toPosixRelativePath(root, path);
   const children: ContextTreeNode[] = [];
 
-  for (const entry of readDirectoryEntries(path)) {
-    const entryName = entry.name;
-    const childPath = join(path, entryName);
+  if (!hasNode || metadata === null) {
+    return null;
+  }
 
-    if (entry.isDirectory()) {
-      if (shouldSkipDirectory(entryName)) {
+  if (targetSegments.length > 0) {
+    const [nextSegment, ...remainingSegments] = targetSegments;
+
+    if (!shouldSkipDirectory(nextSegment)) {
+      const child = buildDirectoryNode(root, join(path, nextSegment), depth + 1, nextSegment, remainingSegments);
+
+      if (child !== null) {
+        children.push(child);
+      }
+    }
+  } else {
+    for (const entry of readDirectoryEntries(path)) {
+      const entryName = entry.name;
+      const childPath = join(path, entryName);
+
+      if (entry.isDirectory()) {
+        if (shouldSkipDirectory(entryName)) {
+          continue;
+        }
+
+        const child = buildDirectoryNode(root, childPath, depth + 1, entryName, []);
+
+        if (child !== null) {
+          children.push(child);
+        }
+
         continue;
       }
 
-      children.push(buildDirectoryNode(root, childPath, depth + 1, entryName));
-      continue;
-    }
+      if (!entry.isFile() || shouldSkipFile(entryName)) {
+        continue;
+      }
 
-    if (!entry.isFile() || shouldSkipFile(entryName)) {
-      continue;
-    }
+      const childMetadata = readFrontmatterMetadata(childPath);
 
-    children.push({
-      kind: "file",
-      name: entryName,
-      relativePath: toPosixRelativePath(root, childPath),
-      depth: depth + 1,
-      metadata: readFrontmatterMetadata(childPath),
-      hasNode: false,
-      children: [],
-    });
+      if (childMetadata === null) {
+        continue;
+      }
+
+      children.push({
+        kind: "file",
+        name: entryName,
+        relativePath: toPosixRelativePath(root, childPath),
+        depth: depth + 1,
+        metadata: childMetadata,
+        hasNode: false,
+        children: [],
+      });
+    }
   }
 
   return {
@@ -178,20 +296,24 @@ function buildDirectoryNode(root: string, path: string, depth: number, name: str
     relativePath,
     depth,
     metadata,
-    hasNode,
+    hasNode: true,
     children,
   };
 }
 
-function cloneWithDepthLimit(node: ContextTreeNode, maxDepth: number | undefined): ContextTreeNode | null {
-  if (maxDepth !== undefined && node.depth > maxDepth) {
+function cloneWithTargetDepthLimit(
+  node: ContextTreeNode,
+  maxDepth: number | undefined,
+  targetDepth: number,
+): ContextTreeNode | null {
+  if (maxDepth !== undefined && node.depth > targetDepth && node.depth > targetDepth + maxDepth) {
     return null;
   }
 
   return {
     ...node,
     children: node.children
-      .map((child) => cloneWithDepthLimit(child, maxDepth))
+      .map((child) => cloneWithTargetDepthLimit(child, maxDepth, targetDepth))
       .filter((child): child is ContextTreeNode => child !== null),
   };
 }
@@ -218,19 +340,37 @@ function globToRegex(pattern: string): RegExp {
 }
 
 function nodeMatchesPattern(node: ContextTreeNode, pattern: RegExp): boolean {
-  return [node.relativePath, node.name, node.metadata.title, node.metadata.description].some((candidate) =>
-    pattern.test(candidate),
-  );
+  const candidates = [node.relativePath, formatDisplayPath(node), node.name, node.metadata.title];
+
+  if (node.metadata.description !== undefined) {
+    candidates.push(node.metadata.description);
+  }
+
+  return candidates.some((candidate) => pattern.test(candidate));
 }
 
-function cloneWithPattern(node: ContextTreeNode, pattern: RegExp, forceKeep: boolean): ContextTreeNode | null {
+function isAncestorOrSelfPath(candidate: string, target: string): boolean {
+  if (candidate.length === 0) {
+    return true;
+  }
+
+  return target === candidate || target.startsWith(`${candidate}/`);
+}
+
+function cloneWithPattern(
+  node: ContextTreeNode,
+  pattern: RegExp,
+  targetRelativePath: string,
+  forceKeep: boolean,
+): ContextTreeNode | null {
   const children = node.children
-    .map((child) => cloneWithPattern(child, pattern, false))
+    .map((child) => cloneWithPattern(child, pattern, targetRelativePath, false))
     .filter((child): child is ContextTreeNode => child !== null);
   const selfMatches = nodeMatchesPattern(node, pattern);
   const keepDirectoryAncestor = node.kind === "directory" && children.length > 0;
+  const keepTargetContext = node.kind === "directory" && isAncestorOrSelfPath(node.relativePath, targetRelativePath);
 
-  if (!forceKeep && !selfMatches && !keepDirectoryAncestor) {
+  if (!forceKeep && !selfMatches && !keepDirectoryAncestor && !keepTargetContext) {
     return null;
   }
 
@@ -238,19 +378,6 @@ function cloneWithPattern(node: ContextTreeNode, pattern: RegExp, forceKeep: boo
     ...node,
     children,
   };
-}
-
-function pruneRenderableDirectories(node: ContextTreeNode, forceKeep: boolean): ContextTreeNode | null {
-  const children = node.children
-    .map((child) => pruneRenderableDirectories(child, false))
-    .filter((child): child is ContextTreeNode => child !== null);
-  const isRenderableDirectory = node.kind === "directory" && (node.hasNode || children.length > 0 || forceKeep);
-
-  if (node.kind === "file" || isRenderableDirectory) {
-    return { ...node, children };
-  }
-
-  return null;
 }
 
 function collectRenderedLines(node: ContextTreeNode, prefix: string, isLast: boolean, lines: string[]): void {
@@ -285,6 +412,43 @@ export function parseTreeLevel(value: unknown): number | undefined {
   return level;
 }
 
+function looksLikeNumericLevelInput(value: string): boolean {
+  return /^[-+]?\d/u.test(value);
+}
+
+function parseTreeTreeOptions(options: Record<string, unknown>, args: string[]): ParsedTreeTreeOptions {
+  if (args.length > 1) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, "Invalid path: expected at most one directory path.");
+  }
+
+  const positionalPath = args[0];
+  const rawLevel = options.level;
+  let level: number | undefined;
+  let path = positionalPath ?? ".";
+
+  if (rawLevel !== undefined) {
+    if (typeof rawLevel !== "string") {
+      throw new TreeTreeCommandError(TREE_TREE_INVALID_LEVEL, "Invalid --level: expected a non-negative integer.");
+    }
+
+    try {
+      level = parseTreeLevel(rawLevel);
+    } catch (error) {
+      if (positionalPath === undefined && !looksLikeNumericLevelInput(rawLevel)) {
+        path = rawLevel;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  return {
+    level,
+    pattern: asString(options.pattern),
+    path,
+  };
+}
+
 function normalizeSnapshotOptions(options: ReadContextTreeSnapshotOptions): ReadContextTreeSnapshotOptions {
   const normalized: ReadContextTreeSnapshotOptions = {};
 
@@ -296,34 +460,101 @@ function normalizeSnapshotOptions(options: ReadContextTreeSnapshotOptions): Read
     normalized.pattern = options.pattern;
   }
 
+  if (options.path !== undefined) {
+    normalized.path = options.path;
+  }
+
   return normalized;
+}
+
+function resolveTreeTarget(cwd: string, path: string): ResolvedTreeTarget {
+  const repoRoot = findGitRoot(cwd);
+
+  if (repoRoot === undefined) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, "Path must be inside a git repository.");
+  }
+
+  const targetPath = resolve(cwd, path);
+
+  if (!isDirectory(targetPath)) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${path}" is not an existing directory.`);
+  }
+
+  if (!isPathInsideOrEqual(repoRoot, targetPath)) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${path}" is outside the git repository.`);
+  }
+
+  return {
+    repoRoot,
+    targetRelativePath: toPosixRelativePath(repoRoot, targetPath),
+  };
+}
+
+function resolveSnapshotTarget(root: string, target: string | undefined): ResolvedTreeTarget {
+  const repoRoot = resolve(root);
+  const targetPath = resolve(repoRoot, target ?? "");
+
+  if (!isPathInsideOrEqual(repoRoot, targetPath)) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is outside the git repository.`);
+  }
+
+  if (!isDirectory(targetPath)) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is not an existing directory.`);
+  }
+
+  return {
+    repoRoot,
+    targetRelativePath: toPosixRelativePath(repoRoot, targetPath),
+  };
+}
+
+function hasDirectoryNode(node: ContextTreeNode, relativePath: string): boolean {
+  if (node.kind === "directory" && node.relativePath === relativePath) {
+    return true;
+  }
+
+  return node.children.some((child) => hasDirectoryNode(child, relativePath));
 }
 
 export function readContextTreeSnapshot(
   root: string,
   options: ReadContextTreeSnapshotOptions = {},
 ): ContextTreeSnapshot {
-  const resolvedRoot = resolve(root);
-  const rootName = basename(resolvedRoot) || resolvedRoot;
-  const discovered = buildDirectoryNode(resolvedRoot, resolvedRoot, 0, rootName);
-  const depthLimited = cloneWithDepthLimit(discovered, options.level);
+  const resolvedTarget = resolveSnapshotTarget(root, options.target);
+  const rootName = basename(resolvedTarget.repoRoot) || resolvedTarget.repoRoot;
+  const targetSegments = splitRelativePath(resolvedTarget.targetRelativePath);
+  const discovered = buildDirectoryNode(resolvedTarget.repoRoot, resolvedTarget.repoRoot, 0, rootName, targetSegments);
+
+  if (discovered === null) {
+    throw new Error(`No valid Context Tree root node found at ${NODE_FILE}.`);
+  }
+
+  if (!hasDirectoryNode(discovered, resolvedTarget.targetRelativePath)) {
+    throw new Error(
+      `Target path "${formatTargetForMessage(resolvedTarget.targetRelativePath)}" is not a valid Context Tree directory node.`,
+    );
+  }
+
+  const depthLimited = cloneWithTargetDepthLimit(discovered, options.level, targetSegments.length);
 
   if (depthLimited === null) {
     throw new Error("Context Tree root was excluded by the depth limit.");
   }
 
   const patternFiltered =
-    options.pattern === undefined ? depthLimited : cloneWithPattern(depthLimited, globToRegex(options.pattern), true);
-  const renderable = patternFiltered === null ? null : pruneRenderableDirectories(patternFiltered, true);
+    options.pattern === undefined
+      ? depthLimited
+      : cloneWithPattern(depthLimited, globToRegex(options.pattern), resolvedTarget.targetRelativePath, true);
 
-  if (renderable === null) {
-    throw new Error("Context Tree root was removed by the renderable node filter.");
+  if (patternFiltered === null) {
+    throw new Error("Context Tree root was removed by the pattern filter.");
   }
 
   return {
-    root: resolvedRoot,
+    root: resolvedTarget.repoRoot,
+    target: resolvedTarget.targetRelativePath,
     options: normalizeSnapshotOptions(options),
-    tree: renderable,
+    tree: patternFiltered,
   };
 }
 
@@ -338,13 +569,17 @@ export function renderContextTree(root: string, options: RenderContextTreeOption
     readContextTreeSnapshot(root, {
       level: options.maxDepth,
       pattern: options.pattern,
+      path: options.path,
+      target: options.path,
     }),
   );
 }
 
 function configureTreeTreeCommand(command: Command): void {
   command
-    .option("-L, --level <depth>", "max display depth, where the current directory is depth 0")
+    .argument("[path]", "directory path to browse, resolved relative to the current working directory")
+    .allowExcessArguments(false)
+    .option("-L, --level <depth>", "max descendant depth below the target directory")
     .option(
       "-P, --pattern <pattern>",
       "shell-style glob filter matched against path, filename, title, and description",
@@ -354,9 +589,13 @@ function configureTreeTreeCommand(command: Command): void {
 export function runTreeTreeCommand(context: CommandContext): void {
   try {
     const options = context.command.opts<Record<string, unknown>>();
-    const snapshot = readContextTreeSnapshot(process.cwd(), {
-      level: parseTreeLevel(options.level),
-      pattern: asString(options.pattern),
+    const parsedOptions = parseTreeTreeOptions(options, context.command.args);
+    const resolvedTarget = resolveTreeTarget(process.cwd(), parsedOptions.path);
+    const snapshot = readContextTreeSnapshot(resolvedTarget.repoRoot, {
+      level: parsedOptions.level,
+      pattern: parsedOptions.pattern,
+      path: parsedOptions.path,
+      target: resolvedTarget.targetRelativePath,
     });
 
     if (context.options.json || isJsonMode()) {
@@ -367,7 +606,12 @@ export function runTreeTreeCommand(context: CommandContext): void {
     print.line(`${renderContextTreeSnapshot(snapshot)}\n`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const code = message.startsWith("Invalid --level") ? TREE_TREE_INVALID_LEVEL : TREE_TREE_FAILED;
+    const code =
+      error instanceof TreeTreeCommandError
+        ? error.code
+        : message.startsWith("Invalid --level")
+          ? TREE_TREE_INVALID_LEVEL
+          : TREE_TREE_FAILED;
     print.fail(code, message);
   }
 }

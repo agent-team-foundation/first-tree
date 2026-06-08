@@ -18,37 +18,64 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+function frontmatter(fields: string): string {
+  return `---\n${fields}---\n`;
+}
+
 function writeNode(path: string, title: string, description?: string): void {
   const descriptionLine = description === undefined ? "" : `description: ${description}\n`;
-  writeFileSync(join(path, "NODE.md"), `---\ntitle: ${title}\n${descriptionLine}---\n# ${title}\n`);
+  writeFileSync(
+    join(path, "NODE.md"),
+    `${frontmatter(`title: ${title}\nowners: [alice]\n${descriptionLine}`)}# ${title}\n`,
+  );
 }
 
 function writeLeaf(path: string, title: string, description?: string): void {
   const descriptionLine = description === undefined ? "" : `description: ${description}\n`;
-  writeFileSync(path, `---\ntitle: ${title}\n${descriptionLine}---\n# ${title}\n`);
+  writeFileSync(path, `${frontmatter(`title: ${title}\nowners: [alice]\n${descriptionLine}`)}# ${title}\n`);
+}
+
+function writeMarkdown(path: string, fields: string): void {
+  writeFileSync(path, `${frontmatter(fields)}# Invalid\n`);
 }
 
 function makeTreeFixture(): string {
   const base = makeTempDir("ft-tree-tree-");
   const root = join(base, "knowledge");
-  const domains = join(root, "domains");
-  const api = join(domains, "api");
+  const docs = join(root, "docs");
+  const development = join(docs, "development");
+  const deep = join(development, "deep");
+  const missingTitle = join(root, "missing-title");
+  const missingOwners = join(root, "missing-owners");
+  const emptyOwners = join(root, "empty-owners");
   const scratch = join(root, "scratch");
 
-  mkdirSync(api, { recursive: true });
+  mkdirSync(deep, { recursive: true });
+  mkdirSync(missingTitle, { recursive: true });
+  mkdirSync(missingOwners, { recursive: true });
+  mkdirSync(emptyOwners, { recursive: true });
   mkdirSync(scratch, { recursive: true });
+  mkdirSync(join(root, ".git"), { recursive: true });
 
   writeNode(root, "Root Node", "Root description");
-  writeNode(domains, "Domains", "Product domains");
-  writeNode(api, "API");
-  writeLeaf(join(api, "auth.md"), "Auth Leaf", "Login flows");
-  writeLeaf(join(api, "payments.md"), "Payments Leaf", "Billing flows");
-  writeLeaf(join(domains, "ops.md"), "Operations Leaf", "Runbooks");
+  writeNode(docs, "Docs", "Documentation");
+  writeNode(development, "Development");
+  writeNode(deep, "Deep Area", "Deep context");
+  writeLeaf(join(deep, "leaf.md"), "Deep Leaf", "Deep leaf detail");
+  writeLeaf(join(development, "http.md"), "HTTP Leaf", "HTTP routes");
+  writeLeaf(join(docs, "ops.md"), "Operations Leaf", "Runbooks");
   writeLeaf(join(root, "guide.md"), "Guide Leaf", "How to navigate");
-  writeLeaf(join(scratch, "note.md"), "Scratch Note", "Temporary details");
 
-  writeFileSync(join(root, "AGENTS.md"), "---\ntitle: Should Skip Agents\n---\n");
-  writeFileSync(join(root, "CLAUDE.md"), "---\ntitle: Should Skip Claude\n---\n");
+  writeMarkdown(join(missingTitle, "NODE.md"), "owners: [alice]\n");
+  writeMarkdown(join(missingOwners, "NODE.md"), "title: Missing Owners\n");
+  writeMarkdown(join(emptyOwners, "NODE.md"), "title: Empty Owners\nowners: []\n");
+  writeMarkdown(join(development, "missing-title.md"), "owners: [alice]\n");
+  writeMarkdown(join(development, "missing-owners.md"), "title: Missing Owners Leaf\n");
+  writeMarkdown(join(development, "empty-owners.md"), "title: Empty Owners Leaf\nowners: []\n");
+  writeLeaf(join(scratch, "note.md"), "Scratch Note", "Temporary details");
+  writeFileSync(join(development, "notes.txt"), "not markdown\n");
+  writeFileSync(join(root, "AGENTS.md"), frontmatter("title: Should Skip Agents\nowners: [alice]\n"));
+  writeFileSync(join(root, "CLAUDE.md"), frontmatter("title: Should Skip Claude\nowners: [alice]\n"));
   writeLeaf(join(root, ".secret.md"), "Should Skip Hidden File", "Hidden");
 
   for (const generatedDir of [".hidden", "node_modules", "__pycache__", "dist", "build", ".next", ".turbo"]) {
@@ -61,16 +88,23 @@ function makeTreeFixture(): string {
   return root;
 }
 
-function commandWithOptions(options: Record<string, unknown>): Command {
+function commandWithOptions(options: Record<string, unknown>, args: string[] = []): Command {
   const command = new Command("test");
+  command.args = args;
+
   for (const [key, value] of Object.entries(options)) {
     command.setOptionValue(key, value);
   }
+
   return command;
 }
 
 function context(command: Command, options: Partial<CommandContext["options"]> = {}): CommandContext {
   return { command, options: { debug: false, json: false, quiet: false, ...options } };
+}
+
+function readMockOutput(spy: { mock: { calls: readonly (readonly unknown[])[] } }): string {
+  return spy.mock.calls.map((call) => String(call[0])).join("");
 }
 
 class ProcessExit extends Error {
@@ -103,87 +137,82 @@ afterEach(() => {
 });
 
 describe("tree tree renderer", () => {
-  it("renders the current node, child directory nodes, and leaf markdown nodes", () => {
+  it("renders only valid Context Tree nodes with concise metadata labels", () => {
     const root = makeTreeFixture();
 
     expect(renderContextTree(root)).toBe(
       [
-        'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-        '├── domains/ [NODE.md] title="Domains" description="Product domains"',
-        '│   ├── api/ [NODE.md] title="API" description="-"',
-        '│   │   ├── auth.md title="Auth Leaf" description="Login flows"',
-        '│   │   └── payments.md title="Payments Leaf" description="Billing flows"',
-        '│   └── ops.md title="Operations Leaf" description="Runbooks"',
-        '├── guide.md title="Guide Leaf" description="How to navigate"',
-        '└── scratch/ title="-" description="-"',
-        '    └── note.md title="Scratch Note" description="Temporary details"',
+        "knowledge/ [Root Node] -> Root description",
+        "├── docs/ [Docs] -> Documentation",
+        "│   ├── docs/development/ [Development]",
+        "│   │   ├── docs/development/deep/ [Deep Area] -> Deep context",
+        "│   │   │   └── docs/development/deep/leaf.md [Deep Leaf] -> Deep leaf detail",
+        "│   │   └── docs/development/http.md [HTTP Leaf] -> HTTP routes",
+        "│   └── docs/ops.md [Operations Leaf] -> Runbooks",
+        "└── guide.md [Guide Leaf] -> How to navigate",
       ].join("\n"),
     );
   });
 
-  it("applies deterministic depth limits", () => {
+  it("applies depth limits only below the selected target path", () => {
     const root = makeTreeFixture();
 
-    expect(renderContextTree(root, { maxDepth: 0 })).toBe(
-      'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-    );
-    expect(renderContextTree(root, { maxDepth: 1 })).toBe(
+    expect(renderContextTree(root, { maxDepth: 0, path: "docs/development" })).toBe(
       [
-        'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-        '├── domains/ [NODE.md] title="Domains" description="Product domains"',
-        '└── guide.md title="Guide Leaf" description="How to navigate"',
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
       ].join("\n"),
     );
-    expect(renderContextTree(root, { maxDepth: 2 })).toBe(
+    expect(renderContextTree(root, { maxDepth: 1, path: "docs/development" })).toBe(
       [
-        'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-        '├── domains/ [NODE.md] title="Domains" description="Product domains"',
-        '│   ├── api/ [NODE.md] title="API" description="-"',
-        '│   └── ops.md title="Operations Leaf" description="Runbooks"',
-        '├── guide.md title="Guide Leaf" description="How to navigate"',
-        '└── scratch/ title="-" description="-"',
-        '    └── note.md title="Scratch Note" description="Temporary details"',
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
+        "        ├── docs/development/deep/ [Deep Area] -> Deep context",
+        "        └── docs/development/http.md [HTTP Leaf] -> HTTP routes",
       ].join("\n"),
     );
   });
 
-  it("matches patterns against relative path, basename, title, and description", () => {
+  it("matches patterns against relative path, filename, title, and description while preserving ancestors", () => {
     const root = makeTreeFixture();
 
-    expect(renderContextTree(root, { pattern: "domains/api/auth.md" })).toContain(
-      'auth.md title="Auth Leaf" description="Login flows"',
+    expect(renderContextTree(root, { pattern: "docs/development/http.md" })).toContain(
+      "docs/development/http.md [HTTP Leaf] -> HTTP routes",
     );
-    expect(renderContextTree(root, { pattern: "guide.md" })).toContain(
-      'guide.md title="Guide Leaf" description="How to navigate"',
+    expect(renderContextTree(root, { pattern: "http.md" })).toContain(
+      "docs/development/http.md [HTTP Leaf] -> HTTP routes",
     );
-    expect(renderContextTree(root, { pattern: "Auth*" })).toContain(
-      'auth.md title="Auth Leaf" description="Login flows"',
+    expect(renderContextTree(root, { pattern: "HTTP*" })).toContain(
+      "docs/development/http.md [HTTP Leaf] -> HTTP routes",
     );
-    expect(renderContextTree(root, { pattern: "Billing*" })).toContain(
-      'payments.md title="Payments Leaf" description="Billing flows"',
-    );
-  });
-
-  it("preserves ancestors for matched descendants after applying depth limits", () => {
-    const root = makeTreeFixture();
-
-    expect(renderContextTree(root, { pattern: "Payments*" })).toBe(
+    expect(renderContextTree(root, { pattern: "Deep leaf*" })).toBe(
       [
-        'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-        '└── domains/ [NODE.md] title="Domains" description="Product domains"',
-        '    └── api/ [NODE.md] title="API" description="-"',
-        '        └── payments.md title="Payments Leaf" description="Billing flows"',
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
+        "        └── docs/development/deep/ [Deep Area] -> Deep context",
+        "            └── docs/development/deep/leaf.md [Deep Leaf] -> Deep leaf detail",
       ].join("\n"),
     );
-    expect(renderContextTree(root, { maxDepth: 2, pattern: "Payments*" })).toBe(
-      'knowledge/ [NODE.md] title="Root Node" description="Root description"',
+    expect(renderContextTree(root, { maxDepth: 0, path: "docs/development", pattern: "Deep*" })).toBe(
+      [
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
+      ].join("\n"),
     );
   });
 
-  it("skips hidden and generated paths plus non-node framework markdown files", () => {
+  it("filters invalid markdown nodes, hidden paths, generated directories, and non-markdown files", () => {
     const root = makeTreeFixture();
     const output = renderContextTree(root);
 
+    expect(output).not.toContain("Missing");
+    expect(output).not.toContain("Empty Owners");
+    expect(output).not.toContain("Scratch Note");
+    expect(output).not.toContain("notes.txt");
     expect(output).not.toContain("Should Skip");
     expect(output).not.toContain("AGENTS.md");
     expect(output).not.toContain("CLAUDE.md");
@@ -198,23 +227,59 @@ describe("tree tree renderer", () => {
 });
 
 describe("tree tree command action", () => {
-  it("prints the rendered tree from the current directory to stderr in human mode", () => {
+  it("prints the selected subtree with repo-root ancestor context in human mode", () => {
     const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     process.chdir(root);
 
-    runTreeTreeCommand(context(commandWithOptions({ level: "1" })));
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
 
-    expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe("");
-    expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toBe(
+    expect(readMockOutput(stdout)).toBe("");
+    expect(readMockOutput(stderr)).toBe(
       `${[
-        'knowledge/ [NODE.md] title="Root Node" description="Root description"',
-        '├── domains/ [NODE.md] title="Domains" description="Product domains"',
-        '└── guide.md title="Guide Leaf" description="How to navigate"',
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
+        "        ├── docs/development/deep/ [Deep Area] -> Deep context",
+        "        │   └── docs/development/deep/leaf.md [Deep Leaf] -> Deep leaf detail",
+        "        └── docs/development/http.md [HTTP Leaf] -> HTTP routes",
       ].join("\n")}\n`,
     );
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("treats a non-numeric -L value as a path only when no positional path is present", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({ level: "docs/development" })));
+
+    expect(readMockOutput(stdout)).toBe("");
+    expect(readMockOutput(stderr)).toContain("docs/development/http.md [HTTP Leaf] -> HTTP routes");
+    expect(readMockOutput(stderr)).not.toContain("guide.md [Guide Leaf]");
+  });
+
+  it("combines numeric -L depth with a positional path", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({ level: "1" }, ["docs/development"])));
+
+    expect(readMockOutput(stdout)).toBe("");
+    expect(readMockOutput(stderr)).toBe(
+      `${[
+        "knowledge/ [Root Node] -> Root description",
+        "└── docs/ [Docs] -> Documentation",
+        "    └── docs/development/ [Development]",
+        "        ├── docs/development/deep/ [Deep Area] -> Deep context",
+        "        └── docs/development/http.md [HTTP Leaf] -> HTTP routes",
+      ].join("\n")}\n`,
+    );
   });
 
   it("prints a JSON envelope to stdout in explicit JSON mode", () => {
@@ -224,18 +289,22 @@ describe("tree tree command action", () => {
     process.chdir(root);
     const expectedRoot = process.cwd();
 
-    runTreeTreeCommand(context(commandWithOptions({ level: "3", pattern: "Auth*" }), { json: true }));
+    runTreeTreeCommand(
+      context(commandWithOptions({ level: "1", pattern: "HTTP*" }, ["docs/development"]), { json: true }),
+    );
 
-    expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toBe("");
-    const envelope = JSON.parse(stdout.mock.calls.map((call) => String(call[0])).join(""));
+    expect(readMockOutput(stderr)).toBe("");
+    const envelope = JSON.parse(readMockOutput(stdout));
 
     expect(envelope).toMatchObject({
       ok: true,
       data: {
         root: expectedRoot,
+        target: "docs/development",
         options: {
-          level: 3,
-          pattern: "Auth*",
+          level: 1,
+          pattern: "HTTP*",
+          path: "docs/development",
         },
         tree: {
           kind: "directory",
@@ -245,6 +314,7 @@ describe("tree tree command action", () => {
           metadata: {
             title: "Root Node",
             description: "Root description",
+            owners: ["alice"],
           },
           hasNode: true,
         },
@@ -253,34 +323,36 @@ describe("tree tree command action", () => {
     expect(envelope.data.tree.children).toEqual([
       {
         kind: "directory",
-        name: "domains",
-        relativePath: "domains",
+        name: "docs",
+        relativePath: "docs",
         depth: 1,
         metadata: {
-          title: "Domains",
-          description: "Product domains",
+          title: "Docs",
+          description: "Documentation",
+          owners: ["alice"],
         },
         hasNode: true,
         children: [
           {
             kind: "directory",
-            name: "api",
-            relativePath: "domains/api",
+            name: "development",
+            relativePath: "docs/development",
             depth: 2,
             metadata: {
-              title: "API",
-              description: "-",
+              title: "Development",
+              owners: ["alice"],
             },
             hasNode: true,
             children: [
               {
                 kind: "file",
-                name: "auth.md",
-                relativePath: "domains/api/auth.md",
+                name: "http.md",
+                relativePath: "docs/development/http.md",
                 depth: 3,
                 metadata: {
-                  title: "Auth Leaf",
-                  description: "Login flows",
+                  title: "HTTP Leaf",
+                  description: "HTTP routes",
+                  owners: ["alice"],
                 },
                 hasNode: false,
                 children: [],
@@ -301,30 +373,86 @@ describe("tree tree command action", () => {
     process.env.FIRST_TREE_JSON = "1";
     setJsonMode(process.env.FIRST_TREE_JSON === "1");
 
-    runTreeTreeCommand(context(commandWithOptions({ level: "0" }), { json: false }));
+    runTreeTreeCommand(context(commandWithOptions({ level: "0" }, ["docs/development"]), { json: false }));
 
-    expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toBe("");
-    expect(JSON.parse(stdout.mock.calls.map((call) => String(call[0])).join(""))).toMatchObject({
+    expect(readMockOutput(stderr)).toBe("");
+    expect(JSON.parse(readMockOutput(stdout))).toMatchObject({
       ok: true,
       data: {
         root: expectedRoot,
+        target: "docs/development",
         options: {
           level: 0,
+          path: "docs/development",
         },
         tree: {
           name: "knowledge",
-          children: [],
+          children: [
+            {
+              name: "docs",
+              children: [
+                {
+                  name: "development",
+                  children: [],
+                },
+              ],
+            },
+          ],
         },
       },
     });
   });
 
-  it("rejects negative and non-integer levels with a stable error envelope", () => {
+  it("rejects invalid paths with a stable error envelope", () => {
+    const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       throw new ProcessExit(typeof code === "number" ? code : 0);
     });
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({}, ["missing"])))).toThrow(ProcessExit);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_INVALID_PATH",
+        message: 'Path "missing" is not an existing directory.',
+      },
+    });
+  });
+
+  it("rejects repo-outside paths with a stable error envelope", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({}, [".."])))).toThrow(ProcessExit);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_INVALID_PATH",
+        message: 'Path ".." is outside the git repository.',
+      },
+    });
+  });
+
+  it("rejects negative and non-integer levels with a stable error envelope", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    process.chdir(root);
 
     expect(() => parseTreeLevel("-1")).toThrow("Invalid --level");
     expect(() => parseTreeLevel("1.5")).toThrow("Invalid --level");
@@ -332,8 +460,8 @@ describe("tree tree command action", () => {
     expect(() => runTreeTreeCommand(context(commandWithOptions({ level: "-1" })))).toThrow(ProcessExit);
 
     expect(exit).toHaveBeenCalledWith(1);
-    expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe("");
-    expect(JSON.parse(stderr.mock.calls.map((call) => String(call[0])).join(""))).toEqual({
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
       ok: false,
       error: {
         code: "TREE_TREE_INVALID_LEVEL",

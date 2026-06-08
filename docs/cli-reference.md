@@ -351,29 +351,52 @@ install (see PR following #844).
 ```
 first-tree tree
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
-└── tree [-L depth] [-P pattern]             # browse Context Tree nodes as a hierarchy
+└── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
 
 Run `first-tree tree verify --help` for options.
 
-`first-tree tree tree` starts at the current directory, renders directory
-nodes from each `NODE.md`, and renders Markdown leaf nodes other than
-`NODE.md`, `AGENTS.md`, and `CLAUDE.md`. It skips hidden paths and common
-generated directories (`node_modules`, `__pycache__`, `dist`, `build`,
-`.next`, `.turbo`). Metadata comes only from YAML frontmatter; missing
-`title` or `description` prints `-`.
+`first-tree tree tree [path]` resolves `path` relative to the current
+working directory, then renders from the current git repository root down
+to that target directory and its descendants. Without `path`, the target is
+the current directory. The target must be an existing directory inside the
+current git repo.
+
+Directory nodes come from that directory's `NODE.md`. Leaf nodes come from
+Markdown files other than `NODE.md`, `AGENTS.md`, and `CLAUDE.md`. A
+Markdown file is renderable only when its YAML frontmatter has a non-empty
+string `title` and a non-empty array `owners`; `description` is optional.
+The `owners` field is used for filtering and included in JSON, but is not
+shown in human output. Hidden paths and common generated directories
+(`node_modules`, `__pycache__`, `dist`, `build`, `.next`, `.turbo`) are
+skipped.
+
+Human output is written as a tree whose node labels use:
+
+```text
+relative/path/ [Title] -> Description
+relative/path.md [Title]
+```
+
+Directory labels end with `/`. The repository root line uses the repo
+directory name, for example `first-tree-context/ [Context Tree] -> Root
+index for the First Tree context tree.`. When `description` is missing,
+the `-> Description` suffix is omitted.
 
 Options:
 
-- `-L, --level <depth>` — maximum display depth, where the current directory is depth `0`.
+- `-L, --level <depth>` — maximum descendant depth below the target directory. Ancestors from the git repo root to the target are always kept. For path-tolerant CLI use, `tree tree -L docs/development` is treated as `tree tree docs/development`; `tree tree -L 2 docs/development` applies depth `2` to that path.
 - `-P, --pattern <pattern>` — case-sensitive shell-style glob filter matched against relative path, filename, `title`, and `description`; matching descendants keep their ancestors visible.
 
 With global `--json` or `FIRST_TREE_JSON=1`, `first-tree tree tree`
-emits a single `{ ok: true, data }` envelope on stdout. `data.tree`
-contains the same pruned hierarchy as structured nodes with
-`kind`, `name`, `relativePath`, `depth`, `metadata`, `hasNode`, and
-`children` fields. Human tree text is written to stderr so stdout stays
-reserved for machine-readable JSON.
+emits a single `{ ok: true, data }` envelope on stdout. `data.root` is the
+git repo root, `data.target` is the resolved target directory relative to
+that root, and `data.options` records the parsed `level`, `pattern`, and
+effective `path`. `data.tree` contains the same filtered hierarchy as
+structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
+`hasNode`, and `children` fields; `metadata` includes `title`, optional
+`description`, and `owners`. Human tree text is written to stderr so stdout
+stays reserved for machine-readable JSON.
 
 ## Environment variables
 
