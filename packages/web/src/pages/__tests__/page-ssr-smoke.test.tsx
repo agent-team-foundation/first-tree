@@ -963,9 +963,11 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Profile");
 
     for (const [route, expected] of [
-      ["/agents/agent-1/runtime", "Runtime"],
+      // Repos render on the Environment (runtime) tab now; Tools & skills
+      // (resources route) lists only skills + MCP.
+      ["/agents/agent-1/runtime", "Team web"],
       ["/agents/agent-1/prompt", "Effective instructions"],
-      ["/agents/agent-1/resources", "Team web"],
+      ["/agents/agent-1/resources", "Integrations (MCP)"],
     ] as const) {
       expect(
         renderPage(

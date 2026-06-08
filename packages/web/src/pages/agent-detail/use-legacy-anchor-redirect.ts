@@ -18,7 +18,8 @@ const HASH_TO_TAB: Record<string, string> = {
   "agent-cfg-mcp": "capabilities",
   "ad-advanced": "capabilities",
   "agent-cfg-env": "runtime",
-  "agent-cfg-git": "capabilities",
+  // Repos moved to the Environment (runtime) tab.
+  "agent-cfg-git": "runtime",
   // Lifecycle lives at the bottom of Profile — keep the danger anchor alive.
   "ad-danger": "profile",
 };
