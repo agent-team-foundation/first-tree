@@ -73,7 +73,7 @@ export const inboxRecoverFrameSchema = z.object({
 });
 export type InboxRecoverFrame = z.infer<typeof inboxRecoverFrameSchema>;
 
-export const inboxRecoverRejectedReasonSchema = z.enum(["agent_not_bound", "chat_id_required", "recover_failed"]);
+export const inboxRecoverRejectedReasonSchema = z.enum(["agent_not_bound", "recover_failed"]);
 export type InboxRecoverRejectedReason = z.infer<typeof inboxRecoverRejectedReasonSchema>;
 
 export const inboxRecoverAcceptedFrameSchema = z.object({
