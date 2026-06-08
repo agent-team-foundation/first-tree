@@ -89,6 +89,10 @@ export type GitMirrorManagerOptions = {
  *   - `skipped-dirty`         left as-is: working tree had local changes
  *   - `skipped-local-commits` left as-is: branch has local commits ahead of upstream
  *   - `skipped-in-use`        left as-is: another live session is using it
+ *   - `stale-offline`         left as-is: fetch failed with a transient network
+ *                             error on an existing usable checkout — degraded to
+ *                             the last-good local source instead of aborting the
+ *                             session (see step (4) in `ensureSourceRepo`)
  */
 export type SourceRepoOutcome =
   | "cloned"
@@ -97,7 +101,8 @@ export type SourceRepoOutcome =
   | "unchanged"
   | "skipped-dirty"
   | "skipped-local-commits"
-  | "skipped-in-use";
+  | "skipped-in-use"
+  | "stale-offline";
 
 export interface GitMirrorManager {
   /**
@@ -401,6 +406,24 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * so the subsequent fetch + `checkout -B` track the configured upstream
    * instead of silently serving the old one.
    */
+  /**
+   * True when `absTarget`'s current `remote.origin.url` already canonically
+   * matches the configured `url` — i.e. reconcileOrigin would NOT repoint origin
+   * to a different repo. Mirrors reconcileOrigin's own canonical comparison.
+   * Gates the transient `stale-offline` degrade: serving the local checkout is
+   * only safe when it is the SAME repo. Treats an unreadable / missing origin as
+   * "not matching" (fail closed).
+   */
+  async function originCanonicallyMatches(absTarget: string, url: string): Promise<boolean> {
+    try {
+      const { stdout } = await git(["config", "--get", "remote.origin.url"], absTarget, 10_000);
+      const current = stdout.trim();
+      return current.length > 0 && canonicalizeRepoUrl(current) === canonicalizeRepoUrl(url);
+    } catch {
+      return false;
+    }
+  }
+
   async function reconcileOrigin(absTarget: string, url: string): Promise<void> {
     let current = "";
     try {
@@ -656,10 +679,61 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         }
 
         // (4) Managed standalone clone → reconcile origin, fetch, then update when safe.
+        //
+        // Capture whether origin ALREADY canonically matched the configured
+        // upstream *before* reconcileOrigin can repoint it. The transient
+        // degrade below is only safe for the SAME repo: if this call is
+        // repointing origin to a different repo and the confirming fetch then
+        // fails, the local checkout is the OLD repo's content and must NOT be
+        // served as the newly-configured source.
+        const originMatchedBeforeFetch = await originCanonicallyMatches(absTarget, url);
         try {
           await reconcileOrigin(absTarget, url);
           await fetchClone(absTarget, url);
         } catch (err) {
+          const stderr = err instanceof Error ? err.message : String(err);
+
+          // Degrade-on-transient-fetch-failure: when GitHub is briefly
+          // unreachable (a network blip, not an auth/corrupt/TLS-trust fault)
+          // and a usable checkout of the SAME repo already exists on disk, do
+          // NOT abort session start/resume — leave the clone at its current
+          // commit and continue on the last-good source. The agent stays
+          // answerable (e.g. to debug the very outage that broke the network),
+          // and the next session's fetch recovers it implicitly. Same "left at
+          // current commit" contract as the skipped-* outcomes; the only new
+          // thing is that the fetch itself didn't succeed.
+          //
+          // Strictly gated — every one of these must hold, else fail closed:
+          //   • high-confidence transient *network* error (not auth / corrupt /
+          //     TLS-trust / our own timeout / repo-not-found);
+          //   • `absTarget` is a real standalone clone with a resolvable HEAD;
+          //   • origin already matched the configured upstream (no repoint —
+          //     "configured repo changed but fetch could not confirm it" fails
+          //     closed);
+          //   • any pinned `ref` already resolves locally (never serve a
+          //     checkout that predates a just-changed ref the fetch couldn't
+          //     confirm).
+          // Silently serving a stale checkout otherwise would mask a real,
+          // non-self-healing problem.
+          if (isLikelyTransientNetworkError(stderr) && isStandaloneClone(absTarget) && originMatchedBeforeFetch) {
+            let usableHead = false;
+            try {
+              await headCommit(absTarget);
+              usableHead = true;
+            } catch {
+              usableHead = false;
+            }
+            const refResolvesLocally =
+              !ref || (await gitOk(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], absTarget, 10_000));
+            if (usableHead && refResolvesLocally) {
+              log?.warn(
+                { gitUrl: url, clonePath: absTarget, stderr: stderr.slice(0, 1024) },
+                "source-repo fetch failed (transient network) — using existing local checkout, left at current commit (stale)",
+              );
+              return finish("stale-offline");
+            }
+          }
+
           log?.warn(
             {
               gitUrl: url,
@@ -672,7 +746,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
                     : err instanceof GitMirrorError
                       ? "git-failed"
                       : "unknown",
-              stderr: err instanceof Error ? err.message.slice(0, 1024) : String(err).slice(0, 1024),
+              stderr: stderr.slice(0, 1024),
             },
             "source-repo fetch failed",
           );
@@ -907,6 +981,13 @@ export function isLikelyTransientNetworkError(message: string): boolean {
     /\bNetwork is unreachable\b/i.test(message) ||
     /Could not resolve host(?:name)?/i.test(message) ||
     /Temporary failure in name resolution/i.test(message) ||
+    // curl 7: `Failed to connect to <host> port <n> ...` and curl 28's
+    // `Couldn't connect to server` — a server unreachable / connect timeout.
+    /Failed to connect to\s+\S+\s+port\s+\d+/i.test(message) ||
+    /Couldn't connect to server/i.test(message) ||
+    // HTTP/2 transport framing fault (libcurl `CURLE_HTTP2`) seen as a
+    // mid-handshake `Error in the HTTP2 framing layer` against github.com.
+    /Error in the HTTP[/]?2 framing layer/i.test(message) ||
     /\bRPC failed\b/i.test(message) ||
     /\bearly EOF\b/i.test(message) ||
     /the remote end hung up unexpectedly/i.test(message) ||

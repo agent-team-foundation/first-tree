@@ -284,6 +284,63 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     expect(upstream).not.toBe(localHead);
   });
 
+  it("degrades to the existing checkout when a SAME-repo fetch fails transiently (stale-offline)", async () => {
+    // Issue #865: an existing, usable clone of the SAME repo + a transient
+    // network fetch failure must NOT abort — leave the checkout at its current
+    // commit and continue on the last-good source so the agent stays answerable.
+    //
+    // Deterministic repro of the incident shape: build a real standalone clone
+    // whose origin ALREADY matches the configured upstream, then point that
+    // upstream at an unreachable endpoint so the next fetch fails transiently
+    // (connection refused). Because origin already matches the configured url,
+    // reconcileOrigin does NOT repoint (this is the "same repo" path, not a
+    // repoint). Port 1 ≠ 443 also disables the https→ssh protocol fallback,
+    // keeping it a same-protocol transient failure.
+    const { url: bare, tip } = seedBareRepo();
+    const clonePath = join(newDataDir(), "repo");
+    execSync(`git clone -q ${bare} ${clonePath}`);
+    const unreachable = "https://127.0.0.1:1/same-repo.git";
+    execSync(`git remote set-url origin ${unreachable}`, { cwd: clonePath });
+    const m = makeManager();
+    const r = await m.ensureSourceRepo({ url: unreachable, clonePath });
+    expect(r.outcome).toBe("stale-offline");
+    expect(r.headCommit).toBe(tip); // left at current commit, not aborted
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(tip);
+    // gitWithNetworkRetry burns its full transient-retry budget (~3 backed-off
+    // attempts) before the degrade fires, so allow more than the 5s default.
+  }, 30_000);
+
+  it("fails closed when origin is being repointed to a different repo, even on a transient fetch failure", async () => {
+    // Boundary flagged by codex-developer + reproduced by QA on issue #865: the
+    // degrade must apply only to "same repo, fetch temporarily unavailable", NOT
+    // to "configured repo changed but the confirming fetch could not run". Here
+    // the configured url repoints to a DIFFERENT repo whose fetch fails
+    // transiently — serving repo A's checkout as repo B would be wrong, so this
+    // must fail closed.
+    const { url, tip } = seedBareRepo();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    const first = await m.ensureSourceRepo({ url, clonePath });
+    expect(first.headCommit).toBe(tip);
+    await expect(m.ensureSourceRepo({ url: "https://127.0.0.1:1/different.git", clonePath })).rejects.toBeInstanceOf(
+      GitMirrorError,
+    );
+  }, 30_000);
+
+  it("still fails closed on a hard (non-transient) fetch failure even with an existing checkout", async () => {
+    // Negative case for the stale-offline degrade: a deterministic, non-network
+    // failure (repository does not exist) must still bubble up — degrading would
+    // mask a real, non-self-healing problem.
+    const { url, tip } = seedBareRepo();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    const first = await m.ensureSourceRepo({ url, clonePath });
+    expect(first.headCommit).toBe(tip);
+    await expect(
+      m.ensureSourceRepo({ url: "file:///first-tree-nonexistent-repo-865.git", clonePath }),
+    ).rejects.toBeInstanceOf(GitMirrorError);
+  });
+
   it("throws a conflict for a non-managed occupant with no managed root (preserves operator data)", async () => {
     const m = makeManager();
     const clonePath = join(newDataDir(), "repo");
@@ -503,6 +560,10 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     // distinct from `SSL_ERROR_SYSCALL` and distinct from the cert-verify
     // failures (negative case below). Narrow pattern by design.
     "fatal: unable to access 'https://github.com/x/y/': error:0A000126:SSL routines::unexpected eof while reading",
+    // Issue #865 — the two verbatim operator-reported forms that motivated the
+    // degrade-on-transient-fetch-failure path. Neither was matched before.
+    "git fetch --prune origin exited with code 128: fatal: unable to access 'https://github.com/agent-team-foundation/first-tree/': Error in the HTTP2 framing layer",
+    "error: RPC failed; curl 28 Failed to connect to github.com port 443 after 75002 ms: Couldn't connect to server",
   ])("matches transient network error: %s", (msg) => {
     expect(isLikelyTransientNetworkError(msg)).toBe(true);
   });
