@@ -14,6 +14,8 @@ import {
 import { dirname, join, relative } from "node:path";
 
 import { appendEvent, previewText } from "./events.js";
+import type { EvalReporter } from "./reporter.js";
+import { stripShimTraceLines } from "./reporter.js";
 import type { CommandResult, FirstTreeReadEvalCase, FixtureValidation, RunPaths } from "./types.js";
 
 const DOMAIN_NODE_TARGET_COUNT = 100;
@@ -360,6 +362,7 @@ function initializeGitRepo(paths: RunPaths, contextTreePath: string): void {
     runCommand("git", ["init", "--initial-branch=main"], contextTreePath),
     runCommand("git", ["config", "user.email", "eval@example.invalid"], contextTreePath),
     runCommand("git", ["config", "user.name", "First Tree Eval"], contextTreePath),
+    runCommand("git", ["config", "commit.gpgsign", "false"], contextTreePath),
     runCommand("git", ["add", "."], contextTreePath),
     runCommand("git", ["commit", "-m", "chore: seed eval context tree"], contextTreePath),
     runCommand("git", ["init", "--bare", originPath], paths.runRoot),
@@ -416,9 +419,25 @@ function append(event) {
   appendFileSync(EVENTS_PATH, JSON.stringify({ timestamp: new Date().toISOString(), ...event }) + "\\n", "utf8");
 }
 
+function formatArg(arg) {
+  return /^[A-Za-z0-9_./:=@+-]+$/.test(arg) ? arg : JSON.stringify(arg);
+}
+
+function commandLine(argv) {
+  return argv.map(formatArg).join(" ");
+}
+
+function trace(message) {
+  if (process.env.FIRST_TREE_EVAL_VERBOSE === "1") {
+    const caseId = process.env.FIRST_TREE_EVAL_CASE_ID || "unknown";
+    process.stderr.write("[" + caseId + "] " + message + "\\n");
+  }
+}
+
 const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "first_tree_dev_call", phase, argv, cwd: process.cwd() });
+trace("first-tree-dev call: " + commandLine(argv));
 
 const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE_DEV || TSX_BIN;
 const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE_DEV ? argv : [CLI_ENTRY, ...argv];
@@ -443,33 +462,37 @@ if (result.error) {
     stdoutPreview: preview(result.stdout || ""),
     stderrPreview: preview(result.stderr || ""),
   });
+  trace("first-tree-dev result: exit=127 error=" + preview(String(result.error)));
   process.exit(127);
 }
 
+const exitCode = result.status == null ? 1 : result.status;
 append({
   type: "first_tree_dev_result",
   phase,
   argv,
   cwd: process.cwd(),
-  exitCode: result.status == null ? 1 : result.status,
+  exitCode,
   signal: result.signal || null,
   stdoutPreview: preview(result.stdout || ""),
   stderrPreview: preview(result.stderr || ""),
 });
+trace("first-tree-dev result: exit=" + exitCode);
 
-process.exit(result.status == null ? 1 : result.status);
+process.exit(exitCode);
 `;
 
   writeText(shimPath, script);
   chmodSync(shimPath, 0o755);
 }
 
-export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths): string | null {
+export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths, reporter: EvalReporter): string | null {
   appendEvent(paths.eventsPath, {
     caseId: evalCase.id,
     type: "fixture_setup_started",
     workspaceKind: evalCase.workspaceKind,
   });
+  reporter.fixtureSetupStarted(evalCase.workspaceKind);
 
   installFirstTreeReadSkill(paths.repoRoot, paths.workspacePath);
   const contextTreePath = evalCase.workspaceKind === "context-tree" ? writeContextTreeFixture(paths) : null;
@@ -480,6 +503,7 @@ export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths): 
     type: "fixture_setup_finished",
     workspaceKind: evalCase.workspaceKind,
   });
+  reporter.fixtureSetupFinished(evalCase.workspaceKind, contextTreePath);
 
   return contextTreePath;
 }
@@ -529,8 +553,15 @@ function isDirectory(path: string): boolean {
   }
 }
 
-export function validateFixture(paths: RunPaths, contextTreePath: string | null): FixtureValidation {
+export function validateFixture(
+  paths: RunPaths,
+  contextTreePath: string | null,
+  caseId: string,
+  verbose: boolean,
+  reporter: EvalReporter,
+): FixtureValidation {
   if (contextTreePath === null) {
+    reporter.fixtureValidationSkipped();
     return {
       domainNodeCount: 0,
       errors: [],
@@ -557,7 +588,7 @@ export function validateFixture(paths: RunPaths, contextTreePath: string | null)
     errors.push(`missing ${missing.reason}: ${missing.path}`);
   }
 
-  const verifyResult = runFixtureVerify(paths, contextTreePath);
+  const verifyResult = runFixtureVerify(paths, contextTreePath, caseId, verbose, reporter);
   if (verifyResult.exitCode !== 0) {
     errors.push(
       `tree verify failed with exit ${verifyResult.exitCode}: ${previewText(verifyResult.stderr || verifyResult.stdout)}`,
@@ -574,32 +605,45 @@ export function validateFixture(paths: RunPaths, contextTreePath: string | null)
   };
 }
 
-function runFixtureVerify(paths: RunPaths, contextTreePath: string): CommandResult {
+function runFixtureVerify(
+  paths: RunPaths,
+  contextTreePath: string,
+  caseId: string,
+  verbose: boolean,
+  reporter: EvalReporter,
+): CommandResult {
+  const args = ["tree", "verify", "--tree-path", contextTreePath];
   appendEvent(paths.eventsPath, {
     contextTreePath,
     type: "fixture_validation_started",
   });
+  reporter.fixtureValidationStarted(args, contextTreePath);
 
   const env = {
     ...process.env,
     FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+    FIRST_TREE_EVAL_CASE_ID: caseId,
     FIRST_TREE_EVAL_PHASE: "fixture_validation",
+    FIRST_TREE_EVAL_VERBOSE: verbose ? "1" : "0",
     PATH: `${paths.binDir}:${process.env.PATH ?? ""}`,
   };
-  const result = spawnSync("first-tree-dev", ["tree", "verify", "--tree-path", contextTreePath], {
+  const result = spawnSync("first-tree-dev", args, {
     cwd: paths.workspacePath,
     encoding: "utf8",
     env,
     maxBuffer: 20 * 1024 * 1024,
   });
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  reporter.shimTraceLines(stderr);
 
   const commandResult: CommandResult = {
-    args: ["tree", "verify", "--tree-path", contextTreePath],
+    args,
     command: "first-tree-dev",
     cwd: paths.workspacePath,
     exitCode: result.status ?? 1,
-    stderr: result.stderr ?? "",
-    stdout: result.stdout ?? "",
+    stderr: stripShimTraceLines(stderr),
+    stdout,
   };
 
   appendEvent(paths.eventsPath, {
@@ -608,6 +652,7 @@ function runFixtureVerify(paths: RunPaths, contextTreePath: string): CommandResu
     stdoutPreview: previewText(commandResult.stdout),
     type: "fixture_validation_finished",
   });
+  reporter.fixtureValidationFinished(commandResult);
 
   return commandResult;
 }

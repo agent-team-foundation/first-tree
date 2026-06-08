@@ -44,6 +44,7 @@ export type CliOptions = {
   json: boolean;
   model: string | null;
   validateFixtures: boolean;
+  verbose: boolean;
 };
 
 export type EvalMetrics = {

@@ -11,6 +11,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:first-tree-read
   pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case <id>
   pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
+  pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --verbose
   pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures
 
 Options:
@@ -19,6 +20,7 @@ Options:
   --model <model>          Pass a model override to codex exec.
   --codex-bin <path>       Codex binary to execute. Defaults to CODEX_BIN or codex.
   --validate-fixtures      Validate fixtures only; no model calls.
+  --verbose                Print live readable progress to stderr.
   --help                   Show this help.
 `;
 }
@@ -38,6 +40,7 @@ function parseArgs(args: readonly string[]): CliOptions {
     json: false,
     model: process.env.CODEX_MODEL ?? null,
     validateFixtures: false,
+    verbose: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -66,6 +69,10 @@ function parseArgs(args: readonly string[]): CliOptions {
     }
     if (arg === "--validate-fixtures") {
       options.validateFixtures = true;
+      continue;
+    }
+    if (arg === "--verbose") {
+      options.verbose = true;
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -100,11 +107,13 @@ async function main(): Promise<void> {
   const summaries = [];
 
   for (const evalCase of selectedCases) {
-    process.stderr.write(
-      options.validateFixtures
-        ? `Validating fixture: ${evalCase.id}\n`
-        : `Running first-tree-read eval case: ${evalCase.id}\n`,
-    );
+    if (!options.verbose) {
+      process.stderr.write(
+        options.validateFixtures
+          ? `Validating fixture: ${evalCase.id}\n`
+          : `Running first-tree-read eval case: ${evalCase.id}\n`,
+      );
+    }
     summaries.push(await runFirstTreeReadCase(packageRoot(), evalCase, options, runStartedAt));
   }
 

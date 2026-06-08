@@ -5,6 +5,8 @@ import { createInterface } from "node:readline";
 import { appendEvent, previewText, readEvents } from "./events.js";
 import { createFirstTreeDevShim, createRunPaths, setupFixture, validateFixture } from "./fixture.js";
 import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
+import type { EvalReporter } from "./reporter.js";
+import { createEvalReporter, isShimTraceLine } from "./reporter.js";
 import { driftNote, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
 
@@ -16,10 +18,7 @@ function codexArgs(options: CliOptions, workspacePath: string, prompt: string): 
     "--ephemeral",
     "--cd",
     workspacePath,
-    "--sandbox",
-    "danger-full-access",
-    "--ask-for-approval",
-    "never",
+    "--dangerously-bypass-approvals-and-sandbox",
     "-c",
     "shell_environment_policy.inherit=all",
   ];
@@ -32,36 +31,50 @@ function codexArgs(options: CliOptions, workspacePath: string, prompt: string): 
   return args;
 }
 
-async function consumeCodexStdout(eventsPath: string, stream: NodeJS.ReadableStream): Promise<void> {
+async function consumeCodexStdout(
+  eventsPath: string,
+  stream: NodeJS.ReadableStream,
+  reporter: EvalReporter,
+): Promise<void> {
   const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
   for await (const line of lines) {
     if (!line.trim()) continue;
     try {
+      const event = JSON.parse(line);
       appendEvent(eventsPath, {
-        event: JSON.parse(line),
+        event,
         type: "codex_event",
       });
+      reporter.codexEvent(event);
     } catch {
       appendEvent(eventsPath, {
         linePreview: previewText(line),
         type: "codex_stdout",
       });
+      reporter.codexStdoutLine(line);
     }
   }
 }
 
-async function consumeStderr(eventsPath: string, stream: NodeJS.ReadableStream): Promise<void> {
+async function consumeStderr(eventsPath: string, stream: NodeJS.ReadableStream, reporter: EvalReporter): Promise<void> {
   const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
   for await (const line of lines) {
     if (!line.trim()) continue;
-    appendEvent(eventsPath, {
-      linePreview: previewText(line),
-      type: "codex_stderr",
-    });
+    if (!isShimTraceLine(line)) {
+      appendEvent(eventsPath, {
+        linePreview: previewText(line),
+        type: "codex_stderr",
+      });
+    }
+    reporter.codexStderrLine(line);
   }
 }
 
-async function waitForChildExit(child: ReturnType<typeof spawn>, eventsPath: string): Promise<number> {
+async function waitForChildExit(
+  child: ReturnType<typeof spawn>,
+  eventsPath: string,
+  reporter: EvalReporter,
+): Promise<number> {
   return await new Promise((resolve) => {
     let settled = false;
     child.once("error", (error) => {
@@ -71,6 +84,7 @@ async function waitForChildExit(child: ReturnType<typeof spawn>, eventsPath: str
         error: error.message,
         type: "codex_spawn_error",
       });
+      reporter.codexSpawnError(error);
       resolve(127);
     });
     child.once("close", (code, signal) => {
@@ -81,6 +95,7 @@ async function waitForChildExit(child: ReturnType<typeof spawn>, eventsPath: str
         signal,
         type: "codex_process_closed",
       });
+      reporter.codexProcessFinished(code ?? 1);
       resolve(code ?? 1);
     });
   });
@@ -91,6 +106,7 @@ async function runCodex(
   evalCase: FirstTreeReadEvalCase,
   workspacePath: string,
   eventsPath: string,
+  reporter: EvalReporter,
 ): Promise<number> {
   const args = codexArgs(options, workspacePath, evalCase.prompt);
   appendEvent(eventsPath, {
@@ -98,11 +114,14 @@ async function runCodex(
     caseId: evalCase.id,
     type: "codex_run_started",
   });
+  reporter.codexProcessStarted(args);
 
   const env = {
     ...process.env,
     FIRST_TREE_EVAL_EVENTS: eventsPath,
+    FIRST_TREE_EVAL_CASE_ID: evalCase.id,
     FIRST_TREE_EVAL_PHASE: "model",
+    FIRST_TREE_EVAL_VERBOSE: options.verbose ? "1" : "0",
     PATH: `${join(dirname(workspacePath), "bin")}:${process.env.PATH ?? ""}`,
   };
 
@@ -115,10 +134,10 @@ async function runCodex(
   const stdout = child.stdout;
   const stderr = child.stderr;
   const streamTasks: Promise<void>[] = [];
-  if (stdout) streamTasks.push(consumeCodexStdout(eventsPath, stdout));
-  if (stderr) streamTasks.push(consumeStderr(eventsPath, stderr));
+  if (stdout) streamTasks.push(consumeCodexStdout(eventsPath, stdout, reporter));
+  if (stderr) streamTasks.push(consumeStderr(eventsPath, stderr, reporter));
 
-  const exitCode = await waitForChildExit(child, eventsPath);
+  const exitCode = await waitForChildExit(child, eventsPath, reporter);
   await Promise.all(streamTasks);
 
   appendEvent(eventsPath, {
@@ -138,18 +157,20 @@ export async function runFirstTreeReadCase(
 ): Promise<CaseRunSummary> {
   const startedAt = new Date().toISOString();
   const paths = createRunPaths(packageRoot, evalCase, startedAt);
+  const reporter = createEvalReporter(evalCase.id, options.verbose);
   appendEvent(paths.eventsPath, {
     caseId: evalCase.id,
     runStartedAt,
     type: "case_started",
   });
+  reporter.caseStarted();
 
   createFirstTreeDevShim(paths);
-  const contextTreePath = setupFixture(evalCase, paths);
-  const fixtureValidation = validateFixture(paths, contextTreePath);
+  const contextTreePath = setupFixture(evalCase, paths, reporter);
+  const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
   const runnerExitCode = options.validateFixtures
     ? 0
-    : await runCodex(options, evalCase, paths.workspacePath, paths.eventsPath);
+    : await runCodex(options, evalCase, paths.workspacePath, paths.eventsPath, reporter);
   const metrics = deriveMetrics(readEvents(paths.eventsPath), fixtureValidation, runnerExitCode);
   const passed = options.validateFixtures
     ? fixtureOnlyPassed(fixtureValidation)
@@ -171,6 +192,7 @@ export async function runFirstTreeReadCase(
   };
 
   writeCaseSummaries(summary);
+  reporter.summaryWritten(paths.summaryJsonPath, paths.summaryMdPath);
   appendEvent(paths.eventsPath, {
     caseId: evalCase.id,
     passed,
@@ -178,6 +200,7 @@ export async function runFirstTreeReadCase(
     summaryMdPath: paths.summaryMdPath,
     type: "case_finished",
   });
+  reporter.caseFinished(passed);
 
   return summary;
 }

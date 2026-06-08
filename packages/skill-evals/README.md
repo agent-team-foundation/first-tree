@@ -10,6 +10,8 @@ quota.
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
+pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --verbose
+pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger --validate-fixtures --verbose
 ```
 
 The runner creates isolated temporary workspaces under
@@ -23,6 +25,10 @@ Each case writes:
   `first-tree-dev` invocations.
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report.
+
+Use `--verbose` to print live, human-readable progress to stderr. It can be
+combined with `--case`, `--validate-fixtures`, and `--json`; stdout remains the
+final summary table or aggregate JSON.
 
 Fixture-only validation is available without model calls:
 
