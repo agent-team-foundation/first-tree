@@ -352,18 +352,21 @@ was tacked onto the bottom of the PR audit trail. Do not just
 delete the section.
 - *Delete*: the PR-id list, the "Shipped in #X" / "Landed in #Y"
   annotations, the "PR-by-PR audit trail" framing.
-- *Keep → Future Work*: any work item the section carried (a
-  pending fix, a deferred migration, an unresolved question, a
-  known gap) — move it into a `## Future Work` section as a
-  present-tense bullet, dropping the PR id.
-- *Keep → fold into body sections*: any current-state architectural
-  fact (e.g. "the rollback path lives at X") or surviving rationale
+- *Move to a GitHub Issue*: any actionable work item the section
+  carried (a pending fix, a deferred migration, an unresolved
+  question, a known gap) — open a present-tense Issue in the
+  relevant repo, dropping the PR id. Active tree nodes do not
+  carry `## Work` or `## Future Work` sections; actionable work
+  lives in Issues (see the team-practice node for the team's own
+  rule on this).
+- *Fold into body sections*: any current-state architectural fact
+  (e.g. "the rollback path lives at X") or surviving rationale
   (e.g. "we chose Postgres because the team was familiar with it")
   — fold it into the relevant Decision / Rationale / Constraints /
   Cross-Domain section as a present-tense statement.
-The audit trail itself stays in `git log`; the node retains the
-durable work, current-state claims, and rationale that the section
-was carrying alongside the PR list.
+The audit trail itself stays in `git log`; the actionable work
+moves to Issues; the durable current-state claims and rationale
+stay in the node body.
 
 ## CLI Surface
 
