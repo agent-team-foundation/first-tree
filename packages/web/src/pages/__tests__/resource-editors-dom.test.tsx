@@ -307,7 +307,7 @@ describe("resource editors", () => {
     await act(async () => root.unmount());
   });
 
-  it("creates a skill with body and metadata", async () => {
+  it("creates a skill with name + content, exposing no namespace/metadata inputs", async () => {
     const { root } = await render();
     await click(byAria("Add Skill"));
     await setInputValue(input("skill-name"), "rel");
@@ -317,13 +317,16 @@ describe("resource editors", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(body, "hello world");
       body.dispatchEvent(new InputEvent("input", { bubbles: true }));
     });
-    await click(byText("Add")); // metadata row
-    await setInputValue(lastByPlaceholder("key"), "team");
-    await setInputValue(lastByPlaceholder("value"), "core");
+    // Namespace + metadata were removed (schema-leaking, no guidance); the body
+    // field is now labelled "Content".
+    expect(document.getElementById("skill-namespace")).toBeNull();
+    expect(document.body.textContent).toContain("Content");
+    expect(document.body.textContent).not.toContain("Metadata");
     await click(byText("Create"));
 
     const payload = resourceMocks.createTeamResource.mock.calls[0]?.[0]?.payload;
-    expect(payload).toEqual(expect.objectContaining({ name: "rel", body: "hello world", metadata: { team: "core" } }));
+    expect(payload).toEqual(expect.objectContaining({ name: "rel", body: "hello world", metadata: {} }));
+    expect("namespace" in payload).toBe(false);
     await act(async () => root.unmount());
   });
 

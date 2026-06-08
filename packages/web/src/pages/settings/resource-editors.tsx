@@ -89,9 +89,9 @@ function record(payload: unknown, key: string): [string, string][] {
   }
   return [];
 }
-// Entries whose value is NOT a string — the string-only KeyValueField can't
-// display these, so we preserve them untouched across an edit instead of
-// dropping them (skill `metadata` is z.record(string, unknown)).
+// Non-string entries of a record payload. Skill `metadata` is
+// z.record(string, unknown) and is no longer user-editable; this preserves any
+// non-string values an imported skill carried so an edit doesn't drop them.
 function nonStringRecord(payload: unknown, key: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (payload && typeof payload === "object" && key in payload) {
@@ -329,56 +329,6 @@ function StringListField({
         ))}
         <div>
           <Button type="button" variant="outline" size="xs" onClick={() => onChange([...values, ""])}>
-            <Plus className="h-3.5 w-3.5" /> Add
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Repeatable key/value rows (MCP headers, skill metadata). */
-function KeyValueField({
-  label,
-  pairs,
-  onChange,
-}: {
-  label: string;
-  pairs: [string, string][];
-  onChange: (next: [string, string][]) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
-      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        {pairs.map(([k, v], i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: positional rows, no stable id
-          <div key={i} className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <Input
-              value={k}
-              className="mono"
-              placeholder="key"
-              onChange={(e) => onChange(pairs.map((p, j) => (j === i ? [e.target.value, p[1]] : p)))}
-            />
-            <Input
-              value={v}
-              className="mono"
-              placeholder="value"
-              onChange={(e) => onChange(pairs.map((p, j) => (j === i ? [p[0], e.target.value] : p)))}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              aria-label={`Remove ${label} row`}
-              onClick={() => onChange(pairs.filter((_, j) => j !== i))}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
-        <div>
-          <Button type="button" variant="outline" size="xs" onClick={() => onChange([...pairs, ["", ""]])}>
             <Plus className="h-3.5 w-3.5" /> Add
           </Button>
         </div>
@@ -676,14 +626,19 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
   // Editable field is the skill id (`payload.name`); prefill from it so an edit
   // round-trips the real skill name, not a divergent display name.
   const [name, setName] = useState(str(init?.payload, "name") || init?.name || "");
-  const [namespace, setNamespace] = useState(str(init?.payload, "namespace"));
   const [description, setDescription] = useState(str(init?.payload, "description"));
   const [body, setBody] = useState(str(init?.payload, "body"));
-  const [metadata, setMetadata] = useState<[string, string][]>(record(init?.payload, "metadata"));
   const [mode, setMode] = useState<DefaultMode>(asDefaultMode(init?.defaultEnabled ?? "available"));
-  // Non-string metadata values aren't editable in the key/value UI; keep them
-  // so an edit doesn't silently drop them.
-  const preservedMeta = nonStringRecord(init?.payload, "metadata");
+  // Namespace and metadata are no longer editable here: they leaked the storage
+  // schema into a form a human authoring a team skill has no use for (namespace
+  // is a plugin-origin concept; metadata is a free-form bag with zero guidance).
+  // Still round-trip whatever an imported SKILL.md carried so editing a skill
+  // never silently drops those values.
+  const preservedNamespace = str(init?.payload, "namespace");
+  const preservedMeta = {
+    ...nonStringRecord(init?.payload, "metadata"),
+    ...pairsToRecord(record(init?.payload, "metadata")),
+  };
 
   const payload = (): CreateTeamResource => {
     const skillName = name.trim() || "skill";
@@ -694,10 +649,10 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
       defaultEnabled: mode,
       payload: {
         name: skillName,
-        ...(namespace.trim() ? { namespace: namespace.trim() } : {}),
+        ...(preservedNamespace.trim() ? { namespace: preservedNamespace.trim() } : {}),
         description: description.trim() || skillName,
         body,
-        metadata: { ...preservedMeta, ...pairsToRecord(metadata) },
+        metadata: preservedMeta,
       },
     };
   };
@@ -706,31 +661,31 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
     <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
       <Field id="skill-name" label="Name" value={name} onChange={setName} placeholder="release-notes" mono />
       <Field
-        id="skill-namespace"
-        label="Namespace"
-        hint="Optional."
-        value={namespace}
-        onChange={setNamespace}
-        placeholder="team"
-        mono
-      />
-      <Field
         id="skill-desc"
         label="Description"
         value={description}
         onChange={setDescription}
         placeholder="What this skill does"
       />
-      <BodyField id="skill-body" value={body} onChange={setBody} />
-      <KeyValueField label="Metadata" pairs={metadata} onChange={setMetadata} />
+      <BodyField id="skill-body" label="Content" value={body} onChange={setBody} />
       <DefaultModeField value={mode} onChange={setMode} />
     </ModalEditor>
   );
 }
 
-function BodyField({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+function BodyField({
+  id,
+  value,
+  onChange,
+  label = "Body",
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  label?: string;
+}) {
   return (
-    <FieldShell id={id} label="Body">
+    <FieldShell id={id} label={label}>
       <Textarea
         id={id}
         value={value}
