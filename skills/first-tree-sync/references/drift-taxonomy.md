@@ -43,8 +43,13 @@ and reaches a different conclusion.
 **Example:** tree node says "We use Postgres" but a migration RFC merged
 last quarter switched the relevant service to ClickHouse.
 
-**Fix bias:** mark the old node as superseded and link the new decision.
-Don't delete history — preserve the rationale.
+**Fix bias:** rewrite the node **in place** to the new current state.
+Carry forward the *rationale* for the new decision (under
+"Rationale") — but do not add a "Superseded by…" footer, a
+"Previously…" section, or a `> YYYY-MM-DD update:` banner. The old
+state stays in `git log` and any `raw-context/` source for the
+change; the node itself is single-state. See
+`first-tree-context` Hard Rule 8 ("No history").
 
 ## `code-not-synced`
 

@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.6.0
+version: 0.7.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -33,7 +33,7 @@ Three objects shape every tree task:
 Tree files:
 
 - `NODE.md` at each directory describes the domain and indexes children
-- leaf `*.md` files capture one decision, constraint, or supersession
+- leaf `*.md` files capture one decision, constraint, or relationship
 - `members/<id>/NODE.md` is one member's responsibilities and review scope
 - frontmatter (`title`, `owners`, optional `soft_links`, `lastReviewed`,
   `decisionLocksCode`) plus the body — see "Node Shape" below
@@ -52,9 +52,9 @@ tree then rots faster than the code and becomes a trap.
 | A choice between alternatives and why the alternatives lost        | Function signatures, types, class hierarchies    |
 | A constraint that shapes future implementation across repos        | Step-by-step implementation walkthroughs         |
 | An ownership change or clarified review path                       | API request / response shapes                    |
-| A deprecation, supersession, or "we used to do X, now we do Y"     | Test fixtures, snapshot data, build / CI config  |
+| The **current** constraint that resulted from a deprecation        | Test fixtures, snapshot data, build / CI config  |
 | A new relationship between two domains                             | Bug fixes that do not change a public contract   |
-| Rationale that would not be obvious from the diff alone            | Refactors that preserve behaviour                |
+| Rationale that would not be obvious from the diff alone            | Historical narrative of how we got here — "previously…", "originally…", "5/29 起…", `> YYYY-MM-DD update:` banners (lives in `git log` and `raw-context/`) |
 
 ## Reading the Tree
 
@@ -127,6 +127,17 @@ follow them.
    `decisionLocksCode: true` reverses that — the tree wins and any
    code drift escalates to a human. Set the flag only on explicit
    human instruction.
+8. **No history — capture current state, not how we got here.** A
+   node states what is true *now* and why; it does not narrate prior
+   states. Past states live in `git log` (and, when worth keeping as
+   raw material, in `raw-context/`). When a decision changes,
+   **rewrite the node in place** to the new current state — do not
+   append a `> 2026-XX-XX update:` banner, a "previously we…" /
+   "originally…" / "5/29 起…" paragraph, or a "Superseded by X"
+   footer. The only history that belongs is rationale (*why* the
+   current state was chosen over alternatives), and that lives in
+   the **Rationale** section as a present-tense argument, not a
+   timeline.
 
 ### The Double Test (judgment filter)
 
@@ -152,9 +163,14 @@ The candidate belongs in the tree **only when both answers are yes**.
 Every node carries content along three axes. Two go in the body; one
 goes in frontmatter:
 
-- **What** — the decision, design choice, or constraint. **High-level**:
-  the durable claim, not the implementation. The Source-System Boundary
-  table above is the canonical guide for which "whats" belong.
+- **What** — the decision, design choice, or constraint, **as it
+  stands today**. High-level: the durable claim, not the
+  implementation; current state, not a timeline of prior states.
+  When the decision changes, rewrite *What* in place to reflect the
+  new state; do not preserve the old state alongside it (that is
+  what `git log` and `raw-context/` are for). The Source-System
+  Boundary table above is the canonical guide for which "whats"
+  belong.
 - **Why** — the rationale: alternatives considered, why they lost, the
   thinking that produced the decision. **A node without a Why is a
   fact, not a decision record.** Why-content is the most commonly lost
@@ -291,6 +307,17 @@ Belongs: nothing. Naming is implementation detail.
 Belongs: constraints that came out of it ("session tokens must be
 HMAC-signed before storage"); the accountable owner.
 Does not belong: the specific vulnerabilities or how they were patched.
+
+**Source: PR that flips a default — e.g. "approvals required" goes
+from 1 to 0; an OAuth signature mode is replaced by HMAC.**
+Belongs: the *current* rule stated as fact ("approvals required = 0";
+"session tokens are HMAC-signed"); the *current* rationale (why the
+new rule is the right one), present-tense.
+Does not belong: a `> 2026-XX-XX update:` banner, a "previously we
+required 1 approval" sentence, a "5/29 起..." paragraph, a
+"Superseded by..." footer. **Rewrite the relevant node in place** to
+the new current state. The old state stays only in `git log` (and
+any `raw-context/` source for the change).
 
 ## CLI Surface
 
