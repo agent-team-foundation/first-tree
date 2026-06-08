@@ -179,15 +179,16 @@ of those separate from an existing node, edit; don't add. Tree bloat
 **Add a leaf** (new `.md` in an existing domain) only when **all three**
 hold:
 
-1. **Distinct identity** — a 3–7 word noun-phrase title that does not
-   overlap any sibling. If the title needs an "and" to be complete, it
-   is probably two decisions or belongs inside an existing leaf.
+1. **Distinct identity** — a noun-phrase title that does not overlap
+   any sibling. If the title needs an "and" to be complete, it is
+   probably two decisions or belongs inside an existing leaf.
 2. **Distinct anchor** — at least one of:
    - `owners` differ from the parent / siblings;
    - another domain would `soft_links` to *this specific decision*,
      not the surrounding domain;
-   - it carries its own Decision + Rationale + Constraints sections
-     that would force an existing leaf to mix two unrelated topics.
+   - the source naturally has its own Decision / Rationale /
+     Constraints that cannot co-live with any existing leaf without
+     mixing two unrelated topics.
 3. **Passes the Double Test** (above).
 
 If only one or two hold, edit the existing leaf — append to its
@@ -199,8 +200,9 @@ shapes:
 
 - *Greenfield* — open a new domain because 3+ leaves are visibly
   landing there in the near term.
-- *Restructure* — a domain has 3 cohesive leaves at the same level
-  and a 4th is about to land; promote the group into a subdomain.
+- *Restructure* — a domain has 3 cohesive leaves at the same level;
+  promote the group into a subdomain. (A 4th leaf about to land is a
+  natural trigger, but the gate is already met at 3.)
 
 Below 3, flat leaves at the same level is fine — flat is cheap, and
 premature splitting just adds cross-references.
@@ -252,9 +254,10 @@ decisionLocksCode: false
 - `decisionLocksCode` — reverses the default conflict-resolution rule
   (see Hard Rule 7).
 
-Body sections, in this order. These carry the *What* and *Why* axes of
-the Content Model; *Who* lives in frontmatter, not the body. Omit any
-section you do not need:
+Body sections, in this order. These carry the *What* (Decision /
+Constraints / Cross-Domain) and *Why* (Rationale) axes of the Content
+Model, plus a source pointer; *Who* lives in frontmatter, not the body.
+Omit any section you do not need:
 
 1. **Decision** — one paragraph stating the durable claim.
 2. **Rationale** — why this decision; why the alternatives lost.
