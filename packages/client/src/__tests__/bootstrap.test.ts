@@ -17,10 +17,10 @@ import {
   BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
   CONTEXT_TREE_HEAD_REL,
-  FIRST_TREE_RUNTIME_DIR,
-  IDENTITY_JSON_REL,
   type ContextTreeBinding,
   deepEqualIdentity,
+  FIRST_TREE_RUNTIME_DIR,
+  IDENTITY_JSON_REL,
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
@@ -277,9 +277,7 @@ describe("bootstrapWorkspace", () => {
     });
 
     expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins")).isDirectory()).toBe(true);
-    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "utf-8")).toBe(
-      "target-dir",
-    );
+    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "utf-8")).toBe("target-dir");
     expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins")).isFile()).toBe(true);
     expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins"), "utf-8")).toBe("target-file");
     expect(existsSync(join(workspace, ".agent"))).toBe(false);
