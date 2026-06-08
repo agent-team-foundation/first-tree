@@ -16,6 +16,8 @@ import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
  */
 describe("GET /me/clients", () => {
   const getApp = useTestApp();
+  const getSemverApp = useTestApp({ commandVersion: "0.6.0" });
+  const getProdApp = useTestApp({ channel: "prod", commandVersion: "0.6.0" });
 
   /** Attach `userId` to a fresh side-org as `role`. */
   async function attachMember(
@@ -82,6 +84,51 @@ describe("GET /me/clients", () => {
     // org where the caller is a non-admin member — proving the route is
     // user-scope, not org-admin-scope.
     expect(ids).toEqual([a.clientId, aSecondInOrgB].sort());
+  });
+
+  it("includes the server command version hint only when the client is behind on dev/staging", async () => {
+    const app = getSemverApp();
+    const ctx = await createAdminContext(app);
+    await app.db.update(clients).set({ sdkVersion: "0.5.0" }).where(eq(clients.id, ctx.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string; serverCommandVersion?: string }>;
+    const row = body.find((c) => c.id === ctx.clientId);
+    expect(row?.serverCommandVersion).toBe("0.6.0");
+
+    await app.db.update(clients).set({ sdkVersion: "0.6.0" }).where(eq(clients.id, ctx.clientId));
+
+    const freshRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(freshRes.statusCode).toBe(200);
+    const freshBody = freshRes.json() as Array<{ id: string; serverCommandVersion?: string }>;
+    const freshRow = freshBody.find((c) => c.id === ctx.clientId);
+    expect(freshRow?.serverCommandVersion).toBeUndefined();
+  });
+
+  it("omits the server command version hint in prod", async () => {
+    const app = getProdApp();
+    const ctx = await createAdminContext(app);
+    await app.db.update(clients).set({ sdkVersion: "0.5.0" }).where(eq(clients.id, ctx.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string; serverCommandVersion?: string }>;
+    const row = body.find((c) => c.id === ctx.clientId);
+    expect(row?.serverCommandVersion).toBeUndefined();
   });
 
   it("requires authentication", async () => {
@@ -174,6 +221,7 @@ describe("GET /me/clients", () => {
  */
 describe("GET /orgs/:orgId/clients (admin team view)", () => {
   const getApp = useTestApp();
+  const getSemverApp = useTestApp({ commandVersion: "0.6.0" });
 
   it("includes capabilities for clients in the team listing", async () => {
     const app = getApp();
@@ -206,6 +254,23 @@ describe("GET /orgs/:orgId/clients (admin team view)", () => {
     expect(row).toBeDefined();
     expect(row?.capabilities["claude-code"]?.state).toBe("unauthenticated");
     expect(row?.capabilities["claude-code"]?.sdkVersion).toBe("0.8.1");
+  });
+
+  it("includes server command version for stale clients in the team listing", async () => {
+    const app = getSemverApp();
+    const admin = await createAdminContext(app);
+    await app.db.update(clients).set({ sdkVersion: "0.5.0" }).where(eq(clients.id, admin.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string; serverCommandVersion?: string }>;
+    const row = body.find((c) => c.id === admin.clientId);
+    expect(row).toBeDefined();
+    expect(row?.serverCommandVersion).toBe("0.6.0");
   });
 
   it("returns an empty capabilities object for clients that have not reported any", async () => {

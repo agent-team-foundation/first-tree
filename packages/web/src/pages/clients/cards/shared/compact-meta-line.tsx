@@ -48,6 +48,9 @@ export function CompactMetaLine({
   // identifier with no hint that it's the First Tree CLI version.
   if (client.sdkVersion) segments.push(`first-tree ${client.sdkVersion}`);
   if (client.os) segments.push(client.os);
+  if (client.serverCommandVersion) {
+    segments.push(`Update available ${client.serverCommandVersion}`);
+  }
   if (segments.length === 0) return null;
   return (
     <div

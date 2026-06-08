@@ -3,6 +3,7 @@ import { requireOrgAdmin } from "../../scope/require-org.js";
 import { expiryToSeconds } from "../../services/auth.js";
 import * as clientService from "../../services/client.js";
 import { serializeDate } from "../../utils.js";
+import { clientCommandVersionHint } from "../client-command-version.js";
 
 /**
  * Class B — `/api/v1/orgs/:orgId/clients`. Lists clients belonging to
@@ -28,6 +29,7 @@ export async function orgClientRoutes(app: FastifyInstance): Promise<void> {
       lastSeenAt: c.lastSeenAt.toISOString(),
       capabilities: clientService.extractCapabilities(c.metadata),
       lastUpdateAttempt: clientService.extractLastUpdateAttempt(c.metadata),
+      ...clientCommandVersionHint(app, c.sdkVersion),
     }));
   });
 }

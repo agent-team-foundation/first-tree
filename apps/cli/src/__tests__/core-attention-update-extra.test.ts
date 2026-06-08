@@ -11,6 +11,7 @@ const bootstrapMocks = vi.hoisted(() => ({
 }));
 
 const printLineMock = vi.hoisted(() => vi.fn());
+const cliFetchMock = vi.hoisted(() => vi.fn());
 
 const childRegistryMocks = vi.hoisted(() => ({
   classify: vi.fn(),
@@ -21,6 +22,7 @@ const childRegistryMocks = vi.hoisted(() => ({
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
+vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../core/output.js", () => ({ print: { line: printLineMock } }));
 vi.mock("@first-tree/client", () => childRegistryMocks);
 vi.mock("node:child_process", () => ({ spawnSync: spawnSyncMock }));
@@ -34,6 +36,14 @@ function installSpawn(child: MockChild): void {
   childRegistryMocks.getChildProcessRegistry.mockReturnValue({
     spawn: vi.fn(() => ({ child })),
   });
+}
+
+function jsonResponse(body: unknown, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: vi.fn(async () => body),
+  } as unknown as Response;
 }
 
 beforeEach(() => {
@@ -169,5 +179,25 @@ describe("core update helpers", () => {
 
     spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "latest\n", stderr: "" });
     expect(fetchLatestVersion()).toEqual({ ok: false, reason: "npm view returned non-semver value: latest" });
+  });
+
+  it("fetches the server command version from bootstrap config", async () => {
+    const { fetchServerCommandVersion } = await import("../core/update.js");
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ serverCommandVersion: "v0.6.0" }));
+    await expect(fetchServerCommandVersion()).resolves.toEqual({ ok: true, version: "0.6.0" });
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "https://hub.example/api/v1/bootstrap/config",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ serverCommandVersion: "latest" }));
+    await expect(fetchServerCommandVersion()).resolves.toEqual({
+      ok: false,
+      reason: "server returned non-semver version: latest",
+    });
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({}, false, 503));
+    await expect(fetchServerCommandVersion()).resolves.toEqual({ ok: false, reason: "server returned HTTP 503" });
   });
 });

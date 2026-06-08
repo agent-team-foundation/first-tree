@@ -39,6 +39,7 @@ export type HubClient = {
   /** Server-derived from offline duration vs refresh-token TTL. See clientAuthStateSchema in shared. */
   authState: "ok" | "expired";
   sdkVersion: string | null;
+  serverCommandVersion?: string | null;
   hostname: string | null;
   os: string | null;
   agentCount: number;

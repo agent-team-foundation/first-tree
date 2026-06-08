@@ -112,6 +112,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     status: overrides.status ?? "connected",
     authState: overrides.authState ?? "ok",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
+    ...(overrides.serverCommandVersion !== undefined ? { serverCommandVersion: overrides.serverCommandVersion } : {}),
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",
     agentCount: overrides.agentCount ?? 1,
@@ -420,6 +421,32 @@ describe("ClientsPage computer cards", () => {
     await click(exactButton(container, "Connect"));
     await waitForText(document.body, "Connect computer");
     await click(exactButton(document.body, "Cancel"));
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows the server-reported update target when a computer is behind", async () => {
+    const { ClientsPage } = await import("../../clients.js");
+    const updating = client({
+      id: "client-update",
+      hostname: "needs-update",
+      sdkVersion: "0.5.0",
+      serverCommandVersion: "0.6.0",
+    });
+    activityMocks.listOrgClients.mockResolvedValueOnce([updating]);
+    activityMocks.listClients.mockResolvedValueOnce([updating]);
+    activityMocks.getActivityOverview.mockResolvedValueOnce({
+      clients: 1,
+      agents: [],
+      running: 0,
+      total: 0,
+      byState: {},
+    });
+
+    const { container, root } = await renderDom(<ClientsPage />);
+
+    await waitForText(container, "needs-update");
+    await waitForText(container, "Update available 0.6.0");
 
     await act(async () => root.unmount());
   });

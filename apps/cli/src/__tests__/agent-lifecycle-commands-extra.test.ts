@@ -32,11 +32,13 @@ const coreMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   fetchLatestVersion: vi.fn(),
+  fetchServerCommandVersion: vi.fn(),
   findStaleAliases: vi.fn(),
   formatStaleReason: vi.fn((reason: string) => reason),
   getClientServiceStatus: vi.fn(),
   installClientService: vi.fn(),
   installGlobalLatest: vi.fn(),
+  installGlobalSpec: vi.fn(),
   isServiceSupported: vi.fn(),
   PACKAGE_NAME: "first-tree",
   promptAddAgent: vi.fn(),
@@ -104,6 +106,10 @@ beforeEach(() => {
   bootstrapMocks.saveAgentConfig.mockReturnValue(join(tempDir, "agents", "kael"));
   coreMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   coreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
+  coreMocks.fetchLatestVersion.mockReturnValue({ ok: true, version: "99.0.0" });
+  coreMocks.fetchServerCommandVersion.mockResolvedValue({ ok: true, version: "99.0.0" });
+  coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
+  coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
   cliFetchMock.mockReset();
   coreMocks.promptAddAgent.mockResolvedValue({ name: "kael", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
@@ -301,19 +307,28 @@ describe("logout and upgrade commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("npm i -g first-tree");
 
     coreMocks.detectInstallMode.mockReturnValue("global");
-    coreMocks.fetchLatestVersion.mockReturnValueOnce({ ok: false, reason: "registry down" });
+    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: false, reason: "server down" });
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "first-tree-dev upgrade --latest",
+    );
 
-    coreMocks.fetchLatestVersion.mockReturnValue({ ok: true, version: "99.0.0" });
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--check"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Upgrade available");
 
-    coreMocks.installGlobalLatest.mockResolvedValueOnce({ ok: false, reason: "permission denied" });
+    coreMocks.fetchLatestVersion.mockReturnValueOnce({ ok: true, version: "100.0.0" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--check", "--latest"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("100.0.0");
+
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--latest", "--no-restart"]);
+    expect(coreMocks.installGlobalLatest).toHaveBeenCalled();
+
+    coreMocks.installGlobalSpec.mockResolvedValueOnce({ ok: false, reason: "permission denied" });
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
 
-    coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--no-restart"]);
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Skipping restart");
+    expect(coreMocks.installGlobalSpec).toHaveBeenCalledWith("99.0.0");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree-dev daemon restart");
 
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runTopLevel(registerUpgradeCommand, ["upgrade"]);

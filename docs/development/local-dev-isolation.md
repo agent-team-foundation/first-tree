@@ -99,8 +99,9 @@ first-tree-staging login <staging-token>
 ## When to use which install
 
 - **`scripts/dev-install.sh`** — actively iterating on CLI / client /
-  shared code. Build is local, no npm round-trip. `upgrade` short-circuits
-  because `detectInstallMode()` returns `"source"`.
+  shared code. Build is local, no server or npm upgrade round-trip.
+  `upgrade` short-circuits because `detectInstallMode()` returns
+  `"source"`.
 - **Direct `pnpm --filter ... dev`** — running parts of the system in
   isolation (server-only, web-only) where you don't need the full CLI
   surface. `tsx` runs against source.
@@ -114,9 +115,10 @@ first-tree-staging login <staging-token>
   you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
 - Global npm packages. If you have both staging and prod installed,
-  upgrading either (e.g. via `first-tree-staging upgrade`) goes through
-  npm and affects your machine-wide install. Dev is immune because its
-  source-checkout install mode short-circuits the upgrade path.
+  upgrading either (e.g. via `first-tree-staging upgrade`) follows that
+  channel's configured server target and affects your machine-wide install.
+  `--latest` bypasses the server and goes directly to npm. Dev is immune
+  because its source-checkout install mode short-circuits the upgrade path.
 
 ## Tearing down a dev install
 
