@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -441,6 +441,36 @@ describe("tree tree command action", () => {
       error: {
         code: "TREE_TREE_INVALID_PATH",
         message: 'Path ".." is outside the git repository.',
+      },
+    });
+  });
+
+  it("rejects symlink targets that escape the repo with a stable error envelope", (ctx) => {
+    const root = makeTreeFixture();
+    const outsideRoot = makeTempDir("ft-tree-tree-outside-");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    writeNode(outsideRoot, "Outside Node", "Escaped context");
+
+    try {
+      symlinkSync(outsideRoot, join(root, "outside"), "dir");
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({}, ["outside"])))).toThrow(ProcessExit);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_INVALID_PATH",
+        message: 'Path "outside" is outside the git repository.',
       },
     });
   });

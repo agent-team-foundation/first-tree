@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
@@ -208,6 +208,10 @@ function isDirectory(path: string): boolean {
 function isPathInsideOrEqual(root: string, target: string): boolean {
   const relativePath = relative(root, target);
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function isRealPathInsideOrEqual(root: string, target: string): boolean {
+  return isPathInsideOrEqual(realpathSync(root), realpathSync(target));
 }
 
 function splitRelativePath(path: string): string[] {
@@ -480,7 +484,7 @@ function resolveTreeTarget(cwd: string, path: string): ResolvedTreeTarget {
     throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${path}" is not an existing directory.`);
   }
 
-  if (!isPathInsideOrEqual(repoRoot, targetPath)) {
+  if (!isRealPathInsideOrEqual(repoRoot, targetPath)) {
     throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${path}" is outside the git repository.`);
   }
 
@@ -494,12 +498,12 @@ function resolveSnapshotTarget(root: string, target: string | undefined): Resolv
   const repoRoot = resolve(root);
   const targetPath = resolve(repoRoot, target ?? "");
 
-  if (!isPathInsideOrEqual(repoRoot, targetPath)) {
-    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is outside the git repository.`);
-  }
-
   if (!isDirectory(targetPath)) {
     throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is not an existing directory.`);
+  }
+
+  if (!isRealPathInsideOrEqual(repoRoot, targetPath)) {
+    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is outside the git repository.`);
   }
 
   return {
