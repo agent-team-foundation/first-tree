@@ -4,6 +4,9 @@ import {
   inboxAckFrameSchema,
   inboxAckRejectedFrameSchema,
   inboxDeliverFrameSchema,
+  inboxRecoverAcceptedFrameSchema,
+  inboxRecoverFrameSchema,
+  inboxRecoverRejectedFrameSchema,
 } from "../schemas/inbox-frames.js";
 
 const baseClientMessage = {
@@ -200,6 +203,54 @@ describe("inboxAckRejectedFrameSchema", () => {
       entryId: 7,
       ref: "ack_123",
       reason: "not_found_or_not_bound",
+    });
+    expect(res.success).toBe(true);
+  });
+});
+
+describe("inboxRecoverFrameSchema", () => {
+  it("accepts a chat recovery request", () => {
+    const res = inboxRecoverFrameSchema.safeParse({
+      type: "inbox:recover",
+      ref: "recover_123",
+      agentId: "agent_1",
+      chatId: "chat_1",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects an empty chat id", () => {
+    const res = inboxRecoverFrameSchema.safeParse({
+      type: "inbox:recover",
+      ref: "recover_123",
+      agentId: "agent_1",
+      chatId: "",
+    });
+    expect(res.success).toBe(false);
+  });
+});
+
+describe("inboxRecoverAcceptedFrameSchema", () => {
+  it("accepts a recovery confirmation", () => {
+    const res = inboxRecoverAcceptedFrameSchema.safeParse({
+      type: "inbox:recover:accepted",
+      ref: "recover_123",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      resetCount: 2,
+    });
+    expect(res.success).toBe(true);
+  });
+});
+
+describe("inboxRecoverRejectedFrameSchema", () => {
+  it("accepts a recovery rejection", () => {
+    const res = inboxRecoverRejectedFrameSchema.safeParse({
+      type: "inbox:recover:rejected",
+      ref: "recover_123",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      reason: "agent_not_bound",
     });
     expect(res.success).toBe(true);
   });

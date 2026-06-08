@@ -113,7 +113,7 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
   );
 }
 
-async function pollInboxInner(db: Database, inboxId: string, limit: number) {
+async function pollInboxInner(db: Database, inboxId: string, limit: number, chatId?: string) {
   return db.transaction(async (tx) => {
     // Claim pending notify=true entries (active triggers). Silent rows
     // (notify=false) are intentionally excluded — they piggy-back on the
@@ -123,13 +123,31 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
     // pollers / WS-push handlers from claiming the same row twice. The outer
     // UPDATE then flips status to 'delivered' on whichever rows the subquery
     // successfully locked — canonical PG SKIP-LOCKED queue idiom.
-    const targetIds = tx
-      .select({ id: inboxEntries.id })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)))
-      .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
-      .limit(limit)
-      .for("update", { skipLocked: true });
+    const targetIds =
+      chatId === undefined
+        ? tx
+            .select({ id: inboxEntries.id })
+            .from(inboxEntries)
+            .where(
+              and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)),
+            )
+            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .limit(limit)
+            .for("update", { skipLocked: true })
+        : tx
+            .select({ id: inboxEntries.id })
+            .from(inboxEntries)
+            .where(
+              and(
+                eq(inboxEntries.inboxId, inboxId),
+                eq(inboxEntries.chatId, chatId),
+                eq(inboxEntries.status, "pending"),
+                eq(inboxEntries.notify, true),
+              ),
+            )
+            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .limit(limit)
+            .for("update", { skipLocked: true });
 
     const claimed = await tx
       .update(inboxEntries)
@@ -309,6 +327,24 @@ export async function claimBacklogForPush(
 ): Promise<InboxEntryWithMessage[]> {
   return withSpan("inbox.deliver.backlog", { "inbox.id": inboxId, "inbox.backlog.limit": limit }, () =>
     pollInboxInner(db, inboxId, limit),
+  );
+}
+
+/**
+ * Chat-scoped WS backlog path used after same-socket recovery. It mirrors
+ * `claimBacklogForPush`, but limits the claim to the chat that asked for
+ * recovery so another chat's backlog cannot consume the recovery window.
+ */
+export async function claimBacklogForPushForChat(
+  db: Database,
+  inboxId: string,
+  chatId: string,
+  limit: number,
+): Promise<InboxEntryWithMessage[]> {
+  return withSpan(
+    "inbox.deliver.backlog.chat",
+    { "inbox.id": inboxId, "chat.id": chatId, "inbox.backlog.limit": limit },
+    () => pollInboxInner(db, inboxId, limit, chatId),
   );
 }
 
@@ -512,6 +548,41 @@ export async function ackThroughEntryIdForBoundAgents(
 }
 
 export const ackEntryByIdForBoundAgents = ackThroughEntryIdForBoundAgents;
+
+export type RecoverUnackedForScopeResult = {
+  resetEntryIds: number[];
+};
+
+/**
+ * Reset delivered-but-unacked notify rows for a single inbox, optionally
+ * narrowed to one chat, and return the concrete ids that were reset. The id
+ * list lets the WS layer remove only those entries from same-socket in-flight
+ * accounting before it redelivers them.
+ */
+export async function recoverUnackedForScope(
+  db: Database,
+  opts: { inboxId: string; chatId?: string },
+): Promise<RecoverUnackedForScopeResult> {
+  const reset = await db
+    .update(inboxEntries)
+    .set({ status: "pending" })
+    .where(
+      opts.chatId === undefined
+        ? and(
+            eq(inboxEntries.inboxId, opts.inboxId),
+            eq(inboxEntries.status, "delivered"),
+            eq(inboxEntries.notify, true),
+          )
+        : and(
+            eq(inboxEntries.inboxId, opts.inboxId),
+            eq(inboxEntries.chatId, opts.chatId),
+            eq(inboxEntries.status, "delivered"),
+            eq(inboxEntries.notify, true),
+          ),
+    )
+    .returning({ id: inboxEntries.id });
+  return { resetEntryIds: reset.map((row) => row.id) };
+}
 
 /**
  * Reset every `delivered` entry across the given `inboxIds` back to `pending`

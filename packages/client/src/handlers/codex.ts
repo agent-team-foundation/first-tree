@@ -734,6 +734,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     const activeThread = thread;
     if (!activeThread) return;
 
+    sessionCtx.markMessagesConsumed(messages);
     const abort = new AbortController();
     currentAbort = abort;
     sessionCtx.setRuntimeState("working");

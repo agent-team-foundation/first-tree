@@ -847,7 +847,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     } else {
       sessionCtx.markCompleted();
     }
+    markCurrentPendingMessageConsumed(sessionCtx);
     stashedSdkMessage = null;
+  }
+
+  function pushPendingAckMessage(message: SessionMessage, sessionCtx: SessionContext): void {
+    const wasEmpty = pendingAckMessages.length === 0;
+    pendingAckMessages.push(message);
+    if (wasEmpty) sessionCtx.markMessagesConsumed(message);
+  }
+
+  function markCurrentPendingMessageConsumed(sessionCtx: SessionContext): void {
+    const current = pendingAckMessages[0];
+    if (current) sessionCtx.markMessagesConsumed(current);
   }
 
   async function pushInjectedMessage(
@@ -865,7 +877,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       stashedSdkMessage = sdkMsg;
       inputController?.push(sdkMsg);
-      pendingAckMessages.push(message);
+      pushPendingAckMessage(message, sessionCtx);
     } catch (err) {
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
       // `toSDKUserMessage` failed before the SDK ever saw the
@@ -1568,7 +1580,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(sdkMsg);
-      pendingAckMessages.push(message);
+      pushPendingAckMessage(message, sessionCtx);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -1631,7 +1643,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
           inputController?.push(sdkMsg);
-          if (message) pendingAckMessages.push(message);
+          if (message) pushPendingAckMessage(message, sessionCtx);
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
@@ -1675,7 +1687,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
-          if (message) pendingAckMessages.push(message);
+          if (message) pushPendingAckMessage(message, sessionCtx);
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
@@ -1691,7 +1703,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
-        if (message) pendingAckMessages.push(message);
+        if (message) pushPendingAckMessage(message, sessionCtx);
       }
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 

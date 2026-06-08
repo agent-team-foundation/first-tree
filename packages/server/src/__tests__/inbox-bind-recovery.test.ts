@@ -173,3 +173,64 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     expect(after[0]?.retryCount).toBe(0);
   });
 });
+
+describe("inbox same-socket chat recovery", () => {
+  const getApp = useTestApp();
+
+  it("resets delivered rows for one chat and drains only that chat", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `recover-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `recover-a2-${uid}` });
+
+    const chat1Res = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chat1Id = chat1Res.json().id;
+    const chat2Res = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chat2Id = chat2Res.json().id;
+
+    const msg1Res = await a1.request("POST", `/api/v1/agent/chats/${chat1Id}/messages`, {
+      format: "text",
+      content: "recover chat one",
+      receiverNames: [a2.agent.name],
+    });
+    const msg2Res = await a1.request("POST", `/api/v1/agent/chats/${chat2Id}/messages`, {
+      format: "text",
+      content: "recover chat two",
+      receiverNames: [a2.agent.name],
+    });
+
+    const claimed1 = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, msg1Res.json().id);
+    expect(claimed1).toHaveLength(1);
+    const claimed1Row = claimed1[0];
+    if (!claimed1Row) throw new Error("expected claimed chat1 inbox row");
+
+    const recovered = await inboxService.recoverUnackedForScope(app.db, {
+      inboxId: a2.agent.inboxId,
+      chatId: chat1Id,
+    });
+    expect(recovered.resetEntryIds).toEqual([claimed1Row.id]);
+
+    const drained = await inboxService.claimBacklogForPushForChat(app.db, a2.agent.inboxId, chat1Id, 10);
+    expect(drained.map((entry) => entry.id)).toEqual([claimed1Row.id]);
+
+    const chat2Rows = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, a2.agent.inboxId),
+          eq(inboxEntries.chatId, chat2Id),
+          eq(inboxEntries.notify, true),
+        ),
+      );
+    expect(chat2Rows).toHaveLength(1);
+    expect(chat2Rows[0]?.messageId).toBe(msg2Res.json().id);
+    expect(chat2Rows[0]?.status).toBe("pending");
+  });
+});

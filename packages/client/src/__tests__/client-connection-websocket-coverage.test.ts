@@ -390,6 +390,48 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     await expect(ackPromise).resolves.toBeUndefined();
   });
 
+  it("sends inbox recovery requests and settles on accepted or rejected frames", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const accepted = connection.sendInboxRecover("agent-1", "chat-1");
+    const recoverFrame = parseSent(socket, socket.sent.length - 1);
+    expect(recoverFrame).toMatchObject({ type: "inbox:recover", agentId: "agent-1", chatId: "chat-1" });
+    expect(typeof recoverFrame.ref).toBe("string");
+
+    socket.emitMessage({
+      type: "inbox:recover:accepted",
+      ref: recoverFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-1",
+      resetCount: 1,
+    });
+    await expect(accepted).resolves.toBeUndefined();
+
+    const rejected = connection.sendInboxRecover("agent-1", "chat-2");
+    const rejectFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "inbox:recover:rejected",
+      ref: rejectFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-2",
+      reason: "recover_failed",
+    });
+    await expect(rejected).rejects.toThrow("recover_failed");
+  });
+
   it("holds agent-scoped confirmed inbox ACKs until that agent is rebound on the current socket", async () => {
     const connection = await makeConnection();
     const internal = priv(connection);

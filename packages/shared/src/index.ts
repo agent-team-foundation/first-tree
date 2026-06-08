@@ -333,6 +333,10 @@ export type {
   InboxAckRejectedFrame,
   InboxAckRejectedReason,
   InboxDeliverFrame,
+  InboxRecoverAcceptedFrame,
+  InboxRecoverFrame,
+  InboxRecoverRejectedFrame,
+  InboxRecoverRejectedReason,
 } from "./schemas/inbox-frames.js";
 // -- WebSocket inbox data-plane frames --
 export {
@@ -342,6 +346,10 @@ export {
   inboxAckRejectedFrameSchema,
   inboxAckRejectedReasonSchema,
   inboxDeliverFrameSchema,
+  inboxRecoverAcceptedFrameSchema,
+  inboxRecoverFrameSchema,
+  inboxRecoverRejectedFrameSchema,
+  inboxRecoverRejectedReasonSchema,
 } from "./schemas/inbox-frames.js";
 export {
   INVITATION_DEFAULT_TTL_DAYS,

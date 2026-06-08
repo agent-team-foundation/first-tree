@@ -73,6 +73,14 @@ export type SessionContext = HandlerContext & {
   markCompleted: () => void;
 
   /**
+   * Mark the concrete message or fused batch as entered into the current
+   * provider turn. This is an in-memory boundary used by suspend: consumed
+   * entries can be ACKed when the turn is paused, while handler queues that
+   * have not entered the provider stay unacked for recovery.
+   */
+  markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
+
+  /**
    * Mark the concrete message or fused message batch a handler has actually
    * consumed. The runtime sends one `inbox:ack` for the last message's
    * `inboxEntryId`; the server interprets it as ack-through for the chat's
@@ -84,9 +92,8 @@ export type SessionContext = HandlerContext & {
 
   /**
    * Mark a concrete message or batch as abandoned by a retryable path
-   * (suspend, abort, timeout). The runtime must not let a later message in
-   * the same chat ack-through these entries, so it fails closed until the
-   * next bind reset redelivers from the server's oldest unacked entry.
+   * (abort, timeout, unknown failure). The runtime leaves the server-side
+   * entries unacked; a later chat recovery or bind reset redelivers them.
    */
   markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 

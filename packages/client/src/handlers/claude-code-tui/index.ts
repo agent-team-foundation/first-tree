@@ -321,6 +321,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
+    sessionCtx.markMessagesConsumed(messages);
     sessionCtx.setRuntimeState("working");
     turnAborted = false;
 
