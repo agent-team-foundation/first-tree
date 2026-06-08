@@ -26,6 +26,8 @@ const agentConfigMocks = vi.hoisted(() => ({
 const agentMocks = vi.hoisted(() => ({
   deleteAgent: vi.fn(),
   getAgent: vi.fn(),
+  listAgents: vi.fn(),
+  listAllAgents: vi.fn(),
   reactivateAgent: vi.fn(),
   rebindAgent: vi.fn(),
   suspendAgent: vi.fn(),
@@ -350,6 +352,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   authMock.value = { memberId: "member-self", role: "admin" };
   agentMocks.getAgent.mockResolvedValue(agent());
+  // Agent switcher list (admin → listAllAgents). Include a second agent so the
+  // switcher has a switch target.
+  const switcherAgents = {
+    items: [agent(), agent({ uuid: "agent-2", name: "nova", displayName: "Nova" })],
+    nextCursor: null,
+  };
+  agentMocks.listAllAgents.mockResolvedValue(switcherAgents);
+  agentMocks.listAgents.mockResolvedValue(switcherAgents);
   agentMocks.updateAgent.mockResolvedValue(agent());
   agentMocks.suspendAgent.mockResolvedValue(agent({ status: "suspended" }));
   agentMocks.reactivateAgent.mockResolvedValue(agent());
@@ -873,6 +883,26 @@ describe("AgentDetailPage", () => {
     await waitForCondition(
       () => !document.body.textContent?.includes("Leave with unsaved changes?"),
       "Expected leave guard to dismiss on cancel",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("guards switching to another agent via the switcher when the draft is dirty", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+    await waitForText(container, "Nova"); // switcher list loaded (Kael + Nova)
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+
+    // Clicking another agent in the switcher leaves the current agent → guarded.
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Nova")) ?? null);
+    await waitForText(document.body, "Leave with unsaved changes?");
+    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Leave with unsaved changes?"),
+      "Expected switcher leave guard to dismiss on cancel",
     );
 
     await act(async () => root.unmount());

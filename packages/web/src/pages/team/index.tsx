@@ -29,6 +29,12 @@ import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { formatRelative } from "../../lib/utils.js";
+import {
+  type AgentFilter,
+  matchesAgentScope,
+  readAgentFilterPreference,
+  writeAgentFilterPreference,
+} from "./agent-filter.js";
 import { type AgentRow, type HumanRow, type RowAction, TeamTable } from "./team-table.js";
 
 /**
@@ -64,8 +70,6 @@ type MemberEditTarget = {
   role: string;
 };
 
-type AgentFilter = "all" | "mine";
-
 /** Target for the suspend / delete confirm dialogs (adopted from main PR 673). */
 type AgentLifecycleTarget = {
   uuid: string;
@@ -74,26 +78,6 @@ type AgentLifecycleTarget = {
 
 const AGENT_PAGE_SIZE = 100;
 const MAX_AGENT_PAGES = 100;
-const AGENT_FILTER_STORAGE_KEY = "first-tree:team-agent-filter:v1";
-
-function readAgentFilterPreference(): AgentFilter {
-  if (typeof window === "undefined") return "all";
-  try {
-    const stored = window.localStorage?.getItem?.(AGENT_FILTER_STORAGE_KEY);
-    return stored === "mine" ? "mine" : "all";
-  } catch {
-    return "all";
-  }
-}
-
-function writeAgentFilterPreference(next: AgentFilter): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage?.setItem?.(AGENT_FILTER_STORAGE_KEY, next);
-  } catch {
-    // Preference storage is best-effort; the current in-memory filter still works.
-  }
-}
 
 export async function fetchAllAgents(
   fetchPage: (params: { limit: number; cursor?: string }) => Promise<{ items: Agent[]; nextCursor: string | null }>,
@@ -484,7 +468,7 @@ export function buildTeamData(args: {
     // Members only see their own private agents; admins see all.
     if (a.visibility === "private" && !isAdmin && a.managerId !== selfMemberId) return false;
     // `Mine` filter: across both groups, only agents the viewer manages.
-    if (filter === "mine" && a.managerId !== selfMemberId) return false;
+    if (!matchesAgentScope(a, filter, selfMemberId)) return false;
     return matchAgent(a);
   };
 

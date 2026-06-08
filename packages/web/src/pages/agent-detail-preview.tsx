@@ -2,6 +2,7 @@ import type { Agent, AgentResourcesOutput, AgentRuntimeConfig } from "@first-tre
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router";
+import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { ResourceTypeSection } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { PromptTab } from "./agent-detail/prompt-tab.js";
@@ -300,6 +301,15 @@ function buildClient(): QueryClient {
     },
   });
   client.setQueryData(["agent-resources", UUID], RESOURCES);
+  // Seed the agent switcher list (both admin/member keys, since preview auth is
+  // ambient). fetchAllAgents flattens to Agent[].
+  const switcherAgents: Agent[] = [
+    AGENT,
+    { ...AGENT, uuid: "agent-preview-2", name: "nova", displayName: "Nova", runtimeState: "working" },
+    { ...AGENT, uuid: "agent-preview-3", name: "atlas", displayName: "Atlas Researcher", runtimeState: null },
+  ];
+  client.setQueryData(["agents", "team-page", "admin"], switcherAgents);
+  client.setQueryData(["agents", "team-page", "member"], switcherAgents);
   return client;
 }
 
@@ -322,6 +332,17 @@ export function AgentDetailPreviewPage() {
     <QueryClientProvider client={client}>
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div className="mx-auto" style={{ maxWidth: 720, padding: "var(--sp-6) var(--sp-4)" }}>
+          <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
+            Agent switcher (vertical B)
+          </h1>
+          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+            Replaces the breadcrumb: ‹ Team + avatar-over-name items, current agent selected (brand ring), presence
+            dots. Switching is leave-guarded.
+          </p>
+          <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
+            <AgentSwitcherStrip currentAgent={AGENT} currentTabPath="profile" onNavigate={() => {}} />
+          </div>
+
           <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
             Environment tab — Repositories
           </h1>
