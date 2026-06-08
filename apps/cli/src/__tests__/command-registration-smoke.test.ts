@@ -103,10 +103,9 @@ describe("CLI command registration", () => {
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 
     const tree = command(root, "tree");
-    // Only `verify` survives — the rest of the namespace was retired in
-    // the 2026-06 cleanup (cloud now owns workspace + tree provisioning;
-    // client runtime inlines its own skill payload install).
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["verify"]);
+    // `verify` survived the 2026-06 cleanup, and `tree` is the narrow
+    // hierarchy browser added back for agents and scripted consumers.
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["tree", "verify"]);
   });
 
   it("keeps important options on high-risk commands", () => {
@@ -128,5 +127,17 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
+    expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--pattern"]);
+  });
+
+  it("exposes help for the Context Tree browser command", () => {
+    const root = new Command();
+    registerTreeCommands(root);
+
+    const help = command(command(root, "tree"), "tree").helpInformation();
+
+    expect(help).toContain("Browse Context Tree nodes as a hierarchy.");
+    expect(help).toContain("--level <depth>");
+    expect(help).toContain("--pattern <pattern>");
   });
 });
