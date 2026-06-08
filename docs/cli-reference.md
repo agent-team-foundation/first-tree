@@ -247,6 +247,9 @@ Day-to-day messaging.
 ```
 first-tree chat
 ├── send <agentName> [message]                       # message via positional or stdin
+│     --request / --question / --option              #   structured ask directed at a human
+│     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
+│     --broadcast                                    #   enter the stream, wake no one
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>
@@ -259,6 +262,16 @@ first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)
 echo "long body" | first-tree chat send code-agent -f markdown
+
+# Ask a human a tracked question (red-dot until answered). --request must
+# target a single human; the body carries context, --question carries the ask.
+first-tree chat send alice --request \
+  "Migration 0021 drops the legacy column — irreversible." \
+  --question "Ship the destructive migration?" \
+  --option "Ship" --option "Hold"
+
+# Answer / thread a question (clears the asker's red-dot)
+first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
 
 # Pull a non-member into the current chat first, then send normally.
 first-tree chat invite code-agent

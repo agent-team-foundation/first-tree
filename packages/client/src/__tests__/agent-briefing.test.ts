@@ -343,15 +343,20 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
-    expect(briefing).toMatch(/Target is a \*\*human\*\* in this chat/);
-    expect(briefing).toMatch(/Target is an \*\*agent\*\* in this chat/);
+    // New contract: chat send is primary; humans get a plain-reply path and a
+    // structured --request ask path; agents must be woken explicitly.
+    expect(briefing).toMatch(/\*\*Asking a human\*\*/);
+    expect(briefing).toMatch(/Reaching an \*\*agent\*\*/);
     expect(briefing).toContain("**Fallback**");
 
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("`first-tree` skill");
 
     expect(briefing).toContain("## Asking Humans");
-    expect(briefing).toContain("[pending redesign, 自行判断]");
+    // Asking Humans now prescribes the structured request mechanism instead of
+    // the old "[pending redesign, 自行判断]" stub.
+    expect(briefing).toMatch(/chat send <human> --request/);
+    expect(briefing).toContain("--question");
 
     expect(briefing).toContain("## Chat Topic");
     expect(briefing).toContain("first-tree chat set-topic");

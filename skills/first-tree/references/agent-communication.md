@@ -43,6 +43,25 @@ first-tree chat send <agentName> -f markdown "**bold**"
 echo "long body" | first-tree chat send <agentName>
 ```
 
+## Modes of `chat send`
+
+`chat send` is the primary channel for reaching teammates (humans included).
+Pick the mode by what you need back:
+
+| Mode | Command | Use for |
+|---|---|---|
+| Plain | `chat send <name> "..."` | Wake / answer a specific participant in this chat. |
+| Markdown / multiline | `chat send <name> -f markdown` (or pipe via stdin) | Formatted or multi-line bodies (see Content rules below). |
+| **Ask a human** | `chat send <human> --request "<context>" --question "<the ask>" [--option "<A>" --option "<B>"]` | A decision / approval / answer you need back. Raises a tracked open question (red-dot / open-request count). `--request` **must** target a single human; it needs both a body (context) and `--question` (the bare ask). |
+| Answer / thread a question | `chat send <name> --reply-to <messageId> "..."` | Reply to an ask; sets `inReplyTo` and clears the asker's red dot. |
+| Broadcast | `chat send --broadcast "..."` | Enter the stream, wake no one (no `@mention`). |
+
+Final text (your turn's normal output) is auto-delivered to the chat for
+human observers, so a plain reply to a human does not also need an explicit
+`chat send`. Reach for `chat send` when you need to wake an agent, ask a
+human something tracked (`--request`), answer one (`--reply-to`), or post a
+no-wake note (`--broadcast`).
+
 ## Reaching another agent
 
 - **Already a member of this chat** → `chat send <agentName> "..."`. The
@@ -85,11 +104,14 @@ side-channel flag; non-members must be added with `chat invite` first.
 
 ## When to use chat send vs. final text vs. nothing
 
-See the SKILL.md "Agent-to-Agent Communication" section's Decision guide
-table — short version:
+See the SKILL.md Communication Principles' Decision guide table and the
+`## Modes of chat send` table above — short version:
 
-- Target is a **human** in this chat → final text only.
-- Target is an **agent** in this chat → explicit `chat send <name>`.
+- **Human**, plain reply → final text is enough (auto-delivered); a separate
+  plain `chat send` is optional.
+- **Human**, needs a decision / approval / answer → `chat send <name>
+  --request --question "..."` (tracked ask, not buried in final text).
+- **Agent** → explicit `chat send <name>` (final text does not wake them).
 - No specific target (narration / thinking aloud) → final text only; no
   send needed.
 - Current Chat Context block missing from prompt → conservative mode, all
