@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.8.0
+version: 0.8.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -342,6 +342,31 @@ required 1 approval" sentence, a "since 5/29…" paragraph, a
 "Superseded by…" footer. **Rewrite the relevant node in place** to
 the new current state. The old state stays only in `git log` (and
 any raw-archive domain your tree may have).
+
+**Trigger: an existing tree node already carries a `## Source`
+section that lists the PRs which delivered the decision.**
+Pattern: the `## Source` body section is forbidden under Hard Rule
+9, but the section often hides *substantive* content — open
+follow-ups, known gaps, deferred items, surviving rationale — that
+was tacked onto the bottom of the PR audit trail. Do not just
+delete the section.
+- *Delete*: the PR-id list, the "Shipped in #X" / "Landed in #Y"
+  annotations, the "PR-by-PR audit trail" framing.
+- *Move to a GitHub Issue*: any actionable work item the section
+  carried (a pending fix, a deferred migration, an unresolved
+  question, a known gap) — open a present-tense Issue in the
+  relevant repo, dropping the PR id. Active tree nodes do not
+  carry `## Work` or `## Future Work` sections; actionable work
+  lives in Issues (see the team-practice node for the team's own
+  rule on this).
+- *Fold into body sections*: any current-state architectural fact
+  (e.g. "the rollback path lives at X") or surviving rationale
+  (e.g. "we chose Postgres because the team was familiar with it")
+  — fold it into the relevant Decision / Rationale / Constraints /
+  Cross-Domain section as a present-tense statement.
+The audit trail itself stays in `git log`; the actionable work
+moves to Issues; the durable current-state claims and rationale
+stay in the node body.
 
 ## CLI Surface
 
