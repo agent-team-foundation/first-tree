@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.7.0
+version: 0.8.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -140,6 +140,21 @@ follow them.
    including, when essential, why the prior approach is
    insufficient), and that lives in the **Rationale** section as a
    present-tense argument, not a timeline.
+9. **No PR references — record the decision, not its delivery.** A
+   tree node captures the durable claim and its rationale, not the
+   PR / commit / issue that delivered it. Do not add a `## Source`
+   section linking to the triggering PR, an inline `(#1234)` /
+   `[apps#1234]` citation, a `Shipped in #X` annotation, or any
+   PR-id reference inside the node body. The audit trail for "which
+   PR landed this decision" lives in `git log` and the source repo's
+   own PR history; the node lives by its present-tense claim alone.
+   This rule applies to all body content (Decision / Rationale /
+   Constraints / Cross-Domain). It does **not** affect: `soft_links`
+   between tree nodes (those are tree-internal navigation, not PR
+   references), or the meta-narration in this skill's own Worked
+   Examples (where "Source: …" labels are part of the *skill text*
+   describing what triggered a write, not a section template for the
+   node itself).
 
 ### The Double Test (judgment filter)
 
@@ -274,16 +289,18 @@ decisionLocksCode: false
 
 Body sections, in this order. These carry the *What* (Decision /
 Constraints / Cross-Domain) and *Why* (Rationale) axes of the Content
-Model, plus a source pointer; *Who* lives in frontmatter, not the body.
-Omit any section you do not need:
+Model; *Who* lives in frontmatter, not the body. Omit any section
+you do not need:
 
 1. **Decision** — one paragraph stating the durable claim.
 2. **Rationale** — why this decision; why the alternatives lost.
 3. **Constraints** — what the decision implies for future implementations.
 4. **Cross-Domain** — explicit references to other domains, when more
    context than `soft_links` is useful.
-5. **Source** — link back to the PR, design doc, or note that
-   motivated the node.
+
+There is no Source / Provenance / Shipped-in section. Per Hard Rule
+9, the PR / commit / issue that delivered the decision does not
+belong in the node — the audit trail lives in `git log`.
 
 A six-line node that captures the decision cleanly beats a sixty-line
 node that buries it. Tree readers scan, they do not study.
