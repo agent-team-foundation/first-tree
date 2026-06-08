@@ -52,7 +52,7 @@ Each phase has a dedicated reference; follow them in order.
 ```
 tree-stale                   — tree node was true; code moved
 tree-wrong                   — tree node never matched code
-tree-outdated                — superseded by a newer decision
+tree-outdated                — node's claim no longer matches the current decision
 code-not-synced/structural   — code structure exists; tree skeleton does not register it
 code-not-synced/substantive  — code decision/constraint exists; tree does not record it
 cross-domain-broken          — soft_links target gone or wrong

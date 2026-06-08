@@ -52,9 +52,10 @@ tree then rots faster than the code and becomes a trap.
 | A choice between alternatives and why the alternatives lost        | Function signatures, types, class hierarchies    |
 | A constraint that shapes future implementation across repos        | Step-by-step implementation walkthroughs         |
 | An ownership change or clarified review path                       | API request / response shapes                    |
-| The **current** constraint that resulted from a deprecation        | Test fixtures, snapshot data, build / CI config  |
+| A current constraint that resulted from a deprecation              | Test fixtures, snapshot data, build / CI config  |
 | A new relationship between two domains                             | Bug fixes that do not change a public contract   |
-| Rationale that would not be obvious from the diff alone            | Historical narrative of how we got here — "previously…", "originally…", "5/29 起…", `> YYYY-MM-DD update:` banners (lives in `git log` and `raw-context/`) |
+| Rationale that would not be obvious from the diff alone            | Refactors that preserve behaviour                |
+| A decision as it stands today (current state + present-tense rationale) | Historical narrative of how we got here (lives in `git log`) |
 
 ## Reading the Tree
 
@@ -129,15 +130,16 @@ follow them.
    human instruction.
 8. **No history — capture current state, not how we got here.** A
    node states what is true *now* and why; it does not narrate prior
-   states. Past states live in `git log` (and, when worth keeping as
-   raw material, in `raw-context/`). When a decision changes,
-   **rewrite the node in place** to the new current state — do not
-   append a `> 2026-XX-XX update:` banner, a "previously we…" /
-   "originally…" / "5/29 起…" paragraph, or a "Superseded by X"
-   footer. The only history that belongs is rationale (*why* the
-   current state was chosen over alternatives), and that lives in
-   the **Rationale** section as a present-tense argument, not a
-   timeline.
+   states. Past states live in `git log` (and, if your tree has a
+   raw archive domain such as `raw-context/`, there too). When a
+   decision changes, **rewrite the node in place** to the new
+   current state — do not append a `> 2026-XX-XX update:` banner, a
+   "previously we…" / "originally…" / "since 5/29…" paragraph, or a
+   "Superseded by X" footer. The only history that belongs is
+   rationale (*why* the current state was chosen over alternatives,
+   including, when essential, why the prior approach is
+   insufficient), and that lives in the **Rationale** section as a
+   present-tense argument, not a timeline.
 
 ### The Double Test (judgment filter)
 
@@ -167,10 +169,10 @@ goes in frontmatter:
   stands today**. High-level: the durable claim, not the
   implementation; current state, not a timeline of prior states.
   When the decision changes, rewrite *What* in place to reflect the
-  new state; do not preserve the old state alongside it (that is
-  what `git log` and `raw-context/` are for). The Source-System
-  Boundary table above is the canonical guide for which "whats"
-  belong.
+  new state; do not preserve the old state alongside it (`git log`,
+  and any raw-archive domain your tree may have, are where prior
+  states live). The Source-System Boundary table above is the
+  canonical guide for which "whats" belong.
 - **Why** — the rationale: alternatives considered, why they lost, the
   thinking that produced the decision. **A node without a Why is a
   fact, not a decision record.** Why-content is the most commonly lost
@@ -308,16 +310,15 @@ Belongs: constraints that came out of it ("session tokens must be
 HMAC-signed before storage"); the accountable owner.
 Does not belong: the specific vulnerabilities or how they were patched.
 
-**Source: PR that flips a default — e.g. "approvals required" goes
-from 1 to 0; an OAuth signature mode is replaced by HMAC.**
-Belongs: the *current* rule stated as fact ("approvals required = 0";
-"session tokens are HMAC-signed"); the *current* rationale (why the
-new rule is the right one), present-tense.
+**Source: PR that flips a policy default — e.g. "approvals required"
+goes from 1 to 0.**
+Belongs: the *current* rule stated as fact ("approvals required = 0");
+the *current* rationale (why 0 is the right number now), present-tense.
 Does not belong: a `> 2026-XX-XX update:` banner, a "previously we
-required 1 approval" sentence, a "5/29 起..." paragraph, a
-"Superseded by..." footer. **Rewrite the relevant node in place** to
+required 1 approval" sentence, a "since 5/29…" paragraph, a
+"Superseded by…" footer. **Rewrite the relevant node in place** to
 the new current state. The old state stays only in `git log` (and
-any `raw-context/` source for the change).
+any raw-archive domain your tree may have).
 
 ## CLI Surface
 

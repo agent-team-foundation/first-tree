@@ -44,12 +44,13 @@ and reaches a different conclusion.
 last quarter switched the relevant service to ClickHouse.
 
 **Fix bias:** rewrite the node **in place** to the new current state.
-Carry forward the *rationale* for the new decision (under
-"Rationale") — but do not add a "Superseded by…" footer, a
-"Previously…" section, or a `> YYYY-MM-DD update:` banner. The old
-state stays in `git log` and any `raw-context/` source for the
-change; the node itself is single-state. See
-`first-tree-context` Hard Rule 8 ("No history").
+Carry forward the new decision's *rationale* — including, when
+essential, why the prior approach is insufficient — as a
+present-tense argument under "Rationale", not a timeline. Do not
+add a "Superseded by…" footer, a "Previously…" section, or a
+`> YYYY-MM-DD update:` banner. Prior states stay in `git log` (and
+any raw-archive domain the tree may have); the node itself is
+single-state. See `first-tree-context` Hard Rule 8 ("No history").
 
 ## `code-not-synced`
 
