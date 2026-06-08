@@ -15,6 +15,7 @@ import {
 } from "./bootstrap.js";
 import type { SessionContext } from "./handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "./workspace.js";
+import { applyPendingMigrations } from "./workspace-migrations.js";
 
 export type AgentBootstrapParams = {
   workspace: string;
@@ -88,6 +89,16 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
  */
 export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   const { workspace, sessionCtx, contextTreePath, briefing } = params;
+
+  // One-shot workspace migrations: sweep legacy directory-structure residue
+  // (UUID-named per-chat snapshots, the pre-`.agent/` `.first-tree/` state
+  // dir, retired source repo clones like `first-tree-hub/`, the legacy
+  // `WHITEPAPER.md` symlink) the moment we re-attach to an old workspace.
+  // Each migration runs at most once per workspace — the applier persists
+  // its own marker file at `.agent/migrations-applied.json` and skips
+  // already-applied ids on subsequent calls. Cheap noop in the steady
+  // state.
+  applyPendingMigrations(workspace, (msg) => sessionCtx.log(msg));
 
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
   const currentTreeHead = readContextTreeHead(contextTreePath);
