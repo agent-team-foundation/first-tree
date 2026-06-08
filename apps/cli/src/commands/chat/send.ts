@@ -23,11 +23,12 @@ function collectOption(value: string, previous: string[]): string[] {
 
 export function registerChatSendCommand(chat: Command): void {
   chat
-    .command("send [agentName] [message]")
+    .command("send [name] [message]")
     .description(
-      "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). With <agentName> the recipient is " +
-        "@mentioned and woken (must already be a participant — `chat invite` first). With --broadcast the message " +
-        "enters the stream but wakes no one. Use --request to ask an open question, --reply-to to answer one.",
+      "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
+        "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
+        "first). With --broadcast the message enters the stream but wakes no one. Use --request to ask a human an " +
+        "open question, --reply-to to answer one.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -35,13 +36,13 @@ export function registerChatSendCommand(chat: Command): void {
     .option("-b, --broadcast", "Send with no @mention — enters the stream, wakes no one")
     .option(
       "--request",
-      "Send as an open question (format=request) directed at <agentName>. The message body carries the " +
+      "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
         "background/context; --question carries only the ask",
     )
     .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
     .option("--reply-to <messageId>", "Answer/thread this message — sets inReplyTo (clears the asker's red dot)")
-    .action(async (agentName: string | undefined, message: string | undefined, options: SendOptions) => {
+    .action(async (name: string | undefined, message: string | undefined, options: SendOptions) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
         if (!chatId) {
@@ -57,13 +58,13 @@ export function registerChatSendCommand(chat: Command): void {
         // Resolve target vs broadcast. In --broadcast mode there is no
         // recipient, so the first positional is actually the message.
         const broadcast = options.broadcast === true;
-        const target = broadcast ? undefined : agentName;
-        const inlineBody = broadcast ? (message ?? agentName) : message;
+        const target = broadcast ? undefined : name;
+        const inlineBody = broadcast ? (message ?? name) : message;
 
         if (!broadcast && !target) {
           fail(
             "NO_TARGET",
-            "Pass <agentName> to @mention a recipient, or use --broadcast to send with no @mention " +
+            "Pass <name> to @mention a recipient, or use --broadcast to send with no @mention " +
               "(enters the stream, wakes no one).",
             2,
           );
@@ -99,7 +100,7 @@ export function registerChatSendCommand(chat: Command): void {
         let format: MessageFormat = options.format;
         if (isRequest) {
           if (!target) {
-            fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human <agentName>.", 2);
+            fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human member.", 2);
           }
           if (!options.question) {
             fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);

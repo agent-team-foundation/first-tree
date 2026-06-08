@@ -73,7 +73,7 @@ auto-delivered fallback for plain replies.
 
 | Target in this chat | What to do |
 |---|---|
-| **human** — plain reply / narration | Final text is enough (auto-delivered); a separate plain `chat send` is optional. |
+| **human** — plain reply / narration | Final text is enough (auto-delivered). Do *not* also fire a plain `chat send` to the same human — it double-posts. |
 | **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot), never buried in final text. See `references/agent-communication.md`. |
 | **agent** | They will NOT see your final text. You MUST `chat send <name>` if you need them to act. |
 | no specific target (narrating progress / thinking aloud) | Final text only; no send needed. |

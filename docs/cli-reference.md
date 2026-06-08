@@ -246,7 +246,7 @@ Day-to-day messaging.
 
 ```
 first-tree chat
-├── send <agentName> [message]                       # message via positional or stdin
+├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
 │     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
 │     --broadcast                                    #   enter the stream, wake no one

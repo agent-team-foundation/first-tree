@@ -263,7 +263,9 @@ participant \`type\` in the Current Chat Context block):
   <name> --request --question "..."\` (see \`## Asking Humans\`). Don't bury the
   ask in final text — it has no red-dot and no tracked answer.
 - Plain reply / narration to a **human** → final text is enough; it is
-  auto-delivered to the chat, so a separate plain \`chat send\` is optional.
+  auto-delivered to the chat. Do **not** *also* fire a plain \`${bin} chat send\`
+  to the same human — that double-posts. (The bullets above cover when an
+  explicit send is the right call: waking an agent, a \`--request\`, a broadcast.)
 - A note that should enter the stream but wake no one → \`${bin} chat send
   --broadcast "..."\`.
 
