@@ -108,10 +108,10 @@ follow them.
    and do not need to re-read; otherwise read it in full — PR diff +
    linked issue + review comments, or the doc end-to-end. The point
    is "no surprises", not "always re-read".
-3. **Smallest correct edit.** Editing an existing node beats adding
-   a leaf; adding a leaf beats opening a new domain. Opening a new
-   top-level domain is a high-bar move that needs explicit
-   justification.
+3. **Smallest correct edit.** Default to editing an existing node;
+   only add a new leaf or directory when it meets the criteria in
+   *When to Add vs. Edit* below. Top-level domains additionally
+   require explicit human-owner approval.
 4. **No diffs, no code detail.** Tree nodes capture the durable
    decision and the rationale, not implementation detail. Function
    signatures, class names, request shapes, retry constants live in
@@ -147,14 +147,71 @@ The candidate belongs in the tree **only when both answers are yes**.
   done this time*, not *what was decided*. Pinning it creates a node
   that goes stale on the next refactor.
 
-### Where Each Fact Goes
+### Content Model — what / why / who
 
-| Situation                                  | Where it goes                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------------- |
-| The decision belongs to an existing domain | Update that domain's `NODE.md` or add a leaf in that domain                           |
-| The decision spans two domains             | Add a leaf in the more-specific domain; add a `soft_links` entry from the broader one |
-| The decision is genuinely new              | Add a new domain directory with its own `NODE.md` (high-bar move)                     |
-| Ownership change                           | Update `members/`, not a domain leaf                                                  |
+Every node carries content along three axes. Two go in the body; one
+goes in frontmatter:
+
+- **What** — the decision, design choice, or constraint. **High-level**:
+  the durable claim, not the implementation. The Source-System Boundary
+  table above is the canonical guide for which "whats" belong.
+- **Why** — the rationale: alternatives considered, why they lost, the
+  thinking that produced the decision. **A node without a Why is a
+  fact, not a decision record.** Why-content is the most commonly lost
+  axis — protect it deliberately during the rush to land a PR or close
+  a meeting.
+  - Common sources of Why: meeting discussions, PR review threads,
+    human↔agent design conversations.
+  - Self-check: "Six months from now, if a reader reads only the
+    *What*, will they be tempted to re-litigate this decision?" If
+    yes, the Why is under-documented.
+- **Who** — ownership, carried by `owners` frontmatter and
+  `members/<id>/NODE.md` nodes. **Do not put ownership in the body.**
+  Changes here go through humans (Hard Rule 6).
+
+### When to Add vs. Edit
+
+**Default to edit, not add.** A node earns its existence by being
+independently usable — separately findable, ownable, linkable. If none
+of those separate from an existing node, edit; don't add. Tree bloat
+(many overlapping leaves) is a worse failure mode than a missing leaf.
+
+**Add a leaf** (new `.md` in an existing domain) only when **all three**
+hold:
+
+1. **Distinct identity** — a 3–7 word noun-phrase title that does not
+   overlap any sibling. If the title needs an "and" to be complete, it
+   is probably two decisions or belongs inside an existing leaf.
+2. **Distinct anchor** — at least one of:
+   - `owners` differ from the parent / siblings;
+   - another domain would `soft_links` to *this specific decision*,
+     not the surrounding domain;
+   - it carries its own Decision + Rationale + Constraints sections
+     that would force an existing leaf to mix two unrelated topics.
+3. **Passes the Double Test** (above).
+
+If only one or two hold, edit the existing leaf — append to its
+Decision / Constraints section, or extend its Rationale.
+
+**Add a directory** (subdomain or top-level) only when there are or are
+expected to be **≥ 3 leaves** under it that share a clear axis. Two
+shapes:
+
+- *Greenfield* — open a new domain because 3+ leaves are visibly
+  landing there in the near term.
+- *Restructure* — a domain has 3 cohesive leaves at the same level
+  and a 4th is about to land; promote the group into a subdomain.
+
+Below 3, flat leaves at the same level is fine — flat is cheap, and
+premature splitting just adds cross-references.
+
+**Top-level domains** carry one extra constraint on top of the ≥ 3
+leaves rule: they must be **approved by a human tree owner**, because
+they reshape the team's mental model — not just the organisation of
+files. Agents do not open top-level domains on their own.
+
+**Ownership changes** still go through `members/`, not a domain leaf
+(Hard Rule 6).
 
 ### Node Shape
 
@@ -190,7 +247,9 @@ decisionLocksCode: false
 - `decisionLocksCode` — reverses the default conflict-resolution rule
   (see Hard Rule 7).
 
-Body sections, in this order, omit any you do not need:
+Body sections, in this order. These carry the *What* and *Why* axes of
+the Content Model; *Who* lives in frontmatter, not the body. Omit any
+section you do not need:
 
 1. **Decision** — one paragraph stating the durable claim.
 2. **Rationale** — why this decision; why the alternatives lost.
