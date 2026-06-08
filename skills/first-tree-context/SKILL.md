@@ -210,6 +210,11 @@ leaves rule: they must be **approved by a human tree owner**, because
 they reshape the team's mental model — not just the organisation of
 files. Agents do not open top-level domains on their own.
 
+**Cross-domain placement.** When a decision touches two domains, the
+leaf goes in the *more specific* domain; the broader domain links to
+it via `soft_links`. The canonical content lives in one place and stays
+discoverable from the other.
+
 **Ownership changes** still go through `members/`, not a domain leaf
 (Hard Rule 6).
 
