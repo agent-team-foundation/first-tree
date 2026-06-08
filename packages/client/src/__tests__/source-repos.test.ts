@@ -70,6 +70,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: ctxA,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(false); // first chat — nobody else
 
@@ -79,6 +80,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: ctxB,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(true); // chat-A still live
 
@@ -90,6 +92,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: ctxB,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(false); // only chat-B now
 
@@ -111,6 +114,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: start,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     await prepareSourceRepos({
       workspace,
@@ -118,6 +122,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: resume,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
 
     // A different chat sees exactly ONE other live chat (chat-A), not two.
@@ -127,6 +132,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: other,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(true);
     releaseSourceReposForSession(other);
@@ -141,6 +147,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: after,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(false);
     releaseSourceReposForSession(after);
@@ -158,6 +165,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
         sessionCtx: failing,
         gitMirrorManager: manager,
         agentName: null,
+        payloadResolved: true,
       }),
     ).rejects.toThrow("clone failed");
 
@@ -169,6 +177,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: next,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(false);
     releaseSourceReposForSession(next);
@@ -187,6 +196,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: live,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
 
     // Resume (fresh SessionContext, same chatId) fails transiently. Because the
@@ -200,6 +210,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
         sessionCtx: resume,
         gitMirrorManager: manager,
         agentName: null,
+        payloadResolved: true,
       }),
     ).rejects.toThrow("clone failed");
 
@@ -211,6 +222,7 @@ describe("source-repos live-use registry (decision B, keyed by chatId)", () => {
       sessionCtx: other,
       gitMirrorManager: manager,
       agentName: null,
+      payloadResolved: true,
     });
     expect(calls.at(-1)?.activelyInUse).toBe(true);
 

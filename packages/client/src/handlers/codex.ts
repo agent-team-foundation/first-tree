@@ -550,18 +550,24 @@ export const createCodexHandler: HandlerFactory = (config) => {
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
     sessionCtx: SessionContext,
+    payloadResolved: boolean,
   ): Promise<void> {
     // Delegate to the shared helper (runtime/source-repos.ts) so the
     // standalone-clone materialisation + per-clone lock + decision-B in-use
     // refcount stay in one place across the SDK, TUI, and codex handlers. The
     // returned list feeds the per-session AGENTS.md "Source Repositories" block
     // on the next `buildAgentBriefing` call.
+    //
+    // `payloadResolved` is forwarded so the shared helper can decide whether
+    // its empty `gitRepos: []` is authoritative — see
+    // `PrepareSourceReposParams.payloadResolved` and PR #869 P0-2.
     sourceReposForPrompt = await prepareSourceReposShared({
       workspace: workspaceCwd,
       payload,
       sessionCtx,
       gitMirrorManager,
       agentName,
+      payloadResolved,
     });
   }
 
@@ -1060,6 +1066,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
       if (agentConfigCache) {
         payload = (await agentConfigCache.refresh(sessionCtx.agent.agentId)).payload;
       }
+      // Track whether the payload reflects a real config — used by the source-
+      // repo state reconcile to distinguish "config has zero repos" from "we
+      // couldn't reach the cache". A `false` here suppresses cleanup of
+      // previously-managed clones; see PR #869 P0-2.
+      const payloadResolved = payload !== null;
       if (!payload) {
         payload = {
           kind: "codex",
@@ -1077,7 +1088,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       // gitRepos first so the per-chat briefing can list the predeclared
       // worktree paths the agent should know about.
-      await prepareSourceRepos(payload, cwd, sessionCtx);
+      await prepareSourceRepos(payload, cwd, sessionCtx, payloadResolved);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
@@ -1116,6 +1127,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       if (agentConfigCache) {
         payload = (await agentConfigCache.refresh(sessionCtx.agent.agentId)).payload;
       }
+      const resumePayloadResolved = payload !== null;
       if (!payload) {
         payload = {
           kind: "codex",
@@ -1134,7 +1146,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // `first-tree tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
-      await prepareSourceRepos(payload, cwd, sessionCtx);
+      await prepareSourceRepos(payload, cwd, sessionCtx, resumePayloadResolved);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);

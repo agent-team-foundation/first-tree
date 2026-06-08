@@ -39,6 +39,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { type RemoveCloneOutcome, tryRemoveCloneSafely } from "./source-repo-cleanup.js";
+import { isSourceRepoPathInUse } from "./source-repos.js";
 
 /**
  * Path inside the agent home where {@link applyPendingMigrations} persists
@@ -105,6 +106,21 @@ function unlinkSymlinkIfExists(path: string): boolean {
   }
 }
 
+/**
+ * Recognise the legacy per-chat-cwd snapshot shape: a workspace-root UUID
+ * directory that carries a top-level briefing file (`AGENTS.md` or
+ * `CLAUDE.md`), as the old per-chat handlers always materialised. A plain
+ * UUID-named directory without that signature is treated as user content
+ * and left alone.
+ *
+ * The check is intentionally cheap (one or two `existsSync` calls) — it
+ * runs at most once per workspace per id (the migrations applier
+ * deduplicates) so a deeper scan isn't justified.
+ */
+function hasLegacySnapshotSignature(dir: string): boolean {
+  return existsSync(join(dir, "AGENTS.md")) || existsSync(join(dir, "CLAUDE.md"));
+}
+
 function readGitOrigin(repoDir: string): string | null {
   const gitDir = join(repoDir, ".git");
   if (!existsSync(gitDir)) return null;
@@ -130,19 +146,96 @@ function readGitOrigin(repoDir: string): string | null {
 export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-uuid-snapshots",
-    description: "Remove legacy UUID-named per-chat snapshot directories at workspace root",
+    description:
+      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` so a user with a UUID-shaped `gitRepos.localPath` is never deleted.",
     apply: (workspacePath, log) => {
+      const currentRepos = readCurrentSourceRepoNames(workspacePath);
       let removed = 0;
+      let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
         if (!UUID_RE.test(name)) continue;
         const full = join(workspacePath, name);
         if (!isDirectory(full)) continue;
+        if (currentRepos.has(name)) {
+          // A legit current source repo whose `localPath` happens to look like
+          // a UUID — never delete.
+          skipped += 1;
+          continue;
+        }
+        if (!hasLegacySnapshotSignature(full)) {
+          // No `AGENTS.md` / `CLAUDE.md` at this UUID dir's root → not the
+          // old per-chat-cwd shape. Probably user content. Leave alone.
+          skipped += 1;
+          continue;
+        }
         rmSync(full, { recursive: true, force: true });
         removed += 1;
       }
       if (removed > 0) {
         log(`workspace-migrations: v1-uuid-snapshots removed ${removed} legacy snapshot dir(s)`);
       }
+      if (skipped > 0) {
+        log(
+          `workspace-migrations: v1-uuid-snapshots skipped ${skipped} UUID-named dir(s) without the legacy snapshot signature`,
+        );
+      }
+    },
+  },
+  {
+    id: "v1-retired-source-repo-first-tree-hub",
+    description:
+      "Remove <ws>/first-tree-hub/ — a retired First-Tree source repo. Narrowly scoped to the broken-pointer shape the legacy hub-worktree model left behind: `.git` is a regular FILE (not a directory) with `gitdir: <path>` whose target no longer exists on disk. In that shape, `git config --get remote.origin.url` exits 128 and the general `v1-orphan-ft-clones` sweep can't identify the clone by origin URL — and the local git state is unusable anyway, so there's no recoverable work to lose. Healthy `first-tree-hub/` clones (with `.git/` as a real directory) defer to `v1-orphan-ft-clones`, which goes through `tryRemoveCloneSafely` with the dirty / ahead / worktree guards. PR #869 code-reviewer P0-1.",
+    apply: (workspacePath, log) => {
+      const target = join(workspacePath, "first-tree-hub");
+      if (!existsSync(target) || !isDirectory(target)) return;
+      // Skip if `first-tree-hub` is in the agent's current source-repos
+      // config — a future re-add would otherwise lose its checkout.
+      if (readCurrentSourceRepoNames(workspacePath).has("first-tree-hub")) {
+        log(
+          "workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — still in current source repos config",
+        );
+        return;
+      }
+      const gitEntry = join(target, ".git");
+      let gitStat: ReturnType<typeof lstatSync>;
+      try {
+        gitStat = lstatSync(gitEntry);
+      } catch {
+        // No `.git` → not a clone (user content, or already cleaned).
+        return;
+      }
+      if (gitStat.isDirectory()) {
+        // Healthy clone — `v1-orphan-ft-clones` will inspect it through
+        // `tryRemoveCloneSafely` with the dirty / ahead / worktree guards.
+        // Skip here to avoid duplicating that path.
+        return;
+      }
+      // `.git` is a regular file (the pointer shape). Read it and confirm
+      // the gitdir target is gone — that's what makes the clone "broken
+      // legacy" rather than a healthy `git worktree add` linked checkout
+      // a future feature might rely on.
+      let pointerTarget: string | null = null;
+      try {
+        const pointerContent = readFileSync(gitEntry, "utf-8");
+        const match = pointerContent.match(/^gitdir:\s*(.+)$/m);
+        if (match?.[1]) pointerTarget = match[1].trim();
+      } catch {
+        return;
+      }
+      if (pointerTarget === null) {
+        log("workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — `.git` file has unexpected shape");
+        return;
+      }
+      if (existsSync(pointerTarget)) {
+        log(
+          `workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — \`.git\` pointer target ${pointerTarget} still exists (live worktree)`,
+        );
+        return;
+      }
+      rmSync(target, { recursive: true, force: true });
+      log(
+        "workspace-migrations: v1-retired-source-repo-first-tree-hub removed first-tree-hub/ (broken `.git` pointer)",
+      );
     },
   },
   // NOTE: a `v1-legacy-dot-first-tree` migration was proposed but withdrawn
@@ -186,7 +279,12 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         const origin = readGitOrigin(full);
         if (origin === null) continue;
         if (!FT_ORIGIN_RE.test(origin)) continue;
-        const outcome: RemoveCloneOutcome = tryRemoveCloneSafely(full, `${name}/ (origin ${origin})`, log);
+        const outcome: RemoveCloneOutcome = tryRemoveCloneSafely(
+          full,
+          `${name}/ (origin ${origin})`,
+          log,
+          isSourceRepoPathInUse,
+        );
         if (outcome === "removed") {
           removed += 1;
         } else if (outcome !== "absent" && outcome !== "not-a-clone") {
@@ -196,10 +294,8 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
           skipped += 1;
         }
       }
-      if (removed === 0 && skipped === 0) {
-        // Single summary line so the marker write is the only side effect
-        // when nothing matched — keeps the steady-state log quiet.
-        log("workspace-migrations: v1-orphan-ft-clones found no orphan FT clones");
+      if (removed > 0 && skipped === 0) {
+        log(`workspace-migrations: v1-orphan-ft-clones removed ${removed} orphan clone(s)`);
       } else if (skipped > 0) {
         log(
           `workspace-migrations: v1-orphan-ft-clones removed ${removed} orphan clone(s); ${skipped} held back by safety guards — operator follow-up`,

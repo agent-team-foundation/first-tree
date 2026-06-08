@@ -28,10 +28,12 @@ describe("workspace-migrations registry", () => {
     rmSync(workspace, { recursive: true, force: true });
   });
 
-  it("v1-uuid-snapshots removes UUID-named directories at workspace root", () => {
+  it("v1-uuid-snapshots removes UUID-named directories that carry the legacy snapshot signature", () => {
     const uuidDir = join(workspace, "12345678-abcd-4def-89ab-1234567890ab");
     const namedDir = join(workspace, "first-tree");
     mkdirSync(uuidDir);
+    // Legacy per-chat snapshots always had AGENTS.md / CLAUDE.md at their root.
+    writeFileSync(join(uuidDir, "AGENTS.md"), "# legacy chat snapshot\n");
     mkdirSync(namedDir);
 
     applyPendingMigrations(workspace, () => {});
@@ -40,15 +42,132 @@ describe("workspace-migrations registry", () => {
     expect(existsSync(namedDir)).toBe(true);
   });
 
+  it("v1-uuid-snapshots leaves UUID-named directories WITHOUT the legacy snapshot signature alone (PR #869 P0)", () => {
+    // A user-created UUID-named directory (no AGENTS.md / CLAUDE.md at root)
+    // must not be deleted — the migration is scoped to the per-chat-cwd shape.
+    const userUuidDir = join(workspace, "abcdef01-2345-4789-abcd-ef0123456789");
+    mkdirSync(userUuidDir);
+    writeFileSync(join(userUuidDir, "user-data.json"), "{}");
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(userUuidDir)).toBe(true);
+    expect(existsSync(join(userUuidDir, "user-data.json"))).toBe(true);
+  });
+
+  it("v1-uuid-snapshots leaves a UUID-named directory that's currently in source_repos config (PR #869 P0)", () => {
+    // Edge case: agent config has a `gitRepos.localPath` shaped like a UUID.
+    // The migration must NOT delete it even when it has a top-level
+    // AGENTS.md (e.g. the cloned repo happens to ship one).
+    const uuidRepo = join(workspace, "fedcba98-7654-4321-9abc-def012345678");
+    mkdirSync(uuidRepo);
+    writeFileSync(join(uuidRepo, "AGENTS.md"), "# this repo happens to ship AGENTS.md\n");
+    writeFileSync(
+      join(workspace, ".agent", "managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: "test",
+        updatedAt: new Date().toISOString(),
+        sourceRepos: ["fedcba98-7654-4321-9abc-def012345678"],
+        skills: [],
+      }),
+    );
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(uuidRepo)).toBe(true);
+  });
+
   it("v1-uuid-snapshots leaves non-UUID names alone even if hexish", () => {
     const dirs = ["abc", "deadbeef", "0123456789abcdef0123456789abcdef"]; // wrong shape
-    for (const d of dirs) mkdirSync(join(workspace, d));
+    for (const d of dirs) {
+      mkdirSync(join(workspace, d));
+      // Add the snapshot signature too — proves the UUID shape is also required.
+      writeFileSync(join(workspace, d, "AGENTS.md"), "");
+    }
 
     applyPendingMigrations(workspace, () => {});
 
     for (const d of dirs) {
       expect(existsSync(join(workspace, d))).toBe(true);
     }
+  });
+
+  it("v1-retired-source-repo-first-tree-hub removes a `first-tree-hub/` with a broken `.git` pointer (PR #869 P0)", () => {
+    // Reproduces the real-world shape code-reviewer flagged: `.git` is a
+    // pointer file (not a directory), and its target gitdir has been
+    // deleted, so `git config --get remote.origin.url` exits 128 and the
+    // origin-URL-based `v1-orphan-ft-clones` sweep cannot match.
+    const target = join(workspace, "first-tree-hub");
+    mkdirSync(target);
+    writeFileSync(join(target, ".git"), "gitdir: /tmp/does-not-exist/worktrees/first-tree-hub\n");
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("v1-retired-source-repo-first-tree-hub does NOT remove `first-tree-hub/` if it's still in current source_repos", () => {
+    const target = join(workspace, "first-tree-hub");
+    mkdirSync(target);
+    writeFileSync(join(target, ".git"), "gitdir: /tmp/somewhere\n");
+    writeFileSync(
+      join(workspace, ".agent", "managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: "test",
+        updatedAt: new Date().toISOString(),
+        sourceRepos: ["first-tree-hub"],
+        skills: [],
+      }),
+    );
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it("v1-retired-source-repo-first-tree-hub does NOT remove a plain directory named `first-tree-hub/` with no `.git`", () => {
+    // A user could legitimately create a folder named first-tree-hub for
+    // notes or scratch. Require the `.git` proof before deleting.
+    const target = join(workspace, "first-tree-hub");
+    mkdirSync(target);
+    writeFileSync(join(target, "user-notes.md"), "# my notes\n");
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(join(target, "user-notes.md"))).toBe(true);
+  });
+
+  it("v1-retired-source-repo-first-tree-hub defers to v1-orphan-ft-clones when `.git` is a healthy directory (PR #869 code-reviewer follow-up)", () => {
+    // A healthy clone — `.git` is a real directory. The retired-hub migration
+    // must NOT bypass the dirty / ahead / worktree guards; v1-orphan-ft-clones
+    // owns that path. Combined with the dirty payload below, this confirms
+    // the safety guards still apply.
+    const target = join(workspace, "first-tree-hub");
+    initRepo(target, "https://github.com/agent-team-foundation/first-tree-hub");
+    writeFileSync(join(target, "dirty.txt"), "uncommitted user work\n");
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(join(target, "dirty.txt"))).toBe(true);
+  });
+
+  it("v1-retired-source-repo-first-tree-hub does NOT delete when `.git` pointer target still exists (live linked checkout)", () => {
+    // A `.git` pointer file whose target IS on disk is a live linked
+    // checkout (`git worktree add`-style). Must not delete.
+    const target = join(workspace, "first-tree-hub");
+    mkdirSync(target);
+    const livePointerTarget = join(workspace, "fake-gitdir");
+    mkdirSync(livePointerTarget);
+    writeFileSync(join(target, ".git"), `gitdir: ${livePointerTarget}\n`);
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(join(target, ".git"))).toBe(true);
   });
 
   it("does not touch <ws>/.first-tree/ (active W1 binding state — migration withdrawn)", () => {

@@ -1398,12 +1398,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
     // TUI handlers share one worktree-lock / Hub-marker implementation rather
     // than each carrying its own source-repo invariant.
+    //
+    // `payloadResolved` distinguishes "agent config truly says zero repos"
+    // from "we couldn't reach the cache/server and `payload` is undefined".
+    // Without this gate, a cache miss would compute an empty current-repo
+    // set and the state-reconcile path would `rm` every previously-managed
+    // clone. See `PrepareSourceReposParams.payloadResolved`.
     sourceReposForPrompt = await prepareSourceReposShared({
       workspace,
       payload,
       sessionCtx,
       gitMirrorManager,
       agentName,
+      payloadResolved: payload !== undefined,
     });
   }
 

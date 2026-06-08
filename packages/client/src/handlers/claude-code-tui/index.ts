@@ -533,7 +533,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         ctx = sessionCtx;
         cwd = acquireAgentHome(workspaceRoot);
 
-        const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
+        const resolvedPayload = await loadPayload(sessionCtx);
+        const payload = resolvedPayload ?? defaultPayload();
 
         // Per-chat material flows through the unified briefing
         // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
@@ -547,6 +548,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           sessionCtx,
           gitMirrorManager,
           agentName,
+          // `payloadResolved: false` when we fell back to `defaultPayload()` —
+          // the empty `gitRepos: []` is then NOT authoritative and state-based
+          // cleanup is suppressed for this session (see PR #869 P0-2).
+          payloadResolved: resolvedPayload !== null && resolvedPayload !== undefined,
         });
         ensureAgentBootstrap({
           workspace: cwd,
@@ -580,7 +585,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         ctx = sessionCtx;
         cwd = acquireAgentHome(workspaceRoot);
 
-        const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
+        const resumePayloadResolved = await loadPayload(sessionCtx);
+        const payload = resumePayloadResolved ?? defaultPayload();
 
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
         sourceReposForPrompt = await prepareSourceRepos({
@@ -589,6 +595,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           sessionCtx,
           gitMirrorManager,
           agentName,
+          // See PR #869 P0-2: same gate as the start() path.
+          payloadResolved: resumePayloadResolved !== null && resumePayloadResolved !== undefined,
         });
         // Same shared bootstrap as start(): ensureAgentBootstrap handles the
         // sentinel + Context-Tree/CLI drift internally, so a stale or failed

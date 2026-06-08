@@ -23,11 +23,23 @@ export type RemoveCloneOutcome =
   | "removed"
   | "absent"
   | "not-a-clone"
+  | "in-use-by-live-chat"
   | "dirty"
   | "ahead-of-upstream"
   | "has-worktrees"
   | "probe-failed"
   | "remove-failed";
+
+/**
+ * Optional callback the caller can pass to short-circuit deletion when the
+ * checkout is still held by a live chat in this process. The state-based
+ * cleanup path passes `isSourceRepoPathInUse` from `source-repos.ts`; the
+ * migration path passes the same callback so the early-startup migration
+ * sweep can't `rm` a path another concurrent chat has already acquired.
+ *
+ * Defaults to `() => false` for callers that don't track live-use state.
+ */
+export type IsPathInUse = (absPath: string) => boolean;
 
 /**
  * Attempt to `rm -rf` the clone at `absPath`. Guards:
@@ -48,11 +60,20 @@ export function tryRemoveCloneSafely(
   absPath: string,
   displayName: string,
   log: (msg: string) => void,
+  isPathInUse: IsPathInUse = () => false,
 ): RemoveCloneOutcome {
   if (!existsSync(absPath)) return "absent";
   if (!existsSync(join(absPath, ".git"))) {
     log(`Clone cleanup: ${displayName} skipped — not a recognised clone (no .git)`);
     return "not-a-clone";
+  }
+
+  // Live-chat check FIRST — refuse to delete a checkout another live chat in
+  // this process is still using (PR #869 P1-4). Earlier than the git probes
+  // so a chat that's mid-`grep` doesn't see files vanish even briefly.
+  if (isPathInUse(absPath)) {
+    log(`Clone cleanup: ${displayName} skipped — in use by another live chat`);
+    return "in-use-by-live-chat";
   }
 
   // Dirty check — `git status --porcelain` reports anything staged, unstaged,
