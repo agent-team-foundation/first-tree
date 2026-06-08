@@ -38,6 +38,9 @@ lcov.info
 packages/e2e/.e2e-runs/
 packages/e2e/.env.e2e
 
+# Opt-in live model skill eval artifacts
+packages/skill-evals/.runs/
+
 # Drizzle
 drizzle/meta/
 

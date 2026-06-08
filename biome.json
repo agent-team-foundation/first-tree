@@ -45,7 +45,8 @@
       "!**/*.code-workspace",
       "!**/.gstack",
       "!**/.first-tree/tmp",
-      "!packages/e2e/.e2e-runs"
+      "!packages/e2e/.e2e-runs",
+      "!packages/skill-evals/.runs"
     ]
   },
   "overrides": [
