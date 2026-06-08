@@ -15,6 +15,7 @@ export type RunPaths = {
   packageRoot: string;
   repoRoot: string;
   runRoot: string;
+  shellEnvDir: string;
   summaryJsonPath: string;
   summaryMdPath: string;
   workspacePath: string;

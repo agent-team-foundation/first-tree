@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { appendEvent, previewText, readEvents } from "./events.js";
@@ -8,7 +8,7 @@ import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
 import type { EvalReporter } from "./reporter.js";
 import { createEvalReporter, isShimTraceLine } from "./reporter.js";
 import { driftNote, writeCaseSummaries } from "./summary.js";
-import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
+import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase, RunPaths } from "./types.js";
 
 function codexArgs(options: CliOptions, workspacePath: string, prompt: string): string[] {
   const args = [
@@ -104,12 +104,11 @@ async function waitForChildExit(
 async function runCodex(
   options: CliOptions,
   evalCase: FirstTreeReadEvalCase,
-  workspacePath: string,
-  eventsPath: string,
+  paths: RunPaths,
   reporter: EvalReporter,
 ): Promise<number> {
-  const args = codexArgs(options, workspacePath, evalCase.prompt);
-  appendEvent(eventsPath, {
+  const args = codexArgs(options, paths.workspacePath, evalCase.prompt);
+  appendEvent(paths.eventsPath, {
     args,
     caseId: evalCase.id,
     type: "codex_run_started",
@@ -118,15 +117,18 @@ async function runCodex(
 
   const env = {
     ...process.env,
-    FIRST_TREE_EVAL_EVENTS: eventsPath,
+    FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
     FIRST_TREE_EVAL_CASE_ID: evalCase.id,
     FIRST_TREE_EVAL_PHASE: "model",
     FIRST_TREE_EVAL_VERBOSE: options.verbose ? "1" : "0",
-    PATH: `${join(dirname(workspacePath), "bin")}:${process.env.PATH ?? ""}`,
+    BASH_ENV: join(paths.shellEnvDir, "bash-env"),
+    ENV: join(paths.shellEnvDir, "sh-env"),
+    PATH: `${paths.binDir}:${process.env.PATH ?? ""}`,
+    ZDOTDIR: paths.shellEnvDir,
   };
 
   const child = spawn(options.codexBin, args, {
-    cwd: workspacePath,
+    cwd: paths.workspacePath,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -134,13 +136,13 @@ async function runCodex(
   const stdout = child.stdout;
   const stderr = child.stderr;
   const streamTasks: Promise<void>[] = [];
-  if (stdout) streamTasks.push(consumeCodexStdout(eventsPath, stdout, reporter));
-  if (stderr) streamTasks.push(consumeStderr(eventsPath, stderr, reporter));
+  if (stdout) streamTasks.push(consumeCodexStdout(paths.eventsPath, stdout, reporter));
+  if (stderr) streamTasks.push(consumeStderr(paths.eventsPath, stderr, reporter));
 
-  const exitCode = await waitForChildExit(child, eventsPath, reporter);
+  const exitCode = await waitForChildExit(child, paths.eventsPath, reporter);
   await Promise.all(streamTasks);
 
-  appendEvent(eventsPath, {
+  appendEvent(paths.eventsPath, {
     caseId: evalCase.id,
     exitCode,
     type: "codex_run_finished",
@@ -168,9 +170,7 @@ export async function runFirstTreeReadCase(
   createFirstTreeDevShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
   const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
-  const runnerExitCode = options.validateFixtures
-    ? 0
-    : await runCodex(options, evalCase, paths.workspacePath, paths.eventsPath, reporter);
+  const runnerExitCode = options.validateFixtures ? 0 : await runCodex(options, evalCase, paths, reporter);
   const metrics = deriveMetrics(readEvents(paths.eventsPath), fixtureValidation, runnerExitCode);
   const passed = options.validateFixtures
     ? fixtureOnlyPassed(fixtureValidation)

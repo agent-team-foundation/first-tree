@@ -381,10 +381,12 @@ export function createRunPaths(packageRoot: string, evalCase: FirstTreeReadEvalC
   const runRoot = join(packageRoot, ".runs", `${stamp}-${evalCase.id}`);
   const workspacePath = join(runRoot, "workspace");
   const binDir = join(runRoot, "bin");
+  const shellEnvDir = join(runRoot, "shell-env");
 
   rmSync(runRoot, { force: true, recursive: true });
   mkdirSync(workspacePath, { recursive: true });
   mkdirSync(binDir, { recursive: true });
+  mkdirSync(shellEnvDir, { recursive: true });
 
   return {
     binDir,
@@ -392,10 +394,24 @@ export function createRunPaths(packageRoot: string, evalCase: FirstTreeReadEvalC
     packageRoot,
     repoRoot,
     runRoot,
+    shellEnvDir,
     summaryJsonPath: join(runRoot, "summary.json"),
     summaryMdPath: join(runRoot, "summary.md"),
     workspacePath,
   };
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/gu, "'\\''")}'`;
+}
+
+function writeShellPathBootstrap(paths: RunPaths): void {
+  const bootstrap = `export PATH=${shellSingleQuote(paths.binDir)}:\${PATH:-}\n`;
+  writeText(join(paths.shellEnvDir, ".zshenv"), bootstrap);
+  writeText(join(paths.shellEnvDir, ".zprofile"), bootstrap);
+  writeText(join(paths.shellEnvDir, ".bash_profile"), bootstrap);
+  writeText(join(paths.shellEnvDir, "bash-env"), bootstrap);
+  writeText(join(paths.shellEnvDir, "sh-env"), bootstrap);
 }
 
 export function createFirstTreeDevShim(paths: RunPaths): void {
@@ -484,6 +500,7 @@ process.exit(exitCode);
 
   writeText(shimPath, script);
   chmodSync(shimPath, 0o755);
+  writeShellPathBootstrap(paths);
 }
 
 export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths, reporter: EvalReporter): string | null {
