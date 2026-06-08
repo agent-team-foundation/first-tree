@@ -115,14 +115,15 @@ Outcome vocabulary (`assert` references these):
 
 ## C7 — Answer a human's open question  *(derived)*
 
-- **Source:** derived — the inverse of C1. (No real sample: in the 3-day window the human never used `--request`, so no open question was ever directed at the agent. This case fixes the gap the others can't, and becomes real once humans start asking via `--request`.)
-- **Situation:** A human raised an open question at the agent via `chat send <agent> --request --question "..."` (a `format=request` message with a `messageId`).
+- **Source:** derived — the inverse of C1. (No observed sample: in the 3-day window the human never used `--request`, so no open question was ever directed at the agent — which is itself why the red-dot mechanism saw zero use. Becomes real once humans start asking via `--request`.)
+- **Situation:** A human raised an open question at the agent via `chat send <agent> --request --question "..."` (a `format=request` message). The runtime delivers it with the reply command — `chat send <asker> --reply-to <id>` — appended to the `[From: …]` header, so the `messageId` is present in the prompt (`agent-io.ts formatInboundContent`).
 - **Decision point:** How to answer so the asker's red-dot clears.
 - **Expected (new contract):**
   ```bash
   first-tree-staging chat send yuezengwu --reply-to <messageId> "Holding — will split the migration."
   ```
 - **assert:** `REPLY_TO(human)` with `--reply-to` set to the originating `messageId` (sets `inReplyTo`, clears the red-dot). Plain `FINAL_TEXT` alone fails (leaves the question open).
+- **Runtime dependency:** the `messageId` must reach the prompt. The `[From: …]` header surfaces it **only** for `format=request` messages; a QA harness that injects a question without the id is testing a situation the runtime no longer produces.
 
 ---
 

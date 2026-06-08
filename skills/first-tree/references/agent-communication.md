@@ -62,6 +62,11 @@ human observers, so a plain reply to a human does not also need an explicit
 human something tracked (`--request`), answer one (`--reply-to`), or post a
 no-wake note (`--broadcast`).
 
+When an **open question** (`format=request`) is delivered to you, the runtime
+appends the ready-to-run reply command — `chat send <asker> --reply-to <id>` —
+to that message's `[From: …]` header, so the message id you need for
+`--reply-to` is always in the prompt.
+
 ## Reaching another agent
 
 - **Already a member of this chat** → `chat send <agentName> "..."`. The
