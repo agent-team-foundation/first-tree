@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   renameSync,
@@ -298,12 +299,16 @@ export async function syncAgentContextTree(
 }
 
 /**
- * Marker file written into every workspace so the Codex CLI's project-root
- * detection (configured via `project_root_markers: ["first-tree-workspace"]`)
- * stops at the workspace boundary instead of walking up the filesystem and
- * loading an unintended `AGENTS.md` from the operator's home or repo root.
+ * Marker directory written into every workspace so the Codex CLI's
+ * project-root detection (configured via
+ * `project_root_markers: [".first-tree-workspace"]`) stops at the workspace
+ * boundary instead of walking up the filesystem and loading an unintended
+ * `AGENTS.md` from the operator's home or repo root.
  */
 export const FIRST_TREE_WORKSPACE_MARKER = ".first-tree-workspace";
+export const FIRST_TREE_RUNTIME_DIR = FIRST_TREE_WORKSPACE_MARKER;
+export const LEGACY_AGENT_RUNTIME_DIR = ".agent";
+export const IDENTITY_JSON_REL = join(FIRST_TREE_RUNTIME_DIR, "identity.json");
 
 /**
  * Materialise the unified agent briefing at `<workspacePath>/AGENTS.md` and
@@ -372,7 +377,7 @@ export function ensureClaudeMdSymlink(workspacePath: string): void {
  * trigger a fresh `installFirstTreeIntegration` (proposals/agent-session-
  * cwd-redesign.20260519.md §⑤.3).
  */
-export const CONTEXT_TREE_HEAD_REL = join(".agent", "context-tree-head");
+export const CONTEXT_TREE_HEAD_REL = join(FIRST_TREE_RUNTIME_DIR, "context-tree-head");
 
 /**
  * Best-effort read of the Context Tree's current HEAD commit. Returns `null`
@@ -414,11 +419,12 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
  * `.agents/skills/*` after a `first-tree upgrade` until the Context Tree
  * happens to move.
  */
-export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
+export const BUNDLED_CLI_VERSION_REL = join(FIRST_TREE_RUNTIME_DIR, "cli-version");
 
 /**
  * Resolve a stable identifier for the bundled CLI that the handler can
- * compare against the cached `.agent/cli-version` to detect upgrades.
+ * compare against the cached `.first-tree-workspace/cli-version` to detect
+ * upgrades.
  *
  * Behaviour by channel:
  *
@@ -486,7 +492,7 @@ export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): s
   // CliBinding's docblock). Anywhere else (prod / staging / uninitialised)
   // we keep the bare version — staging/prod have a release-bumped
   // version that already changes per build, so a fingerprint would just
-  // be noise in the `.agent/cli-version` pin.
+  // be noise in the `.first-tree-workspace/cli-version` pin.
   let isDevChannel = false;
   try {
     isDevChannel = getCliBinding().packageName === null;
@@ -523,7 +529,7 @@ export function readCachedBundledCliVersion(workspacePath: string): string | nul
 export function writeBundledCliVersion(workspacePath: string, version: string | null): void {
   if (!version) return;
   const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
-  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  ensureWorkspaceRuntimeDir(workspacePath);
   writeFileSync(path, version, "utf-8");
 }
 
@@ -531,8 +537,64 @@ export function writeBundledCliVersion(workspacePath: string, version: string | 
 export function writeContextTreeHead(workspacePath: string, head: string | null): void {
   const path = join(workspacePath, CONTEXT_TREE_HEAD_REL);
   if (head === null) return;
-  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  ensureWorkspaceRuntimeDir(workspacePath);
   writeFileSync(path, head, "utf-8");
+}
+
+function mergeLegacyRuntimeDir(sourceDir: string, targetDir: string): void {
+  mkdirSync(targetDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir)) {
+    const sourcePath = join(sourceDir, entry);
+    const targetPath = join(targetDir, entry);
+    const sourceStats = lstatSync(sourcePath);
+    if (sourceStats.isDirectory()) {
+      if (existsSync(targetPath) && lstatSync(targetPath).isDirectory()) {
+        mergeLegacyRuntimeDir(sourcePath, targetPath);
+      } else if (!existsSync(targetPath)) {
+        renameSync(sourcePath, targetPath);
+      } else {
+        rmSync(sourcePath, { recursive: true, force: true });
+      }
+      continue;
+    }
+    if (!existsSync(targetPath)) {
+      renameSync(sourcePath, targetPath);
+    } else {
+      rmSync(sourcePath, { recursive: true, force: true });
+    }
+  }
+  rmSync(sourceDir, { recursive: true, force: true });
+}
+
+/**
+ * Converge the runtime state onto the current `.first-tree-workspace/` layout.
+ *
+ * Legacy states we still heal automatically:
+ *
+ * - root marker file `.first-tree-workspace` from the pre-directory layout
+ * - stable runtime dir `.agent/` from the pre-rename layout
+ *
+ * The resulting directory both stores the stable runtime files and acts as the
+ * root marker Codex uses for project detection.
+ */
+export function ensureWorkspaceRuntimeDir(workspacePath: string): string {
+  const runtimeDir = join(workspacePath, FIRST_TREE_RUNTIME_DIR);
+  const legacyAgentDir = join(workspacePath, LEGACY_AGENT_RUNTIME_DIR);
+
+  if (existsSync(runtimeDir) && lstatSync(runtimeDir).isFile()) {
+    unlinkSync(runtimeDir);
+  }
+
+  if (existsSync(legacyAgentDir) && lstatSync(legacyAgentDir).isDirectory()) {
+    if (existsSync(runtimeDir) && lstatSync(runtimeDir).isDirectory()) {
+      mergeLegacyRuntimeDir(legacyAgentDir, runtimeDir);
+    } else if (!existsSync(runtimeDir)) {
+      renameSync(legacyAgentDir, runtimeDir);
+    }
+  }
+
+  mkdirSync(runtimeDir, { recursive: true });
+  return runtimeDir;
 }
 
 export type BootstrapOptions = {
@@ -543,28 +605,28 @@ export type BootstrapOptions = {
 };
 
 /**
- * Bootstrap the agent's home directory with stable, agent-level files plus
- * the workspace-root marker.
+ * Bootstrap the agent's home directory with stable, agent-level files inside
+ * the workspace-root marker directory.
  *
- * Writes identity.json and the `.first-tree-workspace` marker. Per the
+ * Writes identity.json into `.first-tree-workspace/`. Per the
  * agent-session-cwd-redesign (proposals/2026-05-19) **only agent-level stable
  * fields** live in identity.json; per-chat data (chatId, participants) flows
  * through the unified per-turn briefing file written by {@link
  * writeAgentBriefing} (which the handler invokes on every start/resume after
  * computing the briefing content via {@link buildAgentBriefing}).
  *
- * The bootstrap no longer stages AGENT.md / NODE.md copies under
- * `.agent/context/` and no longer emits `.agent/tools.md`. The unified
- * briefing owns all of that content; the runtime briefing is the single
- * source of agent-level instructions on disk.
+ * The bootstrap no longer stages AGENT.md / NODE.md copies under the legacy
+ * `.agent/context/` tree and no longer emits `.agent/tools.md`. The unified
+ * briefing owns all of that content; the runtime briefing is the single source
+ * of agent-level instructions on disk.
  *
  * Idempotent: safe to call on every handler start() / resume(), though in
  * the per-agent-home model the handler short-circuits this when the
- * `.agent/init-complete` sentinel is already present.
+ * `.first-tree-workspace/init-complete` sentinel is already present.
  */
 export function bootstrapWorkspace(options: BootstrapOptions): void {
   const { workspacePath, identity, contextTreePath, serverUrl } = options;
-  const agentDir = join(workspacePath, ".agent");
+  const agentDir = ensureWorkspaceRuntimeDir(workspacePath);
   // Legacy `.agent/context/` staging directory; pruned at bootstrap so a
   // resumed agent home that pre-dates this PR doesn't keep stale
   // agent-instructions.md / domain-map.md / tools.md around. The unified
@@ -573,7 +635,10 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   if (existsSync(legacyContextDir)) {
     rmSync(legacyContextDir, { recursive: true, force: true });
   }
-  mkdirSync(agentDir, { recursive: true });
+  const legacyToolsMd = join(agentDir, "tools.md");
+  if (existsSync(legacyToolsMd)) {
+    rmSync(legacyToolsMd, { force: true });
+  }
 
   // 1. Write identity.json — agent-level stable fields only. chatId /
   //    chatContext used to live here but are now injected per turn so a
@@ -590,11 +655,6 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
     contextTreePath,
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
-
-  // 2. Workspace-root marker — gates Codex's AGENTS.md walk-up so the agent
-  //    sees the briefing in this workspace and not whatever sits in the
-  //    operator's HOME / git root.
-  writeFileSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
 }
 
 export type InstallFirstTreeIntegrationOptions = {
@@ -728,7 +788,8 @@ export function isHubWorktreeMarker(path: string): boolean {
 
 /**
  * Field-by-field equality for the identity record both handlers write into
- * `.agent/identity.json`. Implemented manually so a missing key on disk
+ * `.first-tree-workspace/identity.json`. Implemented manually so a missing key
+ * on disk
  * (older bootstrap) is treated as drift even when `JSON.stringify` happens
  * to match by chance.
  *

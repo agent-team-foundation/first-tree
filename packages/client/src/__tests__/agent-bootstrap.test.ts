@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({ cachedTreeHead: null as string | null, cachedCli: null as string | null }));
 
 vi.mock("../runtime/bootstrap.js", () => ({
+  FIRST_TREE_RUNTIME_DIR: ".first-tree-workspace",
+  IDENTITY_JSON_REL: ".first-tree-workspace/identity.json",
   bootstrapWorkspace: vi.fn(),
+  ensureWorkspaceRuntimeDir: vi.fn(),
   installCoreSkills: vi.fn(),
   installFirstTreeIntegration: vi.fn(),
   deepEqualIdentity: vi.fn(() => false),
@@ -62,7 +65,6 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     // fast path forever.
     const sentinel = join(workspace, INIT_COMPLETE_SENTINEL_REL);
     mkdirSync(dirname(sentinel), { recursive: true });
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
     writeFileSync(sentinel, "1", "utf-8");
 
     state.cachedTreeHead = null;

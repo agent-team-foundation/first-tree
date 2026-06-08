@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
+import { FIRST_TREE_RUNTIME_DIR, FIRST_TREE_WORKSPACE_MARKER, IDENTITY_JSON_REL } from "../runtime/bootstrap.js";
 import {
   acquireAgentHome,
   acquireWorkspace,
@@ -21,8 +21,8 @@ import {
  *
  *  - acquireAgentHome is idempotent: creates the dir on first call, returns
  *    the same path thereafter, never wipes existing content.
- *  - The boundary marker (`.first-tree-workspace`) is written once at the
- *    agent home root so Codex's `project_root_markers` stops there.
+ *  - The boundary marker directory (`.first-tree-workspace/`) is written once
+ *    at the agent home root so Codex's `project_root_markers` stops there.
  *  - The sentinel write/clear pair is the drift-detection knob: clear it when
  *    Context Tree commit changes, write it after bootstrap succeeds.
  */
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("acquireAgentHome", () => {
-  it("creates the agent home and writes the boundary marker on first call", () => {
+  it("creates the agent home and writes the boundary marker directory on first call", () => {
     const home = join(root, AGENT_NAME);
     const cwd = acquireAgentHome(home);
 
@@ -68,7 +68,7 @@ describe("acquireAgentHome", () => {
     // NOT by rming the directory. acquireAgentHome must not touch contents.
     const home = join(root, AGENT_NAME);
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
+    mkdirSync(join(home, FIRST_TREE_WORKSPACE_MARKER), { recursive: true });
     writeFileSync(join(home, "preexisting.txt"), "keep me", "utf-8");
 
     acquireAgentHome(home);
@@ -90,10 +90,10 @@ describe("markWorkspaceInitComplete / clearWorkspaceInitComplete", () => {
     expect(new Date(body.completedAt).toString()).not.toBe("Invalid Date");
   });
 
-  it("creates .agent/ if missing (defensive)", () => {
+  it("creates the runtime marker directory if missing (defensive)", () => {
     const home = acquireAgentHome(join(root, AGENT_NAME));
     markWorkspaceInitComplete(home);
-    expect(existsSync(join(home, ".agent"))).toBe(true);
+    expect(existsSync(join(home, FIRST_TREE_RUNTIME_DIR))).toBe(true);
   });
 
   it("is idempotent — writing twice leaves a valid sentinel", () => {
@@ -107,12 +107,12 @@ describe("markWorkspaceInitComplete / clearWorkspaceInitComplete", () => {
   it("clearWorkspaceInitComplete removes the sentinel, leaving everything else alone", () => {
     const home = acquireAgentHome(join(root, AGENT_NAME));
     markWorkspaceInitComplete(home);
-    writeFileSync(join(home, ".agent", "identity.json"), "{}", "utf-8");
+    writeFileSync(join(home, IDENTITY_JSON_REL), "{}", "utf-8");
 
     clearWorkspaceInitComplete(home);
 
     expect(existsSync(join(home, INIT_COMPLETE_SENTINEL_REL))).toBe(false);
-    expect(existsSync(join(home, ".agent", "identity.json"))).toBe(true);
+    expect(existsSync(join(home, IDENTITY_JSON_REL))).toBe(true);
     expect(existsSync(join(home, FIRST_TREE_WORKSPACE_MARKER))).toBe(true);
   });
 
@@ -157,8 +157,7 @@ describe("acquireWorkspace (deprecated legacy shim)", () => {
     // Production handlers no longer call this; the shim must therefore not
     // implement the old half-baked rm logic.
     const dir = join(root, "chat-abc");
-    mkdirSync(join(dir, ".agent"), { recursive: true });
-    writeFileSync(join(dir, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
+    mkdirSync(join(dir, FIRST_TREE_RUNTIME_DIR), { recursive: true });
     writeFileSync(join(dir, "leftover.txt"), "untouched", "utf-8");
 
     acquireWorkspace(root, "chat-abc");
