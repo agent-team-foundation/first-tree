@@ -359,6 +359,50 @@ describe("ResourcesTab and SaveBar", () => {
     });
   });
 
+  it("excludes opt-in (available) repos from the agent repo add menu", async () => {
+    const layoutMocks = await import("../layout-context.js");
+    const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
+    spy.mockReturnValue(context());
+    // A legacy team repo still flagged Opt-in (available). Team repos are now
+    // always On by default, so it must NOT be offered as an "enable from team"
+    // option on the agent.
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        availableTeamResources: [
+          {
+            id: "repo-available",
+            organizationId: "org-1",
+            type: "repo",
+            scope: "team",
+            ownerAgentId: null,
+            name: "Opt-in repo",
+            repoCanonicalKey: null,
+            defaultEnabled: "available",
+            status: "active",
+            payload: { url: "https://github.com/acme/optin.git" },
+            createdBy: "member-1",
+            updatedBy: "member-1",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      }),
+    );
+    const { ResourcesTab } = await import("../resources-tab.js");
+
+    const container = await renderWithContext(<ResourcesTab />);
+    await waitForText(container, "Code repositories");
+
+    // Open the repo section's add menu (panel portals to document.body).
+    await click(container.querySelector('button[aria-label="Add Repo"]'));
+    // The opt-in repo is not enableable, and there's no "Enable from team" list…
+    expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
+    expect(document.body.textContent).not.toContain("Enable from team");
+    // …but the menu stays actionable: add a private repo or jump to Settings.
+    expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
+    expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeTruthy();
+  });
+
   it("keeps the MCP add menu actionable with no team MCP (routes to Settings, no dead end)", async () => {
     const layoutMocks = await import("../layout-context.js");
     const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
