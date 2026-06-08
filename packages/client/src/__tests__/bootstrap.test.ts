@@ -7,6 +7,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -257,6 +258,47 @@ describe("bootstrapWorkspace", () => {
     });
 
     expect(existsSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "tools.md"))).toBe(false);
+  });
+
+  it("keeps current runtime entries when legacy paths collide during migration", () => {
+    const workspace = join(tmpBase, "ws-legacy-collision");
+    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins"), { recursive: true });
+    writeFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "target-dir");
+    writeFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins"), "target-file");
+    mkdirSync(join(workspace, ".agent", "file-wins"), { recursive: true });
+    writeFileSync(join(workspace, ".agent", "file-wins", "legacy.txt"), "legacy-dir");
+    writeFileSync(join(workspace, ".agent", "dir-wins"), "legacy-file");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins")).isDirectory()).toBe(true);
+    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "dir-wins", "keep.txt"), "utf-8")).toBe(
+      "target-dir",
+    );
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins")).isFile()).toBe(true);
+    expect(readFileSync(join(workspace, FIRST_TREE_RUNTIME_DIR, "file-wins"), "utf-8")).toBe("target-file");
+    expect(existsSync(join(workspace, ".agent"))).toBe(false);
+  });
+
+  it("replaces a dangling .first-tree-workspace symlink with the runtime directory", () => {
+    const workspace = join(tmpBase, "ws-dangling-runtime-marker");
+    mkdirSync(workspace, { recursive: true });
+    symlinkSync(join(workspace, "missing-marker-target"), join(workspace, FIRST_TREE_RUNTIME_DIR));
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    expect(lstatSync(join(workspace, FIRST_TREE_RUNTIME_DIR)).isDirectory()).toBe(true);
+    expect(existsSync(join(workspace, IDENTITY_JSON_REL))).toBe(true);
   });
 
   it("prunes a legacy `.agent/context/` staging directory on re-bootstrap", () => {

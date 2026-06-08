@@ -541,6 +541,23 @@ export function writeContextTreeHead(workspacePath: string, head: string | null)
   writeFileSync(path, head, "utf-8");
 }
 
+function lstatIfExists(path: string) {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Merge legacy `.agent/` entries into `.first-tree-workspace/`.
+ *
+ * Conflict policy is intentionally "target wins": if a path already exists in
+ * the target, the legacy source entry at that path is pruned instead of
+ * overwriting newer runtime state. That keeps partial upgrades and repeated
+ * bootstraps idempotent.
+ */
 function mergeLegacyRuntimeDir(sourceDir: string, targetDir: string): void {
   mkdirSync(targetDir, { recursive: true });
   for (const entry of readdirSync(sourceDir)) {
@@ -576,19 +593,28 @@ function mergeLegacyRuntimeDir(sourceDir: string, targetDir: string): void {
  *
  * The resulting directory both stores the stable runtime files and acts as the
  * root marker Codex uses for project detection.
+ *
+ * Note: apps/cli still has a separate W1 migration path that reasons about a
+ * legacy file marker named `.first-tree-workspace` inside user workspaces.
+ * This helper only heals the per-agent runtime home under
+ * `<dataDir>/workspaces/<agent>/`, so replacing a pre-existing file or symlink
+ * here does not participate in CLI workspace detection.
  */
 export function ensureWorkspaceRuntimeDir(workspacePath: string): string {
   const runtimeDir = join(workspacePath, FIRST_TREE_RUNTIME_DIR);
   const legacyAgentDir = join(workspacePath, LEGACY_AGENT_RUNTIME_DIR);
+  const runtimeStats = lstatIfExists(runtimeDir);
 
-  if (existsSync(runtimeDir) && lstatSync(runtimeDir).isFile()) {
+  if (runtimeStats && !runtimeStats.isDirectory()) {
     unlinkSync(runtimeDir);
   }
 
-  if (existsSync(legacyAgentDir) && lstatSync(legacyAgentDir).isDirectory()) {
-    if (existsSync(runtimeDir) && lstatSync(runtimeDir).isDirectory()) {
+  const legacyAgentStats = lstatIfExists(legacyAgentDir);
+  const currentRuntimeStats = lstatIfExists(runtimeDir);
+  if (legacyAgentStats?.isDirectory()) {
+    if (currentRuntimeStats?.isDirectory()) {
       mergeLegacyRuntimeDir(legacyAgentDir, runtimeDir);
-    } else if (!existsSync(runtimeDir)) {
+    } else if (!currentRuntimeStats) {
       renameSync(legacyAgentDir, runtimeDir);
     }
   }
