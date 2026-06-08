@@ -236,4 +236,54 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
 
     expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
   });
+
+  it("does NOT delete a clone another live chat in this process is still using (PR #869 code-reviewer R2 N-2)", async () => {
+    plantClone(workspace, "repo-a");
+    plantClone(workspace, "repo-b");
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      sourceRepos: ["repo-a", "repo-b"],
+      skills: [],
+    });
+
+    // Chat A acquires repo-b through a normal prepare call — both repos
+    // are in its config so neither is touched, but the live-use registry
+    // records chat A against both checkout paths.
+    const { manager } = makeManager();
+    const chatA = makeCtx();
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a", "repo-b"]),
+      sessionCtx: chatA,
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+    expect(existsSync(join(workspace, "repo-b"))).toBe(true);
+
+    // Chat B starts with a new config that drops repo-b. Without the
+    // `isPathInUse` check the reconcile path would `rm` repo-b out from
+    // under chat A; the guard must catch this.
+    const chatBLogs: string[] = [];
+    const chatB = {
+      ...makeCtx(),
+      log: (msg: string) => chatBLogs.push(msg),
+    } as unknown as SessionContext;
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a"]),
+      sessionCtx: chatB,
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+
+    expect(existsSync(join(workspace, "repo-b"))).toBe(true);
+    expect(chatBLogs.some((l) => l.toLowerCase().includes("in use by another live chat"))).toBe(true);
+    // State still rolls forward to chat B's set so the next session diffs
+    // against today's reality — the stale clone becomes operator follow-up.
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
+  });
 });

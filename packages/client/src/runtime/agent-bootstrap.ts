@@ -113,7 +113,7 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   // an authoritative current set (e.g. `v1-orphan-ft-clones`) return
   // `"deferred"` when it's null and retry on a future resolved session
   // (PR #869 baixiaohang round-3 P0).
-  applyPendingMigrations(workspace, (msg) => sessionCtx.log(msg), { currentSourceRepoNames });
+  applyPendingMigrations(workspace, sessionCtx.log, { currentSourceRepoNames });
 
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
   const currentTreeHead = readContextTreeHead(contextTreePath);

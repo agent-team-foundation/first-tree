@@ -170,6 +170,25 @@ function hasLegacySnapshotSignature(dir: string): boolean {
  * and on-disk repos is unsafe. The caller returns `"deferred"`; the
  * migrations applier leaves the marker unrecorded and a future resolved
  * session re-runs the migration. PR #869 baixiaohang round-3/4 P0.
+ *
+ * **Known residual race (PR #869 code-reviewer R2 N-1):** when ctx is null
+ * AND persisted state is NON-empty but STALE — e.g. the user just added a
+ * new source repo via the web console and this very next session hits a
+ * cache miss before `prepareSourceRepos(payloadResolved: true)` has had a
+ * chance to refresh the state file — `shouldDeferOnUnknownConfig` returns
+ * false and the fallback to `readCurrentSourceRepoNames` returns the stale
+ * set. If the new repo's `localPath` matches a hardcoded migration target
+ * (today only `first-tree-hub` or a UUID-shaped name carrying an
+ * AGENTS.md), the migration will treat it as orphan and delete. Mitigations
+ * we evaluated:
+ *   - Defer on `ctx === null` regardless of persisted state (option A) —
+ *     safer, but a workspace whose cache is permanently lost would never
+ *     get its sweep. Such a workspace can't function anyway.
+ *   - Force retired-hub / UUID-snapshots through `tryRemoveCloneSafely`
+ *     (option B) — adds the dirty/ahead/worktree guards as a backstop.
+ * Both are tracked as follow-ups; the race window (cache miss between
+ * config change and a successful refresh) is rare enough that documenting
+ * it here is the chosen action for this PR.
  */
 function shouldDeferOnUnknownConfig(ctx: MigrationContext, workspacePath: string): boolean {
   if (ctx.currentSourceRepoNames !== null) return false;
