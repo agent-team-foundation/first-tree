@@ -814,10 +814,9 @@ export function isHubWorktreeMarker(path: string): boolean {
 
 /**
  * Field-by-field equality for the identity record both handlers write into
- * `.first-tree-workspace/identity.json`. Implemented manually so a missing key
- * on disk
- * (older bootstrap) is treated as drift even when `JSON.stringify` happens
- * to match by chance.
+ * `.first-tree-workspace/identity.json`. Implemented manually so a missing
+ * key on disk from an older bootstrap is treated as drift even when
+ * `JSON.stringify` happens to match by chance.
  *
  * Shared between claude-code and codex handlers — both call
  * `ensureStableIdentity` / `ensureCodexBootstrap` to hash-check before
