@@ -18,7 +18,13 @@ export {
 export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";
 export type { ContextTreeBinding } from "./runtime/bootstrap.js";
-export { contextTreeCloneDir, syncAgentContextTree, syncContextTree } from "./runtime/bootstrap.js";
+export {
+  contextTreeCloneDir,
+  ensureWorkspaceRuntimeDir,
+  migrateLegacyRuntimeLayout,
+  syncAgentContextTree,
+  syncContextTree,
+} from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";

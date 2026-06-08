@@ -623,6 +623,26 @@ export function ensureWorkspaceRuntimeDir(workspacePath: string): string {
   return runtimeDir;
 }
 
+/**
+ * Apply the legacy runtime-layout migration without rewriting identity or any
+ * other bootstrap-managed files. Shared by handler bootstrap and the client
+ * startup migration so both converge on the same cleanup: move `.agent/`
+ * into `.first-tree-workspace/`, then prune legacy `.agent/context/` and
+ * `.agent/tools.md` payloads that the unified briefing replaced.
+ */
+export function migrateLegacyRuntimeLayout(workspacePath: string): string {
+  const runtimeDir = ensureWorkspaceRuntimeDir(workspacePath);
+  const legacyContextDir = join(runtimeDir, "context");
+  if (existsSync(legacyContextDir)) {
+    rmSync(legacyContextDir, { recursive: true, force: true });
+  }
+  const legacyToolsMd = join(runtimeDir, "tools.md");
+  if (existsSync(legacyToolsMd)) {
+    rmSync(legacyToolsMd, { force: true });
+  }
+  return runtimeDir;
+}
+
 export type BootstrapOptions = {
   workspacePath: string;
   identity: AgentIdentity;
@@ -652,19 +672,7 @@ export type BootstrapOptions = {
  */
 export function bootstrapWorkspace(options: BootstrapOptions): void {
   const { workspacePath, identity, contextTreePath, serverUrl } = options;
-  const agentDir = ensureWorkspaceRuntimeDir(workspacePath);
-  // Legacy `.agent/context/` staging directory; pruned at bootstrap so a
-  // resumed agent home that pre-dates this PR doesn't keep stale
-  // agent-instructions.md / domain-map.md / tools.md around. The unified
-  // briefing replaces them.
-  const legacyContextDir = join(agentDir, "context");
-  if (existsSync(legacyContextDir)) {
-    rmSync(legacyContextDir, { recursive: true, force: true });
-  }
-  const legacyToolsMd = join(agentDir, "tools.md");
-  if (existsSync(legacyToolsMd)) {
-    rmSync(legacyToolsMd, { force: true });
-  }
+  const agentDir = migrateLegacyRuntimeLayout(workspacePath);
 
   // 1. Write identity.json — agent-level stable fields only. chatId /
   //    chatContext used to live here but are now injected per turn so a
