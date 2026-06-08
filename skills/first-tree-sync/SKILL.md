@@ -1,6 +1,6 @@
 ---
 name: first-tree-sync
-version: 0.6.0
+version: 0.6.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-context` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
@@ -52,7 +52,7 @@ Each phase has a dedicated reference; follow them in order.
 ```
 tree-stale                   — tree node was true; code moved
 tree-wrong                   — tree node never matched code
-tree-outdated                — superseded by a newer decision
+tree-outdated                — node's claim no longer matches the current decision
 code-not-synced/structural   — code structure exists; tree skeleton does not register it
 code-not-synced/substantive  — code decision/constraint exists; tree does not record it
 cross-domain-broken          — soft_links target gone or wrong
