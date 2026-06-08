@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { ConfigRow } from "./flat-section.js";
+import { titleWithSemantics } from "./save-semantics.js";
 
+// Execution (computer + runtime) is the immediate-save half of the Environment
+// tab. Model / reasoning (draft, SaveBar) render separately in the tab's draft
+// zone — they used to be slotted in here, but PR2 splits the two save semantics
+// into distinct zones, so this section is Execution-only now.
 export type RuntimeSectionProps = {
   runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
@@ -18,10 +23,6 @@ export type RuntimeSectionProps = {
   /** When set, the bound-computer card surfaces a "Re-bind" button that
    *  opens the unified ReBindDialog (UX U2). Available only on bound agents. */
   onRebind?: () => void;
-  /** Slot for the Model dropdown — we reuse the existing ModelSection via composition. */
-  modelSlot: ReactNode;
-  /** Slot for the Reasoning effort dropdown — same composition pattern as the model slot. */
-  effortSlot?: ReactNode;
 };
 
 const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
@@ -42,44 +43,33 @@ const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> =
 export function RuntimeSection(props: RuntimeSectionProps) {
   const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
-    <>
-      <Section
-        title="Execution"
-        description="Computer and runtime changes apply immediately through bind or re-bind."
-        action={
-          props.computerLabel && props.onRebind ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={props.onRebind}
-              title="Move this agent to another computer or runtime"
-            >
-              <Link2 className="h-3 w-3" />
-              Re-bind
-            </Button>
-          ) : null
-        }
-      >
-        <ComputerRow
-          computerLabel={props.computerLabel}
-          statusLoading={props.computerStatusLoading ?? false}
-          statusError={props.computerStatusError ?? null}
-          canBindComputer={props.canBindComputer}
-          bindPending={props.bindComputerPending ?? false}
-          onBindComputer={props.onBindComputer}
-        />
-        <RuntimeRow name={copy.name} caption={copy.caption} />
-      </Section>
-      <div style={{ marginTop: "var(--sp-8)" }}>
-        <Section
-          title="Model settings"
-          description="Model and reasoning settings remain drafts until saved from the Save bar."
-        >
-          {props.modelSlot}
-          {props.effortSlot}
-        </Section>
-      </div>
-    </>
+    <Section
+      title={titleWithSemantics("Execution", "immediate")}
+      description="Computer and runtime changes apply immediately through bind or re-bind."
+      action={
+        props.computerLabel && props.onRebind ? (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={props.onRebind}
+            title="Move this agent to another computer or runtime"
+          >
+            <Link2 className="h-3 w-3" />
+            Re-bind
+          </Button>
+        ) : null
+      }
+    >
+      <ComputerRow
+        computerLabel={props.computerLabel}
+        statusLoading={props.computerStatusLoading ?? false}
+        statusError={props.computerStatusError ?? null}
+        canBindComputer={props.canBindComputer}
+        bindPending={props.bindComputerPending ?? false}
+        onBindComputer={props.onBindComputer}
+      />
+      <RuntimeRow name={copy.name} caption={copy.caption} />
+    </Section>
   );
 }
 

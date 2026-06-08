@@ -23,6 +23,7 @@ import { Section } from "../../components/ui/section.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { typeLabelSingular } from "../settings/resource-editors.js";
 import { sourceLabel } from "./resource-source.js";
+import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 /**
  * Shared agent-resource (repo / skill / mcp) section, used by two tabs:
@@ -43,6 +44,8 @@ export type AgentResourcesController = {
   mutateBindings: (bindings: AgentResourceBindingInput[]) => void;
   pending: boolean;
   saveError: unknown;
+  /** True for ~2.5s after a successful immediate save (drives the "Saved" tag). */
+  justSaved: boolean;
 };
 
 /**
@@ -79,6 +82,7 @@ export function agentResourcesMutationHandlers(
 
 export function useAgentResources(uuid: string, opts: { enabled: boolean }): AgentResourcesController {
   const queryClient = useQueryClient();
+  const { justSaved, markSaved } = useJustSaved();
   const resourcesQuery = useQuery({
     queryKey: ["agent-resources", uuid],
     queryFn: () => getAgentResources(uuid),
@@ -89,7 +93,7 @@ export function useAgentResources(uuid: string, opts: { enabled: boolean }): Age
       if (!resourcesQuery.data) throw new Error("resources not loaded");
       return updateAgentResources(uuid, { expectedVersion: resourcesQuery.data.version, bindings });
     },
-    ...agentResourcesMutationHandlers(queryClient, uuid),
+    ...agentResourcesMutationHandlers(queryClient, uuid, { onSuccessAfter: markSaved }),
   });
   return {
     data: resourcesQuery.data,
@@ -98,6 +102,7 @@ export function useAgentResources(uuid: string, opts: { enabled: boolean }): Age
     mutateBindings: updateMut.mutate,
     pending: updateMut.isPending,
     saveError: updateMut.error,
+    justSaved,
   };
 }
 
@@ -112,9 +117,13 @@ export function ResourceTypeSection(props: {
   canEdit: boolean;
   pending: boolean;
   onMutate: (bindings: AgentResourceBindingInput[]) => void;
+  /** Flash a "Saved" tag after a successful immediate write (from useAgentResources). */
+  saved?: boolean;
+  /** Leave-guarded navigate for the "Manage in Settings" exit (omit in previews). */
+  onNavigateAway?: (to: string) => void;
 }) {
   const [repoOpen, setRepoOpen] = useState(false);
-  const { type, data, canEdit, pending, onMutate } = props;
+  const { type, data, canEdit, pending, onMutate, saved, onNavigateAway } = props;
   const currentBindings = data.bindings;
   const activeBindingIds = new Set(currentBindings.map((b) => b.resourceId).filter((id): id is string => !!id));
   // Opt-in team resources an agent can enable for itself. Repos are excluded:
@@ -130,7 +139,7 @@ export function ResourceTypeSection(props: {
   const rows = data.effective[resourceBucket(type)];
   return (
     <Section
-      title={typeLabel(type)}
+      title={titleWithSemantics(typeLabel(type), "immediate", saved)}
       count={rows.length}
       description={type === "mcp" ? "From the MCP servers you connect." : undefined}
       action={
@@ -139,6 +148,7 @@ export function ResourceTypeSection(props: {
             type={type}
             enableable={enableable}
             pending={pending}
+            onNavigateAway={onNavigateAway}
             onAddAgentRepo={() => setRepoOpen(true)}
             onEnable={(resource) =>
               onMutate([
@@ -210,8 +220,11 @@ function AddCapabilityMenu(props: {
   pending: boolean;
   onAddAgentRepo: () => void;
   onEnable: (resource: ResourceRow) => void;
+  /** Leave-guarded navigate for "Manage in Settings"; falls back to plain navigate. */
+  onNavigateAway?: (to: string) => void;
 }) {
   const navigate = useNavigate();
+  const goToSettings = () => (props.onNavigateAway ?? navigate)("/settings/resources");
   return (
     <Popover
       align="end"
@@ -259,7 +272,7 @@ function AddCapabilityMenu(props: {
           <MenuButton
             muted
             onClick={() => {
-              navigate("/settings/resources");
+              goToSettings();
               close();
             }}
           >

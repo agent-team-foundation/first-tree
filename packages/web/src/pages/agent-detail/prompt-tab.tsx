@@ -6,7 +6,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Navigate, useNavigate } from "react-router";
+import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
@@ -17,12 +17,14 @@ import { Textarea } from "../../components/ui/textarea.js";
 import { agentResourcesMutationHandlers } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { sourceLabel } from "./resource-source.js";
+import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 type AvailablePrompt = { id: string; name: string };
 
 export function PromptTab() {
   const ctx = useAgentDetailContext();
   const queryClient = useQueryClient();
+  const { justSaved, markSaved } = useJustSaved();
   const [editor, setEditor] = useState<PromptEditorState | null>(null);
   const resourcesQuery = useQuery({
     queryKey: ["agent-resources", ctx.uuid],
@@ -39,7 +41,12 @@ export function PromptTab() {
     },
     // Same hardening as the shared resource hook (stale-GET cancel + 409 refetch),
     // since the shell now also observes this cache. `onSuccessAfter` closes the editor.
-    ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: () => setEditor(null) }),
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid, {
+      onSuccessAfter: () => {
+        setEditor(null);
+        markSaved();
+      },
+    }),
   });
   // All prompt-binding management (enable / disable / remove / re-enable) goes
   // through one mutation that submits the full bindings array. The old Resources
@@ -49,7 +56,7 @@ export function PromptTab() {
       if (!resourcesQuery.data) throw new Error("prompt resources not loaded");
       return updateAgentResources(ctx.uuid, { expectedVersion: resourcesQuery.data.version, bindings });
     },
-    ...agentResourcesMutationHandlers(queryClient, ctx.uuid),
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: markSaved }),
   });
   if (ctx.isHuman) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
@@ -113,7 +120,7 @@ export function PromptTab() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <Section
-        title="Instructions"
+        title={titleWithSemantics("Instructions", "immediate", justSaved)}
         description="Team and your own instructions for this agent — toggle, customize, or add your own."
         action={
           canEditPrompt && !resourceError && !editor && resources ? (
@@ -122,6 +129,7 @@ export function PromptTab() {
               pending={bindingMut.isPending}
               onAddCustom={() => openPromptEditor(null)}
               onEnable={enablePrompt}
+              onNavigateAway={ctx.guardedNavigate}
             />
           ) : null
         }
@@ -602,8 +610,9 @@ function AddInstructionsMenu(props: {
   pending: boolean;
   onAddCustom: () => void;
   onEnable: (resourceId: string) => void;
+  /** Leave-guarded navigate for the "Manage in Settings" exit. */
+  onNavigateAway: (to: string) => void;
 }) {
-  const navigate = useNavigate();
   return (
     <Popover
       align="end"
@@ -654,7 +663,7 @@ function AddInstructionsMenu(props: {
           <InstructionsMenuButton
             muted
             onClick={() => {
-              navigate("/settings/resources");
+              props.onNavigateAway("/settings/resources");
               close();
             }}
           >

@@ -1,4 +1,5 @@
 import type { ResourceType } from "@first-tree/shared";
+import { useState } from "react";
 import { ResourceTypeSection, useAgentResources } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
@@ -10,6 +11,9 @@ const RESOURCE_TYPES: ResourceType[] = ["skill", "mcp"];
 export function ResourcesTab() {
   const ctx = useAgentDetailContext();
   const resources = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && !ctx.isHuman });
+  // Skill and MCP share one resource mutation/justSaved flag, so flash "Saved"
+  // only on the section that was actually edited (tracked at click time).
+  const [lastSavedType, setLastSavedType] = useState<ResourceType | null>(null);
 
   if (ctx.isHuman) return null;
   if (resources.isLoading) {
@@ -39,7 +43,12 @@ export function ResourcesTab() {
           data={data}
           canEdit={canEdit}
           pending={resources.pending}
-          onMutate={resources.mutateBindings}
+          onMutate={(bindings) => {
+            setLastSavedType(type);
+            resources.mutateBindings(bindings);
+          }}
+          saved={resources.justSaved && lastSavedType === type}
+          onNavigateAway={ctx.guardedNavigate}
         />
       ))}
       {resources.saveError ? (

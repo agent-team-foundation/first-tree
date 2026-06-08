@@ -75,6 +75,7 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     isHuman: baseAgent.type === "human",
     canManageAgent: true,
     canEditConfig: true,
+    guardedNavigate: vi.fn(),
     draft: {} as AgentDetailContext["draft"],
     config: undefined,
     configLoading: false,

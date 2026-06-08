@@ -155,6 +155,7 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
     isHuman: false,
     canManageAgent: true,
     canEditConfig: true,
+    guardedNavigate: vi.fn(),
     draft: draft(overrides.draft),
     config: config(),
     configLoading: false,

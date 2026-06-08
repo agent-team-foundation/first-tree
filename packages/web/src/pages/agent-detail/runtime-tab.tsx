@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Navigate } from "react-router";
+import { Section } from "../../components/ui/section.js";
 import { ResourceTypeSection, useAgentResources } from "./capability-section.js";
 import { EnvSection } from "./env-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
@@ -7,6 +8,7 @@ import { ModelSection } from "./model-section.js";
 import { ReasoningEffortSection } from "./reasoning-effort-section.js";
 import { RuntimeSection } from "./runtime-section.js";
 import { sectionAnchorId } from "./save-bar.js";
+import { titleWithSemantics } from "./save-semantics.js";
 
 export function RuntimeTab() {
   const ctx = useAgentDetailContext();
@@ -41,6 +43,8 @@ export function RuntimeTab() {
           Failed to load configuration: {String(ctx.configError)}
         </div>
       )}
+      {/* Immediate zone — Execution + Repositories. Both save the moment you act
+          (bind/re-bind, repo add/remove); no SaveBar involvement. */}
       {ctx.config && (
         <RuntimeSection
           runtimeProvider={ctx.setupRuntimeProvider}
@@ -51,30 +55,6 @@ export function RuntimeTab() {
           bindComputerPending={ctx.bindClientPending}
           onBindComputer={ctx.onOpenBindDialog}
           onRebind={ctx.agent.clientId ? ctx.onOpenRebindDialog : undefined}
-          modelSlot={
-            <div id={sectionAnchorId("model")}>
-              <ModelSection
-                value={ctx.draft.draft.model}
-                baseline={ctx.config?.payload.model ?? ""}
-                onChange={ctx.draft.setModel}
-                onRevert={ctx.draft.revertModel}
-                disabled={ctx.agent.status !== "active"}
-                provider={ctx.setupRuntimeProvider}
-              />
-            </div>
-          }
-          effortSlot={
-            <div id={sectionAnchorId("effort")}>
-              <ReasoningEffortSection
-                value={ctx.draft.draft.reasoningEffort}
-                baseline={ctx.config?.payload.reasoningEffort ?? ""}
-                onChange={ctx.draft.setReasoningEffort}
-                onRevert={ctx.draft.revertReasoningEffort}
-                disabled={ctx.agent.status !== "active"}
-                provider={ctx.setupRuntimeProvider}
-              />
-            </div>
-          }
         />
       )}
       <div id={sectionAnchorId("git")} style={{ marginTop: "var(--sp-8)" }}>
@@ -93,6 +73,8 @@ export function RuntimeTab() {
             canEdit={canEditResources}
             pending={repos.pending}
             onMutate={repos.mutateBindings}
+            saved={repos.justSaved}
+            onNavigateAway={ctx.guardedNavigate}
           />
         )}
         {repos.saveError ? (
@@ -101,6 +83,38 @@ export function RuntimeTab() {
           </p>
         ) : null}
       </div>
+
+      {/* Draft zone — Model settings + Environment variables. These stage into the
+          SaveBar and commit together; their dirty-dots drive the bar. */}
+      {ctx.config && (
+        <div style={{ marginTop: "var(--sp-8)" }}>
+          <Section
+            title={titleWithSemantics("Model settings", "draft")}
+            description="Model and reasoning settings remain drafts until saved from the Save bar."
+          >
+            <div id={sectionAnchorId("model")}>
+              <ModelSection
+                value={ctx.draft.draft.model}
+                baseline={ctx.config?.payload.model ?? ""}
+                onChange={ctx.draft.setModel}
+                onRevert={ctx.draft.revertModel}
+                disabled={ctx.agent.status !== "active"}
+                provider={ctx.setupRuntimeProvider}
+              />
+            </div>
+            <div id={sectionAnchorId("effort")}>
+              <ReasoningEffortSection
+                value={ctx.draft.draft.reasoningEffort}
+                baseline={ctx.config?.payload.reasoningEffort ?? ""}
+                onChange={ctx.draft.setReasoningEffort}
+                onRevert={ctx.draft.revertReasoningEffort}
+                disabled={ctx.agent.status !== "active"}
+                provider={ctx.setupRuntimeProvider}
+              />
+            </div>
+          </Section>
+        </div>
+      )}
       {ctx.config && (
         <div id={sectionAnchorId("env")} style={{ marginTop: "var(--sp-8)" }}>
           <EnvSection

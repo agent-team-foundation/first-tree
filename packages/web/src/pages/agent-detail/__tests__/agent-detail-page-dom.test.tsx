@@ -778,6 +778,51 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
+  it("guards leaving with an unsaved config draft (confirm discards, cancel stays)", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+
+    // Dirty the config draft by changing the model — the SaveBar appears.
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+
+    // Leaving via the header Chat button is guarded.
+    await click(container.querySelector('button[aria-label="Start chat"]'));
+    await waitForText(document.body, "Leave with unsaved changes?");
+    expect(container.textContent).not.toContain("/?c=draft");
+
+    // Cancel keeps us on the page (no navigation).
+    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Leave with unsaved changes?"),
+      "Expected leave guard to dismiss on cancel",
+    );
+
+    // Re-trigger and discard → navigation proceeds.
+    await click(container.querySelector('button[aria-label="Start chat"]'));
+    await waitForText(document.body, "Leave with unsaved changes?");
+    await click(exactButtonByText(document.body, "Discard & leave"));
+    await waitForText(container, "/?c=draft&with=agent-1");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not guard same-agent tab navigation (draft persists across tabs)", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+
+    // Switching tabs within the same agent must NOT pop the leave guard.
+    const profileTab = [...container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === "Profile");
+    await click(profileTab ?? null);
+    expect(document.body.textContent).not.toContain("Leave with unsaved changes?");
+
+    await act(async () => root.unmount());
+  });
+
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);

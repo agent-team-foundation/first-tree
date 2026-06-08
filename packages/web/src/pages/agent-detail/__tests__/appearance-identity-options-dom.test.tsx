@@ -216,73 +216,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("AppearanceSection", () => {
-  it("edits avatar color, uploads a resized image, removes an image, and reports save errors", async () => {
+describe("AppearanceSection (display-only)", () => {
+  it("shows avatar summary and routes Edit + avatar to the unified dialog", async () => {
     const { AppearanceSection } = await import("../appearance-section.js");
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const onEdit = vi.fn();
 
-    const first = await renderDom(
-      <AppearanceSection agent={agent({ avatarColorToken: "hue-1" })} onSave={onSave} onRefresh={onRefresh} />,
-    );
-    expect(first.container.textContent).toContain("Color hue-1");
-
-    await click(buttonByText(first.container, "Edit"));
-    expect(document.body.textContent).toContain("Edit Appearance");
-    await click(document.body.querySelector('button[title="hue-3"]'));
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith({ avatarColorToken: "hue-3" });
-
-    await act(async () => first.root.unmount());
-
-    const second = await renderDom(
+    const withImage = await renderDom(
       <AppearanceSection
         agent={agent({ avatarColorToken: "hue-3", avatarImageUrl: "/avatars/agent-1.png" })}
-        onSave={onSave}
-        onRefresh={onRefresh}
+        onEdit={onEdit}
       />,
     );
-    expect(second.container.textContent).toContain("Custom image");
-    expect(second.container.querySelector('img[alt="Kael"]')).toBeTruthy();
-
-    await click(buttonByText(second.container, "Edit"));
-    const fileInput = document.body.querySelector<HTMLInputElement>('input[type="file"]');
-    if (!fileInput) throw new Error("Expected file input");
-    await setFileInput(fileInput, new File(["avatar"], "avatar.png", { type: "image/png" }));
-    expect(agentApiMocks.uploadAgentAvatar).toHaveBeenCalledWith("agent-1", expect.any(Blob));
-    expect(onRefresh).toHaveBeenCalled();
-
-    await click(buttonByText(document.body, "Remove image"));
-    expect(agentApiMocks.deleteAgentAvatar).toHaveBeenCalledWith("agent-1");
-
-    onSave.mockRejectedValueOnce(new Error("Color update failed"));
-    await click(document.body.querySelector('button[title="Auto"]'));
-    await click(buttonByText(document.body, "Save"));
-    expect(document.body.textContent).toContain("Color update failed");
-
-    await act(async () => second.root.unmount());
+    expect(withImage.container.textContent).toContain("Custom image");
+    expect(withImage.container.querySelector('img[alt="Kael"]')).toBeTruthy();
+    await click(buttonByText(withImage.container, "Edit"));
+    await click(withImage.container.querySelector('button[aria-label="Edit avatar"]'));
+    expect(onEdit).toHaveBeenCalledTimes(2);
+    await act(async () => withImage.root.unmount());
   });
 
-  it("hides edit controls when the caller cannot edit or the agent is inactive", async () => {
+  it("hides the edit affordance when the caller cannot edit, the agent is inactive, or no onEdit is given", async () => {
     const { AppearanceSection } = await import("../appearance-section.js");
-    const onSave = vi.fn();
+    const onEdit = vi.fn();
 
-    const readOnly = await renderDom(<AppearanceSection agent={agent()} canEdit={false} onSave={onSave} />);
+    const readOnly = await renderDom(<AppearanceSection agent={agent()} canEdit={false} onEdit={onEdit} />);
     expect(buttonByText(readOnly.container, "Edit")).toBeNull();
     await act(async () => readOnly.root.unmount());
 
     const inactive = await renderDom(
-      <AppearanceSection agent={agent({ status: "suspended" })} canEdit onSave={onSave} />,
+      <AppearanceSection agent={agent({ status: "suspended" })} canEdit onEdit={onEdit} />,
     );
     expect(buttonByText(inactive.container, "Edit")).toBeNull();
     await act(async () => inactive.root.unmount());
+
+    const noHandler = await renderDom(<AppearanceSection agent={agent()} canEdit />);
+    expect(buttonByText(noHandler.container, "Edit")).toBeNull();
+    await act(async () => noHandler.root.unmount());
   });
 });
 
-describe("IdentitySection", () => {
-  it("renders resolved identity metadata and saves human identity edits", async () => {
+describe("IdentitySection (display-only)", () => {
+  it("renders resolved identity metadata and routes Edit to the unified dialog", async () => {
     const { IdentitySection } = await import("../identity-section.js");
-    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onEdit = vi.fn();
     const human = agent({
       uuid: "human-1",
       name: "bestony",
@@ -293,7 +269,7 @@ describe("IdentitySection", () => {
       metadata: { tree: { role: "Maintainer", domains: ["agent-hub", "first_tree"] } },
     });
 
-    const { container, root } = await renderDom(<IdentitySection agent={human} onSave={onSave} />);
+    const { container, root } = await renderDom(<IdentitySection agent={human} onEdit={onEdit} />);
     await flush();
     expect(container.textContent).toContain("Manager User");
     expect(container.textContent).toContain("Helper");
@@ -303,71 +279,137 @@ describe("IdentitySection", () => {
     expect(container.textContent).toContain("First tree");
 
     await click(buttonByText(container, "Edit"));
-    const disabledName = document.body.querySelector<HTMLInputElement>("input.font-mono");
-    expect(disabledName?.value).toBe("@bestony");
-    expect(disabledName?.disabled).toBe(true);
-
-    const displayInput = document.body.querySelector<HTMLInputElement>("#id-display");
-    const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#id-visibility");
-    const delegateSelect = document.body.querySelector<HTMLButtonElement>("#id-delegate");
-    if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected identity fields");
-
-    await setInputValue(displayInput, " ");
-    await click(buttonByText(document.body, "Save"));
-    expect(document.body.textContent).toContain("Display name is required.");
-    expect(onSave).not.toHaveBeenCalled();
-
-    await setInputValue(displayInput, "Bestony Renamed");
-    await chooseSelectOption(visibilitySelect, "Visible to your team");
-    await chooseSelectOption(delegateSelect, "Second Helper");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith({
-      displayName: "Bestony Renamed",
-      delegateMention: "delegate-2",
-      visibility: "organization",
-    });
-
-    await act(async () => root.unmount());
-  });
-
-  it("disables visibility for non-owners and surfaces save errors", async () => {
-    const { IdentitySection } = await import("../identity-section.js");
-    authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };
-    const onSave = vi.fn().mockRejectedValueOnce(new Error("Identity update failed"));
-    const { container, root } = await renderDom(
-      <IdentitySection
-        agent={agent({ managerId: "member-self", visibility: "private", metadata: { tree: { domains: [""] } } })}
-        onSave={onSave}
-      />,
-    );
-
-    await click(buttonByText(container, "Edit"));
-    const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#id-visibility");
-    expect(visibilitySelect?.disabled).toBe(true);
-    expect(document.body.textContent).toContain("Only the owner or an admin can change this agent's visibility.");
-
-    const displayInput = document.body.querySelector<HTMLInputElement>("#id-display");
-    if (!displayInput) throw new Error("Expected display field");
-    await setInputValue(displayInput, "Kael Updated");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith({
-      displayName: "Kael Updated",
-    });
-    expect(document.body.textContent).toContain("Identity update failed");
-
+    expect(onEdit).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
 
   it("omits edit controls for read-only or inactive agents", async () => {
     const { IdentitySection } = await import("../identity-section.js");
-    const onSave = vi.fn();
-    const readOnly = await renderDom(<IdentitySection agent={agent()} canEdit={false} onSave={onSave} />);
+    const readOnly = await renderDom(<IdentitySection agent={agent()} canEdit={false} onEdit={vi.fn()} />);
     expect(buttonByText(readOnly.container, "Edit")).toBeNull();
     await act(async () => readOnly.root.unmount());
 
-    const inactive = await renderDom(<IdentitySection agent={agent({ status: "deleted" })} onSave={onSave} />);
+    const inactive = await renderDom(<IdentitySection agent={agent({ status: "deleted" })} onEdit={vi.fn()} />);
     expect(buttonByText(inactive.container, "Edit")).toBeNull();
     await act(async () => inactive.root.unmount());
+  });
+});
+
+describe("ProfileEditDialog (merged identity + appearance)", () => {
+  it("saves identity + color in one call, uploads/removes image eagerly, and flashes saved", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const onSaved = vi.fn();
+    const onOpenChange = vi.fn();
+
+    const { root } = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ avatarColorToken: "hue-1", avatarImageUrl: "/avatars/agent-1.png" })}
+        open
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+        onRefresh={onRefresh}
+        onSaved={onSaved}
+      />,
+    );
+    expect(document.body.textContent).toContain("Edit profile");
+
+    // Image is eager — applies on pick/remove, separate from the Save button.
+    const fileInput = document.body.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("Expected file input");
+    await setFileInput(fileInput, new File(["avatar"], "avatar.png", { type: "image/png" }));
+    expect(agentApiMocks.uploadAgentAvatar).toHaveBeenCalledWith("agent-1", expect.any(Blob));
+    expect(onRefresh).toHaveBeenCalled();
+    await click(buttonByText(document.body, "Remove image"));
+    expect(agentApiMocks.deleteAgentAvatar).toHaveBeenCalledWith("agent-1");
+
+    // Save commits identity fields + the fallback color in one PATCH.
+    await click(document.body.querySelector('button[title="hue-3"]'));
+    await click(buttonByText(document.body, "Save"));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Kael", avatarColorToken: "hue-3" }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    await act(async () => root.unmount());
+  });
+
+  it("blocks save on empty name and keeps the dialog open on a save failure (partial failure)", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockRejectedValueOnce(new Error("Identity update failed"));
+    const onSaved = vi.fn();
+    const onOpenChange = vi.fn();
+
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={onSaved} />,
+    );
+
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    await setInputValue(displayInput, " ");
+    await click(buttonByText(document.body, "Save"));
+    expect(document.body.textContent).toContain("Display name is required.");
+    expect(onSave).not.toHaveBeenCalled();
+
+    await setInputValue(displayInput, "Kael Updated");
+    await click(buttonByText(document.body, "Save"));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Kael Updated" }));
+    // Save failed → dialog stays open (no close), error surfaced, no saved flash.
+    expect(document.body.textContent).toContain("Identity update failed");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("edits human visibility + delegate, and disables visibility for non-owners", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const human = agent({
+      uuid: "human-1",
+      name: "bestony",
+      displayName: "Bestony",
+      type: "human",
+      visibility: "private",
+    });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+
+    const owner = await renderDom(
+      <ProfileEditDialog agent={human} open onOpenChange={vi.fn()} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const disabledName = document.body.querySelector<HTMLInputElement>("input.font-mono");
+    expect(disabledName?.value).toBe("@bestony");
+    expect(disabledName?.disabled).toBe(true);
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
+    const delegateSelect = document.body.querySelector<HTMLButtonElement>("#profile-delegate");
+    if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected fields");
+    await setInputValue(displayInput, "Bestony Renamed");
+    await chooseSelectOption(visibilitySelect, "Visible to your team");
+    await chooseSelectOption(delegateSelect, "Second Helper");
+    await click(buttonByText(document.body, "Save"));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: "Bestony Renamed",
+        delegateMention: "delegate-2",
+        visibility: "organization",
+      }),
+    );
+    await act(async () => owner.root.unmount());
+
+    authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };
+    const nonOwner = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ managerId: "member-self", visibility: "private" })}
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const lockedVisibility = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
+    expect(lockedVisibility?.disabled).toBe(true);
+    expect(document.body.textContent).toContain("Only the owner or an admin can change this agent's visibility.");
+    await act(async () => nonOwner.root.unmount());
   });
 });
 
