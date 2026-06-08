@@ -8,7 +8,7 @@ import {
   type ResourceType,
   skillResourcePayloadSchema,
 } from "@first-tree/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
@@ -45,6 +45,38 @@ export type AgentResourcesController = {
   saveError: unknown;
 };
 
+/**
+ * Shared success/error handlers for any mutation that writes the versioned
+ * `["agent-resources", uuid]` cache (the shared resource hook AND the Instructions
+ * tab's prompt-binding mutations). Centralized so every writer of this cache gets
+ * the same two protections, now that the page shell, Environment, Tools & skills,
+ * and Instructions all observe and write it:
+ *  - onSuccess cancels any in-flight GET before writing, so a stale response can't
+ *    resolve afterwards and clobber the version just written (which would desync
+ *    rows/badges and 409 the next mutation);
+ *  - onError refetches on a 409 so a retry uses the latest version instead of
+ *    dead-ending on the same stale expectedVersion.
+ */
+export function agentResourcesMutationHandlers(
+  queryClient: QueryClient,
+  uuid: string,
+  opts?: { onSuccessAfter?: () => void },
+): { onSuccess: (next: AgentResourcesOutput) => Promise<void>; onError: (err: unknown) => void } {
+  return {
+    onSuccess: async (next) => {
+      await queryClient.cancelQueries({ queryKey: ["agent-resources", uuid] });
+      queryClient.setQueryData(["agent-resources", uuid], next);
+      queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
+      opts?.onSuccessAfter?.();
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) {
+        queryClient.invalidateQueries({ queryKey: ["agent-resources", uuid] });
+      }
+    },
+  };
+}
+
 export function useAgentResources(uuid: string, opts: { enabled: boolean }): AgentResourcesController {
   const queryClient = useQueryClient();
   const resourcesQuery = useQuery({
@@ -57,21 +89,7 @@ export function useAgentResources(uuid: string, opts: { enabled: boolean }): Age
       if (!resourcesQuery.data) throw new Error("resources not loaded");
       return updateAgentResources(uuid, { expectedVersion: resourcesQuery.data.version, bindings });
     },
-    onSuccess: async (next) => {
-      // Cancel any in-flight GET first: a stale response that started before this
-      // PATCH could otherwise resolve afterwards and clobber the version we just
-      // wrote, desyncing rows/badges and 409-ing the next mutation.
-      await queryClient.cancelQueries({ queryKey: ["agent-resources", uuid] });
-      queryClient.setQueryData(["agent-resources", uuid], next);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
-    },
-    onError: (err) => {
-      // On a version conflict, refetch so a retry submits against the latest
-      // version instead of dead-ending on the same stale expectedVersion.
-      if (err instanceof ApiError && err.status === 409) {
-        queryClient.invalidateQueries({ queryKey: ["agent-resources", uuid] });
-      }
-    },
+    ...agentResourcesMutationHandlers(queryClient, uuid),
   });
   return {
     data: resourcesQuery.data,

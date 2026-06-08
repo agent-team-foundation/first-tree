@@ -14,6 +14,7 @@ import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
+import { agentResourcesMutationHandlers } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { sourceLabel } from "./resource-source.js";
 
@@ -36,11 +37,9 @@ export function PromptTab() {
         bindings: updatePromptBindings(resourcesQuery.data.bindings, editor, body),
       });
     },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["agent-resources", ctx.uuid], next);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", ctx.uuid] });
-      setEditor(null);
-    },
+    // Same hardening as the shared resource hook (stale-GET cancel + 409 refetch),
+    // since the shell now also observes this cache. `onSuccessAfter` closes the editor.
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: () => setEditor(null) }),
   });
   // All prompt-binding management (enable / disable / remove / re-enable) goes
   // through one mutation that submits the full bindings array. The old Resources
@@ -50,10 +49,7 @@ export function PromptTab() {
       if (!resourcesQuery.data) throw new Error("prompt resources not loaded");
       return updateAgentResources(ctx.uuid, { expectedVersion: resourcesQuery.data.version, bindings });
     },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["agent-resources", ctx.uuid], next);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", ctx.uuid] });
-    },
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid),
   });
   if (ctx.isHuman) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
