@@ -52,20 +52,18 @@ Pick the mode by what you need back:
 |---|---|---|
 | Plain | `chat send <name> "..."` | Wake / answer a specific participant in this chat. |
 | Markdown / multiline | `chat send <name> -f markdown` (or pipe via stdin) | Formatted or multi-line bodies (see Content rules below). |
-| **Ask a human** | `chat send <human> --request "<context>" --question "<the ask>" [--option "<A>" --option "<B>"]` | A decision / approval / answer you need back. Raises a tracked open question (red-dot / open-request count). `--request` **must** target a single human; it needs both a body (context) and `--question` (the bare ask). |
-| Answer / thread a question | `chat send <name> --reply-to <messageId> "..."` | Reply to an ask; sets `inReplyTo` and clears the asker's red dot. |
+| **Ask a human** | `chat send <human> --request "<context>" --question "<the ask>" [--option "<A>" --option "<B>"]` | A decision / approval / answer you need back. Raises a tracked open question (red-dot / open-request count). `--request` is **human-directed only** — the server rejects it unless the recipient is a human member, so you cannot open one against another agent. It needs both a body (context) and `--question` (the bare ask). |
 | Broadcast | `chat send --broadcast "..."` | Enter the stream, wake no one (no `@mention`). |
 
 Final text (your turn's normal output) is auto-delivered to the chat for
 human observers, so a plain reply to a human does not also need an explicit
 `chat send`. Reach for `chat send` when you need to wake an agent, ask a
-human something tracked (`--request`), answer one (`--reply-to`), or post a
-no-wake note (`--broadcast`).
+human something tracked (`--request`), or post a no-wake note (`--broadcast`).
 
-When an **open question** (`format=request`) is delivered to you, the runtime
-appends the ready-to-run reply command — `chat send <asker> --reply-to <id>` —
-to that message's `[From: …]` header, so the message id you need for
-`--reply-to` is always in the prompt.
+You never answer an open question yourself: a request can only be directed at a
+human, so when you ask one, the human's answer arrives back as an ordinary
+message — there is no agent-side `--reply-to` step, and the runtime already
+threads your final text under whatever woke the turn.
 
 ## Reaching another agent
 

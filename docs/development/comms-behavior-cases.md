@@ -10,6 +10,14 @@ These are the regression set for the contract defined in
 `packages/client/src/runtime/agent-briefing.ts` (Communication / Asking Humans
 blocks) and `skills/first-tree/SKILL.md` + `references/agent-communication.md`.
 
+**Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
+C1 (ask human via `--request`), C4 (wake agent via plain `chat send`), and C6
+(plain status → final text only) **PASS** against live server/DB/daemon. C7 was
+**corrected** by that run: a `--request` is human-directed only (the server
+returns `HTTP_400: A 'request' message must be directed at a human member`), so
+the "agent answers an open question" path does not exist — C7 is now a guard for
+that constraint.
+
 ## How to run
 
 Each case is a `(situation → expected action)` pair judged on the agent's
@@ -24,8 +32,7 @@ Outcome vocabulary (`assert` references these):
 
 | Token | Means |
 |---|---|
-| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask |
-| `REPLY_TO(human)` | `chat send <human> --reply-to <messageId> "..."` — answer, clears red-dot |
+| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent) |
 | `SEND(agent)` | plain `chat send <agent> "..."` — wakes an agent |
 | `BROADCAST` | `chat send --broadcast "..."` — enters stream, wakes no one |
 | `FINAL_TEXT` | normal turn output, auto-bridged to the chat |
@@ -42,7 +49,7 @@ Outcome vocabulary (`assert` references these):
 | C4 | Wake another agent to take action | `2a396670` (`chat send qa`) | baseline (must not regress) | `SEND(agent)` |
 | C5 | Stay silent on re-delivered / no-op messages | `86e05523` / `69c60d85` / `7a4051ab` | guard (anti over-correction) | `SILENT` |
 | C6 | Plain status reply to a human | `96fc8b00` (#852) | guard (plan A) | `FINAL_TEXT`, `¬REQUEST` |
-| C7 | Answer a human's open question | derived from C1 inverse | positive (derived) | `REPLY_TO(human)` |
+| C7 | A request cannot target an agent — reach agents with plain send | real QA `pr860-real-runtime-agent-qa` | guard (constraint) | `SEND(agent)`, `¬REQUEST(agent)` |
 
 ---
 
@@ -113,17 +120,18 @@ Outcome vocabulary (`assert` references these):
 - **Expected (new contract):** Unchanged under **plan A** — `FINAL_TEXT` is enough; no separate `chat send`, and definitely not escalated to `--request`.
 - **assert:** `FINAL_TEXT` carries the reply; `¬REQUEST` ∧ `¬SEND(redundant)`.
 
-## C7 — Answer a human's open question  *(derived)*
+## C7 — A request cannot target an agent  *(guard — constraint)*
 
-- **Source:** derived — the inverse of C1. (No observed sample: in the 3-day window the human never used `--request`, so no open question was ever directed at the agent — which is itself why the red-dot mechanism saw zero use. Becomes real once humans start asking via `--request`.)
-- **Situation:** A human raised an open question at the agent via `chat send <agent> --request --question "..."` (a `format=request` message). The runtime delivers it with the reply command — `chat send <asker> --reply-to <id>` — appended to the `[From: …]` header, so the `messageId` is present in the prompt (`agent-io.ts formatInboundContent`).
-- **Decision point:** How to answer so the asker's red-dot clears.
-- **Expected (new contract):**
-  ```bash
-  first-tree-staging chat send yuezengwu --reply-to <messageId> "Holding — will split the migration."
+- **Source:** real runtime QA `pr860-real-runtime-agent-qa-20260608`. An earlier draft of this case wrongly assumed a human could raise an open question *at an agent* and the agent would answer with `--reply-to`; the live CLI/API disproved it.
+- **Situation:** the agent wants another agent to act on (or weigh in on) something and reaches for a tracked open question.
+- **Decision point:** can you direct a `--request` open question at an agent?
+- **Constraint (by design):** **No.** `--request` (`format=request`) is **human-directed only** — the server rejects any other recipient:
   ```
-- **assert:** `REPLY_TO(human)` with `--reply-to` set to the originating `messageId` (sets `inReplyTo`, clears the red-dot). Plain `FINAL_TEXT` alone fails (leaves the question open).
-- **Runtime dependency:** the `messageId` must reach the prompt. The `[From: …]` header surfaces it **only** for `format=request` messages; a QA harness that injects a question without the id is testing a situation the runtime no longer produces.
+  HTTP_400: A 'request' message must be directed at a human member.
+  ```
+  Agents therefore never receive a `format=request` message and never run an `--reply-to` answer step. When an agent *does* ask a human (C1–C3), the human's answer returns as an ordinary message and the runtime threads the agent's final text automatically (`inReplyTo`); there is no agent-side red-dot to clear.
+- **Expected (new contract):** to reach an agent, use plain `SEND(agent)` — `chat send <agent> "..."`. Reserve `--request`/`--question` for the agent→human direction.
+- **assert:** `¬REQUEST(agent)` (a `--request` aimed at an agent is a contract violation, not just suboptimal) ∧ `SEND(agent)` for agent-to-agent work. Complements C4.
 
 ---
 
@@ -131,8 +139,7 @@ Outcome vocabulary (`assert` references these):
 
 | Decision-guide branch | Positive (do it) | Guard (don't over-do it) |
 |---|---|---|
-| Ask a human (`--request`) | C1, C2, C3 | C5 (no spurious ask), C6 (no escalation) |
-| Answer a human (`--reply-to`) | C7 | — |
-| Wake an agent (`SEND`) | C4 | C5 (no courtesy ping) |
+| Ask a human (`--request`) | C1, C2, C3 | C5 (no spurious ask), C6 (no escalation), C7 (never at an agent) |
+| Wake an agent (`SEND`) | C4 | C5 (no courtesy ping), C7 (plain send, not `--request`) |
 | Plain reply (`FINAL_TEXT`) | C6 | — |
 | Say nothing (`SILENT`) | C5 | — |

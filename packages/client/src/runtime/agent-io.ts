@@ -6,7 +6,6 @@ import {
   isImageRefContent,
 } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
-import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity, SessionMessage } from "./handler.js";
 import { findImagePath } from "./image-store.js";
 
@@ -234,13 +233,5 @@ export async function formatInboundContent(message: SessionMessage, participants
 
   if (!message.senderId) return `${header}${rawContent}`;
   const label = resolveSenderLabel(message.senderId, await participants.get());
-  // An open question (`format=request`) directs the recipient at a tracked ask.
-  // Surface the message id inline so the agent can actually answer it with
-  // `chat send <asker> --reply-to <id>` — without this the id never reaches the
-  // prompt and the `--reply-to` path is unreachable in practice.
-  const askHint =
-    message.format === "request"
-      ? `  (open question — to answer, run: ${getCliBinding().binName} chat send ${label} --reply-to ${message.id})`
-      : "";
-  return `${header}[From: ${label}]${askHint}\n\n${rawContent}`;
+  return `${header}[From: ${label}]\n\n${rawContent}`;
 }

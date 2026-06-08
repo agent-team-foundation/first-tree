@@ -277,7 +277,7 @@ function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
 For the full \`chat send\` / \`chat invite\` CLI usage — every mode
-(\`--request\` / \`--question\` / \`--reply-to\` / \`--broadcast\`), syntax,
+(\`--request\` / \`--question\` / \`--broadcast\`), syntax,
 markdown / stdin, reaching non-members, mention resolution — load the top-level
 **\`first-tree\` skill** (and its \`references/agent-communication.md\`).
 The skill's \`description\` triggers progressive disclosure whenever the
@@ -310,8 +310,11 @@ ${bin} chat send <human> --request \\
 \`\`\`
 
 The body carries the context; \`--question\` is **only** the ask; \`--option\`
-(repeatable) offers explicit choices. \`--request\` must target a single human.
-To answer back / clear the asker's red-dot, reply with \`--reply-to <messageId>\`.
+(repeatable) offers explicit choices. A request is **human-directed only** — the
+server rejects \`--request\` unless the recipient is a human member, so you cannot
+open a tracked question against another agent (reach agents with a plain \`chat
+send <name>\`). The human's answer comes back to you as an ordinary message; you
+do not clear their red-dot yourself.
 
 Reach for this on any real fork: needs approval, ambiguous requirements, a
 safety-sensitive action, or any change to core data structures or the database.`;

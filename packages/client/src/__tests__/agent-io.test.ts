@@ -6,7 +6,6 @@ import {
   formatInboundContent,
   resolveSenderLabel,
 } from "../runtime/agent-io.js";
-import { setCliBinding } from "../runtime/cli-binding.js";
 import type { SessionMessage } from "../runtime/handler.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -108,41 +107,6 @@ describe("formatInboundContent", () => {
       metadata: null,
     };
     expect(await formatInboundContent(msg, cache)).toBe(`[From: alice]\n\n${JSON.stringify({ title: "hi" })}`);
-  });
-
-  it("appends a --reply-to hint with the message id for an open question (format=request)", async () => {
-    // Without this, the id never reaches the prompt and the agent cannot use
-    // `chat send <asker> --reply-to <id>` — the channel-correct binary is taken
-    // from the active CLI binding.
-    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-    const sdk = mkSdk(async () => participants);
-    const cache = createParticipantCache(sdk, "chat-1", () => {});
-    const msg: SessionMessage = {
-      id: "msg_req_42",
-      chatId: "chat-1",
-      senderId: "agent-a",
-      format: "request",
-      content: "Ship the destructive migration?",
-      metadata: null,
-    };
-    const out = await formatInboundContent(msg, cache);
-    expect(out).toContain("[From: alice]");
-    expect(out).toContain("first-tree-staging chat send alice --reply-to msg_req_42");
-    expect(out).toContain("Ship the destructive migration?");
-  });
-
-  it("does not append a reply-to hint for a plain (non-request) message", async () => {
-    const sdk = mkSdk(async () => participants);
-    const cache = createParticipantCache(sdk, "chat-1", () => {});
-    const msg: SessionMessage = {
-      id: "m9",
-      chatId: "chat-1",
-      senderId: "agent-a",
-      format: "text",
-      content: "just an update",
-      metadata: null,
-    };
-    expect(await formatInboundContent(msg, cache)).toBe("[From: alice]\n\njust an update");
   });
 
   it("omits the attribution prefix when senderId is empty", async () => {
