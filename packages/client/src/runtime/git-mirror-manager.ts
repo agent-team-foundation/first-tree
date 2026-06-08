@@ -466,6 +466,21 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     return head.stdout.trim();
   }
 
+  /**
+   * Resolve `ref` (branch / tag / commit) to a commit SHA in the LOCAL clone, or
+   * null when it does not resolve locally. Used to confirm a configured `ref` is
+   * already the checked-out HEAD before degrading to `stale-offline`.
+   */
+  async function localRefCommit(absTarget: string, ref: string): Promise<string | null> {
+    try {
+      const { stdout } = await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], absTarget, 10_000);
+      const sha = stdout.trim();
+      return sha.length > 0 ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Short branch name, or undefined when detached (`git rev-parse --abbrev-ref HEAD` → `HEAD`). */
   async function currentBranch(absTarget: string): Promise<string | undefined> {
     try {
@@ -710,22 +725,25 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           //   • origin already matched the configured upstream (no repoint —
           //     "configured repo changed but fetch could not confirm it" fails
           //     closed);
-          //   • any pinned `ref` already resolves locally (never serve a
-          //     checkout that predates a just-changed ref the fetch couldn't
-          //     confirm).
+          //   • any configured `ref` is ALREADY the checked-out HEAD. It is not
+          //     enough that `ref` merely resolves locally: prepareSourceRepos
+          //     surfaces the configured `ref` to the runtime/briefing, so
+          //     returning a HEAD that differs from `ref` would advertise the
+          //     repo as being at `ref` while serving another commit — and for a
+          //     pinned commit, break the honor-as-is contract. When `ref` has
+          //     just changed to something the current HEAD is not at, fail
+          //     closed (we cannot move to it safely without a confirmed fetch).
           // Silently serving a stale checkout otherwise would mask a real,
           // non-self-healing problem.
           if (isLikelyTransientNetworkError(stderr) && isStandaloneClone(absTarget) && originMatchedBeforeFetch) {
-            let usableHead = false;
+            let headSha: string | null = null;
             try {
-              await headCommit(absTarget);
-              usableHead = true;
+              headSha = await headCommit(absTarget);
             } catch {
-              usableHead = false;
+              headSha = null;
             }
-            const refResolvesLocally =
-              !ref || (await gitOk(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], absTarget, 10_000));
-            if (usableHead && refResolvesLocally) {
+            const refSatisfiedByHead = !ref || (headSha !== null && (await localRefCommit(absTarget, ref)) === headSha);
+            if (headSha !== null && refSatisfiedByHead) {
               log?.warn(
                 { gitUrl: url, clonePath: absTarget, stderr: stderr.slice(0, 1024) },
                 "source-repo fetch failed (transient network) — using existing local checkout, left at current commit (stale)",

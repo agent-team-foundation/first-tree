@@ -327,6 +327,37 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     );
   }, 30_000);
 
+  it("still degrades when the configured ref already matches the checked-out HEAD", async () => {
+    // ref is honored: HEAD is at `tip` and config pins `ref` to that same
+    // commit, so the degrade does not advertise a HEAD different from `ref`.
+    const { url: bare, tip } = seedBareRepo();
+    const clonePath = join(newDataDir(), "repo");
+    execSync(`git clone -q ${bare} ${clonePath}`); // HEAD at tip
+    const unreachable = "https://127.0.0.1:1/same-repo.git";
+    execSync(`git remote set-url origin ${unreachable}`, { cwd: clonePath });
+    const m = makeManager();
+    const r = await m.ensureSourceRepo({ url: unreachable, ref: tip, clonePath });
+    expect(r.outcome).toBe("stale-offline");
+    expect(r.headCommit).toBe(tip);
+  }, 30_000);
+
+  it("fails closed when a transient fetch cannot confirm a configured ref the checkout is not at", async () => {
+    // R4 (codex-assistant): the checkout is on `main` (HEAD = tip), config pins
+    // `ref` to a different commit (`prev`) that exists locally but is NOT the
+    // current HEAD, and the confirming fetch fails transiently. Returning
+    // stale-offline would advertise the repo as being at `ref` while serving
+    // `tip` — and break the honor-the-pinned-commit-as-is contract. Must fail
+    // closed.
+    const { url: bare, tip, prev } = seedBareRepo();
+    expect(prev).not.toBe(tip);
+    const clonePath = join(newDataDir(), "repo");
+    execSync(`git clone -q ${bare} ${clonePath}`); // HEAD at tip, prev is an ancestor present locally
+    const unreachable = "https://127.0.0.1:1/same-repo.git";
+    execSync(`git remote set-url origin ${unreachable}`, { cwd: clonePath });
+    const m = makeManager();
+    await expect(m.ensureSourceRepo({ url: unreachable, ref: prev, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+  }, 30_000);
+
   it("still fails closed on a hard (non-transient) fetch failure even with an existing checkout", async () => {
     // Negative case for the stale-offline degrade: a deterministic, non-network
     // failure (repository does not exist) must still bubble up — degrading would
