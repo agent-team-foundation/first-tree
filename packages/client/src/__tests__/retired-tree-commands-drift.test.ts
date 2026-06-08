@@ -45,7 +45,7 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = ["first-tree", "first-tree-context", "first-tree-sync", "first-tree-seed"];
+const SHIPPED_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
@@ -282,7 +282,7 @@ describe("retired tree subcommand drift guard", () => {
     if (failures.length > 0) {
       const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.skill}\` — ${f.snippet}`).join("\n");
       throw new Error(
-        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
+        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-read\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
       );
     }
   });

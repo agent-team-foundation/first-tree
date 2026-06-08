@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Read"
+  short_description: "Read repo context through the tree CLI"
+  default_prompt: "Use $first-tree-read to select relevant Context Tree files with the tree CLI, then read their contents before acting."

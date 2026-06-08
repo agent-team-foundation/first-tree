@@ -137,9 +137,9 @@ needed for those workspace-collab basics.
    source-system boundary, how to read the tree before acting, and
    the Hard Rules + Double Test that govern every tree write.
 
-These two are unconditional. The remaining First Tree skill
-(\`first-tree-sync\`) loads on demand based on the task signal as
-listed in the First Tree Family map below.
+These two are unconditional. The remaining First Tree skills
+(\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
+task signal as listed in the First Tree Family map below.
 
 Skipping either skill costs you the daemon-lifecycle invariants, the
 full Communication Principles, the source-system boundary, and the
@@ -547,7 +547,7 @@ function firstTreeFamilyMap(): string {
 
 \`first-tree\` and \`first-tree-context\` are **unconditional** — load
 them on every task per \`# Required Reading\` above. The remaining
-row loads on demand: each skill's \`description\` field drives
+rows load on demand: each skill's \`description\` field drives
 progressive disclosure when you mention its domain. For general /
 harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 …) trust the auto-injected list.
@@ -556,6 +556,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
 | \`first-tree-context\` | unconditional (see \`# Required Reading\`) — read context before acting OR write tree updates from a specific PR / doc / note |
+| \`first-tree-read\`    | read relevant Context Tree files for the current repo from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
 }
@@ -572,6 +573,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree",
   "first-tree-context",
+  "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",
 ] as const;

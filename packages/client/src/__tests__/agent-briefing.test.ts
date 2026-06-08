@@ -174,6 +174,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/either omits or only summarises/);
     // Calls out the on-demand-only sibling so the agent doesn't
     // over-load every First Tree family skill on every task.
+    expect(briefing).toContain("`first-tree-read`");
     expect(briefing).toContain("`first-tree-sync`");
   });
 
@@ -253,6 +254,9 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 
     // On-demand rows must NOT pick up the unconditional label by
     // accident — they're triggered by keyword / task signal.
+    const readRow = familyMap.match(/\|\s*`first-tree-read`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(readRow).not.toContain("unconditional");
+
     const syncRow = familyMap.match(/\|\s*`first-tree-sync`\s*\|[^\n]*/)?.[0] ?? "";
     expect(syncRow).not.toContain("unconditional");
   });
