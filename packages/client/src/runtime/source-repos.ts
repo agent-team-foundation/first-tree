@@ -1,8 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, deriveRepoLocalPath } from "@first-tree/shared";
-import type { PredeclaredSourceRepo } from "./bootstrap.js";
+import { type PredeclaredSourceRepo, resolveBundledCliVersion } from "./bootstrap.js";
 import { resolveGitRepoTargetPath } from "./git-local-path.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { SessionContext } from "./handler.js";
+import { readManagedState, updateManagedState } from "./managed-state.js";
 
 export type PrepareSourceReposParams = {
   workspace: string;
@@ -98,7 +102,18 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
   const { workspace, payload, sessionCtx, gitMirrorManager } = params;
   const sourceRepos: PredeclaredSourceRepo[] = [];
 
-  if (!gitMirrorManager || !payload?.gitRepos?.length) return sourceRepos;
+  // No git capability → no source-repo prep AND no cleanup (we can't safely
+  // probe for clean state without git). Returns early before any state read.
+  if (!gitMirrorManager) return sourceRepos;
+
+  // Build the set of `localPath`s the current config wants materialised.
+  // `payload?.gitRepos` may legitimately be empty (config exists, just no
+  // source repos) — the reconcile-state path below still runs in that case
+  // so a previously-managed repo whose name was removed from the config
+  // gets cleaned up.
+  const currentLocalPaths: string[] = (payload?.gitRepos ?? []).map(
+    (repo) => repo.localPath ?? deriveRepoLocalPath(repo.url),
+  );
 
   // Paths THIS call newly registered the chat on — only these may be rolled
   // back on failure (see the catch). A resume that re-acquires an already-live
@@ -106,7 +121,7 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
   // shared checkout out from under the still-live chat.
   const newlyRegistered: string[] = [];
   try {
-    for (const repo of payload.gitRepos) {
+    for (const repo of payload?.gitRepos ?? []) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       // Source repos live at the TOP LEVEL of the agent home — no `worktrees/`
       // prefix. The `worktrees/` subdir is reserved for on-demand worktrees.
@@ -152,6 +167,13 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
         `Git: source repo at ${localPath}${result.branch ? ` on ${result.branch}` : ""} (${result.outcome})`,
       );
     }
+
+    // State reconcile: a source repo that used to be in this agent's config
+    // but is no longer present should be removed from disk. We only consider
+    // repos this CLI previously recorded in `.agent/managed.json` — anything
+    // the user dropped at workspace top level (third-party clones, manual
+    // experiments) is untouched.
+    reconcileSourceRepoState(workspace, currentLocalPaths, sessionCtx);
   } catch (err) {
     // Session start is failing and the SessionManager does NOT call the
     // handler's teardown on a failed start. Roll back ONLY the registrations
@@ -164,4 +186,151 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
   }
 
   return sourceRepos;
+}
+
+/**
+ * Compare the previously-managed source repos against the current set and
+ * remove any whose `localPath` is no longer in the config. Safety guards
+ * (working-tree clean + no extra worktrees + no local commits ahead of
+ * upstream) protect against destroying in-flight work; a guard failure
+ * skips the delete and logs a warning instead.
+ *
+ * State (the `sourceRepos` field of `.agent/managed.json`) is rewritten to
+ * the current set whether or not deletes succeeded — so a future config
+ * change correctly diffs against today's reality, and a guard-skipped
+ * cleanup just becomes a manual operator follow-up rather than a
+ * recurring noisy log.
+ */
+function reconcileSourceRepoState(workspace: string, currentLocalPaths: string[], sessionCtx: SessionContext): void {
+  const currentSet = new Set(currentLocalPaths);
+  const prev = readManagedState(workspace);
+  if (prev) {
+    for (const prevLocalPath of prev.sourceRepos) {
+      if (currentSet.has(prevLocalPath)) continue;
+      const absPath = join(workspace, prevLocalPath);
+      attemptRemoveStaleSourceRepo(absPath, prevLocalPath, sessionCtx.log);
+    }
+  }
+
+  updateManagedState(workspace, resolveBundledCliVersion(), (current) => ({
+    ...current,
+    sourceRepos: [...currentSet].sort(),
+  }));
+}
+
+/**
+ * Try to delete a source-repo checkout that's no longer in the agent's
+ * config. Guards:
+ *
+ *   1. **dir missing**          → noop (already gone)
+ *   2. **not a real clone**     → noop (not ours to delete)
+ *   3. **working tree dirty**   → skip + warn
+ *   4. **local commits ahead**  → skip + warn
+ *   5. **extra worktrees**      → skip + warn (would orphan worktree gitdir)
+ *
+ * Any guard failure logs and returns without touching disk. Only when ALL
+ * guards pass do we `rm -rf` the directory.
+ */
+function attemptRemoveStaleSourceRepo(absPath: string, displayName: string, log: (msg: string) => void): void {
+  if (!existsSync(absPath)) return;
+  if (!existsSync(join(absPath, ".git"))) {
+    log(`Git: ${displayName} removed from config but not a recognised clone (no .git) — leaving in place`);
+    return;
+  }
+
+  // Dirty check — `git status --porcelain` reports anything staged, unstaged,
+  // or untracked. Same rule the mirror manager applies to skip destructive
+  // updates of in-use clones. A probe failure (git crashed, repo corrupt)
+  // is treated as "unknown" and we err on the safe side by skipping.
+  const statusOutput = gitOutput(absPath, ["status", "--porcelain", "--untracked-files=normal"]);
+  if (statusOutput === null) {
+    log(`Git: ${displayName} removed from config but git probe failed — left in place (cleanup skipped)`);
+    return;
+  }
+  if (statusOutput !== "") {
+    log(`Git: ${displayName} removed from config but working tree is dirty — left in place (cleanup skipped)`);
+    return;
+  }
+
+  // Local-commits-ahead check — if HEAD is strictly ahead of the configured
+  // upstream we'd lose unpushed work on rm. A `null` from the helper means
+  // either "no upstream configured" (e.g. detached HEAD, fresh clone never
+  // tracked) or a probe failure — both are conservatively treated as "skip".
+  const aheadCount = gitAheadOfUpstream(absPath);
+  if (aheadCount === null) {
+    log(`Git: ${displayName} removed from config but ahead-count probe inconclusive — left in place (cleanup skipped)`);
+    return;
+  }
+  if (aheadCount > 0) {
+    log(
+      `Git: ${displayName} removed from config but has ${aheadCount} local commit(s) ahead of upstream — left in place (cleanup skipped)`,
+    );
+    return;
+  }
+
+  // Extra-worktree check — `git worktree list --porcelain` produces one
+  // record per worktree separated by blank lines. The main checkout is one
+  // of those; anything beyond that is a dependent worktree we'd orphan. A
+  // probe failure here also blocks the delete.
+  const worktreeOutput = gitOutput(absPath, ["worktree", "list", "--porcelain"]);
+  if (worktreeOutput === null) {
+    log(`Git: ${displayName} removed from config but worktree probe failed — left in place (cleanup skipped)`);
+    return;
+  }
+  const worktreeRecords = worktreeOutput.split(/\n\s*\n/).filter((block) => block.trim().length > 0);
+  if (worktreeRecords.length > 1) {
+    log(
+      `Git: ${displayName} removed from config but has ${worktreeRecords.length - 1} dependent worktree(s) — left in place (cleanup skipped)`,
+    );
+    return;
+  }
+
+  try {
+    rmSync(absPath, { recursive: true, force: true });
+    log(`Git: ${displayName} removed from config — deleted clone at ${absPath}`);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    log(`Git: ${displayName} cleanup failed (${reason.slice(0, 200)}) — left in place`);
+  }
+}
+
+/**
+ * Run `git <args>` in `cwd` and return its trimmed stdout. Returns `null`
+ * (not `""`) when the command crashes / times out so callers can
+ * distinguish "command ran, output empty" from "command failed,
+ * conservatively skip".
+ */
+function gitOutput(cwd: string, args: readonly string[]): string | null {
+  try {
+    return execFileSync("git", [...args], {
+      cwd,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Count commits on HEAD ahead of the tracked upstream. Returns `null` when
+ * the count is genuinely unknown — either no upstream is configured
+ * (e.g. fresh clone, detached HEAD) or the `git rev-list` itself crashed.
+ * Callers conservatively treat `null` as "skip cleanup" rather than guess
+ * a safe default.
+ */
+function gitAheadOfUpstream(cwd: string): number | null {
+  try {
+    const head = execFileSync("git", ["rev-list", "--count", "@{u}..HEAD"], {
+      cwd,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const parsed = Number.parseInt(head, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
