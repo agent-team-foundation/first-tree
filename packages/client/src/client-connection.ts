@@ -10,6 +10,8 @@ import {
   inboxAckAcceptedFrameSchema,
   inboxAckRejectedFrameSchema,
   inboxDeliverFrameSchema,
+  inboxRecoverAcceptedFrameSchema,
+  inboxRecoverRejectedFrameSchema,
   type RuntimeState,
   type ServerWelcomeFrame,
   type SessionEvent,
@@ -39,6 +41,17 @@ type PendingInboxAck = {
   agentId?: string;
   ref: string;
   attempts: number;
+  firstSentAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (err: Error) => void;
+};
+
+type PendingInboxRecover = {
+  agentId: string;
+  chatId: string;
+  ref: string;
   firstSentAt: number;
   timer: ReturnType<typeof setTimeout> | null;
   promise: Promise<void>;
@@ -234,6 +247,7 @@ const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INBOX_ACK_CONFIRM_TIMEOUT_MS = 3_000;
+const INBOX_RECOVER_CONFIRM_TIMEOUT_MS = 3_000;
 /**
  * Silence watchdog: if no server frame (data message OR control-frame pong)
  * arrives within this many ms, the socket is presumed dead and terminated so
@@ -421,6 +435,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    */
   private readonly bindRetryRecords = new Map<string, BindRetryRecord>();
   private readonly pendingInboxAcks = new Map<number, PendingInboxAck>();
+  private readonly pendingInboxRecovers = new Map<string, PendingInboxRecover>();
   private readonly socketBoundAgentIds = new Set<string>();
 
   constructor(config: ClientConnectionConfig) {
@@ -500,6 +515,54 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     const pending = this.createPendingInboxAck(entryId, agentId);
     this.pendingInboxAcks.set(entryId, pending);
     this.sendPendingInboxAck(pending, false);
+    return pending.promise;
+  }
+
+  /**
+   * Ask the server to reset delivered-but-unacked entries for one chat and
+   * redeliver them on this socket. Unlike ACKs, recovery is bounded: callers
+   * must get an accepted/rejected/timeout outcome instead of waiting forever
+   * behind a per-chat recovery gate.
+   */
+  sendInboxRecover(agentId: string, chatId: string): Promise<void> {
+    if (
+      !this.ws ||
+      this.ws.readyState !== WebSocket.OPEN ||
+      !this.registered ||
+      !this.socketBoundAgentIds.has(agentId)
+    ) {
+      return Promise.reject(new Error("inbox:recover unavailable; socket not bound"));
+    }
+
+    const pending: PendingInboxRecover = {
+      agentId,
+      chatId,
+      ref: `recover_${randomUUID().slice(0, 12)}`,
+      firstSentAt: Date.now(),
+      timer: null,
+      promise: Promise.resolve(),
+      resolve: () => {},
+      reject: () => {},
+    };
+    pending.promise = new Promise<void>((resolve, reject) => {
+      pending.resolve = resolve;
+      pending.reject = reject;
+    });
+    this.pendingInboxRecovers.set(pending.ref, pending);
+    this.ws.send(JSON.stringify({ type: "inbox:recover", ref: pending.ref, agentId, chatId }));
+    this.wsLogger.debug(
+      {
+        agentId,
+        chatId,
+        ref: pending.ref,
+        recoverEvent: "inbox_recover_sent",
+      },
+      "inbox:recover sent",
+    );
+    pending.timer = setTimeout(() => {
+      if (!this.pendingInboxRecovers.has(pending.ref)) return;
+      this.rejectPendingInboxRecover(pending, "timeout");
+    }, INBOX_RECOVER_CONFIRM_TIMEOUT_MS);
     return pending.promise;
   }
 
@@ -657,6 +720,47 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
+  private resolvePendingInboxRecover(pending: PendingInboxRecover, resetCount: number): void {
+    this.clearPendingInboxRecoverTimer(pending);
+    this.pendingInboxRecovers.delete(pending.ref);
+    this.wsLogger.debug(
+      {
+        agentId: pending.agentId,
+        chatId: pending.chatId,
+        ref: pending.ref,
+        resetCount,
+        latencyMs: Date.now() - pending.firstSentAt,
+        recoverEvent: "inbox_recover_accepted",
+      },
+      "inbox:recover accepted",
+    );
+    pending.resolve();
+  }
+
+  private rejectPendingInboxRecover(pending: PendingInboxRecover, reason: string): void {
+    this.clearPendingInboxRecoverTimer(pending);
+    this.pendingInboxRecovers.delete(pending.ref);
+    this.wsLogger.warn(
+      {
+        agentId: pending.agentId,
+        chatId: pending.chatId,
+        ref: pending.ref,
+        reason,
+        latencyMs: Date.now() - pending.firstSentAt,
+        recoverEvent: "inbox_recover_rejected",
+      },
+      "inbox:recover rejected",
+    );
+    pending.reject(new Error(`inbox:recover rejected (${reason})`));
+  }
+
+  private clearPendingInboxRecoverTimer(pending: PendingInboxRecover): void {
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+  }
+
   private inboxAckConnectionState(): string {
     if (!this.ws) return "no_socket";
     if (this.ws.readyState !== WebSocket.OPEN) return `socket_${this.ws.readyState}`;
@@ -731,6 +835,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.boundAgents.delete(agentId);
     this.socketBoundAgentIds.delete(agentId);
     this.rejectPendingInboxAcksForAgent(agentId, "agent_unbound");
+    this.rejectPendingInboxRecoversForAgent(agentId, "agent_unbound");
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "agent:unbind", agentId }));
   }
@@ -776,6 +881,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.clearTimers();
     this.rejectAllPendingBinds("Client disconnected");
     this.rejectAllPendingInboxAcks("Client disconnected");
+    this.rejectAllPendingInboxRecovers("Client disconnected");
     if (this.ws) {
       this.ws.removeAllListeners();
       if (this.ws.readyState === WebSocket.OPEN) {
@@ -933,10 +1039,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.stopHeartbeat();
         this.clearAuthRefreshTimer();
         this.clearPendingInboxAckTimers();
+        this.clearPendingInboxRecoverTimers();
         const wasRegistered = this.registered;
         this.registered = false;
         this.socketBoundAgentIds.clear();
         this.rejectAllPendingBinds("WebSocket closed");
+        this.rejectAllPendingInboxRecovers("WebSocket closed");
 
         if (!settled) {
           this.wsLogger.warn({ code }, "closed before ready");
@@ -1145,6 +1253,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         }
         this.bindRetryRecords.set(pending.agentId, record);
         this.rejectPendingInboxAcksForAgent(pending.agentId, `agent_bind_rejected:${reason}`);
+        this.rejectPendingInboxRecoversForAgent(pending.agentId, `agent_bind_rejected:${reason}`);
         this.emit("agent:bind:rejected", reason, pending.agentId);
         pending.reject(new Error(`agent:bind rejected (${reason})`));
       }
@@ -1156,6 +1265,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       this.boundAgents.delete(agentId);
       this.socketBoundAgentIds.delete(agentId);
       this.rejectPendingInboxAcksForAgent(agentId, "agent_unbound");
+      this.rejectPendingInboxRecoversForAgent(agentId, "agent_unbound");
       this.emit("agent:unbound", agentId);
       return;
     }
@@ -1178,6 +1288,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.boundAgents.delete(agentId);
         this.socketBoundAgentIds.delete(agentId);
         this.rejectPendingInboxAcksForAgent(agentId, "agent_force_disconnect");
+        this.rejectPendingInboxRecoversForAgent(agentId, "agent_force_disconnect");
         this.emit("agent:unbound", agentId, typeof msg.reason === "string" ? msg.reason : "server_forced");
       }
       return;
@@ -1248,6 +1359,58 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         return;
       }
       this.rejectPendingInboxAck(pending, parsed.data.reason);
+      return;
+    }
+
+    if (type === "inbox:recover:accepted") {
+      const parsed = inboxRecoverAcceptedFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "ignoring malformed inbox:recover:accepted frame",
+        );
+        return;
+      }
+      const pending = this.pendingInboxRecovers.get(parsed.data.ref);
+      if (!pending || pending.agentId !== parsed.data.agentId || pending.chatId !== parsed.data.chatId) {
+        this.wsLogger.debug(
+          {
+            agentId: parsed.data.agentId,
+            chatId: parsed.data.chatId,
+            ref: parsed.data.ref,
+            recoverEvent: "inbox_recover_no_match",
+          },
+          "inbox:recover:accepted matched no pending recovery",
+        );
+        return;
+      }
+      this.resolvePendingInboxRecover(pending, parsed.data.resetCount);
+      return;
+    }
+
+    if (type === "inbox:recover:rejected") {
+      const parsed = inboxRecoverRejectedFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "ignoring malformed inbox:recover:rejected frame",
+        );
+        return;
+      }
+      const pending = this.pendingInboxRecovers.get(parsed.data.ref);
+      if (!pending || pending.agentId !== parsed.data.agentId) {
+        this.wsLogger.debug(
+          {
+            agentId: parsed.data.agentId,
+            chatId: parsed.data.chatId ?? null,
+            ref: parsed.data.ref,
+            recoverEvent: "inbox_recover_no_match",
+          },
+          "inbox:recover:rejected matched no pending recovery",
+        );
+        return;
+      }
+      this.rejectPendingInboxRecover(pending, parsed.data.reason);
       return;
     }
 
@@ -1329,6 +1492,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           lastReasonCode: record.lastReason,
         });
         this.rejectPendingInboxAcksForAgent(desired.agentId, "agent_rebind_skipped");
+        this.rejectPendingInboxRecoversForAgent(desired.agentId, "agent_rebind_skipped");
         continue;
       }
       const previousAttempts = record?.attempts ?? 0;
@@ -1522,9 +1686,29 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
+  private rejectAllPendingInboxRecovers(reason: string): void {
+    for (const pending of this.pendingInboxRecovers.values()) {
+      this.clearPendingInboxRecoverTimer(pending);
+      pending.reject(new Error(reason));
+    }
+    this.pendingInboxRecovers.clear();
+  }
+
+  private rejectPendingInboxRecoversForAgent(agentId: string, reason: string): void {
+    for (const pending of [...this.pendingInboxRecovers.values()]) {
+      if (pending.agentId === agentId) this.rejectPendingInboxRecover(pending, reason);
+    }
+  }
+
   private clearPendingInboxAckTimers(): void {
     for (const pending of this.pendingInboxAcks.values()) {
       this.clearPendingInboxAckTimer(pending);
+    }
+  }
+
+  private clearPendingInboxRecoverTimers(): void {
+    for (const pending of this.pendingInboxRecovers.values()) {
+      this.clearPendingInboxRecoverTimer(pending);
     }
   }
 
@@ -1540,6 +1724,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
     this.clearAuthRefreshTimer();
     this.clearPendingInboxAckTimers();
+    this.clearPendingInboxRecoverTimers();
   }
 
   private clearAuthRefreshTimer(): void {

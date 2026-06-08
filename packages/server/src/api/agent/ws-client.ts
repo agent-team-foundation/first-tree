@@ -7,6 +7,7 @@ import {
   type InboxEntryWithMessage,
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
+  inboxRecoverFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
@@ -139,21 +140,20 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       >();
 
       /**
-       * Per-agent in-flight `inbox:deliver` counter for backpressure. Lives on
-       * the socket — when the WS closes it goes with it; that's intentional,
-       * because re-counting on a fresh connection would bias the cap against
-       * a healthy reconnect.
+       * Per-agent in-flight `inbox:deliver` ids for backpressure. Tracking ids
+       * instead of a scalar counter lets same-socket recovery remove exactly
+       * the reset rows before redelivery, so the cap cannot leak when an entry
+       * is delivered twice on the same connection.
        */
-      const inboxInFlight = new Map<string, number>();
+      const inboxInFlightEntryIds = new Map<string, Set<number>>();
       /**
-       * Per-agent delivery queue for all server-originated `inbox:deliver`
-       * frames on this socket. Ack-through relies on the client seeing each
-       * `(agent,chat)` stream oldest-first; without this queue, concurrent
-       * NOTIFY handlers or post-ack drains can `SKIP LOCKED` different rows
-       * and send a newer same-chat frame before an older one has reached the
-       * client.
+       * Socket-wide inbox operation queue. This is intentionally stronger than
+       * per-agent delivery serialization: `inbox:ack` does not carry an
+       * agentId, so putting ACK DB updates, recovery resets, and delivery
+       * drains in one FIFO is the simple way to preserve WS frame order for
+       * the ACK/recover race.
        */
-      const inboxDeliveryQueues = new Map<string, Promise<void>>();
+      let inboxOperationQueue: Promise<void> = Promise.resolve();
 
       function isAgentStillRoutedHere(agentId: string): boolean {
         return (
@@ -161,14 +161,29 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         );
       }
 
-      function chainInboxDelivery(agentId: string, op: () => Promise<void>): Promise<void> {
-        const prev = inboxDeliveryQueues.get(agentId) ?? Promise.resolve();
+      function inboxInFlightCount(agentId: string): number {
+        return inboxInFlightEntryIds.get(agentId)?.size ?? 0;
+      }
+
+      function addInboxInFlight(agentId: string, entryId: number): void {
+        const current = inboxInFlightEntryIds.get(agentId) ?? new Set<number>();
+        current.add(entryId);
+        inboxInFlightEntryIds.set(agentId, current);
+      }
+
+      function removeInboxInFlight(agentId: string, entryIds: readonly number[]): void {
+        const current = inboxInFlightEntryIds.get(agentId);
+        if (!current) return;
+        for (const entryId of entryIds) {
+          current.delete(entryId);
+        }
+        if (current.size === 0) inboxInFlightEntryIds.delete(agentId);
+      }
+
+      function chainInboxDelivery(_agentId: string, op: () => Promise<void>): Promise<void> {
+        const prev = inboxOperationQueue;
         const next = prev.then(op, op);
-        inboxDeliveryQueues.set(agentId, next);
-        const cleanup = () => {
-          if (inboxDeliveryQueues.get(agentId) === next) inboxDeliveryQueues.delete(agentId);
-        };
-        void next.then(cleanup, cleanup);
+        inboxOperationQueue = next.catch(() => {});
         return next;
       }
 
@@ -250,11 +265,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       async function drainBacklogForAgent(
         agentId: string,
         inboxId: string,
-        trigger?: { source: "notify"; messageId: string } | { source: "bind" | "ack" },
+        trigger?:
+          | { source: "notify"; messageId: string }
+          | { source: "bind" | "ack" }
+          | { source: "recover"; chatId: string },
       ): Promise<void> {
         if (socket.readyState !== socket.OPEN) return;
         if (!isAgentStillRoutedHere(agentId)) return;
-        const inFlight = inboxInFlight.get(agentId) ?? 0;
+        const inFlight = inboxInFlightCount(agentId);
         const slotsFree = inboxMaxInFlightPerAgent - inFlight;
         if (slotsFree <= 0) {
           if (trigger?.source === "notify") {
@@ -275,16 +293,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
         let entries: InboxEntryWithMessage[];
         try {
-          entries = await inboxService.claimBacklogForPush(app.db, inboxId, limit);
+          entries =
+            trigger?.source === "recover"
+              ? await inboxService.claimBacklogForPushForChat(app.db, inboxId, trigger.chatId, limit)
+              : await inboxService.claimBacklogForPush(app.db, inboxId, limit);
         } catch (err) {
           app.log.error({ err, agentId, inboxId, limit }, "claimBacklogForPush failed");
           return;
         }
 
         for (const entry of entries) {
-          inboxInFlight.set(agentId, (inboxInFlight.get(agentId) ?? 0) + 1);
+          addInboxInFlight(agentId, entry.id);
           if (!sendInboxDeliverFrame(entry)) {
-            inboxInFlight.set(agentId, Math.max(0, (inboxInFlight.get(agentId) ?? 1) - 1));
+            removeInboxInFlight(agentId, [entry.id]);
             // Socket gone mid-drain — stop pushing. Remaining entries stay
             // 'delivered'; the next bind from this client resets them and
             // re-drains.
@@ -695,8 +716,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               await presenceService.unbindAgent(app.db, agentId);
               connectionManager.unbindAgentFromClient(agentId);
               boundAgents.delete(agentId);
-              inboxInFlight.delete(agentId);
-              inboxDeliveryQueues.delete(agentId);
+              inboxInFlightEntryIds.delete(agentId);
 
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
             } else if (type === "session:state") {
@@ -931,25 +951,49 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
               const { entryId, ref } = payloadResult.data;
 
-              // Find the agent / inbox this entry belongs to from the bind
-              // map. We never trust an `agentId` from the wire here — that
-              // would let one bound agent ack another agent's entry. Instead
-              // we resolve the inbox via the DB (one round-trip) and check
-              // the resulting inboxId is in this socket's bound set.
-              try {
-                const ackResult = await inboxService.ackEntryByIdForBoundAgents(
-                  app.db,
-                  entryId,
-                  [...boundAgents.values()].map((a) => a.inboxId),
-                );
-                if (!ackResult.ok) {
+              await chainInboxDelivery("__socket", async () => {
+                try {
+                  const ackResult = await inboxService.ackEntryByIdForBoundAgents(
+                    app.db,
+                    entryId,
+                    [...boundAgents.values()].map((a) => a.inboxId),
+                  );
+                  if (!ackResult.ok) {
+                    if (ref) {
+                      socket.send(
+                        JSON.stringify({
+                          type: "inbox:ack:rejected",
+                          entryId,
+                          ref,
+                          reason: ackResult.reason,
+                        }),
+                      );
+                    }
+                    app.log.debug(
+                      {
+                        clientId,
+                        entryId,
+                        ref,
+                        agentId: null,
+                        boundInboxes: boundAgents.size,
+                        reason: ackResult.reason,
+                        ackEvent: "inbox_ack_rejected",
+                      },
+                      "inbox:ack rejected",
+                    );
+                    return;
+                  }
+                  // Find the agentId that owns this inbox to decrement the
+                  // counter and trigger backlog drain.
+                  const owner = [...boundAgents.values()].find((a) => a.inboxId === ackResult.throughEntry.inboxId);
                   if (ref) {
                     socket.send(
                       JSON.stringify({
-                        type: "inbox:ack:rejected",
+                        type: "inbox:ack:accepted",
                         entryId,
                         ref,
-                        reason: ackResult.reason,
+                        disposition: ackResult.disposition,
+                        ackedCount: ackResult.ackedCount,
                       }),
                     );
                   }
@@ -958,59 +1002,87 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                       clientId,
                       entryId,
                       ref,
-                      agentId: null,
-                      boundInboxes: boundAgents.size,
-                      reason: ackResult.reason,
-                      ackEvent: "inbox_ack_rejected",
+                      agentId: owner?.agentId ?? null,
+                      disposition: ackResult.disposition,
+                      ackedCount: ackResult.ackedCount,
+                      ackedEntryIds: ackResult.ackedEntryIds,
+                      ackEvent: "inbox_ack_accepted",
                     },
-                    "inbox:ack rejected",
+                    "inbox:ack accepted",
+                  );
+                  if (owner && ackResult.ackedEntryIds.length > 0) {
+                    removeInboxInFlight(owner.agentId, ackResult.ackedEntryIds);
+                    // Slot freed → top up. Cheap when no backlog (single SQL
+                    // statement returning 0 rows). Critical when the cap was
+                    // hit and queued NOTIFYs got dropped (proposal §3.5).
+                    await drainBacklogForAgent(owner.agentId, owner.inboxId, { source: "ack" });
+                  }
+                } catch (err) {
+                  app.log.error({ err, entryId }, "inbox:ack handling failed");
+                }
+              });
+            } else if (type === "inbox:recover") {
+              const payloadResult = inboxRecoverFrameSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                app.log.warn(
+                  {
+                    clientId,
+                    issues: payloadResult.error.issues.map((i) => ({
+                      path: i.path.join("."),
+                      code: i.code,
+                      message: i.message,
+                    })),
+                  },
+                  "malformed inbox:recover frame — replying error",
+                );
+                socket.send(JSON.stringify({ type: "error", message: "Malformed inbox:recover frame" }));
+                return;
+              }
+              const { agentId, chatId, ref } = payloadResult.data;
+              await chainInboxDelivery("__socket", async () => {
+                const info = boundAgents.get(agentId);
+                if (!info || !isAgentStillRoutedHere(agentId)) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "inbox:recover:rejected",
+                      ref,
+                      agentId,
+                      chatId,
+                      reason: "agent_not_bound",
+                    }),
                   );
                   return;
                 }
-                // Find the agentId that owns this inbox to decrement the
-                // counter and trigger backlog drain.
-                const owner = [...boundAgents.values()].find((a) => a.inboxId === ackResult.throughEntry.inboxId);
-                if (ref) {
+
+                try {
+                  const recovered = await inboxService.recoverUnackedForScope(app.db, {
+                    inboxId: info.inboxId,
+                    chatId,
+                  });
+                  removeInboxInFlight(agentId, recovered.resetEntryIds);
                   socket.send(
                     JSON.stringify({
-                      type: "inbox:ack:accepted",
-                      entryId,
+                      type: "inbox:recover:accepted",
                       ref,
-                      disposition: ackResult.disposition,
-                      ackedCount: ackResult.ackedCount,
+                      agentId,
+                      chatId,
+                      resetCount: recovered.resetEntryIds.length,
+                    }),
+                  );
+                  await drainBacklogForAgent(agentId, info.inboxId, { source: "recover", chatId });
+                } catch (err) {
+                  app.log.error({ err, agentId, chatId }, "inbox:recover handling failed");
+                  socket.send(
+                    JSON.stringify({
+                      type: "inbox:recover:rejected",
+                      ref,
+                      agentId,
+                      chatId,
+                      reason: "recover_failed",
                     }),
                   );
                 }
-                app.log.debug(
-                  {
-                    clientId,
-                    entryId,
-                    ref,
-                    agentId: owner?.agentId ?? null,
-                    disposition: ackResult.disposition,
-                    ackedCount: ackResult.ackedCount,
-                    ackedEntryIds: ackResult.ackedEntryIds,
-                    ackEvent: "inbox_ack_accepted",
-                  },
-                  "inbox:ack accepted",
-                );
-                if (owner && ackResult.ackedCount > 0) {
-                  inboxInFlight.set(
-                    owner.agentId,
-                    Math.max(0, (inboxInFlight.get(owner.agentId) ?? ackResult.ackedCount) - ackResult.ackedCount),
-                  );
-                  // Slot freed → top up. Cheap when no backlog (single SQL
-                  // statement returning 0 rows). Critical when the cap was
-                  // hit and queued NOTIFYs got dropped (proposal §3.5).
-                  chainInboxDelivery(owner.agentId, () =>
-                    drainBacklogForAgent(owner.agentId, owner.inboxId, { source: "ack" }),
-                  ).catch((err) => {
-                    app.log.error({ err, agentId: owner.agentId }, "post-ack backlog drain crashed");
-                  });
-                }
-              } catch (err) {
-                app.log.error({ err, entryId }, "inbox:ack handling failed");
-              }
+              });
             } else if (type === "heartbeat") {
               if (clientId) {
                 await clientService.heartbeatClient(app.db, clientId);
@@ -1038,7 +1110,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           notifier.unsubscribe(info.inboxId, socket);
         }
         boundAgents.clear();
-        inboxDeliveryQueues.clear();
+        inboxInFlightEntryIds.clear();
 
         if (clientId) {
           // Reconnect-race guard. A typical `systemctl restart` produces this

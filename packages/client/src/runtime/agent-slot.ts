@@ -204,6 +204,7 @@ export class AgentSlot {
       const gitMirrorManager = this.config.gitMirrorManager;
 
       const ackEntry = (entryId: number) => this.clientConnection.sendInboxAck(entryId, agent.agentId);
+      const recoverChat = (chatId: string) => this.clientConnection.sendInboxRecover(agent.agentId, chatId);
 
       this.sessionManager = new SessionManager({
         session: this.config.session,
@@ -236,6 +237,7 @@ export class AgentSlot {
         registryPath,
         agentConfigCache: this.agentConfigCache,
         ackEntry,
+        recoverChat,
         onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
         onRuntimeStateChange: (state) => this.reportRuntimeState(state),
         onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),

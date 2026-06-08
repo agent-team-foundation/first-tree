@@ -60,3 +60,36 @@ export const inboxAckRejectedFrameSchema = z.object({
   reason: inboxAckRejectedReasonSchema,
 });
 export type InboxAckRejectedFrame = z.infer<typeof inboxAckRejectedFrameSchema>;
+
+/**
+ * client → server: ask the server to reset delivered-but-unacked entries for
+ * one chat back to pending so the active socket can redeliver them.
+ */
+export const inboxRecoverFrameSchema = z.object({
+  type: z.literal("inbox:recover"),
+  ref: z.string().min(1),
+  agentId: z.string().min(1),
+  chatId: z.string().min(1),
+});
+export type InboxRecoverFrame = z.infer<typeof inboxRecoverFrameSchema>;
+
+export const inboxRecoverRejectedReasonSchema = z.enum(["agent_not_bound", "chat_id_required", "recover_failed"]);
+export type InboxRecoverRejectedReason = z.infer<typeof inboxRecoverRejectedReasonSchema>;
+
+export const inboxRecoverAcceptedFrameSchema = z.object({
+  type: z.literal("inbox:recover:accepted"),
+  ref: z.string().min(1),
+  agentId: z.string().min(1),
+  chatId: z.string().min(1),
+  resetCount: z.number().int().nonnegative(),
+});
+export type InboxRecoverAcceptedFrame = z.infer<typeof inboxRecoverAcceptedFrameSchema>;
+
+export const inboxRecoverRejectedFrameSchema = z.object({
+  type: z.literal("inbox:recover:rejected"),
+  ref: z.string().min(1),
+  agentId: z.string().min(1),
+  chatId: z.string().min(1).optional(),
+  reason: inboxRecoverRejectedReasonSchema,
+});
+export type InboxRecoverRejectedFrame = z.infer<typeof inboxRecoverRejectedFrameSchema>;

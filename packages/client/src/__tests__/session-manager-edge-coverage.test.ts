@@ -132,6 +132,7 @@ function makeManager(
     handlers?: AgentHandler[];
     handlerFactory?: HandlerFactory;
     ackEntry?: (entryId: number) => Promise<void>;
+    recoverChat?: (chatId: string) => Promise<void>;
     registryPath?: string;
     concurrency?: number;
     maxSessions?: number;
@@ -172,6 +173,7 @@ function makeManager(
     registryPath: opts.registryPath,
     agentConfigCache: opts.agentConfigCache,
     ackEntry: opts.ackEntry ?? vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
+    recoverChat: opts.recoverChat,
     onStateChange: opts.onStateChange,
     onRuntimeStateChange: opts.onRuntimeStateChange,
     onSessionRuntimeChange: opts.onSessionRuntimeChange,
@@ -252,15 +254,19 @@ describe("SessionManager edge coverage", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("ack offline"))
       .mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
     const states: Array<{ chatId: string; state: SessionState }> = [];
     const sm = makeManager({
       handlers: [first, handler()],
       ackEntry,
+      recoverChat,
       concurrency: 1,
       onStateChange: (chatId, state) => states.push({ chatId, state }),
     });
 
-    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-active" }));
+    const firstEntry = mockEntry({ id: 1, chatId: "chat-active" });
+    await sm.dispatch(firstEntry);
+    await sm.dispatch(firstEntry);
     expect(sm.activeCount).toBe(1);
     expect(sm.getQuietGateSnapshot().activeCount).toBe(1);
     expect(sm.getQuietGateSnapshot().lastActivityMs).toBeGreaterThan(0);
@@ -268,9 +274,11 @@ describe("SessionManager edge coverage", () => {
     await sm.handleCommand("missing", "session:terminate");
     await sm.handleCommand("chat-active", "session:suspend");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-active" }));
-    // Ack-through fail-closed: suspending abandons unfinished delivered
-    // entries and blocks same-chat delivery until bind reset/redelivery.
+    // Same-socket recovery fail-closed: suspending clears unfinished local
+    // entries and newer same-chat input asks the server to reset/redeliver
+    // before the handler resumes.
     expect(internals(sm).inFlightEntries.has("chat-active")).toBe(false);
+    expect(recoverChat).toHaveBeenCalledTimes(2);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
     internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });

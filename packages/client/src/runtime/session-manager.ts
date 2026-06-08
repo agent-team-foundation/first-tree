@@ -202,6 +202,11 @@ type SessionManagerConfig = {
    * same socket that delivered it.
    */
   ackEntry: (entryId: number) => Promise<void>;
+  /**
+   * Same-socket chat recovery: reset delivered-but-unacked entries for the
+   * chat back to pending and redeliver them on this connection.
+   */
+  recoverChat?: (chatId: string) => Promise<void>;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
@@ -262,7 +267,8 @@ type TrackedInFlightEntry = {
   entryId: number;
   messageId: string;
   dedupKey: string;
-  admitted: boolean;
+  accepted: boolean;
+  consumed: boolean;
 };
 
 /**
@@ -312,20 +318,16 @@ export class SessionManager {
   private readonly inFlightEntries = new Map<string, TrackedInFlightEntry[]>();
   /**
    * Per-chat admission barrier. It serializes the pre-handler admission phase
-   * only: config refresh, eager asset fetch, marking the entry admitted, and
+   * only: config refresh, eager asset fetch, marking the entry accepted, and
    * invoking `routeMessage()`. It deliberately does NOT wait for the handler's
    * turn promise to settle, so A2 can still be appended/injected while A1's
    * attempt is running; it just cannot overtake A1 before A1 reaches handler
    * membership.
    */
   private readonly admissionQueues = new Map<string, Promise<void>>();
-  /**
-   * Chats whose local handler state was abandoned while server-side entries
-   * may still be `delivered`. Until the next bind reset, processing a newer
-   * entry in that chat could make ack-through commit an older abandoned entry,
-   * so dispatch fails closed and waits for bind recovery.
-   */
-  private readonly needsBindRecovery = new Set<string>();
+  private readonly recoveringChats = new Map<string, Promise<void>>();
+  private readonly recoveryActivationReady = new Set<string>();
+  private readonly requiresInboxRecovery = new Set<string>();
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
@@ -377,11 +379,8 @@ export class SessionManager {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
 
-    if (this.needsBindRecovery.has(chatId)) {
-      this.config.log.warn(
-        { chatId, messageId, entryId: entry.id },
-        "chat has abandoned delivered entries; deferring inbox delivery until bind reset",
-      );
+    if (this.shouldRecoverBeforeDispatch(chatId)) {
+      await this.recoverChatBeforeDispatch(chatId, entry.id, messageId);
       return;
     }
 
@@ -405,13 +404,13 @@ export class SessionManager {
     // Track before routing. The handler (or teardown path) commits by
     // message identity once work is complete; nothing acks until then.
     const queue = this.inFlightEntries.get(chatId);
-    const tracked = { entryId: entry.id, messageId, dedupKey, admitted: false };
+    const tracked = { entryId: entry.id, messageId, dedupKey, accepted: false, consumed: false };
     if (queue) queue.push(tracked);
     else this.inFlightEntries.set(chatId, [tracked]);
 
     let routePromise: Promise<void> | undefined;
     await this.withAdmissionBarrier(chatId, async () => {
-      if (this.needsBindRecovery.has(chatId) || !this.isTrackedEntry(chatId, entry.id)) return;
+      if (!this.isTrackedEntry(chatId, entry.id)) return;
 
       // 2. Step 4: refresh runtime config if the message brought a newer
       // version. This is the *only* trigger for active-session re-config —
@@ -437,7 +436,7 @@ export class SessionManager {
         }
       }
 
-      if (this.needsBindRecovery.has(chatId) || !this.isTrackedEntry(chatId, entry.id)) return;
+      if (!this.isTrackedEntry(chatId, entry.id)) return;
 
       // Note: the "mention_only" filter now lives on the server (see
       // services/message.ts sendMessage fan-out). If an entry reaches dispatch
@@ -454,7 +453,7 @@ export class SessionManager {
       // "not available on this device" placeholder for that ref.
       await this.ensureImagesLocal(message);
 
-      if (this.needsBindRecovery.has(chatId) || !this.markTrackedEntryAdmitted(chatId, entry.id)) return;
+      if (!this.markTrackedEntryAccepted(chatId, entry.id)) return;
 
       // 5. Route by session state. ACK no longer happens inside route — the
       // entry sits in `inFlightEntries` until the handler completes the
@@ -464,7 +463,7 @@ export class SessionManager {
       // this entry has reached handler membership.
       routePromise = this.routeMessage(chatId, message).catch((err) => {
         if (this.isTrackedEntry(chatId, entry.id)) {
-          this.abandonInFlightForBindRecovery(chatId, "route_message_failed");
+          this.clearInFlightForRecovery(chatId, "route_message_failed");
         }
         throw err;
       });
@@ -670,12 +669,12 @@ export class SessionManager {
   }
 
   /**
-   * The server resets delivered-but-unacked rows back to pending during
-   * `agent:bind`. After that point chats blocked by local abandoned state can
-   * safely accept redelivery again.
+   * Compatibility hook for AgentSlot's bind listener. Bind-time recovery is
+   * now server-driven; chat-scoped same-socket recovery is requested lazily
+   * by `dispatch` when no healthy live handler exists.
    */
   noteBindRecoveryComplete(): void {
-    this.needsBindRecovery.clear();
+    // Intentionally no-op.
   }
 
   // ---- Internal -----------------------------------------------------------
@@ -695,11 +694,57 @@ export class SessionManager {
     return this.inFlightEntries.get(chatId)?.some((tracked) => tracked.entryId === entryId) ?? false;
   }
 
-  private markTrackedEntryAdmitted(chatId: string, entryId: number): boolean {
+  private markTrackedEntryAccepted(chatId: string, entryId: number): boolean {
     const tracked = this.inFlightEntries.get(chatId)?.find((entry) => entry.entryId === entryId);
     if (!tracked) return false;
-    tracked.admitted = true;
+    tracked.accepted = true;
     return true;
+  }
+
+  private hasHealthyLiveHandler(chatId: string): boolean {
+    const entry = this.sessions.get(chatId);
+    return entry?.status === "active" && entry.suspending === null;
+  }
+
+  private shouldRecoverBeforeDispatch(chatId: string): boolean {
+    if (this.recoveryActivationReady.has(chatId)) {
+      this.recoveryActivationReady.delete(chatId);
+      return false;
+    }
+    if (this.requiresInboxRecovery.has(chatId)) return true;
+    return Boolean(this.config.recoverChat) && !this.hasHealthyLiveHandler(chatId);
+  }
+
+  private async recoverChatBeforeDispatch(chatId: string, entryId: number, messageId: string): Promise<void> {
+    const existing = this.recoveringChats.get(chatId);
+    if (existing) {
+      await existing;
+      return;
+    }
+    const recoverChat = this.config.recoverChat;
+    if (!recoverChat) {
+      this.config.log.error(
+        { chatId, entryId, messageId },
+        "chat requires inbox recovery but no recoverChat callback is configured; deferring dispatch",
+      );
+      return;
+    }
+
+    let recovery: Promise<void>;
+    recovery = recoverChat(chatId)
+      .then(() => {
+        this.requiresInboxRecovery.delete(chatId);
+        this.recoveryActivationReady.add(chatId);
+        this.config.log.debug({ chatId, entryId, messageId }, "chat inbox recovery accepted before dispatch");
+      })
+      .catch((err) => {
+        this.config.log.warn({ chatId, entryId, messageId, err }, "chat inbox recovery failed before dispatch");
+      })
+      .finally(() => {
+        if (this.recoveringChats.get(chatId) === recovery) this.recoveringChats.delete(chatId);
+      });
+    this.recoveringChats.set(chatId, recovery);
+    await recovery;
   }
 
   private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
@@ -1188,7 +1233,8 @@ export class SessionManager {
   }
 
   private suspendSession(entry: SessionEntry): void {
-    this.abandonInFlightForBindRecovery(entry.chatId, "session_suspended");
+    this.ackConsumedInFlightForSuspend(entry.chatId);
+    this.clearInFlightForRecovery(entry.chatId, "session_suspended_unconsumed_tail");
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
@@ -1269,9 +1315,9 @@ export class SessionManager {
       this.currentTrigger.delete(candidate.key);
       // Drop local in-flight tracking too — the handler is gone, so no
       // markCompleted will ever fire. The server-side entries stay
-      // `delivered`; the next `agent:bind` resets them back to `pending`
-      // for redelivery against a fresh session.
-      this.abandonInFlightForBindRecovery(candidate.key, "session_evicted");
+      // `delivered`; a later chat recovery or bind reset redelivers them
+      // against a fresh session.
+      this.clearInFlightForRecovery(candidate.key, "session_evicted");
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
@@ -1383,17 +1429,6 @@ export class SessionManager {
       return;
     }
 
-    const prefix = queue.slice(0, index + 1);
-    const unadmitted = prefix.filter((tracked) => !tracked.admitted);
-    if (unadmitted.length > 0) {
-      this.config.log.warn(
-        { chatId, throughEntryId, unadmittedEntryIds: unadmitted.map((entry) => entry.entryId) },
-        "attempt completion ignored for unadmitted inbox prefix",
-      );
-      this.abandonInFlightForBindRecovery(chatId, "unadmitted_ack_prefix");
-      return;
-    }
-
     const committed = queue.splice(0, index + 1);
     for (const tracked of committed) {
       this.deduplicator.drop(tracked.dedupKey);
@@ -1410,16 +1445,45 @@ export class SessionManager {
     if (entryId !== undefined) this.ackThroughTrackedEntry(chatId, entryId);
   }
 
-  private abandonInFlightForBindRecovery(chatId: string, reason: string): void {
+  private clearInFlightForRecovery(chatId: string, reason: string): void {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
     this.inFlightEntries.delete(chatId);
     this.deduplicator.dropByPrefix(`${chatId}:`);
-    this.needsBindRecovery.add(chatId);
+    this.requiresInboxRecovery.add(chatId);
     this.config.log.warn(
       { chatId, reason, entryIds: queue.map((entry) => entry.entryId) },
-      "abandoned in-flight inbox entries; waiting for bind recovery",
+      "cleared local in-flight inbox entries; waiting for recovery redelivery",
     );
+  }
+
+  private ackConsumedInFlightForSuspend(chatId: string): void {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+
+    let consumedPrefixCount = 0;
+    for (const tracked of queue) {
+      if (!tracked.consumed) break;
+      consumedPrefixCount++;
+    }
+    if (consumedPrefixCount === 0) return;
+
+    const lastConsumed = queue[consumedPrefixCount - 1];
+    if (lastConsumed) this.ackThroughTrackedEntry(chatId, lastConsumed.entryId);
+  }
+
+  private markMessagesConsumed(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+    const batch = Array.isArray(messages) ? messages : [messages];
+    const consumedIds = new Set<number>();
+    for (const message of batch) {
+      if (message.chatId === chatId && message.inboxEntryId !== undefined) consumedIds.add(message.inboxEntryId);
+    }
+    if (consumedIds.size === 0) return;
+    for (const tracked of queue) {
+      if (consumedIds.has(tracked.entryId)) tracked.consumed = true;
+    }
   }
 
   private markMessagesCompleted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
@@ -1449,7 +1513,7 @@ export class SessionManager {
         (this.inFlightEntries.get(chatId) ?? []).some((entry) => entry.entryId === message.inboxEntryId),
     );
     if (!hasTrackedMessage) return;
-    this.abandonInFlightForBindRecovery(chatId, reason);
+    this.clearInFlightForRecovery(chatId, reason);
   }
 
   /**
@@ -1463,17 +1527,17 @@ export class SessionManager {
   private drainAllInFlightEntries(chatId: string): void {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
-    let admittedPrefixCount = 0;
+    let acceptedPrefixCount = 0;
     for (const tracked of queue) {
-      if (!tracked.admitted) break;
-      admittedPrefixCount++;
+      if (!tracked.accepted) break;
+      acceptedPrefixCount++;
     }
-    if (admittedPrefixCount > 0) {
-      const lastAdmitted = queue[admittedPrefixCount - 1];
-      if (lastAdmitted) this.ackThroughTrackedEntry(chatId, lastAdmitted.entryId);
+    if (acceptedPrefixCount > 0) {
+      const lastAccepted = queue[acceptedPrefixCount - 1];
+      if (lastAccepted) this.ackThroughTrackedEntry(chatId, lastAccepted.entryId);
     }
     if (this.inFlightEntries.has(chatId)) {
-      this.abandonInFlightForBindRecovery(chatId, "drain_unadmitted_remainder");
+      this.clearInFlightForRecovery(chatId, "drain_unaccepted_remainder");
     }
   }
 
@@ -1559,6 +1623,9 @@ export class SessionManager {
       forwardResult,
       markCompleted: () => {
         this.ackOldestTrackedEntry(chatId);
+      },
+      markMessagesConsumed: (messages) => {
+        this.markMessagesConsumed(chatId, messages);
       },
       markMessagesCompleted: (messages) => {
         this.markMessagesCompleted(chatId, messages);
