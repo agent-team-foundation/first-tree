@@ -9,7 +9,11 @@ import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
-import { prepareSourceRepos, releaseSourceReposForSession } from "../../runtime/source-repos.js";
+import {
+  currentSourceRepoNamesFromPayload,
+  prepareSourceRepos,
+  releaseSourceReposForSession,
+} from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
@@ -558,6 +562,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           sessionCtx,
           contextTreePath,
           briefing: buildBriefing(sessionCtx, payload, cwd),
+          // Forward the authoritative current source-repo set to migrations
+          // (PR #869 baixiaohang round-3 P0). Same `payloadResolved` signal as
+          // above — null when defaultPayload was used, so v1-orphan-ft-clones
+          // defers until a future resolved start.
+          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
+            payload,
+            resolvedPayload !== null && resolvedPayload !== undefined,
+          ),
         });
         markWorkspaceInitComplete(cwd);
 
@@ -606,6 +618,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           sessionCtx,
           contextTreePath,
           briefing: buildBriefing(sessionCtx, payload, cwd),
+          // See PR #869 baixiaohang round-3 P0 — same gate as start().
+          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
+            payload,
+            resumePayloadResolved !== null && resumePayloadResolved !== undefined,
+          ),
         });
         markWorkspaceInitComplete(cwd);
 

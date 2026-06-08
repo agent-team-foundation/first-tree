@@ -56,14 +56,48 @@ const FT_ORIGIN_RE = /github\.com[/:]agent-team-foundation\//i;
 
 export type MigrationLog = (msg: string) => void;
 
+/**
+ * Context the applier threads into every `Migration.apply`. Migrations that
+ * need to compare against the agent's CURRENT source-repo configuration
+ * use `currentSourceRepoNames`; when it's `null` the caller could not
+ * resolve a payload from the server/cache (cache miss / unresolved
+ * session start), and migrations that depend on an authoritative current
+ * set must return `"deferred"` so they retry on the next resolved start.
+ *
+ * Migrations whose correctness does NOT depend on the live config (e.g.
+ * a name-based legacy sweep with its own shape check) may ignore the
+ * context and proceed in the unresolved case.
+ */
+export type MigrationContext = {
+  currentSourceRepoNames: ReadonlySet<string> | null;
+};
+
+/**
+ * What an `apply` invocation tells the applier to do with the marker
+ * file:
+ *   - `undefined` / no return → migration ran (cleanly or as a noop);
+ *     marker WILL be recorded so this id never re-runs.
+ *   - `"deferred"`           → migration could not run safely yet
+ *     (typically waiting for `currentSourceRepoNames !== null`); marker
+ *     is NOT recorded; the applier reports it under `deferred` not
+ *     `failed`; the next session retries from scratch.
+ *
+ * `throw` remains the third option, reserved for actual failures (I/O
+ * errors etc.) — also leaves the marker unrecorded but goes through
+ * the `failed` path with logging.
+ */
+export type MigrationOutcome = void | "deferred";
+
 export type Migration = {
   /** Stable identifier persisted to the marker file. Never re-use across
    *  migrations even when one is retired. */
   id: string;
   description: string;
-  /** Idempotent action. Throws on failure; the applier catches and skips
-   *  the marker write so a future run retries. */
-  apply: (workspacePath: string, log: MigrationLog) => void;
+  /** Idempotent action. May return `"deferred"` to ask the applier not to
+   *  record this id (so a future resolved session retries). Throws on
+   *  unexpected failure; the applier catches and skips the marker write
+   *  so a future run retries through the `failed` channel. */
+  apply: (workspacePath: string, log: MigrationLog, ctx: MigrationContext) => MigrationOutcome;
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────
@@ -147,9 +181,9 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-uuid-snapshots",
     description:
-      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` so a user with a UUID-shaped `gitRepos.localPath` is never deleted.",
-    apply: (workspacePath, log) => {
-      const currentRepos = readCurrentSourceRepoNames(workspacePath);
+      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` (or in the live `ctx.currentSourceRepoNames` when available) so a user with a UUID-shaped `gitRepos.localPath` is never deleted.",
+    apply: (workspacePath, log, ctx) => {
+      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
       let removed = 0;
       let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
@@ -185,12 +219,15 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
     id: "v1-retired-source-repo-first-tree-hub",
     description:
       "Remove <ws>/first-tree-hub/ — a retired First-Tree source repo. Narrowly scoped to the broken-pointer shape the legacy hub-worktree model left behind: `.git` is a regular FILE (not a directory) with `gitdir: <path>` whose target no longer exists on disk. In that shape, `git config --get remote.origin.url` exits 128 and the general `v1-orphan-ft-clones` sweep can't identify the clone by origin URL — and the local git state is unusable anyway, so there's no recoverable work to lose. Healthy `first-tree-hub/` clones (with `.git/` as a real directory) defer to `v1-orphan-ft-clones`, which goes through `tryRemoveCloneSafely` with the dirty / ahead / worktree guards. PR #869 code-reviewer P0-1.",
-    apply: (workspacePath, log) => {
+    apply: (workspacePath, log, ctx) => {
       const target = join(workspacePath, "first-tree-hub");
       if (!existsSync(target) || !isDirectory(target)) return;
       // Skip if `first-tree-hub` is in the agent's current source-repos
-      // config — a future re-add would otherwise lose its checkout.
-      if (readCurrentSourceRepoNames(workspacePath).has("first-tree-hub")) {
+      // config — a future re-add would otherwise lose its checkout. The
+      // live `ctx.currentSourceRepoNames` is authoritative; fall back to the
+      // persisted state file when the live set is unknown (cache miss).
+      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
+      if (currentRepos.has("first-tree-hub")) {
         log(
           "workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — still in current source repos config",
         );
@@ -263,9 +300,26 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-orphan-ft-clones",
     description:
-      "Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace's current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869.",
-    apply: (workspacePath, log) => {
-      const currentRepos = readCurrentSourceRepoNames(workspacePath);
+      'Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace\'s current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869. **Requires an authoritative current source-repo set** (`ctx.currentSourceRepoNames !== null`); on a cache-miss session it returns `"deferred"` so it retries when the next resolved session arrives. PR #869 baixiaohang round-3 P0.',
+    apply: (workspacePath, log, ctx) => {
+      // The migration relies on \"absent from current source-repos config\"
+      // to identify orphans. When the live config is unresolved AND the
+      // persisted state file is empty (the common first-upgrade case), an
+      // empty fallback would treat every clean steady-state FT clone as
+      // orphaned and `rm` it. Defer instead — `tryRemoveCloneSafely`'s
+      // safety guards still protect dirty / ahead / worktree clones, but
+      // a clean repo with no work to lose is exactly what we'd
+      // accidentally nuke without an authoritative set.
+      if (ctx.currentSourceRepoNames === null) {
+        const persisted = readCurrentSourceRepoNames(workspacePath);
+        if (persisted.size === 0) {
+          log(
+            "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
+          );
+          return "deferred";
+        }
+      }
+      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
       let removed = 0;
       let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
@@ -382,6 +436,11 @@ export type ApplyMigrationsResult = {
   applied: readonly string[];
   /** Ids skipped because the marker file already lists them. */
   skipped: readonly string[];
+  /** Ids whose `apply` returned `"deferred"` — marker NOT written so the
+   *  migration retries on the next call (typically a future session
+   *  start with a resolved config). Distinct from `failed` so deferred
+   *  entries don't appear as errors in operator logs. */
+  deferred: readonly string[];
   /** Ids whose apply threw — marker NOT written so a future run retries. */
   failed: ReadonlyArray<{ id: string; reason: string }>;
 };
@@ -400,12 +459,14 @@ export type ApplyMigrationsResult = {
 export function applyPendingMigrations(
   workspacePath: string,
   log: MigrationLog,
+  ctx: MigrationContext = { currentSourceRepoNames: null },
   registry: readonly Migration[] = MIGRATIONS_REGISTRY,
 ): ApplyMigrationsResult {
   const record = readAppliedRecord(workspacePath);
   const alreadyApplied = new Set(record.applied);
   const newlyApplied: string[] = [];
   const skipped: string[] = [];
+  const deferred: string[] = [];
   const failed: Array<{ id: string; reason: string }> = [];
 
   for (const migration of registry) {
@@ -414,9 +475,17 @@ export function applyPendingMigrations(
       continue;
     }
     try {
-      migration.apply(workspacePath, log);
-      newlyApplied.push(migration.id);
-      alreadyApplied.add(migration.id);
+      const outcome = migration.apply(workspacePath, log, ctx);
+      if (outcome === "deferred") {
+        // Migration asked the applier not to mark it applied — its
+        // success requires a context this call couldn't provide. Future
+        // session retries; no FAIL log so operators don't chase a non-
+        // problem.
+        deferred.push(migration.id);
+      } else {
+        newlyApplied.push(migration.id);
+        alreadyApplied.add(migration.id);
+      }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failed.push({ id: migration.id, reason });
@@ -431,5 +500,5 @@ export function applyPendingMigrations(
     });
   }
 
-  return { applied: newlyApplied, skipped, failed };
+  return { applied: newlyApplied, skipped, deferred, failed };
 }

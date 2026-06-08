@@ -101,6 +101,27 @@ export function isSourceRepoPathInUse(absPath: string): boolean {
 }
 
 /**
+ * Compute the set of source-repo localPaths the agent's CURRENT config
+ * declares. The same derivation `prepareSourceRepos` uses internally,
+ * exposed so handlers can thread the authoritative set through to
+ * `ensureAgentBootstrap` (which forwards it as `MigrationContext
+ * .currentSourceRepoNames`).
+ *
+ * Returns `null` when `payloadResolved` is `false` — that's the signal
+ * downstream consumers use to defer config-dependent migrations and
+ * suppress state-based cleanup. The non-null branch derives the same
+ * `localPath ?? deriveRepoLocalPath(url)` rule that `prepareSourceRepos`
+ * applies on its own materialisation loop.
+ */
+export function currentSourceRepoNamesFromPayload(
+  payload: AgentRuntimeConfigPayload | undefined,
+  payloadResolved: boolean,
+): ReadonlySet<string> | null {
+  if (!payloadResolved) return null;
+  return new Set((payload?.gitRepos ?? []).map((repo) => repo.localPath ?? deriveRepoLocalPath(repo.url)));
+}
+
+/**
  * Deregister `sessionCtx`'s chat from every source-repo checkout it was using.
  * Idempotent — safe to call once per session teardown even if
  * `prepareSourceRepos` never ran.

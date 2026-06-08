@@ -230,25 +230,68 @@ describe("workspace-migrations registry", () => {
 
   it("v1-orphan-ft-clones removes a clone whose origin is agent-team-foundation/* and not in current source repos", () => {
     initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
-    // The "current" set comes from `.agent/managed.json::sourceRepos`. An
-    // empty file means everything FT-origin is orphan.
-    writeFileSync(
-      join(workspace, ".agent", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: [],
-        skills: [],
-      }),
-    );
-
-    applyPendingMigrations(workspace, () => {});
+    // The authoritative current set comes from the caller's ctx — an
+    // explicit empty Set says "config genuinely has zero repos", which lets
+    // the migration treat every FT-origin clone as orphaned.
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(join(workspace, "first-tree-hub"))).toBe(false);
   });
 
   it("v1-orphan-ft-clones leaves a clone in current source_repos alone", () => {
+    initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set(["first-tree"]) });
+
+    expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
+  });
+
+  it("v1-orphan-ft-clones leaves non-FT-origin clones alone", () => {
+    initRepo(join(workspace, "user-side-clone"), "https://github.com/some-other-org/their-repo");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(join(workspace, "user-side-clone", ".git"))).toBe(true);
+  });
+
+  it("v1-orphan-ft-clones skips dotfile-prefixed entries and worktrees/notes", () => {
+    initRepo(join(workspace, "worktrees"), "https://github.com/agent-team-foundation/anything");
+    initRepo(join(workspace, "notes"), "https://github.com/agent-team-foundation/anything");
+    initRepo(join(workspace, ".some-hidden"), "https://github.com/agent-team-foundation/anything");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(join(workspace, "worktrees", ".git"))).toBe(true);
+    expect(existsSync(join(workspace, "notes", ".git"))).toBe(true);
+    expect(existsSync(join(workspace, ".some-hidden", ".git"))).toBe(true);
+  });
+
+  it("v1-orphan-ft-clones DEFERS when the live config is unresolved AND state has no source repos (PR #869 baixiaohang round-3 P0)", () => {
+    // The regression code-reviewer flagged: on a legacy workspace's first
+    // upgraded start with a cache-miss, ctx.currentSourceRepoNames is null
+    // AND `.agent/managed.json` has not been written yet by a resolved
+    // `prepareSourceRepos` run, so the persisted set is also empty. The
+    // migration must defer and leave the clone untouched, not treat the
+    // empty-fallback as "config truly has no repos".
+    initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
+    const logs: string[] = [];
+
+    const result = applyPendingMigrations(workspace, (msg) => logs.push(msg));
+
+    expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
+    expect(result.deferred).toContain("v1-orphan-ft-clones");
+    // Marker MUST NOT record the deferred id — the next resolved session
+    // gets another shot.
+    const markerPath = join(workspace, MIGRATIONS_APPLIED_REL);
+    if (existsSync(markerPath)) {
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { applied: string[] };
+      expect(marker.applied).not.toContain("v1-orphan-ft-clones");
+    }
+    expect(logs.some((l) => l.includes("v1-orphan-ft-clones deferred"))).toBe(true);
+  });
+
+  it("v1-orphan-ft-clones runs (not deferred) when persisted state has source repos even if ctx is null (graceful fallback)", () => {
+    initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
     initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
     writeFileSync(
       join(workspace, ".agent", "managed.json"),
@@ -261,29 +304,12 @@ describe("workspace-migrations registry", () => {
       }),
     );
 
-    applyPendingMigrations(workspace, () => {});
+    const result = applyPendingMigrations(workspace, () => {});
 
+    expect(result.deferred).not.toContain("v1-orphan-ft-clones");
+    // first-tree is in persisted → safe; first-tree-hub is orphan → removed.
     expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones leaves non-FT-origin clones alone", () => {
-    initRepo(join(workspace, "user-side-clone"), "https://github.com/some-other-org/their-repo");
-
-    applyPendingMigrations(workspace, () => {});
-
-    expect(existsSync(join(workspace, "user-side-clone", ".git"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones skips dotfile-prefixed entries and worktrees/notes", () => {
-    initRepo(join(workspace, "worktrees"), "https://github.com/agent-team-foundation/anything");
-    initRepo(join(workspace, "notes"), "https://github.com/agent-team-foundation/anything");
-    initRepo(join(workspace, ".some-hidden"), "https://github.com/agent-team-foundation/anything");
-
-    applyPendingMigrations(workspace, () => {});
-
-    expect(existsSync(join(workspace, "worktrees", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, "notes", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, ".some-hidden", ".git"))).toBe(true);
+    expect(existsSync(join(workspace, "first-tree-hub"))).toBe(false);
   });
 });
 
@@ -302,11 +328,23 @@ describe("applyPendingMigrations applier", () => {
   it("records applied ids in .agent/migrations-applied.json after a run", () => {
     const ran: string[] = [];
     const registry: readonly Migration[] = [
-      { id: "test-alpha", description: "", apply: () => ran.push("alpha") },
-      { id: "test-beta", description: "", apply: () => ran.push("beta") },
+      {
+        id: "test-alpha",
+        description: "",
+        apply: () => {
+          ran.push("alpha");
+        },
+      },
+      {
+        id: "test-beta",
+        description: "",
+        apply: () => {
+          ran.push("beta");
+        },
+      },
     ];
 
-    const result = applyPendingMigrations(workspace, () => {}, registry);
+    const result = applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: null }, registry);
 
     expect(result.applied).toEqual(["test-alpha", "test-beta"]);
     expect(ran).toEqual(["alpha", "beta"]);
@@ -324,11 +362,23 @@ describe("applyPendingMigrations applier", () => {
     );
     const ran: string[] = [];
     const registry: readonly Migration[] = [
-      { id: "test-alpha", description: "", apply: () => ran.push("alpha") },
-      { id: "test-beta", description: "", apply: () => ran.push("beta") },
+      {
+        id: "test-alpha",
+        description: "",
+        apply: () => {
+          ran.push("alpha");
+        },
+      },
+      {
+        id: "test-beta",
+        description: "",
+        apply: () => {
+          ran.push("beta");
+        },
+      },
     ];
 
-    const result = applyPendingMigrations(workspace, () => {}, registry);
+    const result = applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: null }, registry);
 
     expect(result.applied).toEqual(["test-beta"]);
     expect(result.skipped).toEqual(["test-alpha"]);
@@ -348,7 +398,12 @@ describe("applyPendingMigrations applier", () => {
     ];
 
     const logs: string[] = [];
-    const result = applyPendingMigrations(workspace, (msg) => logs.push(msg), registry);
+    const result = applyPendingMigrations(
+      workspace,
+      (msg) => logs.push(msg),
+      { currentSourceRepoNames: null },
+      registry,
+    );
 
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]?.id).toBe("test-fails");
@@ -369,7 +424,7 @@ describe("applyPendingMigrations applier", () => {
     const before = readFileSync(join(workspace, MIGRATIONS_APPLIED_REL), "utf-8");
     const registry: readonly Migration[] = [{ id: "test-alpha", description: "", apply: () => {} }];
 
-    applyPendingMigrations(workspace, () => {}, registry);
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: null }, registry);
 
     const after = readFileSync(join(workspace, MIGRATIONS_APPLIED_REL), "utf-8");
     expect(after).toBe(before);
@@ -378,9 +433,17 @@ describe("applyPendingMigrations applier", () => {
   it("treats a malformed marker as empty (re-applies all)", () => {
     writeFileSync(join(workspace, MIGRATIONS_APPLIED_REL), "{ not json");
     const ran: string[] = [];
-    const registry: readonly Migration[] = [{ id: "test-alpha", description: "", apply: () => ran.push("alpha") }];
+    const registry: readonly Migration[] = [
+      {
+        id: "test-alpha",
+        description: "",
+        apply: () => {
+          ran.push("alpha");
+        },
+      },
+    ];
 
-    const result = applyPendingMigrations(workspace, () => {}, registry);
+    const result = applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: null }, registry);
 
     expect(result.applied).toEqual(["test-alpha"]);
     expect(ran).toEqual(["alpha"]);

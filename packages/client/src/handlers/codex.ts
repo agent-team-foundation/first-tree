@@ -23,6 +23,7 @@ import type {
 } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import {
+  currentSourceRepoNamesFromPayload,
   prepareSourceRepos as prepareSourceReposShared,
   releaseSourceReposForSession,
 } from "../runtime/source-repos.js";
@@ -1045,13 +1046,23 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * no per-turn prompt API to update mid-thread — debug "wrong chat context
    * surfaces in codex" symptoms by looking here first.
    */
-  function ensureCodexBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
+  function ensureCodexBootstrap(
+    workspace: string,
+    sessionCtx: SessionContext,
+    briefing: string,
+    payload: AgentRuntimeConfigPayload,
+    payloadResolved: boolean,
+  ): void {
     detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
     ensureAgentBootstrapShared({
       workspace,
       sessionCtx,
       contextTreePath,
       briefing,
+      // PR #869 baixiaohang round-3 P0: thread the authoritative current
+      // source-repo set into migrations so `v1-orphan-ft-clones` can defer
+      // when the live config is unresolved.
+      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
     });
   }
 
@@ -1092,7 +1103,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing);
+      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
@@ -1150,7 +1161,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing);
+      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
