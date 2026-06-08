@@ -155,6 +155,27 @@ function hasLegacySnapshotSignature(dir: string): boolean {
   return existsSync(join(dir, "AGENTS.md")) || existsSync(join(dir, "CLAUDE.md"));
 }
 
+/**
+ * Should a config-dependent migration defer this session?
+ *
+ * "Yes" exactly when BOTH:
+ *   - The live `ctx.currentSourceRepoNames` is `null` (the caller could not
+ *     resolve a payload from the server / cache), AND
+ *   - The persisted `.agent/managed.json::sourceRepos` is also empty (no
+ *     resolved session has ever written the state file).
+ *
+ * In that combination there is no authoritative way to tell "config truly
+ * declares zero source repos" from "we have no idea what the config
+ * declares", so any deletion that relies on the difference between current
+ * and on-disk repos is unsafe. The caller returns `"deferred"`; the
+ * migrations applier leaves the marker unrecorded and a future resolved
+ * session re-runs the migration. PR #869 baixiaohang round-3/4 P0.
+ */
+function shouldDeferOnUnknownConfig(ctx: MigrationContext, workspacePath: string): boolean {
+  if (ctx.currentSourceRepoNames !== null) return false;
+  return readCurrentSourceRepoNames(workspacePath).size === 0;
+}
+
 function readGitOrigin(repoDir: string): string | null {
   const gitDir = join(repoDir, ".git");
   if (!existsSync(gitDir)) return null;
@@ -181,8 +202,14 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-uuid-snapshots",
     description:
-      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` (or in the live `ctx.currentSourceRepoNames` when available) so a user with a UUID-shaped `gitRepos.localPath` is never deleted.",
+      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` (or in the live `ctx.currentSourceRepoNames` when available) so a user with a UUID-shaped `gitRepos.localPath` is never deleted. Per round-4: defers when neither signal is available — a UUID-shaped current source repo whose cloned content ships an AGENTS.md would otherwise match the legacy signature and be `rmSync`'d on the first cache-miss start before any resolved payload could write managed.json.",
     apply: (workspacePath, log, ctx) => {
+      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+        log(
+          "workspace-migrations: v1-uuid-snapshots deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
+        );
+        return "deferred";
+      }
       const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
       let removed = 0;
       let skipped = 0;
@@ -222,6 +249,17 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
     apply: (workspacePath, log, ctx) => {
       const target = join(workspacePath, "first-tree-hub");
       if (!existsSync(target) || !isDirectory(target)) return;
+      // Same defer rule as the UUID + orphan paths: when neither the live
+      // ctx nor the persisted state can confirm whether `first-tree-hub`
+      // is currently configured, refuse to act. The broken-pointer shape
+      // check below would otherwise nuke a clone the user re-added before
+      // the cache had a chance to populate.
+      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+        log(
+          "workspace-migrations: v1-retired-source-repo-first-tree-hub deferred — no authoritative current source-repo set; will retry next resolved session",
+        );
+        return "deferred";
+      }
       // Skip if `first-tree-hub` is in the agent's current source-repos
       // config — a future re-add would otherwise lose its checkout. The
       // live `ctx.currentSourceRepoNames` is authoritative; fall back to the
@@ -302,7 +340,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
     description:
       'Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace\'s current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869. **Requires an authoritative current source-repo set** (`ctx.currentSourceRepoNames !== null`); on a cache-miss session it returns `"deferred"` so it retries when the next resolved session arrives. PR #869 baixiaohang round-3 P0.',
     apply: (workspacePath, log, ctx) => {
-      // The migration relies on \"absent from current source-repos config\"
+      // The migration relies on "absent from current source-repos config"
       // to identify orphans. When the live config is unresolved AND the
       // persisted state file is empty (the common first-upgrade case), an
       // empty fallback would treat every clean steady-state FT clone as
@@ -310,14 +348,11 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       // safety guards still protect dirty / ahead / worktree clones, but
       // a clean repo with no work to lose is exactly what we'd
       // accidentally nuke without an authoritative set.
-      if (ctx.currentSourceRepoNames === null) {
-        const persisted = readCurrentSourceRepoNames(workspacePath);
-        if (persisted.size === 0) {
-          log(
-            "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
-          );
-          return "deferred";
-        }
+      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+        log(
+          "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
+        );
+        return "deferred";
       }
       const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
       let removed = 0;

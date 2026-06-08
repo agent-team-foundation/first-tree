@@ -36,10 +36,49 @@ describe("workspace-migrations registry", () => {
     writeFileSync(join(uuidDir, "AGENTS.md"), "# legacy chat snapshot\n");
     mkdirSync(namedDir);
 
-    applyPendingMigrations(workspace, () => {});
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(uuidDir)).toBe(false);
     expect(existsSync(namedDir)).toBe(true);
+  });
+
+  it("v1-uuid-snapshots DEFERS on first cache-miss start when no managed state exists (PR #869 baixiaohang round-4 P0)", () => {
+    // The edge case round-4 review flagged: a UUID-shaped CURRENT source repo
+    // whose cloned content ships an AGENTS.md would match the legacy
+    // snapshot signature. Without the defer rule, the first cache-miss start
+    // would `rm` it before any resolved payload could write managed.json.
+    const uuidDir = join(workspace, "12345678-abcd-4def-89ab-1234567890ab");
+    mkdirSync(uuidDir);
+    writeFileSync(join(uuidDir, "AGENTS.md"), "# this content-bundled file matches the legacy signature\n");
+    const logs: string[] = [];
+
+    const result = applyPendingMigrations(workspace, (msg) => logs.push(msg));
+
+    expect(existsSync(uuidDir)).toBe(true);
+    expect(existsSync(join(uuidDir, "AGENTS.md"))).toBe(true);
+    expect(result.deferred).toContain("v1-uuid-snapshots");
+    expect(logs.some((l) => l.includes("v1-uuid-snapshots deferred"))).toBe(true);
+  });
+
+  it("v1-uuid-snapshots runs (not deferred) when persisted state has source repos even if ctx is null", () => {
+    const uuidDir = join(workspace, "12345678-abcd-4def-89ab-1234567890ab");
+    mkdirSync(uuidDir);
+    writeFileSync(join(uuidDir, "AGENTS.md"), "# legacy snapshot\n");
+    writeFileSync(
+      join(workspace, ".agent", "managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: "test",
+        updatedAt: new Date().toISOString(),
+        sourceRepos: ["first-tree"],
+        skills: [],
+      }),
+    );
+
+    const result = applyPendingMigrations(workspace, () => {});
+
+    expect(result.deferred).not.toContain("v1-uuid-snapshots");
+    expect(existsSync(uuidDir)).toBe(false);
   });
 
   it("v1-uuid-snapshots leaves UUID-named directories WITHOUT the legacy snapshot signature alone (PR #869 P0)", () => {
@@ -49,7 +88,10 @@ describe("workspace-migrations registry", () => {
     mkdirSync(userUuidDir);
     writeFileSync(join(userUuidDir, "user-data.json"), "{}");
 
-    applyPendingMigrations(workspace, () => {});
+    // Pass an authoritative empty set so the migration actually runs (rather
+    // than deferring on unknown config) — proving the signature check, not
+    // the defer fallback, is what spares this directory.
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(userUuidDir)).toBe(true);
     expect(existsSync(join(userUuidDir, "user-data.json"))).toBe(true);
@@ -86,7 +128,7 @@ describe("workspace-migrations registry", () => {
       writeFileSync(join(workspace, d, "AGENTS.md"), "");
     }
 
-    applyPendingMigrations(workspace, () => {});
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     for (const d of dirs) {
       expect(existsSync(join(workspace, d))).toBe(true);
@@ -102,9 +144,26 @@ describe("workspace-migrations registry", () => {
     mkdirSync(target);
     writeFileSync(join(target, ".git"), "gitdir: /tmp/does-not-exist/worktrees/first-tree-hub\n");
 
-    applyPendingMigrations(workspace, () => {});
+    // Authoritative empty set → not deferred → broken-pointer check fires
+    // and removes the clone. Without an explicit set, the migration defers
+    // (round-4 P0 protection).
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(target)).toBe(false);
+  });
+
+  it("v1-retired-source-repo-first-tree-hub DEFERS on first cache-miss start when no managed state exists (PR #869 baixiaohang round-4 follow-on)", () => {
+    // Mirrors the v1-orphan-ft-clones / v1-uuid-snapshots defer paths: if
+    // the caller can't prove first-tree-hub is absent from current config,
+    // leave it alone and retry next session.
+    const target = join(workspace, "first-tree-hub");
+    mkdirSync(target);
+    writeFileSync(join(target, ".git"), "gitdir: /tmp/does-not-exist/worktrees/first-tree-hub\n");
+
+    const result = applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(target)).toBe(true);
+    expect(result.deferred).toContain("v1-retired-source-repo-first-tree-hub");
   });
 
   it("v1-retired-source-repo-first-tree-hub does NOT remove `first-tree-hub/` if it's still in current source_repos", () => {
@@ -134,7 +193,7 @@ describe("workspace-migrations registry", () => {
     mkdirSync(target);
     writeFileSync(join(target, "user-notes.md"), "# my notes\n");
 
-    applyPendingMigrations(workspace, () => {});
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(target)).toBe(true);
     expect(existsSync(join(target, "user-notes.md"))).toBe(true);
@@ -149,7 +208,7 @@ describe("workspace-migrations registry", () => {
     initRepo(target, "https://github.com/agent-team-foundation/first-tree-hub");
     writeFileSync(join(target, "dirty.txt"), "uncommitted user work\n");
 
-    applyPendingMigrations(workspace, () => {});
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(target)).toBe(true);
     expect(existsSync(join(target, "dirty.txt"))).toBe(true);
@@ -164,7 +223,7 @@ describe("workspace-migrations registry", () => {
     mkdirSync(livePointerTarget);
     writeFileSync(join(target, ".git"), `gitdir: ${livePointerTarget}\n`);
 
-    applyPendingMigrations(workspace, () => {});
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(target)).toBe(true);
     expect(existsSync(join(target, ".git"))).toBe(true);
@@ -201,18 +260,9 @@ describe("workspace-migrations registry", () => {
     // something — the safety guards should refuse to delete.
     writeFileSync(join(orphan, "dirty.txt"), "uncommitted work\n");
 
-    writeFileSync(
-      join(workspace, ".agent", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: [],
-        skills: [],
-      }),
-    );
-
-    applyPendingMigrations(workspace, () => {});
+    // Pass an authoritative empty set so the migration runs (rather than
+    // deferring on unknown config) and we actually exercise the dirty guard.
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
 
     expect(existsSync(join(orphan, ".git"))).toBe(true);
     expect(existsSync(join(orphan, "dirty.txt"))).toBe(true);
