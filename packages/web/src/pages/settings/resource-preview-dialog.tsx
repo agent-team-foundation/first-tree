@@ -156,7 +156,7 @@ function MetaFields({ resource }: { resource: ResourceRow }) {
   return (
     <>
       {resource.type === "skill" ? (
-        <Detail label="Skill id" mono>
+        <Detail label="Name" mono>
           {str(p, "name") || resource.name}
         </Detail>
       ) : null}
@@ -215,7 +215,7 @@ export function ResourcePreviewDialog({ resource, onClose }: { resource: Resourc
             style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}
           >
             <p className="m-0 text-label" style={{ color: "var(--fg-3)" }}>
-              Body
+              {resource.type === "skill" ? "Content" : "Body"}
             </p>
             <BodyDetail body={body} />
           </div>
