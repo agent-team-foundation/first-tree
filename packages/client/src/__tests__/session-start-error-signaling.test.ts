@@ -259,6 +259,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     onStateChange?: (chatId: string, state: SessionState) => void;
     onSessionEvent?: (chatId: string, event: SessionEvent) => void;
     sdk?: FirstTreeHubSDK;
+    recoverChat?: (chatId: string) => Promise<void>;
   }) {
     const queue = [...opts.handlerQueue];
     return new SessionManager({
@@ -280,6 +281,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
       onStateChange: opts.onStateChange,
       onSessionEvent: opts.onSessionEvent,
+      recoverChat: opts.recoverChat,
     });
   }
 
@@ -289,6 +291,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const events: Array<{ chatId: string; event: SessionEvent }> = [];
     const { sdk, sendMessage } = mockSdk();
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
@@ -301,12 +304,18 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       sdk,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       onSessionEvent: (chatId, event) => events.push({ chatId, event }),
+      recoverChat,
     });
 
-    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" })); // start succeeds
-    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" })); // preempts chat-A
-    sm.noteBindRecoveryComplete(); // bind reset completed; redelivery may resume chat-A
-    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → throws
+    const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
+    const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
+    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
+    await sm.dispatch(chatAStart); // asks for recovery
+    await sm.dispatch(chatAStart); // redelivery starts chat-A
+    await sm.dispatch(chatBStart); // asks for recovery
+    await sm.dispatch(chatBStart); // redelivery starts chat-B and preempts chat-A
+    await sm.dispatch(chatAResume); // asks for recovery of chat-A's unacked tail
+    await sm.dispatch(chatAResume); // redelivery resumes chat-A → throws
 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
     expect(chatAStates.at(-1)).toBe("errored");
@@ -336,6 +345,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
 
   it("allows the next inbound message for the same chat to start a fresh session after a resume failure", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("resume blew up")),
@@ -347,17 +357,25 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const sm = makeSerializedManager({
       handlerQueue: [handlerA, workingHandler("session-B"), handlerARecovery],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      recoverChat,
     });
 
-    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" }));
-    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" }));
-    sm.noteBindRecoveryComplete(); // bind reset completed; redelivery may resume chat-A
-    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → errored
+    const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
+    const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
+    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
+    const chatARecovery = mockEntry({ id: 4, chatId: "chat-A" });
+    await sm.dispatch(chatAStart);
+    await sm.dispatch(chatAStart);
+    await sm.dispatch(chatBStart);
+    await sm.dispatch(chatBStart);
+    await sm.dispatch(chatAResume);
+    await sm.dispatch(chatAResume); // resume → errored
 
     // A fresh inbound for chat-A should route as start (entry was dropped
     // on resume failure — the resume catch tears down the same way the
     // start catch does, so there's no "stuck suspended" entry blocking it).
-    await sm.dispatch(mockEntry({ id: 4, chatId: "chat-A" }));
+    await sm.dispatch(chatARecovery);
+    await sm.dispatch(chatARecovery);
     expect(handlerARecovery.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.filter((c) => c.chatId === "chat-A").at(-1)?.state).toBe("active");
 

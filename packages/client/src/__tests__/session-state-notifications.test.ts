@@ -45,6 +45,7 @@ function createSessionManager(opts: {
   log?: pino.Logger;
   onStateChange?: (chatId: string, state: SessionState) => void;
   onSessionRuntimeChange?: (chatId: string, state: RuntimeState) => void;
+  recoverChat?: (chatId: string) => Promise<void>;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -74,6 +75,7 @@ function createSessionManager(opts: {
     ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
     onSessionRuntimeChange: opts.onSessionRuntimeChange,
+    recoverChat: opts.recoverChat,
   });
 }
 
@@ -146,17 +148,25 @@ describe("SessionManager: state notifications", () => {
 
   it("fires onStateChange('active') on resume after suspension", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = createSessionManager({
       concurrency: 1,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      recoverChat,
     });
 
     // chat-a starts (active), chat-b preempts chat-a (suspended → active)
-    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
-    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
-    // After bind reset, chat-a may resume and preempt chat-b.
-    sm.noteBindRecoveryComplete();
-    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-a" }));
+    const chatA = mockEntry({ id: 1, chatId: "chat-a" });
+    const chatB = mockEntry({ id: 2, chatId: "chat-b" });
+    const chatAResume = mockEntry({ id: 3, chatId: "chat-a" });
+    await sm.dispatch(chatA);
+    await sm.dispatch(chatA);
+    await sm.dispatch(chatB);
+    await sm.dispatch(chatB);
+    // Resume now goes through chat-scoped recovery first; the second dispatch
+    // represents the redelivered frame that can enter the resume branch.
+    await sm.dispatch(chatAResume);
+    await sm.dispatch(chatAResume);
 
     const chatAChanges = stateChanges.filter((c) => c.chatId === "chat-a");
     expect(chatAChanges).toEqual([
