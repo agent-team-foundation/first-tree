@@ -38,6 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { type RemoveCloneOutcome, tryRemoveCloneSafely } from "./source-repo-cleanup.js";
 
 /**
  * Path inside the agent home where {@link applyPendingMigrations} persists
@@ -82,12 +83,20 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function unlinkIfExists(path: string): boolean {
+/**
+ * Unlink a symbolic link at `path`, returning `true` only when the entry
+ * existed AND was a symlink (NOT a real file or directory). Callers use
+ * this for legacy-symlink cleanup so a user-authored regular file with
+ * the same name is never deleted by mistake.
+ */
+function unlinkSymlinkIfExists(path: string): boolean {
+  let stat: ReturnType<typeof lstatSync>;
   try {
-    lstatSync(path);
+    stat = lstatSync(path);
   } catch {
     return false;
   }
+  if (!stat.isSymbolicLink()) return false;
   try {
     unlinkSync(path);
     return true;
@@ -136,22 +145,24 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       }
     },
   },
-  {
-    id: "v1-legacy-dot-first-tree",
-    description: "Remove legacy <workspace>/.first-tree/ state dir (superseded by .agent/)",
-    apply: (workspacePath, log) => {
-      const target = join(workspacePath, ".first-tree");
-      if (!existsSync(target)) return;
-      rmSync(target, { recursive: true, force: true });
-      log("workspace-migrations: v1-legacy-dot-first-tree removed .first-tree/");
-    },
-  },
+  // NOTE: a `v1-legacy-dot-first-tree` migration was proposed but withdrawn
+  // during Codex review (PR #869, P1 from baixiaohang). The directory
+  // `<workspace>/.first-tree/` is the active W1 binding state (it holds
+  // `workspace.json`, see `packages/shared/src/schemas/workspace-manifest.ts`
+  // → `WORKSPACE_STATE_DIRNAME`). A blind sweep would silently unbind every
+  // upgraded W1 workspace. The residue this migration was meant to catch
+  // (`<workspace>/.first-tree/tmp/` from a much older client) is tiny and
+  // can be revisited as a precision-scoped migration later if it becomes a
+  // real problem; the savings did not justify the data-loss risk.
   {
     id: "v1-whitepaper-symlink",
     description: "Remove legacy WHITEPAPER.md (root-level symlink that used to expose a skill payload)",
     apply: (workspacePath, log) => {
+      // Only remove when the entry is actually a symlink — a user-authored
+      // regular WHITEPAPER.md file at workspace root must NOT be deleted by
+      // an upgrade-time cleanup pass. (Codex review nit P2 on PR #869.)
       const target = join(workspacePath, "WHITEPAPER.md");
-      if (unlinkIfExists(target)) {
+      if (unlinkSymlinkIfExists(target)) {
         log("workspace-migrations: v1-whitepaper-symlink removed WHITEPAPER.md");
       }
     },
@@ -159,10 +170,11 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-orphan-ft-clones",
     description:
-      "Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace's current source-repos config (catches retired source repos like first-tree-hub)",
+      "Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace's current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869.",
     apply: (workspacePath, log) => {
       const currentRepos = readCurrentSourceRepoNames(workspacePath);
       let removed = 0;
+      let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
         // Workspace-meta dirs and the agent-self-managed dirs never have a
         // `.git/` so they're filtered by the origin probe below; skip them
@@ -174,14 +186,24 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         const origin = readGitOrigin(full);
         if (origin === null) continue;
         if (!FT_ORIGIN_RE.test(origin)) continue;
-        rmSync(full, { recursive: true, force: true });
-        log(`workspace-migrations: v1-orphan-ft-clones removed ${name}/ (origin ${origin})`);
-        removed += 1;
+        const outcome: RemoveCloneOutcome = tryRemoveCloneSafely(full, `${name}/ (origin ${origin})`, log);
+        if (outcome === "removed") {
+          removed += 1;
+        } else if (outcome !== "absent" && outcome !== "not-a-clone") {
+          // dirty / ahead-of-upstream / has-worktrees / probe-failed /
+          // remove-failed — `tryRemoveCloneSafely` already logged the reason;
+          // count as "left behind" for the summary line below.
+          skipped += 1;
+        }
       }
-      if (removed === 0) {
+      if (removed === 0 && skipped === 0) {
         // Single summary line so the marker write is the only side effect
         // when nothing matched — keeps the steady-state log quiet.
         log("workspace-migrations: v1-orphan-ft-clones found no orphan FT clones");
+      } else if (skipped > 0) {
+        log(
+          `workspace-migrations: v1-orphan-ft-clones removed ${removed} orphan clone(s); ${skipped} held back by safety guards — operator follow-up`,
+        );
       }
     },
   },

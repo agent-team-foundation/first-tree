@@ -51,13 +51,52 @@ describe("workspace-migrations registry", () => {
     }
   });
 
-  it("v1-legacy-dot-first-tree removes <ws>/.first-tree/ if present", () => {
+  it("does not touch <ws>/.first-tree/ (active W1 binding state — migration withdrawn)", () => {
     const dotFirstTree = join(workspace, ".first-tree");
-    mkdirSync(join(dotFirstTree, "tmp"), { recursive: true });
+    mkdirSync(dotFirstTree, { recursive: true });
+    // The W1 binding manifest lives at `.first-tree/workspace.json` — see
+    // `packages/shared/src/schemas/workspace-manifest.ts` (WORKSPACE_STATE_DIRNAME).
+    // A blind sweep here would silently unbind the workspace on upgrade.
+    writeFileSync(join(dotFirstTree, "workspace.json"), JSON.stringify({ tree: "tree", sources: [] }));
 
     applyPendingMigrations(workspace, () => {});
 
-    expect(existsSync(dotFirstTree)).toBe(false);
+    expect(existsSync(dotFirstTree)).toBe(true);
+    expect(existsSync(join(dotFirstTree, "workspace.json"))).toBe(true);
+  });
+
+  it("v1-whitepaper-symlink does NOT remove a regular WHITEPAPER.md file", () => {
+    const whitepaper = join(workspace, "WHITEPAPER.md");
+    writeFileSync(whitepaper, "# User's own document\n");
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(whitepaper)).toBe(true);
+    expect(readFileSync(whitepaper, "utf-8")).toBe("# User's own document\n");
+  });
+
+  it("v1-orphan-ft-clones holds back dirty clones via the shared safety guards", () => {
+    const orphan = join(workspace, "first-tree-hub");
+    initRepo(orphan, "https://github.com/agent-team-foundation/first-tree-hub");
+    // Stage an unpushed dirty change so `git status --porcelain` reports
+    // something — the safety guards should refuse to delete.
+    writeFileSync(join(orphan, "dirty.txt"), "uncommitted work\n");
+
+    writeFileSync(
+      join(workspace, ".agent", "managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: "test",
+        updatedAt: new Date().toISOString(),
+        sourceRepos: [],
+        skills: [],
+      }),
+    );
+
+    applyPendingMigrations(workspace, () => {});
+
+    expect(existsSync(join(orphan, ".git"))).toBe(true);
+    expect(existsSync(join(orphan, "dirty.txt"))).toBe(true);
   });
 
   it("v1-whitepaper-symlink removes WHITEPAPER.md at workspace root", () => {
