@@ -68,8 +68,12 @@ export function ResourcesTab() {
   const currentBindings = data.bindings;
   const mutateBindings = (next: AgentResourceBindingInput[]) => updateMut.mutate(next);
   const activeBindingIds = new Set(currentBindings.map((b) => b.resourceId).filter((id): id is string => !!id));
+  // Opt-in team resources an agent can enable for itself. Repos are excluded:
+  // team repos are always On by default now (no per-repo Opt-in), so they never
+  // appear in the "Enable from team" list. skill / mcp still support opt-in.
   const available = data.availableTeamResources.filter(
-    (resource) => resource.defaultEnabled === "available" && !activeBindingIds.has(resource.id),
+    (resource) =>
+      resource.defaultEnabled === "available" && resource.type !== "repo" && !activeBindingIds.has(resource.id),
   );
 
   return (
@@ -155,8 +159,9 @@ export function ResourcesTab() {
 /**
  * Per-section add control on the agent Capabilities tab. One "+ <Type>" trigger
  * opens a context menu:
- *   - repo: "Add agent repo" (a private, agent-scoped repo) plus any opt-in team
- *     repos to enable.
+ *   - repo: "Add agent repo" (a private, agent-scoped repo). Team repos are
+ *     always On by default (no per-repo Opt-in), so there's no "enable from
+ *     team" list for repos.
  *   - skill / mcp: opt-in team resources to enable. These types have no
  *     agent-private form (the binding model supports private repos and inline
  *     prompts only), so when the team offers none the menu still routes the user
