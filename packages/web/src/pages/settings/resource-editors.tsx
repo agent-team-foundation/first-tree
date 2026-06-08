@@ -444,12 +444,15 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
   const [name, setName] = useState(init?.name ?? "");
   const [url, setUrl] = useState(str(init?.payload, "url"));
   const [defaultBranch, setDefaultBranch] = useState(str(init?.payload, "defaultBranch"));
-  const [mode, setMode] = useState<DefaultMode>(asDefaultMode(init?.defaultEnabled ?? "available"));
 
+  // Repos are always a team-wide default for now: we don't offer per-repo
+  // Opt-in, so pin `defaultEnabled: "recommended"` instead of rendering the
+  // On-by-default / Opt-in selector the other resource types show. Editing a
+  // legacy Opt-in repo and saving normalizes it to recommended.
   const payload = (): CreateTeamResource => ({
     type: "repo",
     name: name.trim() || url.trim(),
-    defaultEnabled: mode,
+    defaultEnabled: "recommended",
     payload: { url: url.trim(), ...(defaultBranch.trim() ? { defaultBranch: defaultBranch.trim() } : {}) },
   });
 
@@ -474,7 +477,9 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         placeholder="main"
         mono
       />
-      <DefaultModeField value={mode} onChange={setMode} />
+      <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
+        On by default — every agent gets this repo.
+      </p>
     </ModalEditor>
   );
 }
