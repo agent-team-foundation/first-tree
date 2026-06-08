@@ -152,9 +152,9 @@ follow them.
    Constraints / Cross-Domain). It does **not** affect: `soft_links`
    between tree nodes (those are tree-internal navigation, not PR
    references), or the meta-narration in this skill's own Worked
-   Examples (where "Source: …" labels are part of the *skill text*
-   describing what triggered a write, not a section template for the
-   node itself).
+   Examples (where the "Trigger: …" labels are part of the *skill
+   text* describing what prompted a write, not a section template
+   for the node itself).
 
 ### The Double Test (judgment filter)
 
@@ -307,27 +307,33 @@ node that buries it. Tree readers scan, they do not study.
 
 ### Worked Examples
 
-**Source: PR adding a new caching layer.**
+In the examples below, **"Trigger: …"** labels what prompted the
+tree-write (a PR, a meeting note, a report). The labels are
+meta-narration in this skill — they are not a body section template;
+no `## Trigger` / `## Source` heading goes into the actual node (see
+Hard Rule 9).
+
+**Trigger: PR adding a new caching layer.**
 Belongs: "Service X owns the cache; other services read through Service
 X's SDK"; "we chose Redis over Memcached because of pubsub support".
 Does not belong: the cache key format, the eviction policy class, the
 retry constants.
 
-**Source: meeting note "we are moving billing to a new repo".**
+**Trigger: meeting note "we are moving billing to a new repo".**
 Belongs: workspace map gets a new repo; ownership for billing shifts;
 the `billing/` ↔ `platform/` boundary is updated.
 Does not belong: migration timeline, release-day playbook, per-PR
 checklist.
 
-**Source: a reviewer's nit about variable naming.**
+**Trigger: a reviewer's nit about variable naming.**
 Belongs: nothing. Naming is implementation detail.
 
-**Source: a security review report.**
+**Trigger: a security review report.**
 Belongs: constraints that came out of it ("session tokens must be
 HMAC-signed before storage"); the accountable owner.
 Does not belong: the specific vulnerabilities or how they were patched.
 
-**Source: PR that flips a policy default — e.g. "approvals required"
+**Trigger: PR that flips a policy default — e.g. "approvals required"
 goes from 1 to 0.**
 Belongs: the *current* rule stated as fact ("approvals required = 0");
 the *current* rationale (why 0 is the right number now), present-tense.
