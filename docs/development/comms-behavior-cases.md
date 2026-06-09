@@ -34,7 +34,6 @@ Outcome vocabulary (`assert` references these):
 |---|---|
 | `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent) |
 | `SEND(agent)` | plain `chat send <agent> "..."` — wakes an agent |
-| `BROADCAST` | `chat send --broadcast "..."` — enters stream, wakes no one |
 | `FINAL_TEXT` | normal turn output, auto-bridged to the chat |
 | `SILENT` | empty output (silent-turn protocol) |
 | `¬X` | must NOT do X |

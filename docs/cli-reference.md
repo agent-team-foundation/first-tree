@@ -249,7 +249,6 @@ first-tree chat
 ├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
 │     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
-│     --broadcast                                    #   enter the stream, wake no one
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>

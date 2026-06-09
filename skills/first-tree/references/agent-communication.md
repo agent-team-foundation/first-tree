@@ -53,13 +53,15 @@ Pick the mode by what you need back:
 | Plain | `chat send <name> "..."` | Wake / answer a specific participant in this chat. |
 | Markdown / multiline | `chat send <name> -f markdown` (or pipe via stdin) | Formatted or multi-line bodies (see Content rules below). |
 | **Ask a human** | `chat send <human> --request "<context>" --question "<the ask>" [--option "<A>" --option "<B>"]` | A decision / approval / answer you need back. Raises a tracked open question (red-dot / open-request count). `--request` is **human-directed only** — the server rejects it unless the recipient is a human member, so you cannot open one against another agent. It needs both a body (context) and `--question` (the bare ask). |
-| Broadcast | `chat send --broadcast "..."` | Enter the stream, wake no one (no `@mention`). |
+
+Every `chat send` names a recipient — there is no no-mention send. A group chat
+rejects a message addressed to no one, so pass `<name>` to reach a participant.
 
 Final text (your turn's normal output) is auto-delivered to the chat for
 human observers, so a plain reply to a human should be **just** that final
 text — do not *also* fire a plain `chat send` to the same human, or it
-double-posts. Reach for `chat send` when you need to wake an agent, ask a
-human something tracked (`--request`), or post a no-wake note (`--broadcast`).
+double-posts. Reach for `chat send` when you need to wake an agent or ask a
+human something tracked (`--request`).
 
 You never answer an open question yourself: a request can only be directed at a
 human, so when you ask one, the human's answer arrives back as an ordinary
