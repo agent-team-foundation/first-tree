@@ -32,6 +32,18 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("Source repo: https://github.com/acme/app");
     expect(message).toContain("Host the new tree as its own GitHub repo under the same owner as the source");
     expect(message).toContain("record its URL in First Tree");
+
+    // Pin out the retired-skill name so the prose can never silently
+    // regress to advertising a skill that does not exist on disk.
+    expect(message).not.toContain("first-tree onboarding flow");
+
+    // Pin out `$first-tree-seed` naming until the Cloud-side new-tree
+    // provisioning step lands. Naming the skill while Cloud still passes
+    // `contextTreeUrl: null` would send the kickoff agent to a self-check
+    // that hard-refuses on the missing workspace.json tree binding. See
+    // the JSDoc on `buildCreateBootstrap` for the full rationale.
+    expect(message).not.toContain("$first-tree-seed");
+    expect(message).not.toContain("first-tree-seed");
   });
 
   it("builds plural new-tree instructions", () => {
@@ -41,5 +53,10 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("Source repos:");
     expect(message).toContain("ask me which owner if they don't share one");
     expect(message).toContain("each PR");
+
+    // Same retired / not-yet-wired skill-name pins as the singular case.
+    expect(message).not.toContain("first-tree onboarding flow");
+    expect(message).not.toContain("$first-tree-seed");
+    expect(message).not.toContain("first-tree-seed");
   });
 });
