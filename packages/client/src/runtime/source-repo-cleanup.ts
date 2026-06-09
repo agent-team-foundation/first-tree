@@ -36,15 +36,32 @@ export type RemoveCloneOutcome =
  * prev-but-no-longer-current entries can be forgotten vs. which must stay
  * tracked so the next session retries.
  *
- * Final outcomes (`removed`, `absent`, `not-a-clone`) all mean further
+ * **Final outcomes** (`removed`, `absent`, `not-a-clone`) all mean further
  * probing accomplishes nothing — the directory is gone, was already gone,
  * or is structurally not a clone we manage.
  *
- * Every other outcome (`dirty`, `ahead-of-upstream`, `has-worktrees`,
- * `in-use-by-live-chat`, `probe-failed`, `remove-failed`) reflects a
- * condition that an operator action (commit / push / close a worktree /
- * end a live session / fix permissions) can clear, so the next session's
- * probe might succeed. Those entries stay in managed state for retry.
+ * `not-a-clone` is the conservative-but-asymmetric one: we accept that a
+ * clone whose `.git/` was manually removed by the user or an external
+ * process becomes invisible to bookkeeping. Treating it as retry-eligible
+ * would re-probe forever without recovery (`.git/` rarely comes back), so
+ * dropping the entry and leaving the directory on disk as an operator
+ * follow-up is the better trade.
+ *
+ * **Retry-eligible outcomes** (`dirty`, `ahead-of-upstream`, `has-worktrees`,
+ * `in-use-by-live-chat`, `probe-failed`, `remove-failed`) each reflect a
+ * condition that some clearable action can resolve, so the next session's
+ * probe might succeed. Typical recoveries:
+ *
+ * - `dirty` / `ahead-of-upstream` → operator commits / pushes / discards
+ * - `has-worktrees` → operator `git worktree remove`s the dependent checkouts
+ * - `in-use-by-live-chat` → the other live chat ends, releasing the path
+ * - `probe-failed` → transient git crash / timeout clears on retry
+ * - `remove-failed` → underlying filesystem condition clears (permissions,
+ *   `EBUSY` from an open file handle, a read-only mount, `ENOSPC` on the
+ *   directory containing the trash buffer, etc.)
+ *
+ * Entries with retry-eligible outcomes stay in managed state until a future
+ * session reaches a final outcome.
  */
 export function isFinalRemoveOutcome(outcome: RemoveCloneOutcome): boolean {
   return outcome === "removed" || outcome === "absent" || outcome === "not-a-clone";
