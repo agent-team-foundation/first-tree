@@ -1221,7 +1221,7 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Heads up");
     expect(html).toContain("gandy-macbook connected");
     expect(html).toContain("Install Node.js");
-    expect(html).toContain("Choose your projects");
+    expect(html).toContain("Pick repos");
 
     expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
       "What should we call your team?",
@@ -1235,11 +1235,11 @@ describe("page SSR smoke coverage", () => {
     );
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "creating" }),
-    ).toContain("Setting up your agent");
+    ).toContain("Bringing your agent online");
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
-    ).toContain("longer than expected");
-    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Which projects");
+    ).toContain("online yet");
+    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Which repos");
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
       "Use your team&#x27;s Context Tree",
     );

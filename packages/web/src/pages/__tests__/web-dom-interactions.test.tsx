@@ -1333,10 +1333,10 @@ describe("web DOM interaction coverage", () => {
     });
 
     const disconnected = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install First Tree on GitHub", disconnected.container);
+    await waitForText("Install on GitHub", disconnected.container);
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install First Tree on GitHub"),
+        button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
     expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding");
@@ -1346,7 +1346,7 @@ describe("web DOM interaction coverage", () => {
     // Skip is one click now — a legitimate, recoverable choice goes straight
     // through with no confirm gate (the old "Skip connecting code?" panel +
     // Keep-connecting / Skip-anyway was confirmshaming and was removed).
-    expect(disconnected.container.textContent).toContain("You can connect code anytime from Settings.");
+    expect(disconnected.container.textContent).toContain("You can connect a repo anytime from Settings.");
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -1375,7 +1375,7 @@ describe("web DOM interaction coverage", () => {
       setSelectedRepoUrls,
       goNext: vi.fn(),
     });
-    await waitForText("Which projects should your agent work on?", connected.container);
+    await waitForText("Which repos should your agent work on?", connected.container);
     await waitForText("acme/web", connected.container);
     await click(
       [...connected.container.querySelectorAll("label")].find((label) => label.textContent?.includes("acme/web")) ??
@@ -1384,7 +1384,7 @@ describe("web DOM interaction coverage", () => {
     expect(setSelectedRepoUrls).toHaveBeenCalledWith(["https://github.com/acme/web.git"]);
     await click(
       [...connected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a project"),
+        button.textContent?.includes("Continue without a repo"),
       ) ?? null,
     );
     expect(connected.flow.goNext).toHaveBeenCalled();
@@ -1405,7 +1405,7 @@ describe("web DOM interaction coverage", () => {
     });
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
     const scopeMissing = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Reconnect GitHub with project access", scopeMissing.container);
+    await waitForText("Reconnect GitHub with repo access", scopeMissing.container);
     await unmountRoot(scopeMissing.root);
 
     // A non-403 failure from the org repo endpoint (502 upstream / 503
@@ -1426,21 +1426,21 @@ describe("web DOM interaction coverage", () => {
     });
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
     const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Couldn't load your team's projects", loadFailed.container);
+    await waitForText("Couldn't load your team's repos", loadFailed.container);
     await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install First Tree on GitHub", notConfigured.container);
+    await waitForText("Install on GitHub", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install First Tree on GitHub"),
+        button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    await waitForText("Code connection isn't set up here yet.", notConfigured.container);
+    await waitForText("Connecting a repo isn't set up here yet", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without connecting code"),
+        button.textContent?.includes("Continue without a repo"),
       ) ?? null,
     );
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
@@ -1560,7 +1560,7 @@ describe("web DOM interaction coverage", () => {
       path: "invitee",
       activeStep: "kickoff",
     });
-    await waitForText("your team's code isn't connected yet", inviteeNoInstall.container);
+    await waitForText("your team's repo isn't connected yet", inviteeNoInstall.container);
     await click(
       [...inviteeNoInstall.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Copy"),
@@ -1576,7 +1576,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Your team is ready", inviteeConfirm.container);
     await click(
       [...inviteeConfirm.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a project"),
+        button.textContent?.includes("Continue without a repo"),
       ) ?? null,
     );
     expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-onboarding", expect.any(String), ["agent-1"]);
@@ -1592,7 +1592,7 @@ describe("web DOM interaction coverage", () => {
       path: "invitee",
       activeStep: "kickoff",
     });
-    await waitForText("Reconnect GitHub with project access", inviteePickerScope.container);
+    await waitForText("Reconnect GitHub with repo access", inviteePickerScope.container);
     await unmountRoot(inviteePickerScope.root);
 
     resourceMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]);
@@ -1601,7 +1601,7 @@ describe("web DOM interaction coverage", () => {
       path: "invitee",
       activeStep: "kickoff",
     });
-    await waitForText("Couldn't load your projects", inviteePickerNetwork.container);
+    await waitForText("Couldn't load your repos", inviteePickerNetwork.container);
   });
 
   it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {

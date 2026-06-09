@@ -11,7 +11,7 @@ import { InstallGuide, InstallTroubleshooting, ShowMeHow } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
- * Session marker — set when the user clicks "Install First Tree on GitHub"
+ * Session marker — set when the user clicks "Install on GitHub"
  * so we can detect "came back without an install" on the next render.
  * Cleared once an install is observed or the user skips. Per-tab so we
  * never confuse a different login attempt's state.
@@ -235,7 +235,7 @@ export function StepConnectCode() {
           </FlowHint>
         ) : reposQuery.isLoading ? (
           <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-            Loading your projects…
+            {COPY.connectCode.loading}
           </p>
         ) : loadFailed ? (
           <FlowHint tone="error" role="alert">

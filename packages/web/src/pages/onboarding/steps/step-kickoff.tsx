@@ -517,7 +517,7 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
         <TreeUrlDisplay treeUrl={treeUrl} />
         {reposQuery.isLoading ? (
           <p className="text-label" style={{ color: "var(--fg-4)" }}>
-            Loading your projects…
+            {COPY.kickoff.inviteePickerLoading}
           </p>
         ) : scopeMissing ? (
           <FlowHint>
