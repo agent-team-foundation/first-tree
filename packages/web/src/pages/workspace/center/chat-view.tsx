@@ -1129,20 +1129,9 @@ export function ChatView({
   );
 
   const sendMut = useMutation({
-    mutationFn: ({
-      content,
-      mentions,
-      broadcast,
-      inReplyTo,
-    }: {
-      content: string;
-      mentions: string[];
-      broadcast?: boolean;
-      inReplyTo?: string;
-    }) => {
-      const opts = { ...(broadcast ? { broadcast: true } : {}), ...(inReplyTo ? { inReplyTo } : {}) };
-      return Object.keys(opts).length > 0
-        ? sendChatMessage(chatId, content, mentions, opts)
+    mutationFn: ({ content, mentions, inReplyTo }: { content: string; mentions: string[]; inReplyTo?: string }) => {
+      return inReplyTo
+        ? sendChatMessage(chatId, content, mentions, { inReplyTo })
         : sendChatMessage(chatId, content, mentions);
     },
     // Optimistic insert: render the user's row above the composer immediately
@@ -1237,22 +1226,20 @@ export function ChatView({
     // nothing and the button stays disabled, prompting the user to use
     // the `[+]` button or the autocomplete picker.
 
-    // Group-chat send guard: don't fire requests we know the server (with
-    // proposal §3 enforcement) or downstream `mention_only` agents will drop.
-    // Applies to image-only sends too — the server-side mention check runs
-    // per message regardless of format, so an image without an addressee
-    // would 400 just like a text without an addressee (issue 387). Surface
-    // a hint when the user has only attached images so the silent-return
-    // doesn't look like a stuck send.
-    // No @mention in a group chat = an explicit BROADCAST: enter the stream,
-    // wake no one (proposal §D6). Text sends fall through with `broadcast`;
-    // image sends still need an addressee (the image fan-out path has no
-    // broadcast affordance yet), so keep the hint-and-return for those.
-    const broadcasting = requiresMention && draftMentions.length === 0;
-    if (broadcasting && images.length > 0) {
-      // English matches the other uploadError strings in this file
-      // (Failed to send image / Failed to add participants / Image too large).
-      setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
+    // Group-chat send guard: a multi-speaker chat has no no-recipient send
+    // path — every message must @mention at least one member. The send button
+    // is already disabled in this state (see the `disabled` prop below), so
+    // this is the Enter-key / programmatic backstop. Applies to image-only
+    // sends too: the server's mention check runs per message regardless of
+    // format, so an un-addressed image would 400 just like un-addressed text.
+    // Surface a hint when the user has only attached images so the
+    // silent-return doesn't look like a stuck send.
+    if (requiresMention && draftMentions.length === 0) {
+      if (images.length > 0) {
+        // English matches the other uploadError strings in this file
+        // (Failed to send image / Failed to add participants / Image too large).
+        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
+      }
       return;
     }
 
@@ -1391,15 +1378,11 @@ export function ChatView({
 
     // Auto-thread an answer: a plain reply that @-mentions the agent which
     // asked an open question directed at me counts as the answer (proposal
-    // §D2) — attach `inReplyTo` so the server clears the red dot. Skipped for
-    // broadcasts (no mentions).
-    const answeredRequestId = broadcasting
-      ? undefined
-      : (findAnswerableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined);
+    // §D2) — attach `inReplyTo` so the server clears the red dot.
+    const answeredRequestId = findAnswerableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined;
     sendMut.mutate({
       content: text,
       mentions: effectiveSendMentions,
-      broadcast: broadcasting,
       inReplyTo: answeredRequestId,
     });
   };
@@ -3162,18 +3145,24 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
-                            disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
+                            disabled={
+                              sendMut.isPending ||
+                              uploading ||
+                              (!draft.trim() && pendingImages.length === 0) ||
+                              (requiresMention && draftMentions.length === 0)
+                            }
                             title={
                               requiresMention && draftMentions.length === 0
-                                ? draft.trim()
-                                  ? "Broadcast — no @mention, enters the stream and wakes no one"
-                                  : "@mention a member, or type a message to broadcast"
+                                ? "@mention a member to send — a group message must address someone"
                                 : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
+                              (sendMut.isPending ||
+                                uploading ||
+                                (!draft.trim() && pendingImages.length === 0) ||
+                                (requiresMention && draftMentions.length === 0)) &&
                                 "opacity-40 cursor-not-allowed",
                             )}
                             style={{

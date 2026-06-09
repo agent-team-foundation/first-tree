@@ -320,8 +320,8 @@ async function sendMessageInner(
     //
     // `agent-final-text` profile rationale:
     //   - skip mention enforcement (final-text is the one legal mentions-
-    //     empty case: handler-initiated forward, not a user-typed
-    //     broadcast).
+    //     empty case: a handler-initiated forward of the agent's own response
+    //     for human observers, not a message addressed into the room).
     //   - force every fan-out row to notify=false (final text lands in
     //     chat history for human observers but never wakes another
     //     session). v1 §四 改造 4 (b) bypass channel.
@@ -351,11 +351,10 @@ async function sendMessageInner(
     // `purposeProfile.skipMentionEnforcement` — final-text is silent-by-
     // construction so it never needs to name a recipient.
     //
-    // `data.broadcast` is the explicit opt-in broadcast intent (CLI
-    // `chat send --broadcast`, web no-`@` send): enter the stream, wake no
-    // one. It deliberately bypasses the guard — a broadcast names no
-    // recipient by definition. See proposals/group-chat-unified-send §D6.
-    if (options.enforceMention && !purposeProfile.skipMentionEnforcement && !data.broadcast) {
+    // There is no no-recipient send path: a group chat rejects any send that
+    // names no one. The only mentions-empty exception is `agent-final-text`
+    // above (an agent's own response for humans, not a message into the room).
+    if (options.enforceMention && !purposeProfile.skipMentionEnforcement) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       const hasAddressed = (options.addressedToAgentIds?.length ?? 0) > 0;
       if (recipientMentions.length === 0 && !hasAddressed) {

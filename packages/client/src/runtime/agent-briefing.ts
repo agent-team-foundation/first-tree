@@ -265,9 +265,11 @@ participant \`type\` in the Current Chat Context block):
 - Plain reply / narration to a **human** → final text is enough; it is
   auto-delivered to the chat. Do **not** *also* fire a plain \`${bin} chat send\`
   to the same human — that double-posts. (The bullets above cover when an
-  explicit send is the right call: waking an agent, a \`--request\`, a broadcast.)
-- A note that should enter the stream but wake no one → \`${bin} chat send
-  --broadcast "..."\`.
+  explicit send is the right call: waking an agent or a \`--request\`.)
+
+Every \`chat send\` names a recipient — there is no no-mention send. A group
+chat rejects a message that addresses no one; pass \`<name>\` to @mention the
+recipient.
 
 **Fallback** (if the Current Chat Context block is missing — context
 injection may have failed): use conservative mode — all cross-agent
@@ -279,7 +281,7 @@ function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
 For the full \`chat send\` / \`chat invite\` CLI usage — every mode
-(\`--request\` / \`--question\` / \`--broadcast\`), syntax,
+(\`--request\` / \`--question\`), syntax,
 markdown / stdin, reaching non-members, mention resolution — load the top-level
 **\`first-tree\` skill** (and its \`references/agent-communication.md\`).
 The skill's \`description\` triggers progressive disclosure whenever the
