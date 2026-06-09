@@ -14,13 +14,19 @@
  *     message doesn't ask the agent to record it in First Tree again. The
  *     tree is already populated, so `first-tree-seed` does not apply — the
  *     agent uses `first-tree-context` for any further writes.
- *   - new tree (buildCreateBootstrap): Cloud creates the brand-new empty tree
- *     repo on GitHub, records its URL in the org's `context_tree` settings,
- *     and binds the workspace to it BEFORE this kickoff is sent. The message
- *     therefore only names `$first-tree-seed` — the one-shot bootstrap for
- *     filling a pre-provisioned empty tree — and does not ask the agent to
- *     bind, host, or record the tree URL. `first-tree-seed`'s self-check
- *     refuses if any of those preconditions are missing.
+ *   - new tree (buildCreateBootstrap): today, the Cloud-side `runKickoff` path
+ *     does NOT provision the tree repo, write the org's `context_tree`
+ *     setting, or bind the workspace before sending the kickoff message
+ *     (`step-kickoff.tsx` passes `contextTreeUrl: null`). The message
+ *     therefore must NOT name `$first-tree-seed`: that skill's self-check
+ *     hard-requires those preconditions and would refuse on every new-tree
+ *     onboarding. Instead, the prose states the user's goal in plain
+ *     language; the agent uses its full skill set (`first-tree-context` for
+ *     writes, plus general tooling) to bind + host + record + draft. When
+ *     Cloud gains a real provisioning step (creates the tree repo, writes
+ *     `context_tree`, writes `workspace.json`) BEFORE sending kickoff, a
+ *     future PR will switch this prose to name `$first-tree-seed` and drop
+ *     the bind/host/record-URL instructions. See PR #899 baixiaohang r3.
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
@@ -60,20 +66,22 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
   const sourceLines = formatSourceList(sourceUrls);
   const single = sourceUrls.length === 1;
   const opener = single
-    ? "Seed the brand-new Context Tree we've just provisioned for my source repo."
-    : "Seed the one shared Context Tree we've just provisioned for my source repos.";
-  const skillLine = single
-    ? "Run $first-tree-seed end to end: draft real starting content for the tree from what's actually in the repo, not placeholders. The tree repo and workspace binding are already in place — your job is to fill the empty tree."
-    : "Run $first-tree-seed end to end: draft real starting content for the tree from what's actually in the repos, not placeholders. The tree repo and workspace binding are already in place — your job is to fill the empty tree.";
+    ? "Set up First Tree for my source repo and create a brand-new Context Tree for it."
+    : "Set up First Tree for my source repos and create one shared Context Tree they all bind to.";
+  const goalLine = single
+    ? "Bind the repo to the new Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repo, not placeholders. Host the new tree as its own GitHub repo under the same owner as the source."
+    : "Bind every repo to the one new shared Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repos, not placeholders. Host the new tree as its own GitHub repo under the owner the sources share (ask me which owner if they don't share one).";
   const walkthrough = single
-    ? "Show me the diff before each PR is pushed, and walk me through both — PR1 for the top-level structure, PR2 for the leaf content."
-    : "Show me the diffs before each PR is pushed, and walk me through both — PR1 for the top-level structure, PR2 for the leaf content across every domain.";
+    ? "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and the PR."
+    : "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and each PR.";
   return [
     opener,
     "",
     ...sourceLines,
     "",
-    skillLine,
+    goalLine,
+    "",
+    "Once the tree repo is up on GitHub, record its URL in First Tree with the first-tree CLI so future teammates' agents can find it.",
     "",
     walkthrough,
     "",

@@ -44,14 +44,21 @@ phase.
 
 ## Trigger
 
-The **normal** trigger is the Cloud onboarding kickoff prompt that
-arrives in the first chat after the operator finishes provisioning
-the workspace and tree repo. The skill may also run when a human or
-another agent invokes it directly, **provided the empty-tree
-self-check below passes** — the self-check is what gates re-runs and
-mis-invocations, not the prompt's origin. Once the seed has landed,
-the same self-check fails and the skill refuses; route subsequent
-work through `first-tree-context` or `first-tree-sync`.
+This skill runs whenever a human or another agent invokes it
+**provided the empty-tree self-check below passes**. The self-check
+is the gate; the prompt's origin is not. Cloud onboarding **may** in
+the future inject a kickoff prompt that names `$first-tree-seed`
+directly, but only after Cloud also gains a real provisioning step
+that creates the tree repo on GitHub, writes the org's `context_tree`
+setting, and writes `workspace.json` BEFORE the kickoff message is
+sent — those preconditions are what the self-check verifies. Naming
+the skill in kickoff prose without that wiring would route every
+new-tree onboarding at a skill that refuses; that wiring is tracked
+as a separate Cloud-side change.
+
+Once the seed has landed, the same self-check fails and the skill
+refuses; route subsequent work through `first-tree-context` or
+`first-tree-sync`.
 
 ### Self-check before starting (all must pass; stop on any failure)
 
@@ -90,8 +97,9 @@ Phase 1 — Structure  (~3–10 min, main agent only)
 
 User merges PR1 ────────────────────────────────────────────────
 
-Phase 2 — Content    (parallel; ~10–20 min wall-clock)
-  └─ Dispatch one sub-agent per approved top-level domain
+Phase 2 — Content    (parallel; ~10–20 min wall-clock per batch)
+  └─ Allocate sub-agents (cap 6 concurrent; split big top-levels,
+     merge thin ones, batch dispatch when total work units > 6)
   └─ Each sub-agent: deep-read its subtree, draft leaves, report coverage
   └─ Main agent: consolidate + cross-check + collect escalations
   └─ PR2 on chore/seed-phase2-content
@@ -313,13 +321,67 @@ DEFAULT=$(git -C <tree> symbolic-ref refs/remotes/origin/HEAD | sed 's|^refs/rem
 git -C <tree> ls-tree "origin/$DEFAULT" -- <top-level>  # for each approved domain
 ```
 
-### Sub-agent dispatch
+### Sub-agent allocation
 
-Spawn one sub-agent per approved top-level domain (not per
-second-level — second-level is the sub-agent's working surface, not
-its scope). Domains too large for one sub-agent (deep nested package
-trees with many packages) may be split by second-level on the main
-agent's judgement, with a note in the PR2 body explaining the split.
+Phase 2 must balance parallelism against three costs: token spend,
+main-agent consolidation complexity, and the user's PR2 review
+burden. The allocation policy below caps each batch at 6 concurrent
+sub-agents and uses queue-batched dispatch so no approved domain is
+deferred.
+
+**Concurrency cap: 6 sub-agents per batch.** Empirical limit.
+Beyond this, wall-clock savings flatten while token cost and
+consolidation overhead grow. Adjust in a future skill version if
+real usage proves the number too low or too high.
+
+**Default allocation: one sub-agent per approved top-level domain.**
+When the user approved N ≤ 6 top-level domains and none meet the
+split criteria below, dispatch one sub-agent per top-level. The
+sub-agent's scope is the whole top-level subtree; second-level
+entries are its working surface, not separate units.
+
+**Split a top-level into multiple sub-agents** (one per second-level
+under it) when **both** hold:
+
+1. The top-level has **≥ 3 second-level entries** opened in Phase 1.
+2. **AND** any of:
+   - Source aggregate signal weight for this top-level ≥ 30 files
+     of Tier-1 meta material to read.
+   - A source repo / package is **dedicated to one specific
+     second-level** (e.g. `apps/cli/` maps naturally to
+     `system/cli/`). The mapping is then 1 source package →
+     1 sub-agent.
+   - The main agent's estimate of total Tier-2 work would push a
+     single sub-agent's budget past 20 minutes.
+
+Each split sub-agent's authority shrinks to its assigned
+second-level path. It cannot touch sibling second-levels under the
+same top-level — those belong to their own sub-agents and the
+authority table's "modify a sibling domain's files = forbidden" rule
+applies between split siblings, not just between top-level
+siblings.
+
+**Merge multiple thin top-levels into one sub-agent** when each
+top-level has ≤ 2 source signals AND ≤ 1 expected leaf. The pairing
+sub-agent's authority covers both top-level paths; surface the
+pairing in the PR2 body so the user sees why one commit spans two
+domains.
+
+**Batched dispatch when total work units > 6.** Maintain a queue of
+work units (one per top-level, plus split children, minus merged
+pairs). Fan out the first 6; as any sub-agent returns its drafts +
+coverage report, immediately dispatch the next from the queue.
+Continue until the queue is empty. **No work unit is deferred to
+"Known Gaps" — every approved domain is seeded eventually**, just
+across multiple waves. Wall-clock for a queue of ~12 ends up roughly
+2× a single batch's runtime, not a linear blow-up, because the
+slowest sub-agent in batch N gates the start of batch N+1 only if
+its slot is the last to free.
+
+Record the actual allocation (splits, merges, batches) in the PR2
+body so the user can see why each commit covers the subtree it does
+— and so they can spot if the main agent split or merged something
+they would have left alone.
 
 ### Parallel write safety
 
