@@ -53,7 +53,12 @@ const authMock = vi.hoisted(() => ({
   value: {
     memberId: "member-self",
     role: "admin",
+    organizationId: "org-1",
   },
+}));
+
+const orgSettingsMocks = vi.hoisted(() => ({
+  getContextTreeSetting: vi.fn(),
 }));
 
 vi.mock("../../../api/activity.js", async (importOriginal) => ({
@@ -84,6 +89,8 @@ vi.mock("../../../api/usage.js", async (importOriginal) => ({
 vi.mock("../../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
 }));
+
+vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
 
 const NOW = "2026-05-28T12:00:00.000Z";
 
@@ -350,7 +357,8 @@ beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { memberId: "member-self", role: "admin" };
+  authMock.value = { memberId: "member-self", role: "admin", organizationId: "org-1" };
+  orgSettingsMocks.getContextTreeSetting.mockResolvedValue({ repo: "https://github.com/acme/tree", branch: "main" });
   agentMocks.getAgent.mockResolvedValue(agent());
   // Agent switcher list (admin → listAllAgents). Include a second agent so the
   // switcher has a switch target.
