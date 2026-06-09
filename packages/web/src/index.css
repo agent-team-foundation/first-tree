@@ -476,15 +476,10 @@
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
 
-  /* Agent detail content rail — the readable width for text/config tabs
-     (Profile / Environment / Instructions / Tools & skills). Header, tabs, and
-     content share it, centered like the context / team / settings pages. */
+  /* Agent detail content rail — one uniform readable width across every tab
+     (header, tabs, and content all share it), centered like the context / team
+     / settings pages. */
   --agent-detail-rail: 52rem;
-  /* Wider rail for the data-dense Usage tab (activity calendar + multi-column
-     token table), which needs more horizontal room than prose/config surfaces.
-     The whole page column (header + tabs + content) widens together on Usage so
-     it stays a single coherent column rather than content overflowing its tabs. */
-  --agent-detail-rail-wide: 64rem;
   --agent-detail-error-rail: 30rem;
   /* Shared label column for ConfigRow / IdentityField / DangerActionRow grids. */
   --agent-detail-label-col: 8.25rem;

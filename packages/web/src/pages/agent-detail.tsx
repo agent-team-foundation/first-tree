@@ -336,11 +336,6 @@ function AgentDetailPageView() {
     () => tabs.find((t) => t.key === currentTabKey)?.path ?? "profile",
     [tabs, currentTabKey],
   );
-  // The Usage tab is data-dense (activity calendar + multi-column token table)
-  // and needs a wider rail than the prose/config tabs. The whole page column
-  // (header + tabs + content) shares this value so it stays one coherent column
-  // instead of content overflowing its own tab bar.
-  const railVar = currentTabKey === "usage" ? "var(--agent-detail-rail-wide)" : "var(--agent-detail-rail)";
 
   if (agentQuery.isLoading) {
     return (
@@ -491,7 +486,7 @@ function AgentDetailPageView() {
             so the switcher and title row align with everything below. */}
         <div
           style={{
-            maxWidth: railVar,
+            maxWidth: "var(--agent-detail-rail)",
             marginLeft: "auto",
             marginRight: "auto",
             paddingLeft: "var(--sp-5)",
@@ -564,14 +559,7 @@ function AgentDetailPageView() {
         />
       )}
 
-      <TabsNav
-        tabs={tabs}
-        agentUuid={uuid}
-        currentTabKey={currentTabKey}
-        dirtyTabs={dirtyTabs}
-        badges={tabBadges}
-        railVar={railVar}
-      />
+      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} dirtyTabs={dirtyTabs} badges={tabBadges} />
 
       <div
         className="w-full flex-1"
@@ -581,10 +569,9 @@ function AgentDetailPageView() {
           flexDirection: "column",
           gap: "var(--sp-5)",
           width: "100%",
-          // Rail width tracks the active tab: the standard readable rail for
-          // prose/config tabs, a wider one for the data-dense Usage tab. The
-          // header + tab bar above share the same value (see railVar).
-          maxWidth: railVar,
+          // One uniform rail across every tab (no per-tab width jump), centered
+          // to match the context / team / settings pages.
+          maxWidth: "var(--agent-detail-rail)",
           marginLeft: "auto",
           marginRight: "auto",
         }}
@@ -724,15 +711,12 @@ function TabsNav({
   currentTabKey,
   dirtyTabs,
   badges,
-  railVar,
 }: {
   tabs: TabDef[];
   agentUuid: string;
   currentTabKey: string;
   dirtyTabs: ReadonlySet<string>;
   badges: Record<string, number>;
-  /** Rail width for the active tab — kept in sync with the header + content. */
-  railVar: string;
 }) {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -812,7 +796,7 @@ function TabsNav({
           style={{
             gap: "var(--sp-0_5)",
             width: "100%",
-            maxWidth: railVar,
+            maxWidth: "var(--agent-detail-rail)",
             marginLeft: "auto",
             marginRight: "auto",
             paddingLeft: "var(--sp-5)",
