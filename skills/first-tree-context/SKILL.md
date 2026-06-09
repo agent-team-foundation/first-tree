@@ -388,6 +388,10 @@ this constraint." This is the canonical Why a future reader will need
 — no amount of reading the source repo alone would surface the
 offline-first requirement, because it lives only in somebody's head
 until the design phase forces it out and the node records it.
+Does not belong: "the first cut of the design didn't consider
+offline, then we added it after a teammate flagged the mobile case"
+— that is timeline narration (Hard Rule 8). Record the surviving
+constraint, not the path that surfaced it.
 
 **Trigger: design-phase direction picked between options — the
 candidates were A and B; the chosen direction is "B, because A would
