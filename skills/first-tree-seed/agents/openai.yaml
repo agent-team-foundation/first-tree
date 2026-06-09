@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree — Seed"
+  short_description: "One-time initial seeding for a freshly minted Context Tree"
+  default_prompt: "Use $first-tree-seed to draft the first structure and leaves into this fresh tree, in two phases."
