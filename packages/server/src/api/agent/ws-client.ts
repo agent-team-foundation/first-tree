@@ -1,6 +1,10 @@
 import {
   AGENT_BIND_REJECT_REASONS,
   type AgentBindRejectReason,
+  AUTH_REJECTED_CODES,
+  AUTH_RETRYABLE_CODES,
+  type AuthRejectedCode,
+  type AuthRetryableCode,
   agentBindRequestSchema,
   agentPinnedMessageSchema,
   clientRegisterSchema,
@@ -28,9 +32,13 @@ import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
 import { ClientOrgMismatchError, ClientUserMismatchError } from "../../errors.js";
 import {
+  classifyJoseError,
+  decodeJwtForTrace,
   endWsConnectionSpan,
+  type JwtFailureReason,
   setWsConnectionAttrs,
   startWsConnectionSpan,
+  untrustedAttrs,
   withWsMessageSpan,
 } from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
@@ -77,7 +85,9 @@ const wsMessageSchema = z.object({
  * Protocol (unified-user-token milestone):
  *   1. Client connects; server waits up to {@link WS_AUTH_FRAME_TIMEOUT_MS}
  *      for the first `auth` frame carrying a member access JWT.
- *      Failure ⇒ server sends `auth:rejected` and closes (code 4401).
+ *      Deterministic credential/identity failures ⇒ `auth:rejected` + 4401;
+ *      expiry ⇒ `auth:expired` + 4401; transient handshake failures ⇒
+ *      `auth:retryable` / 1011 / 1013.
  *   2. `client:register` — bind the client_id to the authenticated user.
  *   3. `agent:bind` — run Rule R-RUN (no token); populate presence.
  *   4. `session:state` / `runtime:state` / `session:event` / `heartbeat`.
@@ -99,6 +109,141 @@ const wsMessageSchema = z.object({
 type AuthenticatedSession = {
   userId: string;
 };
+
+type WsAuthPhase =
+  | "auth_frame_timeout"
+  | "auth_frame_validation"
+  | "jwt_verify"
+  | "claims_validation"
+  | "user_lookup"
+  | "post_auth_welcome"
+  | "client_register";
+
+type WsAuthOutcome = "accepted" | "expired" | "rejected" | "retryable" | "protocol_error";
+
+function sendJsonOrThrow(socket: WebSocket, frame: unknown): void {
+  if (socket.readyState !== socket.OPEN) {
+    throw new Error("WebSocket is not open");
+  }
+  socket.send(JSON.stringify(frame));
+}
+
+function setAuthWsAttrs(
+  socket: WebSocket,
+  attrs: {
+    phase: WsAuthPhase;
+    outcome: WsAuthOutcome;
+    code: string;
+    retryable: boolean;
+    closeCode?: number;
+    errorClass?: string;
+    extraAttrs?: Record<string, string | number | boolean>;
+  },
+): void {
+  setWsConnectionAttrs(socket, {
+    "auth.ws.phase": attrs.phase,
+    "auth.ws.outcome": attrs.outcome,
+    "auth.ws.code": attrs.code,
+    "auth.ws.retryable": attrs.retryable,
+    "auth.ws.close_code": attrs.closeCode,
+    ...(attrs.errorClass ? { "auth.ws.error_class": attrs.errorClass } : {}),
+    ...(attrs.extraAttrs ?? {}),
+  });
+}
+
+function closeWithAuthRejected(
+  socket: WebSocket,
+  phase: WsAuthPhase,
+  code: AuthRejectedCode,
+  message?: string,
+  errorClass?: string,
+  extraAttrs?: Record<string, string | number | boolean>,
+): void {
+  setAuthWsAttrs(socket, {
+    phase,
+    outcome: "rejected",
+    code,
+    retryable: false,
+    closeCode: 4401,
+    errorClass,
+    extraAttrs,
+  });
+  try {
+    sendJsonOrThrow(socket, {
+      type: "auth:rejected",
+      code,
+      ...(message ? { message } : {}),
+    });
+  } catch {
+    // socket may already be gone; close below is still idempotent
+  }
+  socket.close(4401, "auth rejected");
+}
+
+function closeWithAuthExpired(
+  socket: WebSocket,
+  phase: WsAuthPhase,
+  extraAttrs?: Record<string, string | number | boolean>,
+  errorClass?: string,
+): void {
+  setAuthWsAttrs(socket, {
+    phase,
+    outcome: "expired",
+    code: "jwt_expired",
+    retryable: true,
+    closeCode: 4401,
+    extraAttrs,
+    errorClass,
+  });
+  try {
+    sendJsonOrThrow(socket, { type: "auth:expired" });
+  } catch {
+    // socket may already be gone
+  }
+  socket.close(4401, "auth expired");
+}
+
+function closeWithAuthRetryable(
+  socket: WebSocket,
+  phase: WsAuthPhase,
+  code: AuthRetryableCode,
+  closeCode: 1011 | 1013,
+  message?: string,
+  errorClass?: string,
+): void {
+  setAuthWsAttrs(socket, { phase, outcome: "retryable", code, retryable: true, closeCode, errorClass });
+  try {
+    sendJsonOrThrow(socket, {
+      type: "auth:retryable",
+      code,
+      ...(message ? { message } : {}),
+    });
+  } catch {
+    // socket may already be gone
+  }
+  socket.close(closeCode, "auth retryable");
+}
+
+function joseErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  if (!("code" in err)) return undefined;
+  const code = err.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function rejectedCodeForJoseError(reason: JwtFailureReason, err: unknown): AuthRejectedCode {
+  if (joseErrorCode(err) === "ERR_JWT_CLAIM_VALIDATION_FAILED") {
+    return AUTH_REJECTED_CODES.INVALID_CLAIMS;
+  }
+  switch (reason) {
+    case "jwt_signature_invalid":
+    case "jwt_malformed":
+    case "jwt_verify_failed":
+      return AUTH_REJECTED_CODES.INVALID_TOKEN;
+    case "jwt_expired":
+      return AUTH_REJECTED_CODES.INVALID_TOKEN;
+  }
+}
 
 function sendRejected(socket: WebSocket, ref: string | undefined, reason: AgentBindRejectReason): void {
   socket.send(JSON.stringify({ type: "agent:bind:rejected", ref, reason }));
@@ -331,14 +476,44 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         return next;
       }
 
-      const authTimeout = setTimeout(() => {
+      let authTimeout: NodeJS.Timeout | null = null;
+      const clearAuthTimeout = () => {
+        if (!authTimeout) return;
+        clearTimeout(authTimeout);
+        authTimeout = null;
+      };
+      const rejectAuthAndClose = (
+        phase: WsAuthPhase,
+        code: AuthRejectedCode,
+        message?: string,
+        errorClass?: string,
+        extraAttrs?: Record<string, string | number | boolean>,
+      ) => {
+        clearAuthTimeout();
+        closeWithAuthRejected(socket, phase, code, message, errorClass, extraAttrs);
+      };
+      const expireAuthAndCloseWithAttrs = (
+        phase: WsAuthPhase,
+        extraAttrs?: Record<string, string | number | boolean>,
+        errorClass?: string,
+      ) => {
+        clearAuthTimeout();
+        closeWithAuthExpired(socket, phase, extraAttrs, errorClass);
+      };
+      const retryAuthAndClose = (
+        phase: WsAuthPhase,
+        code: AuthRetryableCode,
+        closeCode: 1011 | 1013,
+        message?: string,
+        errorClass?: string,
+      ) => {
+        clearAuthTimeout();
+        closeWithAuthRetryable(socket, phase, code, closeCode, message, errorClass);
+      };
+
+      authTimeout = setTimeout(() => {
         if (!session) {
-          try {
-            socket.send(JSON.stringify({ type: "auth:rejected", reason: "timeout" }));
-          } catch {
-            // socket may already be closed
-          }
-          socket.close(4401, "auth timeout");
+          retryAuthAndClose("auth_frame_timeout", AUTH_RETRYABLE_CODES.AUTH_TIMEOUT, 1013, "auth frame timeout");
         }
       }, WS_AUTH_FRAME_TIMEOUT_MS);
 
@@ -351,12 +526,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         const delay = expSeconds * 1000 - Date.now();
         if (delay <= 0) return;
         authExpiryTimer = setTimeout(() => {
-          try {
-            socket.send(JSON.stringify({ type: "auth:expired" }));
-          } catch {
-            // ignore
-          }
-          socket.close(4401, "auth expired");
+          closeWithAuthExpired(socket, "jwt_verify");
         }, delay);
       };
 
@@ -365,13 +535,29 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         try {
           msg = JSON.parse(String(raw));
         } catch {
-          socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+          if (!session) {
+            rejectAuthAndClose(
+              "auth_frame_validation",
+              AUTH_REJECTED_CODES.INVALID_AUTH_FRAME,
+              "invalid JSON auth frame",
+            );
+          } else {
+            socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+          }
           return;
         }
 
         const parsed = wsMessageSchema.safeParse(msg);
         if (!parsed.success) {
-          socket.send(JSON.stringify({ type: "error", message: "Invalid message format" }));
+          if (!session) {
+            rejectAuthAndClose(
+              "auth_frame_validation",
+              AUTH_REJECTED_CODES.INVALID_AUTH_FRAME,
+              "invalid auth message format",
+            );
+          } else {
+            socket.send(JSON.stringify({ type: "error", message: "Invalid message format" }));
+          }
           return;
         }
 
@@ -380,50 +566,102 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         // ── Auth gate — the very first frame must be {type:"auth"}.
         if (!session) {
           if (type !== "auth") {
-            socket.send(JSON.stringify({ type: "auth:rejected", reason: "not_authenticated" }));
-            socket.close(4401, "not authenticated");
+            rejectAuthAndClose(
+              "auth_frame_validation",
+              AUTH_REJECTED_CODES.INVALID_AUTH_FRAME,
+              "first frame must be auth",
+            );
             return;
           }
           const authParsed = wsAuthFrameSchema.safeParse(msg);
           if (!authParsed.success) {
-            socket.send(JSON.stringify({ type: "auth:rejected", reason: "invalid_frame" }));
-            socket.close(4401, "invalid auth");
+            rejectAuthAndClose("auth_frame_validation", AUTH_REJECTED_CODES.INVALID_AUTH_FRAME, "invalid auth frame");
             return;
           }
 
+          const token = authParsed.data.token;
+          let payload: Awaited<ReturnType<typeof jwtVerify>>["payload"];
           try {
-            const { payload } = await jwtVerify(authParsed.data.token, jwtSecretBytes);
-            const claims = payload as {
-              sub?: string;
-              memberId?: string;
-              organizationId?: string;
-              role?: string;
-              type?: string;
-              exp?: number;
-            };
-            if (claims.type !== "access" || !claims.sub) {
-              throw new Error("Invalid token claims");
+            const verified = await jwtVerify(token, jwtSecretBytes);
+            payload = verified.payload;
+          } catch (err) {
+            const reason = classifyJoseError(err);
+            const traceClaims = untrustedAttrs("auth.ws", decodeJwtForTrace(token));
+            const errorClass = err instanceof Error ? err.name : reason;
+            if (reason === "jwt_expired") {
+              expireAuthAndCloseWithAttrs("jwt_verify", traceClaims, errorClass);
+              return;
             }
+            rejectAuthAndClose(
+              "jwt_verify",
+              rejectedCodeForJoseError(reason, err),
+              "JWT verification failed",
+              errorClass,
+              traceClaims,
+            );
+            return;
+          }
 
-            const [user] = await app.db
+          const tokenType = payload.type;
+          if (tokenType !== "access") {
+            rejectAuthAndClose(
+              "claims_validation",
+              tokenType === undefined ? AUTH_REJECTED_CODES.INVALID_CLAIMS : AUTH_REJECTED_CODES.WRONG_TOKEN_TYPE,
+              "member access token required",
+              tokenType === undefined ? "missing_token_type" : "wrong_token_type",
+            );
+            return;
+          }
+          const userId = payload.sub;
+          if (typeof userId !== "string" || userId.length === 0) {
+            rejectAuthAndClose(
+              "claims_validation",
+              AUTH_REJECTED_CODES.INVALID_CLAIMS,
+              "missing subject claim",
+              "missing_sub",
+            );
+            return;
+          }
+
+          let user: { id: string; status: string } | undefined;
+          try {
+            [user] = await app.db
               .select({ id: users.id, status: users.status })
               .from(users)
-              .where(eq(users.id, claims.sub))
+              .where(eq(users.id, userId))
               .limit(1);
-            if (!user || user.status !== "active") {
-              throw new Error("User not found or suspended");
-            }
+          } catch (err) {
+            app.log.warn({ err, userId }, "WS auth user lookup failed; asking client to retry");
+            retryAuthAndClose(
+              "user_lookup",
+              AUTH_RETRYABLE_CODES.AUTH_BACKEND_UNAVAILABLE,
+              1013,
+              "authentication backend unavailable",
+              err instanceof Error ? err.name : "UnknownError",
+            );
+            return;
+          }
+          if (!user) {
+            rejectAuthAndClose("user_lookup", AUTH_REJECTED_CODES.USER_NOT_FOUND, "user not found");
+            return;
+          }
+          if (user.status !== "active") {
+            rejectAuthAndClose("user_lookup", AUTH_REJECTED_CODES.USER_SUSPENDED, "user suspended");
+            return;
+          }
 
-            // Session is org-free (decouple-client-from-identity §4.2). The
-            // JWT's `organizationId`/`memberId`/`role` claims are recorded as
-            // hints only; bind-time R-RUN re-resolves the agent's owner
-            // through `agents → manager → user` against the live DB.
-            session = { userId: user.id };
-            jwtDefaultOrgId = typeof claims.organizationId === "string" ? claims.organizationId : null;
-            setWsConnectionAttrs(socket, { "user.id": user.id });
-            clearTimeout(authTimeout);
-            scheduleAuthExpiry(claims.exp);
-            socket.send(JSON.stringify({ type: "auth:ok" }));
+          // Session is org-free (decouple-client-from-identity §4.2). The
+          // JWT's `organizationId`/`memberId`/`role` claims are recorded as
+          // hints only; bind-time R-RUN re-resolves the agent's owner
+          // through `agents → manager → user` against the live DB.
+          session = { userId: user.id };
+          jwtDefaultOrgId = typeof payload.organizationId === "string" ? payload.organizationId : null;
+          setWsConnectionAttrs(socket, { "user.id": user.id });
+          clearAuthTimeout();
+          scheduleAuthExpiry(payload.exp);
+
+          try {
+            sendJsonOrThrow(socket, { type: "auth:ok" });
             // Wire-additive: older clients drop the unknown type; newer ones
             // use it to detect version drift. `capabilities.wsInboxDeliver`
             // must stay `true` here so 0.10.4 ~ 0.14.2 clients suppress
@@ -431,18 +669,27 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             // would fall back to `GET /inbox` + `POST /inbox/:id/ack` and
             // the missing ack endpoint would loop messages forever. 0.14.3+
             // clients ignore the field entirely.
-            socket.send(
-              JSON.stringify({
-                type: "server:welcome",
-                serverCommandVersion: app.commandVersion(),
-                serverTimeMs: Date.now(),
-                capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
-              }),
-            );
+            sendJsonOrThrow(socket, {
+              type: "server:welcome",
+              serverCommandVersion: app.commandVersion(),
+              serverTimeMs: Date.now(),
+              capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
+            });
+            setAuthWsAttrs(socket, {
+              phase: "post_auth_welcome",
+              outcome: "accepted",
+              code: "auth_ok",
+              retryable: false,
+            });
           } catch (err) {
-            const message = err instanceof Error ? err.message : "auth failure";
-            socket.send(JSON.stringify({ type: "auth:rejected", reason: message }));
-            socket.close(4401, "auth rejected");
+            app.log.warn({ err, userId: user.id }, "WS post-auth handshake failed; asking client to retry");
+            retryAuthAndClose(
+              "post_auth_welcome",
+              AUTH_RETRYABLE_CODES.HANDSHAKE_INTERNAL_ERROR,
+              1011,
+              "post-auth handshake failed",
+              err instanceof Error ? err.name : "UnknownError",
+            );
           }
           return;
         }
@@ -472,6 +719,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 placeholderOrgId = m?.organizationId ?? null;
               }
               if (!placeholderOrgId) {
+                setAuthWsAttrs(socket, {
+                  phase: "client_register",
+                  outcome: "rejected",
+                  code: "no_membership",
+                  retryable: false,
+                  closeCode: 4403,
+                });
                 socket.send(
                   JSON.stringify({
                     type: "client:register:rejected",
@@ -500,6 +754,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     : err instanceof ClientOrgMismatchError
                       ? err.code
                       : undefined;
+                setAuthWsAttrs(socket, {
+                  phase: "client_register",
+                  outcome: "rejected",
+                  code: code ?? "client_register_failed",
+                  retryable: false,
+                  closeCode: 4403,
+                  errorClass: err instanceof Error ? err.name : "UnknownError",
+                });
                 socket.send(
                   JSON.stringify({
                     type: "client:register:rejected",
@@ -1103,7 +1365,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
       socket.on("close", async (closeCode?: number) => {
         endWsConnectionSpan(socket, closeCode);
-        clearTimeout(authTimeout);
+        clearAuthTimeout();
         if (authExpiryTimer) clearTimeout(authExpiryTimer);
 
         for (const [, info] of boundAgents) {

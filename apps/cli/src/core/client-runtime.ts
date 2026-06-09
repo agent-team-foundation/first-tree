@@ -38,6 +38,13 @@ export function isAgentSuspendedBindError(error: unknown): boolean {
   return msg.includes("agent_suspended");
 }
 
+function authPausedDetail(error: Error): string {
+  const authCode = "authCode" in error && typeof error.authCode === "string" ? error.authCode : null;
+  const authMessage = "authMessage" in error && typeof error.authMessage === "string" ? error.authMessage : null;
+  if (!authCode) return error.message;
+  return `Auth rejection code: ${authCode}${authMessage ? ` — ${authMessage}` : ""}`;
+}
+
 export type ClientRuntimeOptions = {
   /**
    * Version of the Command package this process was launched from. Passed to
@@ -142,7 +149,7 @@ export class ClientRuntime {
     this.connection.on("auth:paused", (reason, err) => {
       print.blank();
       print.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
-      print.status("", err.message);
+      print.status("", authPausedDetail(err));
       print.status("", "Recovery: get a new connect token from the First Tree web console");
       print.status("", "          (Computers → + New Connection), then re-run `first-tree login <token>`.");
       print.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);

@@ -113,6 +113,35 @@ describe("ClientConnection — auth paused mode (Bug 2)", () => {
     await connection.disconnect();
   }, 10_000);
 
+  it("structured auth:rejected includes the rejection code in paused error", async () => {
+    wss.on("connection", (ws: WebSocket) => {
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string };
+        if (msg.type === "auth") {
+          ws.send(JSON.stringify({ type: "auth:rejected", code: "invalid_token", message: "signature mismatch" }));
+        }
+      });
+    });
+
+    const connection = new ClientConnection({
+      serverUrl,
+      clientId: "client_paused_rejected_structured",
+      getAccessToken: async () => "tok",
+    });
+
+    const pausedErrors: Error[] = [];
+    connection.on("auth:paused", (_reason, err) => pausedErrors.push(err));
+    connection.on("error", () => {});
+
+    await expect(connection.connect()).rejects.toThrow(/invalid_token/);
+    expect(connection.isPaused()).toBe(true);
+    expect(connection.getPausedReason()).toBe("auth_rejected");
+    expect(pausedErrors[0]?.message).toContain("invalid_token");
+    expect(pausedErrors[0]?.message).toContain("signature mismatch");
+
+    await connection.disconnect();
+  }, 10_000);
+
   it("clearPaused emits auth:resumed and re-arms reconnect", async () => {
     class AuthRefreshFailedError extends Error {
       constructor() {

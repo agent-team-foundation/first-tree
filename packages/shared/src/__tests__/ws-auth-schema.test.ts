@@ -1,5 +1,76 @@
 import { describe, expect, it } from "vitest";
-import { serverWelcomeFrameSchema } from "../schemas/ws-auth.js";
+import {
+  authControlFrameSchema,
+  authExpiredFrameSchema,
+  authRejectedFrameSchema,
+  authRetryableFrameSchema,
+  serverWelcomeFrameSchema,
+} from "../schemas/ws-auth.js";
+
+describe("auth control frame schemas", () => {
+  it("accepts auth:rejected with a finite rejection code", () => {
+    const res = authRejectedFrameSchema.safeParse({
+      type: "auth:rejected",
+      code: "invalid_token",
+      message: "signature verification failed",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts auth:expired without a free-form payload", () => {
+    const res = authExpiredFrameSchema.safeParse({ type: "auth:expired" });
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts auth:retryable with retryAfterMs", () => {
+    const res = authRetryableFrameSchema.safeParse({
+      type: "auth:retryable",
+      code: "auth_backend_unavailable",
+      retryAfterMs: 2500,
+      message: "database unavailable",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("classifies auth_timeout as retryable, not rejected", () => {
+    expect(
+      authRetryableFrameSchema.safeParse({
+        type: "auth:retryable",
+        code: "auth_timeout",
+      }).success,
+    ).toBe(true);
+    expect(
+      authRejectedFrameSchema.safeParse({
+        type: "auth:rejected",
+        code: "auth_timeout",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses the finite auth control union by frame type", () => {
+    const res = authControlFrameSchema.safeParse({
+      type: "auth:retryable",
+      code: "server_draining",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects unknown auth:rejected codes", () => {
+    const res = authRejectedFrameSchema.safeParse({
+      type: "auth:rejected",
+      code: "please_login_again",
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects unknown auth:retryable codes", () => {
+    const res = authRetryableFrameSchema.safeParse({
+      type: "auth:retryable",
+      code: "try_sometime",
+    });
+    expect(res.success).toBe(false);
+  });
+});
 
 describe("serverWelcomeFrameSchema", () => {
   it("accepts a well-formed frame", () => {
