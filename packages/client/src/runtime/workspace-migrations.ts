@@ -156,43 +156,39 @@ function hasLegacySnapshotSignature(dir: string): boolean {
 }
 
 /**
- * Should a config-dependent migration defer this session?
+ * Should a config-dependent migration proceed this session?
  *
- * "Yes" exactly when BOTH:
- *   - The live `ctx.currentSourceRepoNames` is `null` (the caller could not
- *     resolve a payload from the server / cache), AND
- *   - The persisted `.agent/managed.json::sourceRepos` is also empty (no
- *     resolved session has ever written the state file).
+ * "Yes" only when the live `ctx.currentSourceRepoNames` is non-null — the
+ * caller resolved a payload from the server / cache for this session. When
+ * it's `null` (cache miss, default-payload fallback), callers MUST return
+ * `"deferred"`: persisted `.agent/managed.json::sourceRepos` proves a
+ * PREVIOUS config, not the current one, and falling back to it after a
+ * fresh config edit (web-console add + immediate cache miss on the next
+ * start) is the same "unknown config looks authoritative" deletion class
+ * of bug the `payloadResolved` gate was added to prevent. Marker stays
+ * unrecorded; the next resolved session re-runs the migration.
  *
- * In that combination there is no authoritative way to tell "config truly
- * declares zero source repos" from "we have no idea what the config
- * declares", so any deletion that relies on the difference between current
- * and on-disk repos is unsafe. The caller returns `"deferred"`; the
- * migrations applier leaves the marker unrecorded and a future resolved
- * session re-runs the migration. PR #869 baixiaohang round-3/4 P0.
+ * The trade-off: a workspace whose cache is **permanently** broken never
+ * runs the one-shot sweep. That's acceptable because such a workspace
+ * cannot reach the resolved-payload codepath that materialises
+ * `.agent/managed.json` in the first place — its config-dependent state
+ * is already inconsistent, and accumulating a few legacy directories on
+ * disk is a strictly smaller cost than risking deletion of a currently-
+ * configured source repo.
  *
- * **Known residual race (PR #869 code-reviewer R2 N-1):** when ctx is null
- * AND persisted state is NON-empty but STALE — e.g. the user just added a
- * new source repo via the web console and this very next session hits a
- * cache miss before `prepareSourceRepos(payloadResolved: true)` has had a
- * chance to refresh the state file — `shouldDeferOnUnknownConfig` returns
- * false and the fallback to `readCurrentSourceRepoNames` returns the stale
- * set. If the new repo's `localPath` matches a hardcoded migration target
- * (today only `first-tree-hub` or a UUID-shaped name carrying an
- * AGENTS.md), the migration will treat it as orphan and delete. Mitigations
- * we evaluated:
- *   - Defer on `ctx === null` regardless of persisted state (option A) —
- *     safer, but a workspace whose cache is permanently lost would never
- *     get its sweep. Such a workspace can't function anyway.
- *   - Force retired-hub / UUID-snapshots through `tryRemoveCloneSafely`
- *     (option B) — adds the dirty/ahead/worktree guards as a backstop.
- * Both are tracked as follow-ups; the race window (cache miss between
- * config change and a successful refresh) is rare enough that documenting
- * it here is the chosen action for this PR.
+ * History: round-3 added a deferral that ONLY fired when both ctx and
+ * persisted state were empty; round-4 spread it to all config-dependent
+ * migrations; round-5 (baixiaohang P0) collapsed the condition to "ctx
+ * null, period" — the persisted-state-as-fallback path was the residual
+ * race code-reviewer R2 N-1 documented but did not close. PR #869.
+ *
+ * Returned as a TYPE PREDICATE so callers can write `if
+ * (!hasResolvedConfig(ctx)) return "deferred";` and have TypeScript
+ * narrow `ctx.currentSourceRepoNames` to `ReadonlySet<string>` on the
+ * fall-through path.
  */
-function shouldDeferOnUnknownConfig(ctx: MigrationContext, workspacePath: string): boolean {
-  if (ctx.currentSourceRepoNames !== null) return false;
-  return readCurrentSourceRepoNames(workspacePath).size === 0;
+function hasResolvedConfig(ctx: MigrationContext): ctx is { currentSourceRepoNames: ReadonlySet<string> } {
+  return ctx.currentSourceRepoNames !== null;
 }
 
 function readGitOrigin(repoDir: string): string | null {
@@ -223,13 +219,13 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
     description:
       "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` (or in the live `ctx.currentSourceRepoNames` when available) so a user with a UUID-shaped `gitRepos.localPath` is never deleted. Per round-4: defers when neither signal is available — a UUID-shaped current source repo whose cloned content ships an AGENTS.md would otherwise match the legacy signature and be `rmSync`'d on the first cache-miss start before any resolved payload could write managed.json.",
     apply: (workspacePath, log, ctx) => {
-      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+      if (!hasResolvedConfig(ctx)) {
         log(
-          "workspace-migrations: v1-uuid-snapshots deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
+          "workspace-migrations: v1-uuid-snapshots deferred — no authoritative current source-repo set (live config unresolved); will retry next resolved session",
         );
         return "deferred";
       }
-      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
+      const currentRepos = ctx.currentSourceRepoNames;
       let removed = 0;
       let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
@@ -273,7 +269,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       // is currently configured, refuse to act. The broken-pointer shape
       // check below would otherwise nuke a clone the user re-added before
       // the cache had a chance to populate.
-      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+      if (!hasResolvedConfig(ctx)) {
         log(
           "workspace-migrations: v1-retired-source-repo-first-tree-hub deferred — no authoritative current source-repo set; will retry next resolved session",
         );
@@ -283,7 +279,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       // config — a future re-add would otherwise lose its checkout. The
       // live `ctx.currentSourceRepoNames` is authoritative; fall back to the
       // persisted state file when the live set is unknown (cache miss).
-      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
+      const currentRepos = ctx.currentSourceRepoNames;
       if (currentRepos.has("first-tree-hub")) {
         log(
           "workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — still in current source repos config",
@@ -367,13 +363,13 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       // safety guards still protect dirty / ahead / worktree clones, but
       // a clean repo with no work to lose is exactly what we'd
       // accidentally nuke without an authoritative set.
-      if (shouldDeferOnUnknownConfig(ctx, workspacePath)) {
+      if (!hasResolvedConfig(ctx)) {
         log(
-          "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved AND `.agent/managed.json` empty); will retry next resolved session",
+          "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved); will retry next resolved session",
         );
         return "deferred";
       }
-      const currentRepos = ctx.currentSourceRepoNames ?? readCurrentSourceRepoNames(workspacePath);
+      const currentRepos = ctx.currentSourceRepoNames;
       let removed = 0;
       let skipped = 0;
       for (const name of safeReaddir(workspacePath)) {
@@ -413,36 +409,12 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   },
 ];
 
-/**
- * Read the names of source repos currently materialised in this workspace,
- * by inspecting the previously-recorded managed state. Used by
- * `v1-orphan-ft-clones` to avoid deleting clones the state-based machinery
- * still tracks.
- *
- * Returns an empty set when no state file exists — at that point the
- * orphan-clone migration is being asked to run on a brand-new workspace,
- * which can't have orphans anyway, so the conservative empty set is fine.
- *
- * Imported lazily (require-style) to keep this module free of cross-file
- * cycles — `managed-state` already imports node:fs which keeps the
- * dependency direction one-way.
- */
-function readCurrentSourceRepoNames(workspacePath: string): Set<string> {
-  // Inline read instead of importing readManagedState to avoid a cycle
-  // when this module is loaded as part of the bootstrap path that also
-  // pulls in managed-state.
-  const statePath = join(workspacePath, ".agent", "managed.json");
-  if (!existsSync(statePath)) return new Set();
-  try {
-    const raw = JSON.parse(readFileSync(statePath, "utf-8")) as unknown;
-    if (typeof raw !== "object" || raw === null) return new Set();
-    const record = raw as Record<string, unknown>;
-    if (!Array.isArray(record.sourceRepos)) return new Set();
-    return new Set(record.sourceRepos.filter((entry): entry is string => typeof entry === "string"));
-  } catch {
-    return new Set();
-  }
-}
+// `readCurrentSourceRepoNames` was the round-3/4 fallback for "live ctx
+// unresolved, try persisted state". Round-5 (baixiaohang P0) closed that
+// fallback because persisted state is by definition stale relative to the
+// current session's config — see the `hasResolvedConfig` docstring. The
+// helper is intentionally NOT reintroduced; config-dependent migrations
+// now refuse to act without a live ctx, full stop.
 
 // ─── Applier ─────────────────────────────────────────────────────────
 

@@ -60,7 +60,11 @@ describe("workspace-migrations registry", () => {
     expect(logs.some((l) => l.includes("v1-uuid-snapshots deferred"))).toBe(true);
   });
 
-  it("v1-uuid-snapshots runs (not deferred) when persisted state has source repos even if ctx is null", () => {
+  it("v1-uuid-snapshots STILL DEFERS when ctx is null even if persisted state is non-empty (PR #869 baixiaohang round-5 P0)", () => {
+    // Round-3/4 had a graceful fallback to persisted `managed.json` when ctx
+    // was null; round-5 closed that path because persisted state reflects a
+    // PREVIOUS config, not the current one — a fresh config edit followed by
+    // a cache miss would otherwise see the new repo as "absent" and `rm` it.
     const uuidDir = join(workspace, "12345678-abcd-4def-89ab-1234567890ab");
     mkdirSync(uuidDir);
     writeFileSync(join(uuidDir, "AGENTS.md"), "# legacy snapshot\n");
@@ -77,8 +81,8 @@ describe("workspace-migrations registry", () => {
 
     const result = applyPendingMigrations(workspace, () => {});
 
-    expect(result.deferred).not.toContain("v1-uuid-snapshots");
-    expect(existsSync(uuidDir)).toBe(false);
+    expect(result.deferred).toContain("v1-uuid-snapshots");
+    expect(existsSync(uuidDir)).toBe(true);
   });
 
   it("v1-uuid-snapshots leaves UUID-named directories WITHOUT the legacy snapshot signature alone (PR #869 P0)", () => {
@@ -340,7 +344,11 @@ describe("workspace-migrations registry", () => {
     expect(logs.some((l) => l.includes("v1-orphan-ft-clones deferred"))).toBe(true);
   });
 
-  it("v1-orphan-ft-clones runs (not deferred) when persisted state has source repos even if ctx is null (graceful fallback)", () => {
+  it("v1-orphan-ft-clones STILL DEFERS when ctx is null even if persisted state is non-empty (PR #869 baixiaohang round-5 P0)", () => {
+    // Same regression as the UUID test above: previous "graceful fallback to
+    // persisted state" path was racy — a fresh web-console add could be
+    // misidentified as orphan if cache missed before the new repo's name
+    // landed in `managed.json`. Defer instead and retry next resolved session.
     initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
     initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
     writeFileSync(
@@ -356,10 +364,9 @@ describe("workspace-migrations registry", () => {
 
     const result = applyPendingMigrations(workspace, () => {});
 
-    expect(result.deferred).not.toContain("v1-orphan-ft-clones");
-    // first-tree is in persisted → safe; first-tree-hub is orphan → removed.
+    expect(result.deferred).toContain("v1-orphan-ft-clones");
     expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, "first-tree-hub"))).toBe(false);
+    expect(existsSync(join(workspace, "first-tree-hub"))).toBe(true);
   });
 });
 

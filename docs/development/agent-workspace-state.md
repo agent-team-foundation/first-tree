@@ -75,6 +75,29 @@ before any other bootstrap step:
    persisted only after a clean run.
 2. The existing first-run-vs-steady-state sentinel logic continues.
 
+### Two outcomes that block the marker
+
+A migration's `apply` can finish in three ways:
+
+- **clean return** (`undefined`) — migration ran; marker recorded; id
+  never re-runs.
+- **`"deferred"` return** — migration could not safely run this session
+  (typically because the live source-repo config is unresolved); marker
+  NOT recorded; the next session retries from scratch.
+- **`throw`** — unexpected I/O / git failure; marker NOT recorded;
+  logged via the `failed` channel; the next session retries.
+
+The `deferred` outcome is specifically for migrations whose correctness
+depends on the live agent config (`MigrationContext.currentSourceRepoNames`).
+Those migrations call `hasResolvedConfig(ctx)` at the top and defer when
+the caller could not resolve a payload. Persisted `managed.json` is NOT a
+safe fallback — it proves a previous config, not the current one — so any
+deletion that relies on "what's missing from the current config" must
+wait for a session with a real payload.
+
+Migrations whose check is purely local (e.g. `v1-whitepaper-symlink`'s
+"is this entry a symlink?") ignore the context and proceed unconditionally.
+
 State-based source/skill cleanup runs from inside the installers that
 already operate per session:
 
