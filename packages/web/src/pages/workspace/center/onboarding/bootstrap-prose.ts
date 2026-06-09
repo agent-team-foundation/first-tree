@@ -26,7 +26,7 @@
  *     Cloud gains a real provisioning step (creates the tree repo, writes
  *     `context_tree`, writes `workspace.json`) BEFORE sending kickoff, a
  *     future PR will switch this prose to name `$first-tree-seed` and drop
- *     the bind/host/record-URL instructions. See PR #899 baixiaohang r3.
+ *     the bind/host/record-URL instructions. See PR 899 (baixiaohang's r3 review).
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
