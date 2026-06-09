@@ -105,7 +105,7 @@ export function AgentSwitcherStrip({
             style={{
               width: 36,
               height: 36,
-              borderRadius: "50%",
+              borderRadius: "var(--radius-full)",
               border: "var(--hairline) solid var(--border)",
               background: "var(--bg-raised)",
               color: "var(--fg-3)",
@@ -133,24 +133,25 @@ export function AgentSwitcherStrip({
                   : () => onNavigate(`/agents/${a.uuid}/${resolveTabPath(a, memberId, role, currentTabPath)}`)
               }
             >
+              {/* Selection is signalled by the label underline + weight below
+                  (tab-style), not a heavy/colored ring around the avatar — so the
+                  avatar size is constant (no select-time shrink/jump) and follows
+                  the OptionCard rule of never using a heavier border for selection. */}
               <span className="relative inline-flex shrink-0" style={{ width: 36, height: 36 }}>
                 <span
                   className="inline-flex items-center justify-center"
                   style={{
                     width: 36,
                     height: 36,
-                    borderRadius: "50%",
-                    padding: selected ? 2 : 0,
-                    border: selected
-                      ? "var(--hairline-bold) solid var(--primary)"
-                      : "var(--hairline) solid transparent",
+                    borderRadius: "var(--radius-full)",
+                    border: "var(--hairline) solid transparent",
                     background: selected ? "var(--bg-active)" : "transparent",
                   }}
                 >
                   <Avatar
                     src={a.avatarImageUrl}
                     name={a.displayName}
-                    size={selected ? 30 : 34}
+                    size={34}
                     colorToken={a.avatarColorToken}
                     seed={a.uuid}
                   />
@@ -205,8 +206,14 @@ function StripButton({
     >
       {children}
       <span
-        className="text-caption w-full truncate text-center"
-        style={{ color: ariaCurrent ? "var(--fg)" : "var(--fg-3)" }}
+        className="text-caption max-w-full truncate text-center"
+        style={{
+          color: ariaCurrent ? "var(--fg)" : "var(--fg-3)",
+          paddingBottom: "var(--sp-0_5)",
+          borderBottom: ariaCurrent
+            ? "var(--hairline-bold) solid var(--primary)"
+            : "var(--hairline-bold) solid transparent",
+        }}
       >
         {label}
       </span>

@@ -37,7 +37,7 @@ export function ConfigRow({
 }: ConfigRowProps) {
   return (
     <div
-      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[8.25rem_minmax(0,1fr)_auto_auto] md:items-start md:gap-4"
+      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[var(--agent-detail-label-col)_minmax(0,1fr)_auto_auto] md:items-start md:gap-4"
       style={{
         padding: "var(--sp-2_5) 0",
         borderBottom: "var(--hairline) solid var(--border-faint)",

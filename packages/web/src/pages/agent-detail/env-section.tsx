@@ -96,7 +96,7 @@ export function EnvSection(props: EnvSectionProps) {
                   <button
                     type="button"
                     onClick={() => canReveal && toggleReveal(item.key)}
-                    className="bg-transparent border-0 cursor-pointer inline-flex items-center text-muted-foreground"
+                    className="bg-transparent border-0 p-0 cursor-pointer inline-flex items-center text-muted-foreground rounded-[var(--radius-chip)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
                     title={
                       canReveal
                         ? isRevealed
@@ -106,7 +106,6 @@ export function EnvSection(props: EnvSectionProps) {
                     }
                     aria-label={isRevealed ? "Hide value" : "Reveal value"}
                     disabled={!canReveal}
-                    style={{ padding: 0, opacity: canReveal ? 1 : 0.4 }}
                   >
                     {isRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>

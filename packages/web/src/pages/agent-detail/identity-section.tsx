@@ -136,7 +136,7 @@ function VisibilityBadge({ visibility }: { visibility: Agent["visibility"] }) {
 function IdentityField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div
-      className="grid min-w-0 grid-cols-1 items-baseline gap-1 sm:grid-cols-[8.25rem_minmax(0,1fr)] sm:gap-4"
+      className="grid min-w-0 grid-cols-1 items-baseline gap-1 sm:grid-cols-[var(--agent-detail-label-col)_minmax(0,1fr)] sm:gap-4"
       style={{ padding: "var(--sp-2) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
     >
       <div className="text-body truncate" style={{ color: "var(--fg-3)" }}>

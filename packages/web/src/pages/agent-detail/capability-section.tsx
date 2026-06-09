@@ -9,7 +9,7 @@ import {
   skillResourcePayloadSchema,
 } from "@first-tree/shared";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
@@ -20,8 +20,8 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
-import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { typeLabelSingular } from "../settings/resource-editors.js";
+import { ResourceRowView, RowAction } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
@@ -163,7 +163,7 @@ export function ResourceTypeSection(props: {
       <div>
         {rows.length === 0 ? (
           <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-            No {emptyNoun(type)} enabled.
+            No {emptyNoun(type)} yet.
           </p>
         ) : (
           rows.map((row) => (
@@ -330,54 +330,38 @@ function EffectiveRow(props: {
   const source = sourceLabel(props.row.source);
   const canRemove = props.row.bindingId && props.bindings.some((b) => b.id === props.row.bindingId);
   const canDisable = props.row.resourceId && props.row.source === "team_recommended" && props.row.mode === "enabled";
-  return (
-    <div
-      className="flex items-center gap-3"
-      style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="m-0 text-body font-medium truncate" style={{ color: "var(--fg)" }}>
-            {props.row.name}
-          </p>
-          {status ? (
-            <span className="mono inline-flex items-center gap-1.5 text-caption" style={{ color: status.color }}>
-              <StatusGlyph colorVar={status.color} shape="dot" size={7} ariaLabel={status.label} />
-              {status.label}
-            </span>
-          ) : null}
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            {source}
-          </span>
-        </div>
-        {subtitle ? (
-          <p className="m-0 text-caption truncate mono" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
-            {subtitle}
-          </p>
+  // Mono only for technical detail (repo URL, MCP command). A skill description
+  // and an "unavailable" failure reason are prose and stay in the sans body.
+  const monoPeek = props.row.mode !== "unavailable" && (props.row.type === "repo" || props.row.type === "mcp");
+  const actions =
+    props.canEdit && (canDisable || canRemove) ? (
+      <>
+        {canDisable ? (
+          <RowAction
+            label="Disable"
+            disabled={props.pending}
+            onClick={() => props.onDisable(props.row.resourceId ?? "")}
+          />
         ) : null}
-      </div>
-      {props.canEdit && canDisable ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={props.pending}
-          onClick={() => props.onDisable(props.row.resourceId ?? "")}
-        >
-          Disable
-        </Button>
-      ) : null}
-      {props.canEdit && canRemove ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={props.pending}
-          aria-label={`Remove ${props.row.name}`}
-          onClick={() => props.onRemoveBinding(props.row.bindingId ?? "")}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      ) : null}
-    </div>
+        {canRemove ? (
+          <RowAction
+            icon="remove"
+            label={`Remove ${props.row.name}`}
+            disabled={props.pending}
+            onClick={() => props.onRemoveBinding(props.row.bindingId ?? "")}
+          />
+        ) : null}
+      </>
+    ) : null;
+  return (
+    <ResourceRowView
+      name={props.row.name}
+      source={source}
+      status={status}
+      peek={subtitle}
+      monoPeek={monoPeek}
+      actions={actions}
+    />
   );
 }
 

@@ -4,7 +4,7 @@ import {
   PROMPT_APPEND_MAX_LENGTH,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
@@ -20,10 +20,10 @@ import {
 import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
-import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { agentResourcesMutationHandlers, statusMarker } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
+import { ResourceRowView, RowAction, type RowStatusMarker } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
@@ -387,7 +387,9 @@ function PromptResourceBlocks(props: {
     return (
       <PromptResourceBlock
         key={row.id}
-        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={statusMarker(row.mode)} />}
+        name={promptBlockName(row)}
+        source={row.source}
+        marker={statusMarker(row.mode)}
         action={action}
         body={row.promptBody ?? ""}
         expanded={expandedIds.has(row.id)}
@@ -401,7 +403,8 @@ function PromptResourceBlocks(props: {
     blocks.push(
       <PromptResourceBlock
         key="agent-custom-editor"
-        title={<PromptBlockHeading name={null} source="inline_prompt" />}
+        name={null}
+        source="inline_prompt"
         body=""
         expanded
         onToggle={() => {}}
@@ -419,7 +422,7 @@ function PromptResourceBlocks(props: {
       !!row.bindingId &&
       (row.mode === "disabled" || !enabledBindingIds.has(row.bindingId));
     const action = manageable ? (
-      <PromptBlockAction
+      <RowAction
         label={row.mode === "disabled" ? "Re-enable" : "Remove"}
         icon={row.mode === "disabled" ? undefined : "remove"}
         disabled={props.busy}
@@ -429,7 +432,9 @@ function PromptResourceBlocks(props: {
     blocks.push(
       <PromptResourceBlock
         key={row.id}
-        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={statusMarker(row.mode)} />}
+        name={promptBlockName(row)}
+        source={row.source}
+        marker={statusMarker(row.mode)}
         action={action}
         body={row.promptBody ?? ""}
         expanded={expandedIds.has(row.id)}
@@ -446,16 +451,13 @@ function PromptResourceBlocks(props: {
     blocks.push(
       <PromptResourceBlock
         key={orphanId}
-        title={<PromptBlockHeading name={null} source="inline_prompt" />}
+        name={null}
+        source="inline_prompt"
         action={
           props.editor || !props.canEdit ? null : (
             <div className="flex gap-2">
-              <PromptBlockAction
-                icon="edit"
-                label="Edit custom instructions"
-                onClick={() => props.onEditBinding(bindingId)}
-              />
-              <PromptBlockAction
+              <RowAction icon="edit" label="Edit custom instructions" onClick={() => props.onEditBinding(bindingId)} />
+              <RowAction
                 label="Remove"
                 icon="remove"
                 disabled={props.busy}
@@ -494,7 +496,7 @@ function promptRowAction(
 ): ReactNode {
   const buttons: ReactNode[] = [];
   const remove = (
-    <PromptBlockAction
+    <RowAction
       key="remove"
       label="Remove"
       icon="remove"
@@ -504,26 +506,16 @@ function promptRowAction(
   );
   if (row.source === "inline_prompt") {
     buttons.push(
-      <PromptBlockAction
-        key="edit"
-        icon="edit"
-        label="Edit custom instructions"
-        onClick={() => props.onStartEdit(row)}
-      />,
+      <RowAction key="edit" icon="edit" label="Edit custom instructions" onClick={() => props.onStartEdit(row)} />,
     );
     if (row.bindingId) buttons.push(remove);
   } else if (row.source.startsWith("team_") && row.resourceId) {
     buttons.push(
-      <PromptBlockAction
-        key="customize"
-        icon="edit"
-        label="Customize for this agent"
-        onClick={() => props.onStartEdit(row)}
-      />,
+      <RowAction key="customize" icon="edit" label="Customize for this agent" onClick={() => props.onStartEdit(row)} />,
     );
     if (row.source === "team_recommended") {
       buttons.push(
-        <PromptBlockAction
+        <RowAction
           key="disable"
           label="Disable"
           disabled={props.busy}
@@ -568,73 +560,48 @@ function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: 
   );
 }
 
-// One instruction row, matching the shared `EffectiveRow` skeleton (Environment /
-// Tools & skills): a flat two-line row — line 1 = title + source + status + right-
-// aligned ghost actions + chevron; line 2 = a one-line truncated content peek. The
-// row expands in place: the full Markdown (or the inline editor) renders in a sunken
-// contained block below. Short, single-line prompts have no chevron, so the list
-// stays calm.
+// One instruction row — a thin wrapper over the shared `ResourceRowView`
+// primitive (the same flat skeleton the Tools & skills / Environment resource
+// rows use): name → source → status, right-aligned ghost actions, a one-line
+// peek, and an in-place sunken expansion holding the full Markdown or the inline
+// editor. Short, single-line prompts have no chevron, so the list stays calm.
 function PromptResourceBlock(props: {
-  title: ReactNode;
+  name: string | null;
+  source: EffectivePromptRow["source"];
+  marker?: RowStatusMarker;
   action?: ReactNode;
   body: string;
   expanded: boolean;
   onToggle: () => void;
-  /** When present (editor active), the sunken area always shows this instead of Markdown. */
+  /** When present (editor active), the sunken area shows this instead of Markdown. */
   editor?: ReactNode;
 }) {
   const peek = peekLine(props.body);
-  // Keep the existing guard: trivially-short single-line prompts need no expander.
+  // Trivially-short single-line prompts need no expander.
   const canExpand = props.body.length > 120 || props.body.includes("\n");
-  const showSunken = props.editor ? true : props.expanded && !!props.body;
   return (
-    <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-      {/* Title + actions. On mobile they stack (title row, then the action group
-          wraps below) so the long management buttons never overflow a phone width;
-          on sm+ they sit on one row with the actions right-aligned. */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
-        <div className="min-w-0 flex-1">{props.title}</div>
-        {props.action || (!props.editor && canExpand) ? (
-          <div className="flex flex-wrap items-center gap-1 shrink-0">
-            {props.action}
-            {props.editor ? null : canExpand ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                aria-expanded={props.expanded}
-                aria-label={props.expanded ? "Collapse instructions" : "Expand instructions"}
-                onClick={props.onToggle}
-              >
-                {props.expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </Button>
-            ) : null}
+    <ResourceRowView
+      name={props.name}
+      source={sourceLabel(props.source)}
+      status={props.marker}
+      peek={peek || undefined}
+      actions={props.action}
+      emptyPeek="No instructions yet."
+      expandLabel="instructions"
+      expand={{
+        canExpand,
+        expanded: props.expanded,
+        onToggle: props.onToggle,
+        // Cap prose to a readable measure (~66–75ch), matching the Effective
+        // instructions dialog (max-w-2xl) instead of stretching the full rail.
+        body: props.body ? (
+          <div className="max-w-2xl">
+            <Markdown>{props.body}</Markdown>
           </div>
-        ) : null}
-      </div>
-      {showSunken ? (
-        <div
-          className="text-body"
-          style={{
-            marginTop: "var(--sp-2)",
-            background: "var(--bg-sunken)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-panel)",
-            padding: "var(--sp-3)",
-          }}
-        >
-          {props.editor ? props.editor : <Markdown>{props.body}</Markdown>}
-        </div>
-      ) : peek ? (
-        <p className="m-0 text-caption truncate" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
-          {peek}
-        </p>
-      ) : (
-        <p className="m-0 text-caption text-muted-foreground" style={{ marginTop: "var(--sp-0_5)" }}>
-          No instructions yet.
-        </p>
-      )}
-    </div>
+        ) : null,
+      }}
+      editor={props.editor ?? undefined}
+    />
   );
 }
 
@@ -646,38 +613,6 @@ function peekLine(body: string): string {
     if (line) return line;
   }
   return "";
-}
-
-function PromptBlockAction(props: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  /** "edit" → pencil icon only; "remove" → trash icon only; undefined → text label.
-   *  Icon-only keeps the widest controls (e.g. "Customize for this agent") from
-   *  overflowing the flat row on narrow screens; the label moves to aria-label/title. */
-  icon?: "edit" | "remove";
-}) {
-  if (props.icon) {
-    const Icon = props.icon === "remove" ? Trash2 : Pencil;
-    return (
-      <Button
-        type="button"
-        size="xs"
-        variant="ghost"
-        disabled={props.disabled}
-        aria-label={props.label}
-        title={props.label}
-        onClick={props.onClick}
-      >
-        <Icon className="h-4 w-4" />
-      </Button>
-    );
-  }
-  return (
-    <Button type="button" size="xs" variant="ghost" disabled={props.disabled} onClick={props.onClick}>
-      {props.label}
-    </Button>
-  );
 }
 
 // Per-section add control on the Instructions tab. One "+" trigger opens a menu:
@@ -795,34 +730,6 @@ function promptBlockName(row: EffectivePromptRow): string | null {
   return row.name;
 }
 
-function PromptBlockHeading(props: {
-  name: string | null;
-  source: EffectivePromptRow["source"];
-  marker?: { label: string; color: string } | null;
-}) {
-  return (
-    <span className="inline-flex items-center gap-2">
-      {props.name ? (
-        <span className="text-body font-medium truncate" style={{ color: "var(--fg)" }}>
-          {props.name}
-        </span>
-      ) : null}
-      <span className="text-caption font-normal" style={{ color: "var(--fg-4)" }}>
-        {sourceLabel(props.source)}
-      </span>
-      {props.marker ? (
-        <span
-          className="mono inline-flex items-center gap-1.5 text-caption font-normal"
-          style={{ color: props.marker.color }}
-        >
-          <StatusGlyph colorVar={props.marker.color} shape="dot" size={7} ariaLabel={props.marker.label} />
-          {props.marker.label}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
 function InlineCustomPromptEditor(props: {
   body: string;
   error: string | null;
@@ -854,7 +761,7 @@ function InlineCustomPromptEditor(props: {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-2">
+    <form onSubmit={submit} className="max-w-2xl space-y-2">
       <Textarea
         id="custom-prompt-body"
         ref={taRef}
@@ -901,7 +808,7 @@ function InlineCustomPromptEditor(props: {
             Cancel
           </Button>
           <Button type="submit" size="xs" variant="outline" disabled={props.saving}>
-            {props.saving ? "Saving..." : "Save instructions"}
+            {props.saving ? "Saving…" : "Save instructions"}
           </Button>
         </div>
       </div>
