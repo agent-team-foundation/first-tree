@@ -369,9 +369,8 @@ bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
    a thread stands, or hold several chats and must choose what to
    advance, run \`${bin} chat list\` and read each description to
    reconstruct what you've done / what's in flight, then drill in with
-   \`${bin} chat history <chat>\`. If \`lastMessageAt\` is newer than
-   \`updatedAt\`, the description has fallen behind — trust the messages
-   and refresh it.
+   \`${bin} chat history <chat>\`. Refresh any description that no longer
+   matches what the thread has actually done.
 
 **Exception: GitHub-sourced topics — leave them alone.** Topics like
 \`PR repo#307: title\`, \`Issue repo#42\`, \`Commit repo@sha\` are

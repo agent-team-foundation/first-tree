@@ -252,6 +252,10 @@ first-tree chat
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>
+├── set-topic [topic]                                # set/clear topic + description (chat self-description)
+│     --clear                                        #   clear the topic (falls back to auto-derived title)
+│     --description <text> / --clear-description     #   set/clear the running work-state summary
+│     --chat <chatId> / --agent <name>               #   target another chat / the named agent
 └── open <agent-name>                                # interactive REPL
 ```
 
@@ -279,6 +283,14 @@ first-tree chat send code-agent "now we can talk"
 # Browse
 first-tree chat list
 first-tree chat history <chatId>
+
+# Self-description: a short topic label + a longer running work summary,
+# both set through set-topic. Agents read descriptions via `chat list` to
+# self-locate across threads (see the agent briefing's "Chat Topic & Description").
+first-tree chat set-topic "review PR #916"
+first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
+first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"
+first-tree chat set-topic --clear-description
 
 # Interactive
 first-tree chat open code-agent
