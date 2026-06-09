@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Github } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowRight, Check, ChevronRight, Github } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
@@ -157,6 +157,7 @@ export function StepConnectCode() {
   if (!installed) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <PhaseNav phase="connect" />
         {/* Intro is now embedded into the step `why` via STEP_COPY — no
             separate reassurance paragraph (folded into why) and no
             "alreadyInstalledHint" (the share-link affordance below covers
@@ -232,6 +233,7 @@ export function StepConnectCode() {
   // ── Connected — pick the project ─────────────────────────────────────
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+      <PhaseNav phase="pick" />
       <StatusRow state="ok" label={connectedLabel} />
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
@@ -278,6 +280,64 @@ export function StepConnectCode() {
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * In-step two-phase indicator (Connect GitHub → Pick repos) so the user can see
+ * this step is two parts and where they are. Numbered/checked to mirror the
+ * GuideSteps badges; distinct from the shell's overall "Step N of M" (no number
+ * counter here, to avoid a competing step count).
+ */
+function PhaseNav({ phase }: { phase: "connect" | "pick" }) {
+  const activeIndex = phase === "connect" ? 0 : 1;
+  return (
+    <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+      {COPY.connectCode.phases.map((label, i) => {
+        const state = i < activeIndex ? "done" : i === activeIndex ? "active" : "todo";
+        return (
+          <Fragment key={label}>
+            {i > 0 && (
+              <ChevronRight
+                className="h-3.5 w-3.5"
+                style={{ color: "var(--fg-4)", flexShrink: 0 }}
+                aria-hidden="true"
+              />
+            )}
+            <span className="inline-flex items-center text-label" style={{ gap: "var(--sp-1_5)" }}>
+              <span
+                aria-hidden="true"
+                className="mono inline-flex items-center justify-center"
+                style={{
+                  width: "var(--sp-4)",
+                  height: "var(--sp-4)",
+                  flexShrink: 0,
+                  borderRadius: "var(--radius-full)",
+                  background:
+                    state === "active"
+                      ? "var(--primary)"
+                      : state === "done"
+                        ? "color-mix(in oklch, var(--primary) 14%, transparent)"
+                        : "transparent",
+                  border: state === "todo" ? "var(--hairline) solid var(--border-strong)" : "none",
+                  color: state === "active" ? "var(--primary-on)" : "var(--primary)",
+                }}
+              >
+                {state === "done" ? <Check className="h-3 w-3" /> : i + 1}
+              </span>
+              <span
+                style={{
+                  color: state === "active" ? "var(--fg)" : "var(--fg-4)",
+                  fontWeight: state === "active" ? 600 : 400,
+                }}
+              >
+                {label}
+              </span>
+            </span>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

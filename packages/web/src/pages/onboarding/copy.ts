@@ -133,6 +133,9 @@ export const COPY = {
     // `STEP_COPY['connect-code'].why` verbatim and had no remaining
     // consumer after the connect-code step started reading from
     // STEP_COPY directly. Keep the why as the single source of truth.
+    /** The step's two sub-phases, shown as an in-step indicator so the user can
+        see it's "connect, then pick" and where they are. */
+    phases: ["Connect GitHub", "Pick repos"],
     cta: "Install on GitHub",
     waiting: "Waiting for GitHub…",
     connected: "Connected",
