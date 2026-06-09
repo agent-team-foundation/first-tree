@@ -9,7 +9,6 @@ interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
-  broadcast?: boolean;
   request?: boolean;
   question?: string;
   option?: string[];
@@ -27,13 +26,12 @@ export function registerChatSendCommand(chat: Command): void {
     .description(
       "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
         "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
-        "first). With --broadcast the message enters the stream but wakes no one. Use --request to ask a human an " +
+        "first). A message must name a recipient — there is no no-mention send. Use --request to ask a human an " +
         "open question, --reply-to to answer one.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
-    .option("-b, --broadcast", "Send with no @mention — enters the stream, wakes no one")
     .option(
       "--request",
       "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
@@ -55,17 +53,15 @@ export function registerChatSendCommand(chat: Command): void {
           );
         }
 
-        // Resolve target vs broadcast. In --broadcast mode there is no
-        // recipient, so the first positional is actually the message.
-        const broadcast = options.broadcast === true;
-        const target = broadcast ? undefined : name;
-        const inlineBody = broadcast ? (message ?? name) : message;
+        // Every send names a recipient: the first positional is the target,
+        // the second is the message body.
+        const target = name;
+        const inlineBody = message;
 
-        if (!broadcast && !target) {
+        if (!target) {
           fail(
             "NO_TARGET",
-            "Pass <name> to @mention a recipient, or use --broadcast to send with no @mention " +
-              "(enters the stream, wakes no one).",
+            "Pass <name> to @mention a recipient — a message must name a recipient (there is no no-mention send).",
             2,
           );
         }
@@ -140,14 +136,11 @@ export function registerChatSendCommand(chat: Command): void {
           source: "cli",
           // Server resolves the name against the chat's participant list and
           // adds it to mentions; an unknown name fails with a `chat invite`
-          // hint. Omitted in --broadcast mode → no @mention, no wake-up.
+          // hint.
           ...(target ? { receiverNames: [target] } : {}),
           // Answer/thread a prior message; the server's open-question counter
           // decrements off exactly this when the target answers a request.
           ...(options.replyTo ? { inReplyTo: options.replyTo } : {}),
-          // Explicit broadcast: enter the stream, wake no one, skip the
-          // group-chat @mention guard server-side.
-          ...(broadcast ? { broadcast: true } : {}),
         });
         success(result);
       } catch (error) {

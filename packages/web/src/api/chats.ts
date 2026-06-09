@@ -85,14 +85,13 @@ export function sendChatMessage(
   chatId: string,
   content: string,
   mentions: string[],
-  opts?: { inReplyTo?: string; broadcast?: boolean },
+  opts?: { inReplyTo?: string },
 ): Promise<Message> {
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
     content,
     ...(mentions.length > 0 ? { metadata: { mentions } } : {}),
     ...(opts?.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
-    ...(opts?.broadcast ? { broadcast: true } : {}),
   });
 }
 

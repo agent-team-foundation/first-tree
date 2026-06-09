@@ -92,8 +92,8 @@ export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
  *     reply text (today: `runtime/result-sink.ts`). Lands in chat history
  *     so human observers in the web UI can see what the agent is doing,
  *     but does not wake other agents and is not subject to the group-chat
- *     `@mention required` guard — it is not a user-typed group broadcast.
- *     v1 §四 改造 4 (b) bypass channel.
+ *     `@mention required` guard — it is an agent's own response surfaced
+ *     for humans, not a message addressed into the room.
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
  * adapter, etc.) and goes through the normal enforcement profile.
@@ -118,15 +118,6 @@ export const sendMessageSchema = z.object({
    */
   source: messageSourceSchema.default("api"),
   purpose: messagePurposeSchema.optional(),
-  /**
-   * Explicit broadcast intent: enter the chat stream but wake no one and
-   * skip the group-chat `@mention required` guard. Opt-in — set by the CLI
-   * `chat send --broadcast` and the web composer's no-`@` send. Distinct from
-   * `purpose: "agent-final-text"` (which is a runtime-internal forward); this
-   * is a deliberate human/agent broadcast ("我搞完了 / 立场宣布"). See
-   * proposals/group-chat-unified-send §D6.
-   */
-  broadcast: z.boolean().optional(),
   /**
    * Recipient agent names that the server should resolve to uuids against
    * the chat's participant list and add to the message's `mentions`. Lets
