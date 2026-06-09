@@ -5,7 +5,7 @@ import { resolveGitRepoTargetPath } from "./git-local-path.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { SessionContext } from "./handler.js";
 import { readManagedState, updateManagedState } from "./managed-state.js";
-import { tryRemoveCloneSafely } from "./source-repo-cleanup.js";
+import { isFinalRemoveOutcome, tryRemoveCloneSafely } from "./source-repo-cleanup.js";
 
 export type PrepareSourceReposParams = {
   workspace: string;
@@ -261,25 +261,41 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
  * upstream) protect against destroying in-flight work; a guard failure
  * skips the delete and logs a warning instead.
  *
- * State (the `sourceRepos` field of `.agent/managed.json`) is rewritten to
- * the current set whether or not deletes succeeded — so a future config
- * change correctly diffs against today's reality, and a guard-skipped
- * cleanup just becomes a manual operator follow-up rather than a
- * recurring noisy log.
+ * **Retry semantics for skipped deletes.** A clone that the safety guards
+ * refuse to remove (dirty / ahead-of-upstream / has-worktrees /
+ * in-use-by-live-chat / probe-failed / remove-failed) stays in
+ * `.first-tree-workspace/managed.json::sourceRepos` so the NEXT session's
+ * reconcile re-runs the probes. The blocking condition is typically
+ * operator-clearable between sessions (commit / push / close the dependent
+ * worktree / end the live chat / fix permissions); once cleared, the
+ * follow-up reconcile completes the delete.
+ *
+ * Only "final" outcomes — `removed` (we deleted it), `absent` (already
+ * gone), or `not-a-clone` (structurally not ours to delete, ever) — drop
+ * the entry from managed state and stop further retries. Log noise on
+ * recurring skips is accepted as the cost of self-healing; the alternative
+ * (forget about the orphan after one skip) leaves the operator with no
+ * automatic cleanup once the blocker is resolved.
  */
 function reconcileSourceRepoState(workspace: string, currentLocalPaths: string[], sessionCtx: SessionContext): void {
   const currentSet = new Set(currentLocalPaths);
+  const retainedForRetry: string[] = [];
   const prev = readManagedState(workspace);
   if (prev) {
     for (const prevLocalPath of prev.sourceRepos) {
       if (currentSet.has(prevLocalPath)) continue;
       const absPath = join(workspace, prevLocalPath);
-      tryRemoveCloneSafely(absPath, prevLocalPath, sessionCtx.log, isSourceRepoPathInUse);
+      const outcome = tryRemoveCloneSafely(absPath, prevLocalPath, sessionCtx.log, isSourceRepoPathInUse);
+      // Recoverable skip → keep tracking this clone so the next session's
+      // reconcile re-evaluates the safety guards. See the docstring above
+      // for the full classification.
+      if (!isFinalRemoveOutcome(outcome)) retainedForRetry.push(prevLocalPath);
     }
   }
 
+  const nextSourceRepos = new Set([...currentSet, ...retainedForRetry]);
   updateManagedState(workspace, resolveBundledCliVersion(), (current) => ({
     ...current,
-    sourceRepos: [...currentSet].sort(),
+    sourceRepos: [...nextSourceRepos].sort(),
   }));
 }

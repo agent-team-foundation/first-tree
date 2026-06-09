@@ -31,6 +31,26 @@ export type RemoveCloneOutcome =
   | "remove-failed";
 
 /**
+ * Whether a removal outcome counts as "work complete; drop the entry from
+ * managed state". The state-based reconcile path uses this to decide which
+ * prev-but-no-longer-current entries can be forgotten vs. which must stay
+ * tracked so the next session retries.
+ *
+ * Final outcomes (`removed`, `absent`, `not-a-clone`) all mean further
+ * probing accomplishes nothing — the directory is gone, was already gone,
+ * or is structurally not a clone we manage.
+ *
+ * Every other outcome (`dirty`, `ahead-of-upstream`, `has-worktrees`,
+ * `in-use-by-live-chat`, `probe-failed`, `remove-failed`) reflects a
+ * condition that an operator action (commit / push / close a worktree /
+ * end a live session / fix permissions) can clear, so the next session's
+ * probe might succeed. Those entries stay in managed state for retry.
+ */
+export function isFinalRemoveOutcome(outcome: RemoveCloneOutcome): boolean {
+  return outcome === "removed" || outcome === "absent" || outcome === "not-a-clone";
+}
+
+/**
  * Optional callback the caller can pass to short-circuit deletion when the
  * checkout is still held by a live chat in this process. The state-based
  * cleanup path passes `isSourceRepoPathInUse` from `source-repos.ts`; the

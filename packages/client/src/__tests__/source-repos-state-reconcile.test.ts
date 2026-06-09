@@ -139,7 +139,7 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
     expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
   });
 
-  it("prev=[A,B], current=[A] but B is dirty → B is kept, state still rolls forward to [A]", async () => {
+  it("prev=[A,B], current=[A] but B is dirty → B is kept on disk AND retained in state for retry", async () => {
     plantClone(workspace, "repo-a");
     plantClone(workspace, "repo-b", { dirty: true });
     writeManagedState(workspace, {
@@ -162,12 +162,14 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
 
     expect(existsSync(join(workspace, "repo-b"))).toBe(true);
     expect(existsSync(join(workspace, "repo-b", "dirty.txt"))).toBe(true);
-    // State rolls forward to current set — the dirty clone becomes an
-    // operator follow-up (see `reconcileSourceRepoState` docstring).
-    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
+    // Retry semantics: a guard-skipped delete stays in managed state so the
+    // next session re-runs the probes. See `reconcileSourceRepoState`
+    // docstring — the operator clearing the dirty state between sessions
+    // is exactly the recovery path we want to remain open.
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
   });
 
-  it("prev=[A,B], current=[A] but B hosts a dependent worktree → B is kept", async () => {
+  it("prev=[A,B], current=[A] but B hosts a dependent worktree → B is kept on disk AND retained in state", async () => {
     plantClone(workspace, "repo-a");
     plantClone(workspace, "repo-b", { withWorktreeRef: "linked-wt" });
     writeManagedState(workspace, {
@@ -189,6 +191,49 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
     });
 
     expect(existsSync(join(workspace, "repo-b"))).toBe(true);
+    // Retained for retry — once the operator removes the dependent worktree,
+    // the next reconcile completes the delete.
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
+  });
+
+  it("dirty B retained → next session, after operator cleans B, is finally removed and dropped from state", async () => {
+    plantClone(workspace, "repo-a");
+    const repoB = plantClone(workspace, "repo-b", { dirty: true });
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      sourceRepos: ["repo-a", "repo-b"],
+      skills: [],
+    });
+
+    // Session 1: B dirty → skip + retain in state.
+    const { manager } = makeManager();
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a"]),
+      sessionCtx: makeCtx(),
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+    expect(existsSync(repoB)).toBe(true);
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
+
+    // Operator cleans B between sessions.
+    rmSync(join(repoB, "dirty.txt"));
+
+    // Session 2: B is now clean → removed + dropped from state.
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a"]),
+      sessionCtx: makeCtx(),
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+    expect(existsSync(repoB)).toBe(false);
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
   });
 
   it("prev=[A,B], payload=undefined (cache miss) → NOTHING is deleted (PR #869 P0-2 regression)", async () => {
@@ -282,8 +327,8 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
 
     expect(existsSync(join(workspace, "repo-b"))).toBe(true);
     expect(chatBLogs.some((l) => l.toLowerCase().includes("in use by another live chat"))).toBe(true);
-    // State still rolls forward to chat B's set so the next session diffs
-    // against today's reality — the stale clone becomes operator follow-up.
-    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
+    // Retained for retry — when chat A teardown releases the live-use lock,
+    // a later session can complete the delete.
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
   });
 });

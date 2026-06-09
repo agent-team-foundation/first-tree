@@ -104,7 +104,9 @@ already operate per session:
 - **`prepareSourceRepos`** (`runtime/source-repos.ts`) — after the per-repo
   clone/fetch loop, diff `prev.sourceRepos` against the current set and
   remove any clone no longer in the config. Safety guards apply (see
-  below); state is then rewritten to the current set.
+  below); the new state is `current ∪ (prev items the guards refused to
+  delete)`, so a guard-skipped clone stays tracked and the next session
+  retries.
 - **`installFirstTreeSkills`** (`runtime/first-tree-skills/installer.ts`)
   — same diff against `TREE_SKILL_NAMES`. Dropped skills lose their
   `.agents/skills/<name>/` payload AND their `.claude/skills/<name>`
@@ -127,10 +129,24 @@ Every clone deletion — both state-based and migration-driven — goes through
 6. **Any probe crashed / timed out** → `probe-failed`, skip. Conservative
    default: we'd rather leave a stale clone than nuke unpushed work.
 
-A skipped clone stays on disk and becomes an operator follow-up. The
-state file is still updated to the current set so the next session
-doesn't try the same skipped clone again as part of state-based cleanup
-— the migration path is "best effort, one shot".
+A skipped clone stays on disk **and stays in
+`.first-tree-workspace/managed.json::sourceRepos`** so the next session's
+state-based reconcile re-runs the probes. The conditions that block a
+delete (uncommitted work, commits ahead of upstream, an attached worktree,
+a live chat holding the path, a transient probe / rm failure) are all
+operator-clearable between sessions; once cleared, the follow-up reconcile
+completes the delete. Recurring "skipped — working tree is dirty" log
+lines on persistent blockers are accepted as the cost of self-healing.
+
+Only **final** outcomes — `removed` (we deleted it just now), `absent`
+(already gone), or `not-a-clone` (no `.git/` — never ours to delete) —
+drop the entry from managed state and stop further retries. The
+classification lives in `isFinalRemoveOutcome` next to the
+`RemoveCloneOutcome` definition in `runtime/source-repo-cleanup.ts`.
+
+The migration path (`workspace-migrations.ts`) is unchanged — that one is
+still "best effort, one shot" because it's gated by `migrations-applied.json`
+and re-runs only when the marker is missing.
 
 ## What is NOT touched by this machinery
 
