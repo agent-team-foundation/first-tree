@@ -11,8 +11,9 @@ import { isFinalRemoveOutcome, type RemoveCloneOutcome } from "../runtime/source
  * inline so a new union member added in source without a matching entry
  * here trips a TypeScript error at the `satisfies` line — the test then
  * fails to compile, forcing the author to decide whether the new outcome
- * is final or retry-eligible. This is the "防御未来给 union 加成员忘了
- * 分类" anchor (PR #913 code-reviewer follow-up nit 3).
+ * is final or retry-eligible. This is the anchor against "added a new
+ * outcome and forgot to classify it" (PR #913 code-reviewer follow-up
+ * nit 3).
  */
 const OUTCOME_EXPECTATIONS = {
   removed: true,
