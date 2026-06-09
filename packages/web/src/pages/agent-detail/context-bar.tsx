@@ -1,35 +1,42 @@
-/**
- * Sticky context bar for the agent detail page. Renders the fixed
- * "Runs on <runtime> @ <computer>" strap so the operator always knows which
- * runtime + binding the page is editing once they've scrolled past the top
- * header (which surfaces the same facts plus model/sessions tiles).
- *
- * Model is intentionally NOT shown here — it is already present in the always-
- * visible top header tiles, so duplicating it adds noise without information.
- *
- * The bar sits **inside** the scrollable main column directly under the page
- * header, so the breadcrumb+title stays at the top (only this bar sticks).
- *
- * Visibility is driven by the parent (see `AgentDetailPage`): an
- * IntersectionObserver on a sentinel at the bottom of the top header toggles
- * `visible`, avoiding first-screen duplication.
- */
+import { Avatar } from "../../components/avatar.js";
+import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 
+/**
+ * Sticky identity bar for the agent detail page. Once the operator scrolls past
+ * the top header (which carries the switcher + title), this bar takes over to
+ * keep "which agent am I looking at" visible: avatar + name + presence.
+ *
+ * It used to repeat "Runs on <runtime> @ <computer>", which duplicated the
+ * Environment tab's Execution section. Identity is the thing that actually needs
+ * to stay pinned while scrolling a long tab.
+ *
+ * The top switcher and this bar never show at once — the bar is gated by an
+ * IntersectionObserver on a sentinel under the header (see `AgentDetailPage`),
+ * so it only appears after the switcher has scrolled away.
+ */
 export type ContextBarProps = {
-  runtimeLabel: string;
-  computerLabel: string | null;
-  /**
-   * When false, the bar is not rendered at all. Defaults to true so callers
-   * that don't want visibility control get the always-on behaviour.
-   */
+  displayName: string;
+  avatarImageUrl?: string | null;
+  avatarColorToken?: string | null;
+  /** Stable seed for the fallback avatar color (the agent uuid). */
+  seed: string;
+  runtimeState: string | null | undefined;
+  /** When false, the bar is not rendered at all. */
   visible?: boolean;
 };
 
-export function ContextBar({ runtimeLabel, computerLabel, visible = true }: ContextBarProps) {
+export function ContextBar({
+  displayName,
+  avatarImageUrl,
+  avatarColorToken,
+  seed,
+  runtimeState,
+  visible = true,
+}: ContextBarProps) {
   if (!visible) return null;
   return (
     <div
-      className="sticky z-20 flex items-center justify-between gap-3 backdrop-blur"
+      className="sticky z-20 flex items-center gap-2 backdrop-blur"
       style={{
         top: 0,
         padding: "var(--sp-1_75) var(--sp-5)",
@@ -37,19 +44,11 @@ export function ContextBar({ runtimeLabel, computerLabel, visible = true }: Cont
         borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
-      <div className="mono text-caption flex items-center gap-2" style={{ color: "var(--fg-3)" }}>
-        <span>
-          Runs on <span style={{ color: "var(--fg-2)" }}>{runtimeLabel}</span>
-        </span>
-        {computerLabel && (
-          <>
-            <span style={{ color: "var(--fg-4)" }} aria-hidden>
-              @
-            </span>
-            <span style={{ color: "var(--fg-2)" }}>{computerLabel}</span>
-          </>
-        )}
-      </div>
+      <Avatar src={avatarImageUrl} name={displayName} size={20} colorToken={avatarColorToken} seed={seed} />
+      <span className="text-body font-medium min-w-0 flex-1 truncate" style={{ color: "var(--fg)" }}>
+        {displayName}
+      </span>
+      <PresenceChip status={runtimeStateToPresence(runtimeState)} className="shrink-0" />
     </div>
   );
 }

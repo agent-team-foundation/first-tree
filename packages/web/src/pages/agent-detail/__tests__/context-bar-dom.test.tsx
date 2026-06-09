@@ -25,24 +25,18 @@ afterEach(() => {
 });
 
 describe("ContextBar", () => {
-  it("renders runtime and optional computer labels only when visible", async () => {
+  it("renders the agent identity only when visible", async () => {
     const { ContextBar } = await import("../context-bar.js");
     const hidden = await renderDom(
-      <ContextBar runtimeLabel="Claude Code" computerLabel="gandy-macbook" visible={false} />,
+      <ContextBar displayName="Kael" seed="agent-1" runtimeState="idle" visible={false} />,
     );
     expect(hidden.container.textContent).toBe("");
     await act(async () => hidden.root.unmount());
 
-    const withoutComputer = await renderDom(<ContextBar runtimeLabel="Codex" computerLabel={null} />);
-    expect(withoutComputer.container.textContent).toContain("Runs on");
-    expect(withoutComputer.container.textContent).toContain("Codex");
-    expect(withoutComputer.container.textContent).not.toContain("@");
-    await act(async () => withoutComputer.root.unmount());
-
-    const withComputer = await renderDom(<ContextBar runtimeLabel="Claude Code" computerLabel="gandy-macbook" />);
-    expect(withComputer.container.textContent).toContain("Claude Code");
-    expect(withComputer.container.textContent).toContain("@");
-    expect(withComputer.container.textContent).toContain("gandy-macbook");
-    await act(async () => withComputer.root.unmount());
+    const shown = await renderDom(<ContextBar displayName="Kael" seed="agent-1" runtimeState="idle" />);
+    // Identity (name) is pinned; the old "Runs on <runtime> @ <computer>" strap is gone.
+    expect(shown.container.textContent).toContain("Kael");
+    expect(shown.container.textContent).not.toContain("Runs on");
+    await act(async () => shown.root.unmount());
   });
 });

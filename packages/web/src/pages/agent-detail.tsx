@@ -1,6 +1,6 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MessageSquare, Monitor } from "lucide-react";
+import { MessageSquare, Monitor } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
@@ -32,12 +32,14 @@ import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { isBindableClient } from "./agent-detail/action-state.js";
+import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { deriveSaveHint } from "./agent-detail/save-hint.js";
+import { buildTabs, type TabDef } from "./agent-detail/tabs.js";
 import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
 
@@ -50,32 +52,17 @@ const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   git: "runtime",
 };
 
-type TabDef = { key: string; label: string; path: string };
-
-// IA labels only — routing `path` and the `key` (draft / deep-link mapping) are
-// kept stable so existing URLs and `SECTION_TO_TAB` keep resolving:
-//   runtime → "Environment", capabilities → "Tools & skills".
-function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
-  const tabs: TabDef[] = [{ key: "profile", label: "Profile", path: "profile" }];
-  if (canEditConfig) {
-    tabs.push(
-      { key: "runtime", label: "Environment", path: "runtime" },
-      { key: "prompt", label: "Instructions", path: "prompt" },
-      { key: "capabilities", label: "Tools & skills", path: "capabilities" },
-    );
-  } else if (!isHuman) {
-    tabs.push({ key: "capabilities", label: "Tools & skills", path: "capabilities" });
-  }
-  // Usage is an observation surface, not part of the edit flow. Keep it at
-  // the end so configuration tabs read left-to-right as the setup workflow.
-  // Human-type agents have no token usage to show.
-  if (!isHuman) {
-    tabs.push({ key: "usage", label: "Usage", path: "usage" });
-  }
-  return tabs;
+export function AgentDetailPage() {
+  const params = useParams<{ uuid: string }>();
+  // Remount the whole page on agent switch. The switcher navigates in place
+  // (only `:uuid` changes), so the route element stays mounted; without a key the
+  // previous agent's config draft, pending-nav, and dialog state would leak into
+  // the next agent — notably useConfigDraft only re-seeds from null, so a clean
+  // switch would otherwise render/save agent A's model/env against agent B.
+  return <AgentDetailPageView key={params.uuid ?? ""} />;
 }
 
-export function AgentDetailPage() {
+function AgentDetailPageView() {
   const params = useParams<{ uuid: string }>();
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
@@ -343,6 +330,12 @@ export function AgentDetailPage() {
     const last = segments[segments.length - 1] ?? "";
     return tabs.find((t) => t.path === last)?.key ?? "profile";
   }, [location.pathname, tabs]);
+  // The actual current tab PATH (what the switcher preserves when switching
+  // agents). Derived from the key rather than assuming key === path.
+  const currentTabPath = useMemo(
+    () => tabs.find((t) => t.key === currentTabKey)?.path ?? "profile",
+    [tabs, currentTabKey],
+  );
 
   if (agentQuery.isLoading) {
     return (
@@ -438,15 +431,6 @@ export function AgentDetailPage() {
     boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
-  // Exhaustive map (not a binary ternary) so adding a provider to
-  // RuntimeProvider forces this label to be filled in — prevents a new
-  // runtime from silently rendering as "Claude Code" in the context bar.
-  const CONTEXT_RUNTIME_LABEL: Record<RuntimeProvider, string> = {
-    "claude-code": "Claude Code",
-    "claude-code-tui": "Claude Code (TUI)",
-    codex: "Codex",
-  };
-  const contextRuntimeLabel = CONTEXT_RUNTIME_LABEL[setupRuntimeProvider];
 
   const refreshAgent = async () => {
     await queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
@@ -498,33 +482,12 @@ export function AgentDetailPage() {
   return (
     <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-3)" }}>
-        {isNarrow ? (
-          <button
-            type="button"
-            onClick={() => guardedNavigate("/team")}
-            aria-label="Back to agents"
-            className="inline-flex items-center bg-transparent border-0 cursor-pointer transition-colors hover:text-[var(--fg)] text-caption"
-            style={{
-              color: "var(--fg-3)",
-              minHeight: "var(--sp-7)",
-              padding: "0 var(--sp-1_5)",
-              marginBottom: "var(--sp-2)",
-              marginLeft: "calc(var(--sp-1_5) * -1)",
-              gap: "var(--sp-1)",
-            }}
-          >
-            <ArrowLeft className="h-3 w-3" />
-            Agents
-          </button>
-        ) : (
-          <Breadcrumb style={{ marginBottom: "var(--sp-2)" }}>
-            <BreadcrumbLink onClick={() => guardedNavigate("/team")}>Team</BreadcrumbLink>
-            <BreadcrumbSep />
-            <BreadcrumbLink onClick={() => guardedNavigate("/team")}>Agents</BreadcrumbLink>
-            <BreadcrumbSep />
-            <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
-          </Breadcrumb>
-        )}
+        {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
+            (and back to Team) without losing the agent context. Leaving via it is
+            leave-guarded. */}
+        <div style={{ marginBottom: "var(--sp-2)" }}>
+          <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={guardedNavigate} />
+        </div>
         <div className="flex w-full items-center gap-2">
           <Avatar
             src={agent.avatarImageUrl}
@@ -544,12 +507,16 @@ export function AgentDetailPage() {
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
-            {activeSessions > 0 && (
-              <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                {activeSessions} active
-              </span>
-            )}
+            {/* One status cluster: presence (with label) + active-session count
+                folded in, instead of scattered indicators. */}
+            <span className="inline-flex items-center gap-1.5">
+              <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
+              {activeSessions > 0 && (
+                <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                  · {activeSessions} active
+                </span>
+              )}
+            </span>
             <Button
               variant="ghost"
               size="xs"
@@ -570,7 +537,14 @@ export function AgentDetailPage() {
       <div ref={headerSentinelRef} aria-hidden style={{ height: 0 }} />
 
       {!isHuman && (
-        <ContextBar runtimeLabel={contextRuntimeLabel} computerLabel={boundClientLabel} visible={contextBarVisible} />
+        <ContextBar
+          displayName={agent.displayName}
+          avatarImageUrl={agent.avatarImageUrl}
+          avatarColorToken={agent.avatarColorToken}
+          seed={agent.uuid}
+          runtimeState={agent.runtimeState}
+          visible={contextBarVisible}
+        />
       )}
 
       <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} dirtyTabs={dirtyTabs} badges={tabBadges} />
