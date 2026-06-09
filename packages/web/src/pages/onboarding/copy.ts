@@ -136,6 +136,10 @@ export const COPY = {
     cta: "Install on GitHub",
     waiting: "Waiting for GitHub…",
     connected: "Connected",
+    /** Richer connected confirmation once repos are known: org (when there's a
+        single owner) + count, e.g. "Connected to acme · 3 repos". */
+    connectedSummary: (count: number, org: string | null) =>
+      `Connected${org ? ` to ${org}` : ""} · ${count} repo${count === 1 ? "" : "s"}`,
     pickProject: "Which repos should your agent work on?",
     /** Loading state for the repo picker (was hardcoded in the step). */
     loading: "Loading your repos…",
@@ -150,8 +154,11 @@ export const COPY = {
     // it from being a dead end.
     loadFailed: "Couldn't load your team's repos — continue without one for now.",
     reconnect: "Reconnect GitHub with repo access",
-    notConfigured: "Connecting a repo isn't set up here yet — continue now and add one later from Settings.",
-    notAdmin: "Only a team admin can connect a repo. Ask an admin to finish this, or continue for now.",
+    // Collapsed the two rare, not-user-fixable install errors (App not set up on
+    // this server / caller lacks permission) into one recoverable message — the
+    // action is the same either way (continue, set up later), so two separate
+    // screens added surface without adding clarity.
+    cantConnect: "Couldn't connect a repo here right now — continue now and add one later from Settings.",
     continueWithout: "Continue without a repo",
     continueNoProject: "Continue without a repo",
     pickHint: "Pick one or more repos for your agent — or continue without any for now.",

@@ -432,14 +432,14 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-code-err-notconfigured",
-    label: "Install error · not configured (click Install)",
+    label: "Install error · can't connect · 503 (click Install)",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
   },
   {
     id: "admin-code-err-notadmin",
-    label: "Install error · not a team admin (click Install)",
+    label: "Install error · can't connect · 403 (click Install)",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 403 } },

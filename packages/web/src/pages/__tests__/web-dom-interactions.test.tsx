@@ -1437,7 +1437,7 @@ describe("web DOM interaction coverage", () => {
         button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    await waitForText("Connecting a repo isn't set up here yet", notConfigured.container);
+    await waitForText("Couldn't connect a repo here right now", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Continue without a repo"),

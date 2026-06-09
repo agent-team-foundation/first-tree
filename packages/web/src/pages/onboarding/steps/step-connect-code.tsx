@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Github } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
@@ -97,6 +97,28 @@ export function StepConnectCode() {
   const loadFailed = !!reposQuery.error && !scopeMissing;
   const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
 
+  // Default the picker to every granted repo so the user doesn't re-pick what
+  // they just granted on GitHub (they can narrow by unchecking). One-shot when
+  // repos first load — after that we never fight a deliberate "none".
+  const preselectedRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on first repo load; reads selection at fire time
+  useEffect(() => {
+    if (preselectedRef.current) return;
+    const loaded = reposQuery.data;
+    if (!loaded || loaded.length === 0) return;
+    preselectedRef.current = true;
+    if (selectedRepoUrls.length === 0) setSelectedRepoUrls(loaded.map((r) => r.cloneUrl));
+  }, [reposQuery.data]);
+
+  // Connected confirmation: org (when all repos share one owner) + count.
+  const grantedRepos = reposQuery.data ?? [];
+  const grantedOwners = [...new Set(grantedRepos.map((r) => r.fullName.split("/")[0] ?? ""))];
+  const grantedOrg = grantedOwners.length === 1 ? grantedOwners[0] || null : null;
+  const connectedLabel =
+    grantedRepos.length > 0
+      ? COPY.connectCode.connectedSummary(grantedRepos.length, grantedOrg)
+      : COPY.connectCode.connected;
+
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
     setInstallError(null);
@@ -140,14 +162,9 @@ export function StepConnectCode() {
             "alreadyInstalledHint" (the share-link affordance below covers
             the same recovery path more clearly). */}
 
-        {installError === "not_configured" ? (
+        {installError === "not_configured" || installError === "not_admin" ? (
           <>
-            <FlowHint>{COPY.connectCode.notConfigured}</FlowHint>
-            <ContinueWithout onClick={goNext} />
-          </>
-        ) : installError === "not_admin" ? (
-          <>
-            <FlowHint>{COPY.connectCode.notAdmin}</FlowHint>
+            <FlowHint>{COPY.connectCode.cantConnect}</FlowHint>
             <ContinueWithout onClick={goNext} />
           </>
         ) : (
@@ -215,7 +232,7 @@ export function StepConnectCode() {
   // ── Connected — pick the project ─────────────────────────────────────
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <StatusRow state="ok" label={COPY.connectCode.connected} />
+      <StatusRow state="ok" label={connectedLabel} />
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
