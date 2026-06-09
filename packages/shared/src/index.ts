@@ -729,8 +729,26 @@ export {
   workspaceManifestSchema,
 } from "./schemas/workspace-manifest.js";
 // -- WebSocket handshake frames --
-export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
+export type {
+  AuthControlFrame,
+  AuthExpiredFrame,
+  AuthRejectedCode,
+  AuthRejectedFrame,
+  AuthRetryableCode,
+  AuthRetryableFrame,
+  ServerCapabilities,
+  ServerWelcomeFrame,
+  WsAuthFrame,
+} from "./schemas/ws-auth.js";
 export {
+  AUTH_REJECTED_CODES,
+  AUTH_RETRYABLE_CODES,
+  authControlFrameSchema,
+  authExpiredFrameSchema,
+  authRejectedCodeSchema,
+  authRejectedFrameSchema,
+  authRetryableCodeSchema,
+  authRetryableFrameSchema,
   serverCapabilitiesSchema,
   serverWelcomeFrameSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,

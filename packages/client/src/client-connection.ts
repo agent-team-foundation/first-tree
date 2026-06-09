@@ -4,7 +4,11 @@ import { hostname as getHostname, platform } from "node:os";
 import {
   type AgentBindRejectReason,
   type AgentPinnedMessage,
+  type AuthRejectedCode,
   agentPinnedMessageSchema,
+  authExpiredFrameSchema,
+  authRejectedFrameSchema,
+  authRetryableFrameSchema,
   type ClientPausedReason,
   type InboxDeliverFrame,
   inboxAckAcceptedFrameSchema,
@@ -239,6 +243,26 @@ export class ClientUserMismatchError extends Error {
   constructor(message = "Client belongs to a different user") {
     super(message);
     this.name = "ClientUserMismatchError";
+  }
+}
+
+class ServerAuthRejectedError extends Error {
+  readonly authCode: AuthRejectedCode | undefined;
+  readonly authMessage: string | undefined;
+
+  constructor(opts: { code?: AuthRejectedCode; message?: string; legacyReason?: string; unsupportedCode?: string }) {
+    const detail =
+      opts.code !== undefined
+        ? `code ${opts.code}${opts.message ? `: ${opts.message}` : ""}`
+        : opts.unsupportedCode !== undefined
+          ? `unsupported code ${opts.unsupportedCode}`
+          : opts.legacyReason !== undefined
+            ? `legacy reason: ${opts.legacyReason}`
+            : "legacy frame without code";
+    super(`Server rejected access token (auth:rejected, ${detail})`);
+    this.name = "ServerAuthRejectedError";
+    this.authCode = opts.code;
+    this.authMessage = opts.message;
   }
 }
 
@@ -797,9 +821,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // a fresh `connect()` once login succeeds.
           if (this.pausedReason !== null) throw err;
           attempt++;
-          const delayMs = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+          const { delayMs, floorMs } = this.consumeReconnectDelay(attempt);
           this.wsLogger.warn(
-            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            { attempt, delayMs, floorMs: floorMs || undefined, err: err instanceof Error ? err.message : String(err) },
             "initial connect failed, will retry",
           );
           this.emit("error", err instanceof Error ? err : new Error(String(err)));
@@ -1124,25 +1148,68 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "auth:rejected" || type === "auth:expired") {
+    if (type === "auth:expired") {
       // The close handler reads `this.registered` to decide whether to
       // reconnect; clearing it here would make that decision see post-close
       // state and skip the reconnect after a mid-session auth:expired push.
-      if (type === "auth:expired") {
-        this.authLogger.info("token expired, reconnecting with fresh token");
-        this.emit("auth:expired");
-      } else {
-        // auth:rejected means the token itself was refused — retrying with
-        // the same token would just thrash. Bug 2 fix: instead of marking
-        // the connection closed (and letting the consumer process.exit 75
-        // into a systemd restart storm), enter paused mode. The operator
-        // recovers by running `first-tree login <new-token>`; the
-        // credentials-watcher calls `clearPaused()` and a fresh reconnect
-        // re-handshakes with the new token.
-        this.authLogger.warn("auth rejected by server");
-        this.enterPausedMode("auth_rejected", new Error("Server rejected access token (auth:rejected)"));
+      const parsed = authExpiredFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.authLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "auth:expired frame did not match current schema; treating by frame type",
+        );
       }
+      this.authLogger.info("token expired, reconnecting with fresh token");
+      this.emit("auth:expired");
       this.ws?.close(4401, type);
+      return;
+    }
+
+    if (type === "auth:retryable") {
+      const parsed = authRetryableFrameSchema.safeParse(msg);
+      if (parsed.success) {
+        const { code, retryAfterMs, message } = parsed.data;
+        if (retryAfterMs !== undefined) {
+          this.nextReconnectMinDelayMs = Math.max(this.nextReconnectMinDelayMs, retryAfterMs);
+        }
+        this.authLogger.warn({ code, retryAfterMs, message }, "server reported retryable auth handshake failure");
+      } else {
+        this.authLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "auth:retryable frame did not match current schema; retrying by frame type",
+        );
+      }
+      this.ws?.close(1013, "auth retryable");
+      return;
+    }
+
+    if (type === "auth:rejected") {
+      // auth:rejected means deterministic credential/identity failure.
+      // Retryable server-side handshake failures must arrive as
+      // auth:retryable or a retryable close code, never as a message string
+      // that the client has to interpret.
+      const parsed = authRejectedFrameSchema.safeParse(msg);
+      const err = parsed.success
+        ? new ServerAuthRejectedError({ code: parsed.data.code, message: parsed.data.message })
+        : new ServerAuthRejectedError({
+            unsupportedCode: typeof msg.code === "string" ? msg.code : undefined,
+            legacyReason: typeof msg.reason === "string" ? msg.reason : undefined,
+          });
+      if (parsed.success) {
+        this.authLogger.warn({ code: parsed.data.code, message: parsed.data.message }, "auth rejected by server");
+      } else {
+        this.authLogger.warn(
+          {
+            rawCode: typeof msg.code === "string" ? msg.code : undefined,
+            legacyReason: typeof msg.reason === "string" ? msg.reason : undefined,
+            issues: parsed.error.issues.map((i) => i.message),
+          },
+          "auth:rejected frame did not match current schema; treating as deterministic auth rejection",
+        );
+      }
+      this.lastHandshakeError = err;
+      this.enterPausedMode("auth_rejected", err);
+      this.ws?.close(4401, "auth rejected");
       return;
     }
 
@@ -1566,6 +1633,21 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.emit("resilience.connection.paused", { reason });
   }
 
+  private consumeReconnectDelay(attempt: number): { delayMs: number; floorMs: number } {
+    const exponential = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+    const floorMs = this.nextReconnectMinDelayMs;
+    this.nextReconnectMinDelayMs = 0;
+    let delayMs = Math.max(exponential, floorMs);
+    if (floorMs > 0) {
+      // Add up to 20% jitter only to explicit retry floors, where many
+      // clients may otherwise wake at the same server-suggested deadline.
+      // Never subtract from the floor: Retry-After is a lower bound.
+      const jitter = delayMs * 0.2 * Math.random();
+      delayMs = Math.round(delayMs + jitter);
+    }
+    return { delayMs, floorMs };
+  }
+
   private scheduleReconnect(): void {
     // Guard against an entry from auth:fatal / disconnect() racing with the
     // close handler — `closing=true` means "no more reconnects", honoured here.
@@ -1578,26 +1660,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
 
-    const exponential = Math.min(RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1), RECONNECT_MAX_MS);
-    // Honour a 429 Retry-After from the most recent refresh attempt: take
-    // whichever is larger, then consume the floor so subsequent attempts
-    // (after the limiter window opens up again) revert to the normal
-    // exponential schedule. Without this, the next attempt would also
-    // wait ≥retryAfter, effectively halting reconnects until manual reset.
-    const floor = this.nextReconnectMinDelayMs;
-    this.nextReconnectMinDelayMs = 0;
-    let delay = Math.max(exponential, floor);
-    if (floor > 0) {
-      // ±20% jitter applies only to the 429 path, where multiple clients
-      // sharing an IP (NAT / CI pool) can otherwise all hit the same
-      // Retry-After deadline simultaneously and reform the limiter spike.
-      // Organic exponential backoff doesn't need jitter — each connection
-      // entered the loop at its own arbitrary moment already.
-      const jitter = delay * 0.2 * (Math.random() * 2 - 1);
-      delay = Math.max(0, Math.round(delay + jitter));
-    }
+    const { delayMs, floorMs } = this.consumeReconnectDelay(this.reconnectAttempt);
     this.wsLogger.debug(
-      { attempt: this.reconnectAttempt, delayMs: delay, floorMs: floor || undefined },
+      { attempt: this.reconnectAttempt, delayMs, floorMs: floorMs || undefined },
       "scheduling reconnect",
     );
     this.reconnectTimer = setTimeout(() => {
@@ -1608,7 +1673,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           if (!this.closing) this.scheduleReconnect();
         });
       }
-    }, delay);
+    }, delayMs);
   }
 
   private startHeartbeat(): void {

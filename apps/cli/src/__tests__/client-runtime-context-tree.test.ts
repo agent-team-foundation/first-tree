@@ -510,6 +510,12 @@ describe("ClientRuntime context-tree wiring", () => {
     if (!paused) throw new Error("auth:paused listener missing");
     paused("auth_refresh_failed", new Error("refresh rejected"));
     expect(print.status).toHaveBeenCalledWith("✗", "auth rejected — pausing agents until fresh credentials arrive.");
+    expect(print.status).toHaveBeenCalledWith("", "refresh rejected");
+    const structured = new Error("Server rejected access token");
+    Object.defineProperty(structured, "authCode", { value: "invalid_token" });
+    Object.defineProperty(structured, "authMessage", { value: "signature mismatch" });
+    paused("auth_rejected", structured);
+    expect(print.status).toHaveBeenCalledWith("", "Auth rejection code: invalid_token — signature mismatch");
     expect(rt.isPaused()).toBe(true);
 
     const resumed = connectionListeners.get("auth:resumed");

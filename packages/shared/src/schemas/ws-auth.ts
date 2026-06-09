@@ -2,8 +2,9 @@ import { z } from "zod";
 
 /**
  * First-frame auth envelope sent by the SDK on the client WS connection.
- * The server rejects the connection with close code 4401 if this frame does
- * not arrive within {@link WS_AUTH_FRAME_TIMEOUT_MS} or fails verification.
+ * The server asks the client to retry with close code 1013 if this frame does
+ * not arrive within {@link WS_AUTH_FRAME_TIMEOUT_MS}; malformed frames still
+ * close as deterministic auth rejections.
  */
 export const wsAuthFrameSchema = z.object({
   type: z.literal("auth"),
@@ -13,6 +14,65 @@ export type WsAuthFrame = z.infer<typeof wsAuthFrameSchema>;
 
 /** How long the server waits for the first `auth` frame before closing the WS. */
 export const WS_AUTH_FRAME_TIMEOUT_MS = 5_000;
+
+export const AUTH_REJECTED_CODES = {
+  INVALID_TOKEN: "invalid_token",
+  INVALID_CLAIMS: "invalid_claims",
+  WRONG_TOKEN_TYPE: "wrong_token_type",
+  USER_NOT_FOUND: "user_not_found",
+  USER_SUSPENDED: "user_suspended",
+  INVALID_AUTH_FRAME: "invalid_auth_frame",
+} as const;
+export const authRejectedCodeSchema = z.enum([
+  "invalid_token",
+  "invalid_claims",
+  "wrong_token_type",
+  "user_not_found",
+  "user_suspended",
+  "invalid_auth_frame",
+]);
+export type AuthRejectedCode = z.infer<typeof authRejectedCodeSchema>;
+
+export const AUTH_RETRYABLE_CODES = {
+  AUTH_BACKEND_UNAVAILABLE: "auth_backend_unavailable",
+  HANDSHAKE_INTERNAL_ERROR: "handshake_internal_error",
+  AUTH_TIMEOUT: "auth_timeout",
+  SERVER_DRAINING: "server_draining",
+} as const;
+export const authRetryableCodeSchema = z.enum([
+  "auth_backend_unavailable",
+  "handshake_internal_error",
+  "auth_timeout",
+  "server_draining",
+]);
+export type AuthRetryableCode = z.infer<typeof authRetryableCodeSchema>;
+
+export const authRejectedFrameSchema = z.object({
+  type: z.literal("auth:rejected"),
+  code: authRejectedCodeSchema,
+  message: z.string().min(1).optional(),
+});
+export type AuthRejectedFrame = z.infer<typeof authRejectedFrameSchema>;
+
+export const authExpiredFrameSchema = z.object({
+  type: z.literal("auth:expired"),
+});
+export type AuthExpiredFrame = z.infer<typeof authExpiredFrameSchema>;
+
+export const authRetryableFrameSchema = z.object({
+  type: z.literal("auth:retryable"),
+  code: authRetryableCodeSchema,
+  retryAfterMs: z.number().int().positive().optional(),
+  message: z.string().min(1).optional(),
+});
+export type AuthRetryableFrame = z.infer<typeof authRetryableFrameSchema>;
+
+export const authControlFrameSchema = z.discriminatedUnion("type", [
+  authRejectedFrameSchema,
+  authExpiredFrameSchema,
+  authRetryableFrameSchema,
+]);
+export type AuthControlFrame = z.infer<typeof authControlFrameSchema>;
 
 /**
  * Negotiable wire-protocol features the server advertises in its `welcome`
