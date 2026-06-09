@@ -114,6 +114,9 @@ export function StepConnectCode() {
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
     setInstallError(null);
+    // Re-arm the "waiting" window on a retry so the stuck hint and the CTA
+    // disable behave as if this were a fresh attempt.
+    setPostAttemptStuck(false);
     setRedirecting(true);
     // Open the tab synchronously inside the click gesture so the browser doesn't
     // treat the post-await window.open as a blocked popup; fill its location once
@@ -177,7 +180,15 @@ export function StepConnectCode() {
                 footer. Skip goes straight through (no confirm gate); the
                 muted reassurance line below keeps the choice informed. */}
             <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-              <Button type="button" onClick={() => void handleConnect()} disabled={redirecting || !organizationId}>
+              {/* Disable while a launch is in flight AND during the post-launch
+                  "waiting" window, so a second click can't open another install
+                  tab / re-mint. Re-enable once we detect the user came back
+                  without an install (postAttemptStuck) so they can retry. */}
+              <Button
+                type="button"
+                onClick={() => void handleConnect()}
+                disabled={redirecting || (attempted && !postAttemptStuck) || !organizationId}
+              >
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
               </Button>

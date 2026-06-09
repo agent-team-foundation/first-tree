@@ -1188,6 +1188,7 @@ describe("page SSR smoke coverage", () => {
     const { ConnectStuckPanel } = await import("../../components/connect-stuck-panel.js");
     const { CommandBox, FlowNote, RepoPicker, StatusRow, WorkingState } = await import("../onboarding/flow-ui.js");
     const { InstallGuide, ShowMeHow, TerminalGuide } = await import("../onboarding/guides.js");
+    const { GithubConnectedPage } = await import("../onboarding/github-connected.js");
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
@@ -1222,6 +1223,13 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("gandy-macbook connected");
     expect(html).toContain("Install Node.js");
     expect(html).toContain("Pick repos");
+
+    // The install-popup landing page (auto-closes the script-opened tab; the
+    // effect is a no-op under SSR). Confirms it renders + carries role=status.
+    const connectedHtml = renderPage(<GithubConnectedPage />);
+    expect(connectedHtml).toContain("Connected");
+    expect(connectedHtml).toContain("close this tab");
+    expect(connectedHtml).toContain('role="status"');
 
     expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
       "What should we call your team?",

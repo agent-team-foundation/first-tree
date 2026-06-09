@@ -21,6 +21,7 @@ export function GithubConnectedPage() {
 
   return (
     <div
+      role="status"
       className="flex h-screen flex-col items-center justify-center text-center bg-background"
       style={{ gap: "var(--sp-3)", padding: "var(--sp-6)" }}
     >

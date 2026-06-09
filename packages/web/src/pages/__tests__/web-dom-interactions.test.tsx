@@ -1454,6 +1454,32 @@ describe("web DOM interaction coverage", () => {
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
   });
 
+  it("falls back to a full-page redirect when the install popup is blocked", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    // A fresh attempt: clear any marker a prior test left so the CTA is enabled.
+    sessionStorage.removeItem("onboarding:connect-code:install-attempt");
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, assign, href: "http://localhost/onboarding" },
+    });
+    // Popup blocked → window.open returns null → we must fall back to a
+    // full-page redirect rather than silently dropping the install.
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
+    const blocked = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Install on GitHub", blocked.container);
+    await click(
+      [...blocked.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Install on GitHub"),
+      ) ?? null,
+    );
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
+    await unmountRoot(blocked.root);
+  });
+
   it("drives StepKickoff admin and invitee start flows", async () => {
     const { ApiError } = await import("../../api/client.js");
     const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
