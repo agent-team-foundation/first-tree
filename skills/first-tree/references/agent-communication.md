@@ -26,36 +26,60 @@ runtime sets `$FIRST_TREE_HOME` so you can check with `echo $FIRST_TREE_HOME`.
 The CLI auto-reads its config from env — no extra setup.
 
 ```bash
-# Send to an agent by NAME (uuids are NOT accepted — run `first-tree agent list` for names).
-# The recipient MUST be a participant of your current chat — the message lands
-# in that chat. If they are NOT a member the call ERRORS with a hint telling
-# you to add them first (see "Reaching a non-member" below).
-first-tree chat send <agentName> "your message"
+# Send to a participant — agent OR human — by NAME (uuids are NOT accepted; run
+# `first-tree agent list` for names). The recipient MUST be a participant of your
+# current chat — the message lands in that chat. If they are NOT a member the call
+# ERRORS with a hint telling you to add them first (see "Reaching a non-member").
+first-tree chat send <name> "your message"
 
-# Pull a non-member into your current chat first, then send normally.
+# Pull a non-member AGENT into your current chat first, then send normally.
 first-tree chat invite <agentName>
-first-tree chat send <agentName> "your message"
+first-tree chat send <name> "your message"
 
 # Markdown format (default is text)
-first-tree chat send <agentName> -f markdown "**bold**"
+first-tree chat send <name> -f markdown "**bold**"
 
 # Pipe long / multiline content via stdin
-echo "long body" | first-tree chat send <agentName>
+echo "long body" | first-tree chat send <name>
 ```
+
+## Modes of `chat send`
+
+`chat send` is the primary channel for reaching teammates (humans included).
+Pick the mode by what you need back:
+
+| Mode | Command | Use for |
+|---|---|---|
+| Plain | `chat send <name> "..."` | Wake / answer a specific participant in this chat. |
+| Markdown / multiline | `chat send <name> -f markdown` (or pipe via stdin) | Formatted or multi-line bodies (see Content rules below). |
+| **Ask a human** | `chat send <human> --request "<context>" --question "<the ask>" [--option "<A>" --option "<B>"]` | A decision / approval / answer you need back. Raises a tracked open question (red-dot / open-request count). `--request` is **human-directed only** — the server rejects it unless the recipient is a human member, so you cannot open one against another agent. It needs both a body (context) and `--question` (the bare ask). |
+| Broadcast | `chat send --broadcast "..."` | Enter the stream, wake no one (no `@mention`). |
+
+Final text (your turn's normal output) is auto-delivered to the chat for
+human observers, so a plain reply to a human should be **just** that final
+text — do not *also* fire a plain `chat send` to the same human, or it
+double-posts. Reach for `chat send` when you need to wake an agent, ask a
+human something tracked (`--request`), or post a no-wake note (`--broadcast`).
+
+You never answer an open question yourself: a request can only be directed at a
+human, so when you ask one, the human's answer arrives back as an ordinary
+message — there is no agent-side `--reply-to` step, and the runtime already
+threads your final text under whatever woke the turn.
 
 ## Reaching another agent
 
-- **Already a member of this chat** → `chat send <agentName> "..."`. The
+- **Already a member of this chat** → `chat send <name> "..."`. The
   message lands in the current chat and the recipient is woken if they were
   `@<name>`-mentioned (or — for two-speaker chats — implicitly).
 - **Not a member of this chat** → first `chat invite <agentName>` to bring
-  them in, then `chat send <agentName> "..."` like normal. First Tree keeps
+  the agent in, then `chat send <name> "..."` like normal. First Tree keeps
   a single group-chat model — there is no side-conversation escape hatch.
   `@<name>` in content always resolves against the current chat's
   participants, so naming someone who is not a member is rejected.
 
-The CLI **only addresses agents by name**. You cannot route by chat-id from
-the `chat send` command.
+The CLI addresses **participants by name** — agents and humans alike, resolved
+against the current chat. You cannot route by chat-id from the `chat send`
+command.
 
 ## Content rules (anti-double-encode)
 
@@ -69,7 +93,7 @@ break markdown rendering downstream.
   newlines), use **stdin** with real newlines, plus `-f markdown`:
 
   ```bash
-  cat <<'EOF' | first-tree chat send <agentName> -f markdown
+  cat <<'EOF' | first-tree chat send <name> -f markdown
   Multi-line **markdown** with literal `code` and "quotes".
   EOF
   ```
@@ -79,17 +103,20 @@ break markdown rendering downstream.
 `@<name>` in content resolves against the **current chat's participants**
 (server-side; see `services/message.ts sendMessage`). Naming someone who is
 not a member is rejected — invite them first via `chat invite`. The same
-participant set applies to both the positional `<agentName>` argument of
+participant set applies to both the positional `<name>` argument of
 `chat send` and every `@<name>` token in the message body — there is no
-side-channel flag; non-members must be added with `chat invite` first.
+side-channel flag; non-member agents must be added with `chat invite` first.
 
 ## When to use chat send vs. final text vs. nothing
 
-See the SKILL.md "Agent-to-Agent Communication" section's Decision guide
-table — short version:
+See the SKILL.md Communication Principles' Decision guide table and the
+`## Modes of chat send` table above — short version:
 
-- Target is a **human** in this chat → final text only.
-- Target is an **agent** in this chat → explicit `chat send <name>`.
+- **Human**, plain reply → final text is enough (auto-delivered); do *not* also
+  fire a plain `chat send` to the same human — it double-posts.
+- **Human**, needs a decision / approval / answer → `chat send <name>
+  --request --question "..."` (tracked ask, not buried in final text).
+- **Agent** → explicit `chat send <name>` (final text does not wake them).
 - No specific target (narration / thinking aloud) → final text only; no
   send needed.
 - Current Chat Context block missing from prompt → conservative mode, all

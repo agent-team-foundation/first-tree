@@ -253,15 +253,21 @@ finished, the operator cleans up with \`git worktree remove\`.`;
 function communicationBlock(bin: string): string {
   return `## Communication
 
-Decision guide (based on participant \`type\` in the Current Chat Context block):
+\`chat send\` is your primary tool for reaching teammates; your final text is
+the auto-delivered fallback for plain replies. Decision guide (based on
+participant \`type\` in the Current Chat Context block):
 
-- Target is a **human** in this chat → your final text is enough; do not
-  redundantly \`chat send\` (it just adds noise).
-- Target is an **agent** in this chat → they will NOT see your final text
-  as a wake signal. You MUST \`${bin} chat send <name>\` if you need them
-  to act.
-- No specific target (just narrating progress / thinking aloud) → final
-  text only; no send needed.
+- Reaching an **agent** to make them act → you MUST \`${bin} chat send <name>\`.
+  They do NOT see your final text as a wake signal.
+- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
+  <name> --request --question "..."\` (see \`## Asking Humans\`). Don't bury the
+  ask in final text — it has no red-dot and no tracked answer.
+- Plain reply / narration to a **human** → final text is enough; it is
+  auto-delivered to the chat. Do **not** *also* fire a plain \`${bin} chat send\`
+  to the same human — that double-posts. (The bullets above cover when an
+  explicit send is the right call: waking an agent, a \`--request\`, a broadcast.)
+- A note that should enter the stream but wake no one → \`${bin} chat send
+  --broadcast "..."\`.
 
 **Fallback** (if the Current Chat Context block is missing — context
 injection may have failed): use conservative mode — all cross-agent
@@ -272,8 +278,9 @@ text to wake anyone.`;
 function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
-For the full \`chat send\` / \`chat invite\` CLI usage — syntax, markdown /
-stdin, reaching non-members, mention resolution — load the top-level
+For the full \`chat send\` / \`chat invite\` CLI usage — every mode
+(\`--request\` / \`--question\` / \`--broadcast\`), syntax,
+markdown / stdin, reaching non-members, mention resolution — load the top-level
 **\`first-tree\` skill** (and its \`references/agent-communication.md\`).
 The skill's \`description\` triggers progressive disclosure whenever the
 user mentions chat, daemon, agent config, or anything related to First
@@ -288,9 +295,31 @@ rules.`;
 }
 
 function askingHumansBlock(): string {
+  const bin = getCliBinding().binName;
   return `## Asking Humans
 
-Asking a human is [pending redesign, 自行判断].`;
+When you need something only a human can give — a decision, sign-off, or an
+answer — ask with a **structured request** instead of burying the question in
+your final text. A request raises a tracked open question on the human's side
+(red-dot / open-question count) that stays until they answer; final text does
+not.
+
+\`\`\`bash
+${bin} chat send <human> --request \\
+  "<background/context the human needs to decide>" \\
+  --question "<the single ask>" \\
+  --option "<choice A>" --option "<choice B>"
+\`\`\`
+
+The body carries the context; \`--question\` is **only** the ask; \`--option\`
+(repeatable) offers explicit choices. A request is **human-directed only** — the
+server rejects \`--request\` unless the recipient is a human member, so you cannot
+open a tracked question against another agent (reach agents with a plain \`chat
+send <name>\`). The human's answer comes back to you as an ordinary message; you
+do not clear their red-dot yourself.
+
+Reach for this on any real fork: needs approval, ambiguous requirements, a
+safety-sensitive action, or any change to core data structures or the database.`;
 }
 
 function chatTopicBlock(bin: string): string {
