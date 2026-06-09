@@ -16,6 +16,7 @@ import {
 } from "./bootstrap.js";
 import type { SessionContext } from "./handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "./workspace.js";
+import { applyPendingMigrations } from "./workspace-migrations.js";
 
 export type AgentBootstrapParams = {
   workspace: string;
@@ -30,6 +31,16 @@ export type AgentBootstrapParams = {
    * caching across sessions.
    */
   briefing: string;
+  /**
+   * Authoritative source-repo `localPath` set from the live, resolved agent
+   * config payload — same value `prepareSourceRepos` was called with. `null`
+   * when the caller could not resolve a payload (cache miss, default-payload
+   * fallback). Threaded into `applyPendingMigrations` as the `ctx
+   * .currentSourceRepoNames` field so migrations that need an authoritative
+   * current config (`v1-orphan-ft-clones`) can defer instead of acting on an
+   * empty fallback. PR #869 baixiaohang round-3 P0.
+   */
+  currentSourceRepoNames: ReadonlySet<string> | null;
 };
 
 /**
@@ -90,7 +101,22 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
  * same agent home. See proposal §⓪.3 for the race window this accepts.
  */
 export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
-  const { workspace, sessionCtx, contextTreePath, briefing } = params;
+  const { workspace, sessionCtx, contextTreePath, briefing, currentSourceRepoNames } = params;
+
+  // One-shot workspace migrations: sweep legacy directory-structure residue
+  // (UUID-named per-chat snapshots, the legacy `WHITEPAPER.md` symlink,
+  // retired source-repo clones like `first-tree-hub/`) the moment we
+  // re-attach to an old workspace. Each migration runs at most once per
+  // workspace — the applier persists its own marker file at
+  // `.agent/migrations-applied.json` and skips already-applied ids on
+  // subsequent calls. Cheap noop in the steady state.
+  //
+  // `currentSourceRepoNames` carries the live, resolved source-repo
+  // localPaths through to the per-migration context; migrations that need
+  // an authoritative current set (e.g. `v1-orphan-ft-clones`) return
+  // `"deferred"` when it's null and retry on a future resolved session
+  // (PR #869 baixiaohang round-3 P0).
+  applyPendingMigrations(workspace, sessionCtx.log, { currentSourceRepoNames });
 
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
   const currentTreeHead = readContextTreeHead(contextTreePath);

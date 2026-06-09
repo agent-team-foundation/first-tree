@@ -38,6 +38,8 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveBundledCliVersion } from "../bootstrap.js";
+import { readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
@@ -323,8 +325,70 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSki
  * Install the tree-aware skill payloads (`first-tree`, `first-tree-context`,
  * etc.) into the workspace. Called by the agent bootstrap when the agent
  * has a Context Tree binding.
+ *
+ * Also reconciles `.agent/managed.json::skills`: any skill the workspace
+ * recorded as installed by a previous CLI version but that's no longer in
+ * `TREE_SKILL_NAMES` gets its `.agents/skills/<name>/` payload and
+ * `.claude/skills/<name>` symlink removed. The current set is then written
+ * back to state. Core skills are not tracked here — `CORE_SKILL_NAMES` is
+ * presently empty, and re-introducing one later can extend the state
+ * schema.
  */
 export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
-  return installSkillSet(options.workspacePath, TREE_SKILL_NAMES, bundledSkillsRoot);
+  const result = installSkillSet(options.workspacePath, TREE_SKILL_NAMES, bundledSkillsRoot);
+  reconcileTreeSkillState(options.workspacePath);
+  return result;
+}
+
+/**
+ * Compare the previously-managed skill set against the current
+ * `TREE_SKILL_NAMES` and remove any skill no longer in the current bundle.
+ * Per-skill cleanup is best-effort: a missing payload is a noop, and a
+ * raised exception on remove is logged-via-throw nowhere — callers never
+ * see it, so we swallow internally to avoid blocking the agent start over a
+ * stale-skill removal failure.
+ *
+ * State is persisted regardless of per-skill outcome so a future install
+ * pass diffs against today's reality.
+ */
+function reconcileTreeSkillState(workspacePath: string): void {
+  const currentSkills = new Set<string>(TREE_SKILL_NAMES);
+  const prev = readManagedState(workspacePath);
+  if (prev) {
+    for (const prevSkill of prev.skills) {
+      if (currentSkills.has(prevSkill)) continue;
+      removeManagedSkill(workspacePath, prevSkill);
+    }
+  }
+  updateManagedState(workspacePath, resolveBundledCliVersion(), (current) => ({
+    ...current,
+    skills: [...currentSkills].sort(),
+  }));
+}
+
+/**
+ * Remove a previously-managed skill's on-disk payload AND its Claude Code
+ * symlink. Either step is best-effort and only operates on entries that
+ * actually exist; anything the user added later (a custom skill payload
+ * under `.agents/skills/<user-skill>/`) is never touched because we look
+ * up by NAME, not by listing the directory.
+ */
+function removeManagedSkill(workspacePath: string, name: string): void {
+  const agentsFull = join(workspacePath, ".agents", "skills", name);
+  const claudeFull = join(workspacePath, ".claude", "skills", name);
+  try {
+    rmSync(agentsFull, { recursive: true, force: true });
+  } catch {
+    // Best-effort — the symlink-side cleanup below still runs.
+  }
+  // The Claude-side entry is a symlink; we don't care whether it currently
+  // resolves. `lstat`-then-unlink mirrors the pattern in
+  // `ensureClaudeSymlink` for atomic replacement.
+  try {
+    lstatSync(claudeFull);
+    unlinkSync(claudeFull);
+  } catch {
+    // Either missing or unlink failed — both acceptable here.
+  }
 }

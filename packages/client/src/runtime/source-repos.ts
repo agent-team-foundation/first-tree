@@ -1,8 +1,11 @@
+import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, deriveRepoLocalPath } from "@first-tree/shared";
-import type { PredeclaredSourceRepo } from "./bootstrap.js";
+import { type PredeclaredSourceRepo, resolveBundledCliVersion } from "./bootstrap.js";
 import { resolveGitRepoTargetPath } from "./git-local-path.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { SessionContext } from "./handler.js";
+import { readManagedState, updateManagedState } from "./managed-state.js";
+import { tryRemoveCloneSafely } from "./source-repo-cleanup.js";
 
 export type PrepareSourceReposParams = {
   workspace: string;
@@ -15,6 +18,23 @@ export type PrepareSourceReposParams = {
    * that source repos are standalone clones on their real default branch.
    */
   agentName: string | null;
+  /**
+   * True when the caller actually resolved `payload` from the server / config
+   * cache — i.e. the empty / missing `gitRepos` field genuinely reflects the
+   * agent's current configuration. False when the caller could not reach a
+   * source of truth (cache miss) and fell back to a default-shaped payload
+   * just to keep the session start moving.
+   *
+   * State-based cleanup of "previously managed source repos no longer in
+   * config" ONLY runs when `payloadResolved === true`. Otherwise an
+   * unresolved cache miss would compute `currentLocalPaths = []` and decide
+   * every prev-recorded repo had been removed from config — `rm`-ing every
+   * clean steady-state clone in the workspace. The non-state-tracking path
+   * (clone / fetch the repos that ARE in `payload.gitRepos`) is unaffected
+   * and runs regardless. See PR #869 review (code-reviewer P0-2) for the
+   * regression this guards against.
+   */
+  payloadResolved: boolean;
 };
 
 /**
@@ -68,6 +88,40 @@ function releaseChatFromPath(chatId: string, absPath: string): void {
 }
 
 /**
+ * Is the absolute checkout path currently held by at least one live chat in
+ * THIS process? Used by the source-repo cleanup paths to refuse to delete a
+ * checkout out from under a still-running chat (PR #869 P1-4).
+ *
+ * Cross-process awareness is out of scope — `liveChatsByPath` is per-process
+ * state. Cross-process concurrency on the same workspace is already
+ * unsupported (the workspace is per-agent; one daemon owns each agent).
+ */
+export function isSourceRepoPathInUse(absPath: string): boolean {
+  return (liveChatsByPath.get(absPath)?.size ?? 0) > 0;
+}
+
+/**
+ * Compute the set of source-repo localPaths the agent's CURRENT config
+ * declares. The same derivation `prepareSourceRepos` uses internally,
+ * exposed so handlers can thread the authoritative set through to
+ * `ensureAgentBootstrap` (which forwards it as `MigrationContext
+ * .currentSourceRepoNames`).
+ *
+ * Returns `null` when `payloadResolved` is `false` — that's the signal
+ * downstream consumers use to defer config-dependent migrations and
+ * suppress state-based cleanup. The non-null branch derives the same
+ * `localPath ?? deriveRepoLocalPath(url)` rule that `prepareSourceRepos`
+ * applies on its own materialisation loop.
+ */
+export function currentSourceRepoNamesFromPayload(
+  payload: AgentRuntimeConfigPayload | undefined,
+  payloadResolved: boolean,
+): ReadonlySet<string> | null {
+  if (!payloadResolved) return null;
+  return new Set((payload?.gitRepos ?? []).map((repo) => repo.localPath ?? deriveRepoLocalPath(repo.url)));
+}
+
+/**
  * Deregister `sessionCtx`'s chat from every source-repo checkout it was using.
  * Idempotent — safe to call once per session teardown even if
  * `prepareSourceRepos` never ran.
@@ -99,10 +153,21 @@ export function releaseSourceReposForSession(sessionCtx: SessionContext): void {
  * corrupt, wrong origin, TLS trust) still aborts the session and bubbles up.
  */
 export async function prepareSourceRepos(params: PrepareSourceReposParams): Promise<PredeclaredSourceRepo[]> {
-  const { workspace, payload, sessionCtx, gitMirrorManager } = params;
+  const { workspace, payload, sessionCtx, gitMirrorManager, payloadResolved } = params;
   const sourceRepos: PredeclaredSourceRepo[] = [];
 
-  if (!gitMirrorManager || !payload?.gitRepos?.length) return sourceRepos;
+  // No git capability → no source-repo prep AND no cleanup (we can't safely
+  // probe for clean state without git). Returns early before any state read.
+  if (!gitMirrorManager) return sourceRepos;
+
+  // Build the set of `localPath`s the current config wants materialised.
+  // `payload?.gitRepos` may legitimately be empty (config exists, just no
+  // source repos) — the state-reconcile path below uses `payloadResolved`
+  // (not the gitRepos length) to decide whether the empty set is
+  // authoritative or just an unresolved fallback.
+  const currentLocalPaths: string[] = (payload?.gitRepos ?? []).map(
+    (repo) => repo.localPath ?? deriveRepoLocalPath(repo.url),
+  );
 
   // Paths THIS call newly registered the chat on — only these may be rolled
   // back on failure (see the catch). A resume that re-acquires an already-live
@@ -110,7 +175,7 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
   // shared checkout out from under the still-live chat.
   const newlyRegistered: string[] = [];
   try {
-    for (const repo of payload.gitRepos) {
+    for (const repo of payload?.gitRepos ?? []) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       // Source repos live at the TOP LEVEL of the agent home — no `worktrees/`
       // prefix. The `worktrees/` subdir is reserved for on-demand worktrees.
@@ -160,6 +225,21 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
         `Git: source repo at ${localPath}${result.branch ? ` on ${result.branch}` : ""} (${result.outcome})`,
       );
     }
+
+    // State reconcile: a source repo that used to be in this agent's config
+    // but is no longer present should be removed from disk. We only consider
+    // repos this CLI previously recorded in `.agent/managed.json` — anything
+    // the user dropped at workspace top level (third-party clones, manual
+    // experiments) is untouched.
+    //
+    // GATED on `payloadResolved`: a cache miss / default-payload fallback
+    // would produce an empty currentLocalPaths and falsely conclude that
+    // every previously-managed repo had been removed from config. See the
+    // field docstring on `PrepareSourceReposParams.payloadResolved` and
+    // PR #869 review (code-reviewer P0-2).
+    if (payloadResolved) {
+      reconcileSourceRepoState(workspace, currentLocalPaths, sessionCtx);
+    }
   } catch (err) {
     // Session start is failing and the SessionManager does NOT call the
     // handler's teardown on a failed start. Roll back ONLY the registrations
@@ -172,4 +252,34 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
   }
 
   return sourceRepos;
+}
+
+/**
+ * Compare the previously-managed source repos against the current set and
+ * remove any whose `localPath` is no longer in the config. Safety guards
+ * (working-tree clean + no extra worktrees + no local commits ahead of
+ * upstream) protect against destroying in-flight work; a guard failure
+ * skips the delete and logs a warning instead.
+ *
+ * State (the `sourceRepos` field of `.agent/managed.json`) is rewritten to
+ * the current set whether or not deletes succeeded — so a future config
+ * change correctly diffs against today's reality, and a guard-skipped
+ * cleanup just becomes a manual operator follow-up rather than a
+ * recurring noisy log.
+ */
+function reconcileSourceRepoState(workspace: string, currentLocalPaths: string[], sessionCtx: SessionContext): void {
+  const currentSet = new Set(currentLocalPaths);
+  const prev = readManagedState(workspace);
+  if (prev) {
+    for (const prevLocalPath of prev.sourceRepos) {
+      if (currentSet.has(prevLocalPath)) continue;
+      const absPath = join(workspace, prevLocalPath);
+      tryRemoveCloneSafely(absPath, prevLocalPath, sessionCtx.log, isSourceRepoPathInUse);
+    }
+  }
+
+  updateManagedState(workspace, resolveBundledCliVersion(), (current) => ({
+    ...current,
+    sourceRepos: [...currentSet].sort(),
+  }));
 }

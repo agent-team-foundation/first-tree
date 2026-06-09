@@ -30,6 +30,7 @@ import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import {
+  currentSourceRepoNamesFromPayload,
   prepareSourceRepos as prepareSourceReposShared,
   releaseSourceReposForSession,
 } from "../runtime/source-repos.js";
@@ -1410,12 +1411,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
     // TUI handlers share one worktree-lock / Hub-marker implementation rather
     // than each carrying its own source-repo invariant.
+    //
+    // `payloadResolved` distinguishes "agent config truly says zero repos"
+    // from "we couldn't reach the cache/server and `payload` is undefined".
+    // Without this gate, a cache miss would compute an empty current-repo
+    // set and the state-reconcile path would `rm` every previously-managed
+    // clone. See `PrepareSourceReposParams.payloadResolved`.
     sourceReposForPrompt = await prepareSourceReposShared({
       workspace,
       payload,
       sessionCtx,
       gitMirrorManager,
       agentName,
+      payloadResolved: payload !== undefined,
     });
   }
 
@@ -1529,11 +1537,26 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * `workspaceId` for the integrate shell-out is the agent name — the home
    * directory is per-agent, so the skill identity stays stable across chats.
    */
-  function ensureAgentBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
+  function ensureAgentBootstrap(
+    workspace: string,
+    sessionCtx: SessionContext,
+    briefing: string,
+    payload: AgentRuntimeConfigPayload | undefined,
+  ): void {
     // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
     // and TUI handlers share one briefing / core-skill / drift-pin contract
     // rather than each maintaining a partial copy.
-    ensureAgentBootstrapShared({ workspace, sessionCtx, contextTreePath, briefing });
+    //
+    // `currentSourceRepoNames` is threaded through to the migration applier
+    // so `v1-orphan-ft-clones` can defer when the live config is unresolved
+    // (cache miss). See PR #869 baixiaohang round-3 P0.
+    ensureAgentBootstrapShared({
+      workspace,
+      sessionCtx,
+      contextTreePath,
+      briefing,
+      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payload !== undefined),
+    });
   }
 
   const handler: AgentHandler = {
@@ -1561,7 +1584,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing);
+      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       // Stage-2 sentinel: written once per agent home. Future starts short-
       // circuit the expensive integrate path on its presence.
@@ -1664,7 +1687,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing);
+      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       markWorkspaceInitComplete(cwd);
 

@@ -93,6 +93,7 @@ vi.mock("../runtime/chat-context.js", () => ({
 vi.mock("../runtime/source-repos.js", () => ({
   prepareSourceRepos: vi.fn(async () => []),
   releaseSourceReposForSession: vi.fn(),
+  currentSourceRepoNamesFromPayload: vi.fn(() => null),
 }));
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";

@@ -86,6 +86,9 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       sessionCtx: fakeSessionCtx(),
       contextTreePath: "/tree",
       briefing: "# Agent Identity\n\nstub briefing\n",
+      // Tests that don't exercise migration / state-reconcile pass `null` —
+      // mirrors the cache-miss caller signal.
+      currentSourceRepoNames: null,
     };
 
     // Call 1: integration fails → CLI version NOT pinned.
@@ -109,6 +112,7 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
       sessionCtx: fakeSessionCtx(),
       contextTreePath: null,
       briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
     };
     ensureAgentBootstrap(params);
     // No Context Tree → installFirstTreeIntegration is never called regardless.
