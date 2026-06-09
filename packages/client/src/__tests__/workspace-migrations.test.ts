@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -367,6 +376,72 @@ describe("workspace-migrations registry", () => {
     expect(result.deferred).toContain("v1-orphan-ft-clones");
     expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
     expect(existsSync(join(workspace, "first-tree-hub"))).toBe(true);
+  });
+
+  it("v1-orphan-skills removes hardcoded legacy skill payloads + matching .claude symlinks", () => {
+    // Plant each of the 6 retired skills on disk in the canonical layout
+    // (`.agents/skills/<name>/SKILL.md` + `.claude/skills/<name>` symlink).
+    // The migration must remove all of them in one pass.
+    const legacy = [
+      "attention",
+      "first-tree-cloud",
+      "first-tree-github-scan",
+      "first-tree-onboarding",
+      "first-tree-write",
+      "github-scan",
+    ];
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    for (const name of legacy) {
+      const agentsDir = join(workspace, ".agents", "skills", name);
+      mkdirSync(agentsDir, { recursive: true });
+      writeFileSync(join(agentsDir, "SKILL.md"), `---\nname: ${name}\n---\nstale ${name}\n`);
+      symlinkSync(join("..", "..", ".agents", "skills", name), join(workspace, ".claude", "skills", name));
+    }
+
+    const result = applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    for (const name of legacy) {
+      expect(existsSync(join(workspace, ".agents", "skills", name))).toBe(false);
+      // The symlink itself should be gone, not just dangling.
+      expect(() => lstatSync(join(workspace, ".claude", "skills", name))).toThrow();
+    }
+    expect(result.applied).toContain("v1-orphan-skills");
+  });
+
+  it("v1-orphan-skills leaves current skill payloads alone (only the hardcoded historical list matches)", () => {
+    // Plant a currently-bundled skill alongside one of the legacy names.
+    // The current skill must survive; the legacy one must go.
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    const currentName = "first-tree-context"; // still in TREE_SKILL_NAMES
+    const legacyName = "first-tree-cloud"; // retired
+    for (const name of [currentName, legacyName]) {
+      const agentsDir = join(workspace, ".agents", "skills", name);
+      mkdirSync(agentsDir, { recursive: true });
+      writeFileSync(join(agentsDir, "SKILL.md"), `---\nname: ${name}\n---\n`);
+      symlinkSync(join("..", "..", ".agents", "skills", name), join(workspace, ".claude", "skills", name));
+    }
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(join(workspace, ".agents", "skills", currentName, "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(workspace, ".claude", "skills", currentName)).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(workspace, ".agents", "skills", legacyName))).toBe(false);
+  });
+
+  it("v1-orphan-skills does NOT remove a `.claude/skills/<legacy>` entry that's a regular directory (not a symlink)", () => {
+    // A user-authored regular directory at the Claude path — the migration
+    // unlinks ONLY when the entry is a symbolic link, so this should
+    // survive. The `.agents/skills/<legacy>/` payload (if any) is still
+    // removed because that path IS owned by the CLI by convention.
+    const name = "attention";
+    const claudeDir = join(workspace, ".claude", "skills", name);
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, "user-content.md"), "# my notes\n");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(claudeDir)).toBe(true);
+    expect(existsSync(join(claudeDir, "user-content.md"))).toBe(true);
   });
 });
 
