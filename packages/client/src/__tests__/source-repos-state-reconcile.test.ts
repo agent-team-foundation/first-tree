@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitMirrorManager, SourceRepoOutcome } from "../runtime/git-mirror-manager.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { readManagedState, writeManagedState } from "../runtime/managed-state.js";
-import { prepareSourceRepos } from "../runtime/source-repos.js";
+import { prepareSourceRepos, releaseSourceReposForSession } from "../runtime/source-repos.js";
 
 type EnsureArgs = Parameters<GitMirrorManager["ensureSourceRepo"]>[0];
 
@@ -330,5 +330,61 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
     // Retained for retry — when chat A teardown releases the live-use lock,
     // a later session can complete the delete.
     expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
+  });
+
+  it("in-use B retained → after chat A teardown, next reconcile completes the delete and drops state", async () => {
+    plantClone(workspace, "repo-a");
+    plantClone(workspace, "repo-b");
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      sourceRepos: ["repo-a", "repo-b"],
+      skills: [],
+    });
+
+    // Session 1: chat A acquires both repos under the old (broader) config.
+    const { manager } = makeManager();
+    const chatA = makeCtx();
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a", "repo-b"]),
+      sessionCtx: chatA,
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+
+    // Session 2: chat B reconciles against the new config (drops repo-b),
+    // hits the live-use guard, retains repo-b in state.
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a"]),
+      sessionCtx: makeCtx(),
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+    expect(existsSync(join(workspace, "repo-b"))).toBe(true);
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a", "repo-b"]);
+
+    // Chat A tears down between sessions, releasing the live-use lock on
+    // both checkout paths.
+    releaseSourceReposForSession(chatA);
+
+    // Session 3: chat C reconciles with the same reduced config. The
+    // live-use guard now passes (no chat holds repo-b), the other safety
+    // probes pass (clean, no worktrees, 0 ahead), and the delete completes.
+    // The entry then drops from managed state.
+    await prepareSourceRepos({
+      workspace,
+      payload: payloadFor(["repo-a"]),
+      sessionCtx: makeCtx(),
+      gitMirrorManager: manager,
+      agentName: null,
+      payloadResolved: true,
+    });
+    expect(existsSync(join(workspace, "repo-b"))).toBe(false);
+    expect(readManagedState(workspace)?.sourceRepos).toEqual(["repo-a"]);
   });
 });
