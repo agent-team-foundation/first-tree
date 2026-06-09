@@ -92,7 +92,11 @@ export function releaseSourceReposForSession(sessionCtx: SessionContext): void {
  * it to the latest default branch. Concurrency for the same path is serialised
  * inside the manager (`withPathLock`).
  *
- * Fail-fast: any clone/fetch failure aborts the session and bubbles up.
+ * Fail-fast, with one degrade: a transient *network* fetch failure on an
+ * already-existing usable checkout does NOT abort — the manager leaves the
+ * clone at its current commit (`stale-offline`) so the agent stays answerable
+ * on the last-good source. Every other failure (first-clone failure, auth,
+ * corrupt, wrong origin, TLS trust) still aborts the session and bubbles up.
  */
 export async function prepareSourceRepos(params: PrepareSourceReposParams): Promise<PredeclaredSourceRepo[]> {
   const { workspace, payload, sessionCtx, gitMirrorManager } = params;
@@ -136,6 +140,10 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
         sessionCtx.log(`Git: ${localPath} has local commits ahead of upstream — left at current commit`);
       } else if (result.outcome === "skipped-in-use") {
         sessionCtx.log(`Git: ${localPath} in use by another live chat — left at current commit`);
+      } else if (result.outcome === "stale-offline") {
+        sessionCtx.log(
+          `Git: ${localPath} could not be fetched (transient network) — using existing local checkout, left at current commit (stale)`,
+        );
       }
 
       // Per agent-session-cwd-redesign: predeclared source repos are agent-scoped
