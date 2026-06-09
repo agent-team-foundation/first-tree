@@ -103,11 +103,17 @@ describe("chat membership + fan-out semantics (explicit-only)", () => {
         type: "group",
         participantIds: [agent.uuid],
       });
-      await sendMessage(app.db, chat.id, human.agent.uuid, {
-        source: "web",
-        format: "text",
-        content: "what's the date?",
-      });
+      await sendMessage(
+        app.db,
+        chat.id,
+        human.agent.uuid,
+        {
+          source: "web",
+          format: "text",
+          content: "what's the date?",
+        },
+        { allowRecipientlessSend: true },
+      );
 
       expect(await notifyEntries(chat.id, agent.uuid)).toHaveLength(0);
     });
@@ -204,11 +210,17 @@ describe("chat membership + fan-out semantics (explicit-only)", () => {
         type: "group",
         participantIds: [a1.uuid, a2.uuid],
       });
-      await sendMessage(app.db, chat.id, human.agent.uuid, {
-        source: "web",
-        format: "text",
-        content: "team status?",
-      });
+      await sendMessage(
+        app.db,
+        chat.id,
+        human.agent.uuid,
+        {
+          source: "web",
+          format: "text",
+          content: "team status?",
+        },
+        { allowRecipientlessSend: true },
+      );
 
       expect(await notifyEntries(chat.id, a1.uuid)).toHaveLength(0);
       expect(await notifyEntries(chat.id, a2.uuid)).toHaveLength(0);

@@ -69,22 +69,33 @@ export type SendMessageResult = {
 
 export type SendMessageOptions = {
   /**
-   * When true, reject the send with `BadRequestError` if no recipient is
-   * declared — neither `metadata.mentions` (uuids), `data.receiverNames`
-   * (names), nor `addressedToAgentIds` (system routing). Used by both the
-   * human web endpoint and the agent SDK endpoint so every message that
-   * reaches the server arrives with an explicit routing intent.
+   * Trusted-internal opt-out from the default explicit-recipient guard.
    *
-   * The only legal way to satisfy this option with empty routing is to
-   * declare `data.purpose === "agent-final-text"`, which marks the send as
-   * a silent history-only write (result-sink's final-text turn).
+   * `sendMessage()` enforces explicit-recipient routing **by default**: a send
+   * that declares no recipient (no `metadata.mentions`, no `data.receiverNames`,
+   * no `addressedToAgentIds`) is rejected with `BadRequestError`. This is the
+   * durable contract — the server rejects a no-recipient send regardless of
+   * caller (see `system/cloud/chat/messaging.md` "Addressing Is Required To
+   * Send"). The two user entry points (web `api/chats.ts`, agent SDK
+   * `api/agent/messages.ts`) therefore carry no business flag; they inherit the
+   * default.
    *
-   * Server-internal callers (adapter inbound, github-delivery) leave this
-   * off because their routing decisions are owned by the caller and
-   * validated upstream; they pass `metadata.mentions` or
-   * `addressedToAgentIds` directly.
+   * The one other send shape that legitimately carries no recipient bypasses
+   * the guard without this option: `data.purpose === "agent-final-text"` — an
+   * agent's own final response surfaced for human observers, silent by
+   * construction (self-declared via `purposeProfile.skipMentionEnforcement`).
+   *
+   * This option is the **only** other escape hatch, reserved for trusted
+   * server-internal delivery paths whose addressing is owned and validated by
+   * the caller and **can legitimately resolve to no live speaker for some
+   * events** — today only `github-delivery.deliverNormalizedEvent`, whose card
+   * addressing (`addressedToAgentIds` derived from the audience row) may name a
+   * delegate that is not a speaker of the bound chat. Such a send writes a
+   * silent history/context row for human observers rather than reaching an
+   * inbox. Set it only on a path you have audited; never thread it through an
+   * HTTP boundary.
    */
-  enforceMention?: boolean;
+  allowRecipientlessSend?: boolean;
   /**
    * When true and `data.content` is a string, prepend `@<name>` tokens for
    * any participant in `metadata.mentions` whose name is missing from the
@@ -141,16 +152,21 @@ export async function sendMessage(
  * Routing contract (post-retire of content extraction)
  * ====================================================
  *
- * Every wake-up requires the caller to declare routing intent explicitly,
- * by one of:
+ * Every wake-up requires the caller to declare routing intent explicitly.
+ * Explicit-recipient enforcement is ON BY DEFAULT in `sendMessage()`; a send
+ * that declares no recipient is rejected unless it is one of the silent shapes
+ * below. Routing is declared by one of:
  *
  *   - `data.metadata.mentions: string[]` — agent uuids (resolved upstream)
  *   - `data.receiverNames: string[]` — agent names; resolved here against
  *     the chat's speaker list
  *   - `options.addressedToAgentIds` — system-routed override (e.g. github
- *     delivery)
+ *     delivery), counted only when it resolves to an active speaker
+ *
+ * Recipient-less sends are rejected by default, except these declared-silent
+ * shapes:
  *   - `data.purpose === "agent-final-text"` — silent history-only write
- *     (the only legal mentions-empty case under `enforceMention`)
+ *   - `options.allowRecipientlessSend === true` — trusted system opt-out
  *
  * The server never parses `@<name>` tokens out of content. Clients that
  * surface IM-style `@-mention` UX (web composer, future mobile) must
@@ -336,10 +352,12 @@ async function sendMessageInner(
           forceSilentFanOut: false,
         };
 
-    // Mention enforcement (explicit-only contract). Reject the send when
-    // the caller opted in via `enforceMention` but declared no routing
-    // intent — `metadata.mentions`, `receiverNames`, and
-    // `addressedToAgentIds` are the three legal declarations.
+    // Mention enforcement (explicit-only contract) — DEFAULT ON. Reject the
+    // send when no routing intent is declared — `metadata.mentions`,
+    // `receiverNames`, and `addressedToAgentIds` are the three legal
+    // declarations. The invariant lives here in the write path so every entry
+    // point inherits it; a new send caller cannot silently re-open the
+    // "write to chat history with no recipient" footgun by forgetting a flag.
     //
     // Applies to every chat shape (1:1 included): the previous "1:1
     // implicit wake" bypass was removed when the explicit contract took
@@ -347,17 +365,28 @@ async function sendMessageInner(
     // `metadata.mentions` for 2-speaker chats so this check passes
     // transparently.
     //
-    // `purpose === "agent-final-text"` bypasses via
-    // `purposeProfile.skipMentionEnforcement` — final-text is silent-by-
-    // construction so it never needs to name a recipient.
-    //
-    // There is no no-recipient send path: a group chat rejects any send that
-    // names no one. The only mentions-empty exception is `agent-final-text`
-    // above (an agent's own response for humans, not a message into the room).
-    if (options.enforceMention && !purposeProfile.skipMentionEnforcement) {
+    // Two send shapes legitimately carry no recipient and bypass the guard:
+    //   - `purpose === "agent-final-text"` (via
+    //     `purposeProfile.skipMentionEnforcement`) — silent-by-construction
+    //     final text, never needs to name a recipient.
+    //   - `options.allowRecipientlessSend` — trusted server-internal opt-out
+    //     for system delivery paths whose addressing can legitimately resolve
+    //     to no live speaker (today: github-delivery). See the option's doc.
+    const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
+    if (!skipRecipientEnforcement) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
-      const hasAddressed = (options.addressedToAgentIds?.length ?? 0) > 0;
-      if (recipientMentions.length === 0 && !hasAddressed) {
+      // A system-routing override (`addressedToAgentIds`) only satisfies the
+      // guard when it resolves to an active, non-sender speaker of this chat.
+      // Counting raw array length instead would let addressing that reaches no
+      // one slip through (`[undefined]`, `[senderId]`, or an id that is not a
+      // live speaker) — the same silent-dead-end the guard exists to prevent.
+      // A trusted system path whose addressing can legitimately resolve to no
+      // speaker (github-delivery) declares `allowRecipientlessSend` to opt out
+      // above rather than lean on that hole.
+      const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
+        (id) => id !== senderId && participantsById.get(id)?.status === "active",
+      );
+      if (recipientMentions.length === 0 && !hasActiveAddressed) {
         throw new BadRequestError(
           "Sending a message requires an explicit recipient. " +
             "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +

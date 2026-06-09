@@ -158,9 +158,27 @@ describe("inbox WS data-plane claim helpers", () => {
 
     // Three silent messages (no mentions → silent context rows), then a
     // trigger that explicitly mentions observer.
-    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "first silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "third silent" });
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      { source: "api", format: "text", content: "first silent" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      { source: "api", format: "text", content: "second silent" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      { source: "api", format: "text", content: "third silent" },
+      { allowRecipientlessSend: true },
+    );
     const trigger = await sendMessage(app.db, chat.id, human.uuid, {
       source: "api",
       format: "text",

@@ -106,7 +106,13 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     });
 
     // No @, no metadata.mentions → nobody wakes (silent fan-out).
-    await sendMessage(app.db, chat.id, sender.uuid, { source: "web", format: "text", content: "hello team" });
+    await sendMessage(
+      app.db,
+      chat.id,
+      sender.uuid,
+      { source: "web", format: "text", content: "hello team" },
+      { allowRecipientlessSend: true },
+    );
     expect(await readSessionState(app, mentioned.uuid, chat.id)).toBeNull();
     expect(await readSessionState(app, silent.uuid, chat.id)).toBeNull();
 

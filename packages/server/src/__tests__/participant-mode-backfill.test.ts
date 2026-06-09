@@ -56,7 +56,15 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
       participantIds: [peer.agent.uuid],
     });
     for (let i = 0; i < 7; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `m${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `m${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     await app.db.transaction((tx) =>
@@ -80,7 +88,15 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
       participantIds: [peer.agent.uuid],
     });
     for (let i = 0; i < 4; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `w${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `w${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     // Seed a watcher row directly — recomputeChatWatchers would also work
@@ -115,7 +131,15 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
       participantIds: [newcomer.agent.uuid],
     });
     for (let i = 0; i < 3; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `n${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `n${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     // `newcomer` was added as a speaker at chat creation time; createChat
@@ -142,7 +166,15 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
       participantIds: [existing.agent.uuid],
     });
     for (let i = 0; i < 5; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `b${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `b${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     const existingBefore = await countSilentEntries(app.db, existing.agent.inboxId, chat.id);
@@ -181,11 +213,17 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
       participantIds: [peer.agent.uuid],
     });
     for (let i = 0; i < 6; i++) {
-      await sendMessage(app.db, chat.id, owner.humanAgentUuid, {
-        source: "api",
-        format: "text",
-        content: `web-${i}`,
-      });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.humanAgentUuid,
+        {
+          source: "api",
+          format: "text",
+          content: `web-${i}`,
+        },
+        { allowRecipientlessSend: true },
+      );
     }
 
     await addMeChatParticipants(app.db, chat.id, owner.humanAgentUuid, owner.organizationId, {
@@ -210,7 +248,15 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
       participantIds: [peer.agent.uuid],
     });
     for (let i = 0; i < 5; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `e${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `e${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     await ensureParticipant(app.db, chat.id, newcomer.agent.uuid);
@@ -234,7 +280,15 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
     });
     const total = PRECEDING_CONTEXT_MAX_ENTRIES + 10;
     for (let i = 0; i < total; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `c${i}` });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        { source: "api", format: "text", content: `c${i}` },
+        {
+          allowRecipientlessSend: true,
+        },
+      );
     }
 
     await app.db.transaction((tx) => addChatParticipants(tx, chat.id, [{ agentId: newcomer.agent.uuid }]));

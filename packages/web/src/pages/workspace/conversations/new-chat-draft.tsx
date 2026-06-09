@@ -35,7 +35,7 @@ import { cn } from "../../../lib/utils.js";
  *     "ask my PA something" case is zero-step. Stable across clicks —
  *     no runtime-presence MRU here, see issue 342.
  *
- *   - Textarea carries the message content. Server's `enforceMention`
+ *   - Textarea carries the message content. Server's explicit-recipient enforcement
  *     contract requires an explicit recipient on every send — for 1:1
  *     (single chip) the composer auto-injects the chip's uuid into
  *     `metadata.mentions` so a bare body still passes; for groups
@@ -55,7 +55,7 @@ import { cn } from "../../../lib/utils.js";
  *     chat exists. An image-only send (empty body) is allowed; a group
  *     (2+ chips) still needs an `@` in the body so each file POST
  *     carries non-empty `metadata.mentions` and clears the server's
- *     per-message `enforceMention` check.
+ *     per-message explicit-recipient enforcement check.
  *
  * On send: createMeChat({participantIds: chips ∪ body @s}) → stage each
  * image into IndexedDB → single `sendFileMessageBatch` carrying caption +
@@ -358,10 +358,10 @@ export function NewChatDraft({
       // sends still go through `sendChatMessage` below.
       if (images.length > 0) {
         // Carry the resolved mentions onto the batched file send so the
-        // single POST clears the server's `enforceMention` check. 1:1
+        // single POST clears the server's explicit-recipient enforcement check. 1:1
         // drafts have `mentions` already auto-injected by handleSend (the
         // single chip's uuid); group drafts carry the body's `@-mention`
-        // set. The server applies `enforceMention` to every chat shape now,
+        // set. The server applies explicit-recipient enforcement to every chat shape now,
         // so no path can rely on an empty-mentions skip.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
         const attachments: ImageRefContent[] = [];
@@ -420,7 +420,7 @@ export function NewChatDraft({
     // in-chat composer's "text non-empty or has image" rule).
     if (draft.trim().length === 0 && pendingImages.length === 0) return false;
     // Groups still need an explicit `@` even for image-only sends: the
-    // server's `enforceMention` runs per message regardless of format,
+    // server's explicit-recipient enforcement runs per message regardless of format,
     // and group chats can't rely on the 1:1 auto-inject path.
     if (chips.length >= 2 && bodyMentions.length === 0) return false;
     return true;
