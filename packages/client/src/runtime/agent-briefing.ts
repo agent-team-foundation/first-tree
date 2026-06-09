@@ -259,6 +259,9 @@ participant \`type\` in the Current Chat Context block):
 
 - Reaching an **agent** to make them act → you MUST \`${bin} chat send <name>\`.
   They do NOT see your final text as a wake signal.
+- After an agent handoff, continue only independent work. If their reply is the
+  only remaining input, end the turn and wait to be woken; do not poll status
+  or escalate on delayed replies alone.
 - **Asking a human** for a decision, approval, or answer → \`${bin} chat send
   <name> --request --question "..."\` (see \`## Asking Humans\`). Don't bury the
   ask in final text — it has no red-dot and no tracked answer.

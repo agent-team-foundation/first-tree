@@ -347,6 +347,8 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // structured --request ask path; agents must be woken explicitly.
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/Reaching an \*\*agent\*\*/);
+    expect(briefing).toContain("After an agent handoff, continue only independent work");
+    expect(briefing).toContain("do not poll status");
     expect(briefing).toContain("**Fallback**");
 
     expect(briefing).toContain("## Workspace Collaboration");
