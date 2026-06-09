@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.8.3
+version: 0.8.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -220,15 +220,20 @@ goes in frontmatter:
     encodes two things at once: an alternative that was *actually
     pursued* (not abstractly considered), and the constraint or
     insight that ruled it out. Both are exactly the content that
-    keeps the next agent from re-litigating the same path. In a
-    copilot team most corrections come from human↔agent
-    back-and-forth — capture them while you still have them.
+    keeps the next agent from re-litigating the same path.
+    Corrections surface in design-phase back-and-forth — chat
+    threads, review comments, design meetings — and decay fast
+    once the PR lands. Capture them while you still have them, but
+    apply the **Double Test** (above) before pinning: not every
+    review nit is a course-correction, and the surviving
+    constraint still has to be durable across refactors.
   - **Translate corrections into present-tense rationale, not
-    narration.** "The agent first proposed a global cache; the
-    human said no" is a timeline (Hard Rule 8 forbids it). "Cache
-    is per-tenant because multi-tenancy isolation is a hard
-    constraint" is the surviving Why. Keep the *constraint* the
-    correction introduced; drop the *story* of how it happened.
+    narration (i.e. timeline).** "The agent first proposed a
+    global cache; the human said no" is a timeline (Hard Rule 8
+    forbids it). "Cache is per-tenant because multi-tenancy
+    isolation is a hard constraint" is the surviving Why. Keep
+    the *constraint* the correction introduced; drop the *story*
+    of how it happened.
   - Other rich sources: meeting discussions where a decision was
     reached; PR review threads that changed the design.
   - Self-check: "Six months from now, if a reader reads only the
@@ -350,6 +355,13 @@ tree-write (a PR, a meeting note, a report). The labels are
 meta-narration in this skill — they are not a body section template;
 no `## Trigger` / `## Source` heading goes into the actual node (see
 Hard Rule 9).
+
+Some examples split `Belongs:` into `Belongs (What):` and `Belongs
+(Why):` to make the Content Model distinction concrete; others
+keep a single `Belongs:` line where the distinction is not
+load-bearing. Both forms describe the same underlying boundary —
+what survives in the node vs what stays in the source repo. The
+split is teaching emphasis, not a separate convention.
 
 **Trigger: PR adding a new caching layer.**
 Belongs: "Service X owns the cache; other services read through Service
