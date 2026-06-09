@@ -9,9 +9,6 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "rea
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
-import { Markdown } from "../../components/ui/markdown.js";
-import { Popover } from "../../components/ui/popover.js";
-import { Section } from "../../components/ui/section.js";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +17,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../../components/ui/dialog.js";
+import { Markdown } from "../../components/ui/markdown.js";
+import { Popover } from "../../components/ui/popover.js";
+import { Section } from "../../components/ui/section.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { agentResourcesMutationHandlers, statusMarker } from "./capability-section.js";
