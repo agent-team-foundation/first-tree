@@ -36,6 +36,7 @@ import {
   promptMissingFields,
   promptUpdate,
   reconcileLocalRuntimeProviders,
+  refreshServerUpdateTarget,
   startClientService,
   uploadAgentSkills,
   uploadClientCapabilities,
@@ -232,6 +233,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             updateConfig: config.update,
             prompt: managed ? declineUpdate : promptUpdate,
             executeUpdate,
+            refreshServerTarget: refreshServerUpdateTarget,
           },
         });
         runtimeRef = runtime;

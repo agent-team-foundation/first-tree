@@ -26,6 +26,7 @@ const coreMocks = vi.hoisted(() => ({
   promptMissingFields: vi.fn(),
   promptUpdate: vi.fn(),
   reconcileLocalRuntimeProviders: vi.fn(),
+  refreshServerUpdateTarget: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
   uploadClientCapabilities: vi.fn(),

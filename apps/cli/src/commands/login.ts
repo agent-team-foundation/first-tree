@@ -28,6 +28,7 @@ import {
   loadCredentials,
   migrateLocalAgentDirs,
   promptUpdate,
+  refreshServerUpdateTarget,
   saveCredentials,
 } from "../core/index.js";
 import { print } from "../core/output.js";
@@ -204,6 +205,7 @@ export function registerLoginCommand(program: Command): void {
             updateConfig: config.update,
             prompt: promptUpdate,
             executeUpdate: createExecuteUpdate({ managed: false }),
+            refreshServerTarget: refreshServerUpdateTarget,
           },
         });
         for (const [name, agentConfig] of agents) runtime.addAgent(name, agentConfig);

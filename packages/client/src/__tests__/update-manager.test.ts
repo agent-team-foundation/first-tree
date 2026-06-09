@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { ClientConfig } from "@first-tree/shared/config";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerWelcome } from "../client-connection.js";
+import type { RefreshUpdateTargetResult } from "../runtime/update-manager.js";
 import { UpdateManager } from "../runtime/update-manager.js";
 
 /**
@@ -350,6 +351,128 @@ describe("UpdateManager decision flow", () => {
 
       expect(getQuietGateSnapshot).toHaveBeenCalledTimes(2);
       expect(executeUpdate).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("policy=auto, reconnect coalesces the latest welcome target while the quiet gate waits", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const snapshots = [
+        { activeCount: 1, lastActivityMs: Date.now() },
+        { activeCount: 0, lastActivityMs: 0 },
+      ];
+      const getQuietGateSnapshot = vi.fn(() => snapshots.shift() ?? { activeCount: 0, lastActivityMs: 0 });
+
+      UpdateManager.attach(conn, {
+        currentVersion: "0.8.4",
+        updateConfig: makeUpdateConfig({
+          policy: "auto",
+          restart_quiet_seconds: 30,
+          restart_check_interval_seconds: 10,
+        }),
+        isTTY: false,
+        log: () => {},
+        getQuietGateSnapshot,
+        prompt: async () => false,
+        executeUpdate,
+      });
+
+      conn.emitWelcome(makeWelcome("1.0.0", true));
+      await vi.advanceTimersByTimeAsync(1);
+      conn.emitWelcome(makeWelcome("0.9.2", true));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(executeUpdate).toHaveBeenCalledOnce();
+      expect(executeUpdate).toHaveBeenCalledWith({ currentVersion: "0.8.4", targetVersion: "0.9.2" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("policy=auto refreshes the server target after the quiet gate and accepts rollback above current", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const refreshServerTarget = vi.fn(
+        async (): Promise<RefreshUpdateTargetResult> => ({ ok: true, targetVersion: "0.9.2" }),
+      );
+      const snapshots = [
+        { activeCount: 1, lastActivityMs: Date.now() },
+        { activeCount: 0, lastActivityMs: 0 },
+      ];
+      const getQuietGateSnapshot = vi.fn(() => snapshots.shift() ?? { activeCount: 0, lastActivityMs: 0 });
+
+      UpdateManager.attach(conn, {
+        currentVersion: "0.8.4",
+        updateConfig: makeUpdateConfig({
+          policy: "auto",
+          restart_quiet_seconds: 30,
+          restart_check_interval_seconds: 10,
+        }),
+        isTTY: false,
+        log: () => {},
+        getQuietGateSnapshot,
+        prompt: async () => false,
+        executeUpdate,
+        refreshServerTarget,
+      });
+
+      conn.emitWelcome(makeWelcome("1.0.0", true));
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(refreshServerTarget).toHaveBeenCalledOnce();
+      expect(executeUpdate).toHaveBeenCalledOnce();
+      expect(executeUpdate).toHaveBeenCalledWith({ currentVersion: "0.8.4", targetVersion: "0.9.2" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("policy=auto skips when the refreshed server target is older than the running version", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const refreshServerTarget = vi.fn(
+        async (): Promise<RefreshUpdateTargetResult> => ({ ok: true, targetVersion: "0.9.2" }),
+      );
+      const snapshots = [
+        { activeCount: 1, lastActivityMs: Date.now() },
+        { activeCount: 0, lastActivityMs: 0 },
+      ];
+      const getQuietGateSnapshot = vi.fn(() => snapshots.shift() ?? { activeCount: 0, lastActivityMs: 0 });
+
+      UpdateManager.attach(conn, {
+        currentVersion: "0.9.3",
+        updateConfig: makeUpdateConfig({
+          policy: "auto",
+          restart_quiet_seconds: 30,
+          restart_check_interval_seconds: 10,
+        }),
+        isTTY: false,
+        log: () => {},
+        getQuietGateSnapshot,
+        prompt: async () => false,
+        executeUpdate,
+        refreshServerTarget,
+      });
+
+      conn.emitWelcome(makeWelcome("1.0.0", true));
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(refreshServerTarget).toHaveBeenCalledOnce();
+      expect(executeUpdate).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
