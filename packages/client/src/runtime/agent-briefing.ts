@@ -531,7 +531,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
 | \`first-tree-context\` | unconditional (see \`# Required Reading\`) — read context before acting OR write tree updates from a specific PR / doc / note |
-| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |`;
+| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
+| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
 }
 
 /**
@@ -543,4 +544,9 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree", "first-tree-context", "first-tree-sync"] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-sync",
+  "first-tree-seed",
+] as const;

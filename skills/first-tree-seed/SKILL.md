@@ -3,7 +3,7 @@ name: first-tree-seed
 version: 0.1.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Initial-seeding skill for a freshly-minted Context Tree. Use exactly once per tree, right after Cloud onboarding finishes provisioning the workspace and the tree repo is still empty. Two phases. Phase 1 — structural-only deep read (filesystem walk → first-line meta reads → surgical content reads) that proposes a top + second-level domain skeleton from observed source signals, gets the user's approval, and lands as PR1. Phase 2 — parallel sub-agents (one per approved top-level domain) read code deeply within their assigned subtree, draft initial leaf nodes under a time budget, and return a coverage report so the user knows what was and was not extracted; the main agent consolidates everything into PR2. Use this skill only for the very first content pass on an empty tree — `first-tree-context` owns every subsequent incremental tree write from a specific source PR / doc / note.
+description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-context`. Do not use to audit drift on an existing tree — that is `first-tree-sync`.
 ---
 
 # First Tree — Seed
@@ -44,25 +44,39 @@ phase.
 
 ## Trigger
 
-Cloud onboarding's kickoff step injects a prompt into the first chat
-that names this skill. The injection arrives because the tree the
-operator just provisioned is detectably empty — typically signalled by
-"no `NODE.md` at the tree root" or "the tree dir has only the default
-`.git/` plus an empty README".
+The **normal** trigger is the Cloud onboarding kickoff prompt that
+arrives in the first chat after the operator finishes provisioning
+the workspace and tree repo. The skill may also run when a human or
+another agent invokes it directly, **provided the empty-tree
+self-check below passes** — the self-check is what gates re-runs and
+mis-invocations, not the prompt's origin. Once the seed has landed,
+the same self-check fails and the skill refuses; route subsequent
+work through `first-tree-context` or `first-tree-sync`.
 
-The skill **does not auto-fire** from any other context. If a human or
-another agent invokes it on a non-empty tree, refuse with a one-line
-explanation and point at `first-tree-context` or `first-tree-sync`.
+### Self-check before starting (all must pass; stop on any failure)
 
-Self-check before starting:
+1. **Workspace bound.** `<workspaceRoot>/.first-tree/workspace.json`
+   exists with non-empty `tree` and `sources` fields.
+2. **Tree is empty.** All of:
+   - `<workspaceRoot>/<manifest.tree>/NODE.md` does not exist, **or**
+     exists with no non-whitespace body content beyond an
+     auto-generated placeholder header (Cloud may ship a minimal
+     placeholder root NODE.md in the future; an empty body with only
+     a title still counts as empty).
+   - `<workspaceRoot>/<manifest.tree>/members/` does not exist (or
+     is empty).
+   - No directory directly under `<workspaceRoot>/<manifest.tree>/`
+     other than `.git/`, `.first-tree/`, `.github/`, and any
+     dotfile-prefixed dir.
 
-- `<workspaceRoot>/.first-tree/workspace.json` exists with non-empty
-  `tree` + `sources` (workspace is bound).
-- `<workspaceRoot>/<manifest.tree>/NODE.md` does **not** exist (tree
-  is empty). Stop if it does.
-- `<workspaceRoot>/<manifest.sources[i]>` is present on disk for every
-  declared source. If a source is missing, surface to user and stop —
-  do not seed from a partial workspace.
+   If any of those fail, the tree is non-empty — refuse with a
+   one-line explanation pointing at `first-tree-context` /
+   `first-tree-sync`. Do **not** prompt the user to clear the tree
+   yourself; deleting nodes is human-owned.
+3. **All declared sources present on disk.**
+   `<workspaceRoot>/<manifest.sources[i]>` exists for every entry.
+   A missing source means the workspace is half-provisioned; surface
+   to the user and stop. Do not seed from a partial workspace.
 
 ## The Two Phases
 
@@ -104,7 +118,7 @@ tier left a specific question unanswered.
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
 | 0    | Filesystem walk over every bound source. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
-| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl`. | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
+| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on 4xx — private repo or missing token; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 
 **Tier 2 is targeted, not exhaustive.** If you cannot articulate the
@@ -178,6 +192,13 @@ Wait for the user's reply. Default behavior on plain "ok" / "yes" is
 may toggle individual items, drop the OFF defaults entirely, or add
 their own top-level domains.
 
+**This user-checklist step is what satisfies `first-tree-context`'s
+"top-level domains require explicit human-owner approval" rule.**
+The main agent proposes candidates with evidence; the human is the
+one who actually opens each one. Without an explicit "yes" from the
+user, do not create any top-level domain — even ones marked
+"recommended ON".
+
 ### What to write
 
 After the user confirms, create on the seed branch:
@@ -187,8 +208,9 @@ After the user confirms, create on the seed branch:
   Description paragraph drawn verbatim from the most-authoritative
   source README first paragraph, or summarised in ≤30 words if that
   paragraph is too long.
-- `<tree>/members/<owner>/NODE.md` — owner identity + `## Recent
-  Contributors` list (top 5 from `git log --since='6 months ago'`).
+- `<tree>/members/<owner>/NODE.md` — see frontmatter spec below.
+  Body has the owner's identity line plus a `## Recent Contributors`
+  list (top 5 from `git log --since='6 months ago'`).
 - `<tree>/raw-context/NODE.md` — one-paragraph statement of purpose
   ("intake for meeting notes, explorations, and material not yet
   promoted to a durable domain").
@@ -201,11 +223,52 @@ After the user confirms, create on the seed branch:
   placeholder `.md` file, again with `title`, `owners`, and a
   one-paragraph charter — no leaf content yet.
 
-Every node carries `title` + `owners` frontmatter (required by
-`first-tree tree verify`). Use the workspace's primary owner as the
-default `owners` value; the user reassigns ownership in Phase 2 or
-later. Set `lastReviewed` to today; do not set `decisionLocksCode`
-(it defaults false).
+### Frontmatter shape
+
+Domain and leaf nodes carry the standard shape:
+
+```yaml
+---
+title: "<noun phrase>"   # default = directory name titlecased (e.g. system/ → "System")
+owners: [<primary owner>] # one entry; user reassigns later
+---
+```
+
+Member nodes carry the extended shape required by
+`first-tree tree verify`'s member validator:
+
+```yaml
+---
+title: "<github handle>"
+owners: [<github handle>]
+type: human                # or "agent" — agents only when seeding an agent-team workspace
+role: "Owner"              # neutral default; user adjusts to "Engineer" / "Product" / etc.
+domains:                   # non-empty; default = the list of top-level domains opened in Phase 1
+  - <domain-1>
+  - <domain-2>
+---
+```
+
+Notes on defaults:
+
+- **Primary owner** = the most-active recent contributor across the
+  bound sources, computed from `git log --since='6 months ago'
+  --format='%aN <%aE>' | sort | uniq -c | sort -rn | head -1`. Use
+  the GitHub handle when `gh repo view` resolves the email; fall
+  back to the `%aN` author name otherwise. The user is the
+  authoritative source — confirm in chat before writing if the
+  derived owner is ambiguous.
+- **Member-node `role`** defaults to `"Owner"` because seed does
+  not know the real role. Validator only requires non-empty; the
+  user adjusts later.
+- **Member-node `domains`** defaults to the list of opened
+  top-level domain names (one entry per opened domain). Validator
+  requires non-empty.
+- Do **not** set `lastReviewed`. That field marks owner-reviewed
+  state and is written by `first-tree-sync` after a real review;
+  stamping it on a bootstrap node makes unreviewed content look
+  reviewed and hides it from future audits.
+- Do **not** set `decisionLocksCode` (defaults false).
 
 ### PR1
 
@@ -234,9 +297,15 @@ extracted.
 
 ### Trigger
 
-The user signals merge of PR1 in chat (or the agent observes the
-PR1 branch removed from the remote and merged into `main`). The
-main agent then dispatches Phase 2.
+The user **re-pings the chat** after merging PR1 — that ping is the
+only sanctioned start signal. The agent does **not** poll the remote,
+the inbox, or any other source between phases; the seed skill is not
+running between PR1 and PR2. When the ping arrives, run a fresh
+self-check that PR1's structure is actually on the tree's default
+branch (`git fetch && git ls-tree origin/main -- <top-level>` for the
+approved domains) before dispatching sub-agents — protects against
+the case where the user pinged before merging, or merged a different
+branch.
 
 ### Sub-agent dispatch
 
@@ -246,11 +315,23 @@ its scope). Domains too large for one sub-agent (deep nested package
 trees with many packages) may be split by second-level on the main
 agent's judgement, with a note in the PR2 body explaining the split.
 
-All sub-agents work in parallel on the same git branch
-`chore/seed-phase2-content`, each writing only into its assigned
-subtree path. Their working paths are disjoint by construction;
-git-level conflicts are not expected. The main agent serialises any
-needed cross-cutting commits at the end.
+### Parallel write safety
+
+Sub-agents run in parallel and may touch the filesystem simultaneously.
+To keep them out of `.git/index.lock` contention and out of each
+other's commit history, enforce two invariants:
+
+1. **Sub-agents write files only.** They use Read / Write / Edit
+   against `<tree>/<assigned-subtree>/` paths but do **not** call
+   `git add`, `git commit`, `git push`, or any other git-mutating
+   command. Their disjoint sub-paths guarantee filesystem-level safety.
+2. **The main agent serialises every git operation.** After all
+   sub-agents return their drafts + coverage reports, the main agent
+   runs the consolidation pass (below), then groups files by
+   sub-agent and lands one commit per sub-agent (`git add
+   <sub-path>/... && git commit -m "..."`) on
+   `chore/seed-phase2-content`. This keeps domain boundaries visible
+   in `git log` without ever risking concurrent index writes.
 
 ### Sub-agent contract
 
@@ -270,9 +351,11 @@ The sub-agent's authority within its assigned subtree:
 | ------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | Restructure inside its subtree (split / merge second-level, add third-level, rewrite NODE.md descriptions, adjust internal soft_links) | full           |
 | Add new sub-domain branches (new sub-directories) under its assigned top-level                                                        | full           |
-| Modify a sibling domain or a parent NODE.md                                                                                           | **forbidden**  |
+| Write `soft_links:` entries that **point into** sibling subtrees (read-only cross-domain reference; target file is not modified)      | full           |
+| Modify a sibling domain's files or a parent NODE.md                                                                                   | **forbidden**  |
 | Create a new top-level domain                                                                                                         | **forbidden**  |
 | Modify `members/`, `raw-context/`, or other supporting structures                                                                     | **forbidden**  |
+| Run any `git` command (`add` / `commit` / `push` / `checkout` / ...) — the main agent serialises git ops                              | **forbidden**  |
 
 Forbidden actions become entries in the sub-agent's
 **escalations list**, returned to the main agent: "I observed N
@@ -284,11 +367,19 @@ create it." The main agent aggregates these for the user.
 Sub-agents **do not chase completeness**. Stop when any of these
 holds, whichever comes first:
 
-- Time budget exhausted.
-- Three consecutive code reads produced no new candidate leaf (the
-  domain's high-value veins are mined out).
-- Twelve leaves have been drafted in this domain (a single seed pass
-  should not create a sixty-leaf domain — defer the rest).
+- **Time budget exhausted.** Wall-clock since dispatch ≥ assigned
+  budget (default 15 min).
+- **Three consecutive Read / Grep tool calls returned no new
+  candidate leaf.** One tool call = one stop-check tick; an
+  exploratory `Grep` that turns up nothing counts the same as a
+  `Read` of a file that has nothing tree-worthy. After three ticks
+  in a row, the domain's high-value veins are mined out.
+- **Twelve leaves drafted in this domain.** Empirical cap from
+  observing real seed runs; not a hard architectural limit. A single
+  seed pass should not create a sixty-leaf domain — defer the rest
+  to `first-tree-context` writes after the user has reviewed PR2.
+  Adjust in a future skill version if real usage shows the number is
+  consistently too low or too high.
 
 ### Mandatory coverage report
 
@@ -355,6 +446,26 @@ After all sub-agents return:
 After PR2 opens, the seed skill is done. Subsequent writes are owned
 by `first-tree-context`; subsequent drift audits by
 `first-tree-sync`.
+
+### Recovery path: PR1 merged, Phase 2 abandoned
+
+A user may merge PR1 and then never come back for Phase 2 (life
+happens, the team is busy, the kickoff agent crashed). The tree
+ends up with real structure but zero leaves. **This is not a
+re-seed condition** — the seed self-check sees a populated tree
+(`<tree>/<domain>/NODE.md` files exist) and refuses. Instead:
+
+- Future writes go through `first-tree-context` one source at a
+  time, exactly as they would on any other live tree.
+- A team that wants to back-fill the missing leaf content can
+  invoke `first-tree-sync` to scan for `code-not-synced/substantive`
+  drift; sync's hand-off back to `first-tree-context` then performs
+  the writes one source at a time.
+
+Communicate this fallback to the user in PR1's body so the choice
+is visible: "If you merge PR1 without coming back for Phase 2, the
+tree is fully usable but empty; later writes go through
+`first-tree-context` / `first-tree-sync`."
 
 ---
 
