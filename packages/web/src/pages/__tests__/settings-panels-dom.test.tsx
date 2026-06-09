@@ -30,6 +30,10 @@ const settingsMocks = vi.hoisted(() => ({
   putSourceReposSetting: vi.fn(),
 }));
 
+const contextApiMocks = vi.hoisted(() => ({
+  initializeContextTree: vi.fn(),
+}));
+
 const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
 }));
@@ -41,6 +45,8 @@ vi.mock("../../auth/auth-context.js", () => ({
 vi.mock("../../api/organizations.js", () => orgMocks);
 
 vi.mock("../../api/org-settings.js", () => settingsMocks);
+
+vi.mock("../../api/context-tree.js", () => contextApiMocks);
 
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
@@ -130,6 +136,14 @@ async function renderPanel(element: ReactElement): Promise<{ container: HTMLElem
   return { container, root };
 }
 
+async function click(element: Element | null): Promise<void> {
+  if (!element) throw new Error("Expected element to click");
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -179,6 +193,12 @@ beforeEach(() => {
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
   );
+  contextApiMocks.initializeContextTree.mockResolvedValue({
+    repo: "https://github.com/acme/acme-context-tree.git",
+    htmlUrl: "https://github.com/acme/acme-context-tree",
+    branch: "main",
+    nodePath: "NODE.md",
+  });
   settingsMocks.getSourceReposSetting.mockResolvedValue(sourceRepos());
   settingsMocks.putSourceReposSetting.mockImplementation(async (_id: string, body: Partial<OrgSourceReposOutput>) =>
     sourceRepos(body),
@@ -275,6 +295,47 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
+  it("initializes an empty context tree setting for admins", async () => {
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+    let resolveInitialize: (value: { repo: string; htmlUrl: string; branch: "main"; nodePath: "NODE.md" }) => void =
+      () => undefined;
+    contextApiMocks.initializeContextTree.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveInitialize = resolve;
+      }),
+    );
+
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Create private GitHub repo");
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Create")) ?? null,
+    );
+    expect(contextApiMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
+    expect(container.textContent).toContain("Creating private GitHub repo");
+    expect(container.textContent).toContain("Initializing root NODE.md");
+    expect(container.textContent).toContain("Saving team setting");
+
+    await act(async () => {
+      resolveInitialize({
+        repo: "https://github.com/acme/acme-context-tree.git",
+        htmlUrl: "https://github.com/acme/acme-context-tree",
+        branch: "main",
+        nodePath: "NODE.md",
+      });
+    });
+    await waitForCondition(
+      () =>
+        container.querySelectorAll<HTMLInputElement>("input")[0]?.value ===
+        "https://github.com/acme/acme-context-tree.git",
+      "Expected initialized repo to populate the form",
+    );
+    expect(container.querySelectorAll<HTMLInputElement>("input")[1]?.value).toBe("main");
+
+    await act(async () => root.unmount());
+  });
+
   it("renders the context tree binding read-only for members", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
@@ -287,6 +348,16 @@ describe("settings panels", () => {
     }
     // No Save affordance for members.
     expect(container.querySelector('button[type="submit"]')).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("shows admin-required copy for members when no context tree repo is configured", async () => {
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    authMock.value = { ...authMock.value, role: "member" };
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Ask an admin to initialize");
+    expect(container.textContent).not.toContain("Create private GitHub repo");
     await act(async () => root.unmount());
   });
 });

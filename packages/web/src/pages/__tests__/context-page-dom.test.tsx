@@ -12,11 +12,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const contextApiMocks = vi.hoisted(() => ({
   getContextTreeSnapshot: vi.fn(),
+  initializeContextTree: vi.fn(),
 }));
 
 const authMock = vi.hoisted(() => ({
   value: {
     organizationId: "org-1" as string | null,
+    role: "member" as "admin" | "member" | null,
   },
 }));
 
@@ -114,6 +116,15 @@ async function waitForText(container: ParentNode, text: string, timeoutMs = 3000
   throw new Error(`Missing text: ${text}\n${container.textContent ?? ""}`);
 }
 
+async function waitForCondition(predicate: () => boolean, message: string, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await flush();
+  }
+  throw new Error(message);
+}
+
 function snapshot(overrides: Partial<ContextTreeSnapshot> = {}): ContextTreeSnapshot {
   return {
     ...MOCK_CONTEXT_SNAPSHOT,
@@ -157,8 +168,15 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.useRealTimers();
-  authMock.value = { organizationId: "org-1" };
+  authMock.value = { organizationId: "org-1", role: "member" };
   contextApiMocks.getContextTreeSnapshot.mockReset();
+  contextApiMocks.initializeContextTree.mockReset();
+  contextApiMocks.initializeContextTree.mockResolvedValue({
+    repo: "https://github.com/acme/acme-context-tree.git",
+    htmlUrl: "https://github.com/acme/acme-context-tree",
+    branch: "main",
+    nodePath: "NODE.md",
+  });
 });
 
 afterEach(() => {
@@ -277,8 +295,56 @@ describe("ContextPage DOM behavior", () => {
       />,
     );
     expect(disconnected.container.textContent).toContain("Connect Context Tree");
-    expect(disconnected.container.textContent).toContain("Connect a Context Tree repo");
+    expect(disconnected.container.textContent).toContain("Ask an admin to initialize");
+    expect(buttonByText(disconnected.container, "Create private GitHub repo")).toBeNull();
     await act(async () => disconnected.root.unmount());
+  });
+
+  it("initializes the context tree from the live unavailable admin state", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    const { ContextPage } = await import("../context.js");
+    const unavailable = snapshot({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+      contextStatus: { label: "Not configured", detail: null, severity: "warning" },
+    });
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailable);
+    let resolveInitialize: (value: { repo: string; htmlUrl: string; branch: "main"; nodePath: "NODE.md" }) => void =
+      () => undefined;
+    contextApiMocks.initializeContextTree.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveInitialize = resolve;
+      }),
+    );
+
+    const { container, root, queryClient } = await renderDom(<ContextPage />);
+    await waitForText(container, "Create private GitHub repo");
+
+    await click(buttonByText(container, "Create private GitHub repo"));
+    expect(contextApiMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
+    expect(container.textContent).toContain("Creating private GitHub repo");
+    expect(container.textContent).toContain("Initializing root NODE.md");
+    expect(container.textContent).toContain("Saving team setting");
+
+    await act(async () => {
+      resolveInitialize({
+        repo: "https://github.com/acme/acme-context-tree.git",
+        htmlUrl: "https://github.com/acme/acme-context-tree",
+        branch: "main",
+        nodePath: "NODE.md",
+      });
+    });
+    await waitForCondition(
+      () => contextApiMocks.getContextTreeSnapshot.mock.calls.length > 1,
+      "Expected snapshot query to refetch after initialization",
+    );
+    expect(queryClient.getQueryData(["org-setting", "org-1", "context_tree"])).toEqual({
+      repo: "https://github.com/acme/acme-context-tree.git",
+      branch: "main",
+    });
+
+    await act(async () => root.unmount());
   });
 
   it("loads and errors through the live query path", async () => {
@@ -303,7 +369,7 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(failed.container, "Snapshot unavailable");
     await act(async () => failed.root.unmount());
 
-    authMock.value = { organizationId: null };
+    authMock.value = { organizationId: null, role: null };
     const noOrg = await renderDom(<ContextPage />);
     // No org → query disabled, no snapshot. The page renders only its
     // PageHeader chrome (always present, like every other tab) — no live

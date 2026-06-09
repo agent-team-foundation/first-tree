@@ -3,8 +3,9 @@ import type {
   ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
+  InitializeContextTreeResponse,
 } from "@first-tree/shared";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +15,7 @@ import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
+import { ContextTreeInitializer } from "./context-tree-initializer.js";
 
 const CONTEXT_WINDOW = "7d";
 // Live-feed refetch cadence. The usage feed inside the snapshot is what wants
@@ -23,9 +25,11 @@ const CONTEXT_WINDOW = "7d";
 const CONTEXT_REFETCH_MS = 20_000;
 
 export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
-  const { organizationId } = useAuth();
+  const { organizationId, role } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const preview = previewSnapshot !== undefined;
+  const isAdmin = role === "admin";
 
   const query = useQuery({
     queryKey: ["context-tree-snapshot", organizationId, CONTEXT_WINDOW, preview],
@@ -52,6 +56,17 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
   }, [selectedUpdateId, snapshot]);
 
   const liveStatusReady = snapshot && (preview || !query.isLoading) && snapshot.snapshotStatus !== "unavailable";
+  const handleContextInitialized = async (result: InitializeContextTreeResponse) => {
+    if (!organizationId) return;
+    queryClient.setQueryData(["org-setting", organizationId, "context_tree"], {
+      repo: result.repo,
+      branch: result.branch,
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["context-tree-snapshot", organizationId] }),
+      queryClient.invalidateQueries({ queryKey: ["org-setting", organizationId, "context_tree"] }),
+    ]);
+  };
 
   return (
     <>
@@ -67,7 +82,13 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         ) : null}
         {snapshot && (preview || !query.isLoading) ? (
           snapshot.snapshotStatus === "unavailable" ? (
-            <UnavailableState snapshot={snapshot} />
+            <UnavailableState
+              snapshot={snapshot}
+              isAdmin={isAdmin}
+              canInitialize={!preview && isAdmin && !snapshot.repo}
+              organizationId={organizationId}
+              onInitialized={handleContextInitialized}
+            />
           ) : (
             <>
               <ContextStatusNote snapshot={snapshot} />
@@ -446,11 +467,25 @@ function ErrorState({ message }: { message: string }) {
   );
 }
 
-function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+function UnavailableState({
+  snapshot,
+  isAdmin,
+  canInitialize,
+  organizationId,
+  onInitialized,
+}: {
+  snapshot: ContextTreeSnapshot;
+  isAdmin: boolean;
+  canInitialize: boolean;
+  organizationId: string | null;
+  onInitialized: (result: InitializeContextTreeResponse) => void | Promise<void>;
+}) {
   const title = snapshot.repo ? "Context Tree sync unavailable" : "Connect Context Tree";
   const detail = snapshot.repo
     ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
-    : "Connect a Context Tree repo to show the team knowledge agents can use.";
+    : isAdmin
+      ? "Create a private GitHub repo to initialize the team Context Tree."
+      : "Ask an admin to initialize this team's Context Tree.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
@@ -466,6 +501,11 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
             {syncDetail ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
                 {syncDetail}
+              </div>
+            ) : null}
+            {canInitialize ? (
+              <div style={{ marginTop: "var(--sp-3)" }}>
+                <ContextTreeInitializer organizationId={organizationId} onInitialized={onInitialized} />
               </div>
             ) : null}
             {snapshot.repo || snapshot.branch ? (

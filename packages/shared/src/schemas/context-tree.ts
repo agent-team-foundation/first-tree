@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repoUrlSchema } from "./org-settings.js";
 
 export const CONTEXT_TREE_SNAPSHOT_STATUSES = {
   ACTIVE: "active",
@@ -247,3 +248,14 @@ export const contextTreeSnapshotSchema = z.object({
   changes: z.array(contextTreeChangeSchema),
 });
 export type ContextTreeSnapshot = z.infer<typeof contextTreeSnapshotSchema>;
+
+export const initializeContextTreeRequestSchema = z.object({}).strict();
+export type InitializeContextTreeRequest = z.infer<typeof initializeContextTreeRequestSchema>;
+
+export const initializeContextTreeResponseSchema = z.object({
+  repo: repoUrlSchema,
+  htmlUrl: z.string().url(),
+  branch: z.literal("main"),
+  nodePath: z.literal("NODE.md"),
+});
+export type InitializeContextTreeResponse = z.infer<typeof initializeContextTreeResponseSchema>;
