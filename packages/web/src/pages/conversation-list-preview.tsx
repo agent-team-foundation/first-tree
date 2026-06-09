@@ -31,6 +31,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? "preview",
     topic: overrides.topic ?? null,
+    description: overrides.description ?? null,
     participants: overrides.participants ?? [],
     participantCount: overrides.participantCount ?? overrides.participants?.length ?? 0,
     lastMessageAt: overrides.lastMessageAt ?? minutesAgo(8),
