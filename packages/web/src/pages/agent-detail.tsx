@@ -761,7 +761,13 @@ function TabsNav({
         ref={scrollRef}
         role="tablist"
         aria-label="Agent configuration sections"
-        style={{ overflowX: "auto" }}
+        // overflowY:hidden (not just minHeight): the active Tab's marginBottom:-1
+        // makes its border-box one pixel taller than the bar, and overflowX:auto
+        // coerces overflow-y from visible to auto → a spurious VERTICAL scrollbar
+        // over that extra pixel. Hiding overflow-y suppresses the scrollbar while
+        // keeping the active underline on the baseline and the focus ring intact
+        // (verified visually).
+        style={{ overflowX: "auto", overflowY: "hidden" }}
         onScroll={updateEdges}
       >
         {tabs.map((t) => {

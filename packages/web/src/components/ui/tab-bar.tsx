@@ -18,12 +18,13 @@ export const TabBar = forwardRef<HTMLDivElement, TabBarProps>(function TabBar({ 
       className={cn("flex items-end", className)}
       style={{
         gap: 2,
-        // minHeight (not a fixed height): the active Tab uses marginBottom:-1 to
-        // overlap the bar's bottom border, making its content one pixel taller
-        // than the row. With a fixed height + a horizontally-scrolling consumer
-        // (overflowX:auto coerces overflow-y from visible to auto), that extra
-        // pixel surfaced a spurious VERTICAL scrollbar. Letting the bar grow to
-        // its content removes the overflow without clipping the focus ring/underline.
+        // minHeight (not a fixed height) so the bar grows with its content / focus
+        // ring. NOTE: the active Tab's marginBottom:-1 makes its border-box one
+        // pixel taller than the bar, and a horizontally-scrolling consumer
+        // (overflowX:auto) coerces overflow-y to auto → a spurious VERTICAL
+        // scrollbar over that extra pixel. minHeight does NOT fix that; the
+        // consumer must also set overflowY:hidden
+        // (see TabsNav in agent-detail.tsx).
         minHeight: 34,
         padding: "0 var(--sp-5)",
         borderBottom: "var(--hairline) solid var(--border)",
