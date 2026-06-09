@@ -15,6 +15,7 @@ import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
 import { ResourceEmptyState } from "./resource-empty-state.js";
+import { titleWithSemantics } from "./save-semantics.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
 /**
@@ -57,7 +58,7 @@ export function EnvSection(props: EnvSectionProps) {
 
   return (
     <Section
-      title="Environment variables"
+      title={titleWithSemantics("Environment variables", "draft")}
       count={activeCount}
       description="Injected into this agent's runtime process. Sensitive values are encrypted and hidden after save."
       action={action}

@@ -36,7 +36,7 @@ import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
-import { SaveBar } from "./agent-detail/save-bar.js";
+import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { deriveSaveHint } from "./agent-detail/save-hint.js";
 import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
@@ -258,6 +258,26 @@ export function AgentDetailPage() {
 
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
+  // Leave guard. react-router's `useBlocker` is unavailable here — the app uses
+  // a declarative <BrowserRouter>, not a data router, so useBlocker throws via
+  // its useDataRouterContext invariant. Instead we collar this page's own "leave"
+  // entries and confirm before discarding the config draft: breadcrumb, back,
+  // Chat, the in-page "Manage in Settings" / "Open Computers" links, and PR3's
+  // agent switcher (via the context-exposed `guardedNavigate`). beforeunload
+  // still covers hard exits (refresh / close).
+  // Known gaps (follow-up; the only clean fix is a data-router migration, which
+  // is a separate app-wide change): the GLOBAL top nav (Workspace / Context /
+  // Team / Settings in layout.tsx) and browser back/forward (popstate) route
+  // around this guard — beforeunload doesn't catch SPA popstate either.
+  const [pendingNav, setPendingNav] = useState<string | null>(null);
+  const guardedNavigate = useCallback(
+    (to: string) => {
+      if (draft.summary.anyDirty) setPendingNav(to);
+      else navigate(to);
+    },
+    [draft.summary.anyDirty, navigate],
+  );
+
   const [dryRunText, setDryRunText] = useState<string | null>(null);
   const dryRunMutation = useMutation({
     mutationFn: () => dryRunAgentConfig(uuid, draft.buildPayloadPatch()),
@@ -444,6 +464,7 @@ export function AgentDetailPage() {
     isHuman,
     canManageAgent,
     canEditConfig,
+    guardedNavigate,
     draft,
     config: cfgQuery.data,
     configLoading: cfgQuery.isLoading,
@@ -480,7 +501,7 @@ export function AgentDetailPage() {
         {isNarrow ? (
           <button
             type="button"
-            onClick={() => navigate("/team")}
+            onClick={() => guardedNavigate("/team")}
             aria-label="Back to agents"
             className="inline-flex items-center bg-transparent border-0 cursor-pointer transition-colors hover:text-[var(--fg)] text-caption"
             style={{
@@ -497,9 +518,9 @@ export function AgentDetailPage() {
           </button>
         ) : (
           <Breadcrumb style={{ marginBottom: "var(--sp-2)" }}>
-            <BreadcrumbLink onClick={() => navigate("/team")}>Team</BreadcrumbLink>
+            <BreadcrumbLink onClick={() => guardedNavigate("/team")}>Team</BreadcrumbLink>
             <BreadcrumbSep />
-            <BreadcrumbLink onClick={() => navigate("/team")}>Agents</BreadcrumbLink>
+            <BreadcrumbLink onClick={() => guardedNavigate("/team")}>Agents</BreadcrumbLink>
             <BreadcrumbSep />
             <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
           </Breadcrumb>
@@ -534,7 +555,7 @@ export function AgentDetailPage() {
               size="xs"
               onClick={() => {
                 const search = new URLSearchParams({ c: "draft", with: agent.uuid });
-                navigate(`/?${search.toString()}`);
+                guardedNavigate(`/?${search.toString()}`);
               }}
               title="Start a chat with this agent"
               aria-label="Start chat"
@@ -588,7 +609,15 @@ export function AgentDetailPage() {
           onReloadRemote={() => {
             void reloadRemote();
           }}
-          onJumpTo={(section) => navigate(`/agents/${uuid}/${SECTION_TO_TAB[section]}`, { replace: true })}
+          onJumpTo={(section) => {
+            // Same-agent navigation (no leave guard), then scroll the dirty
+            // section into view — the tab alone lands at the top, which after the
+            // Environment zoning can be far above env / model.
+            navigate(`/agents/${uuid}/${SECTION_TO_TAB[section]}`, { replace: true });
+            setTimeout(() => {
+              document.getElementById(sectionAnchorId(section))?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 50);
+          }}
         />
       )}
 
@@ -596,7 +625,7 @@ export function AgentDetailPage() {
         open={discardDialogOpen}
         onOpenChange={setDiscardDialogOpen}
         title="Discard unsaved changes?"
-        description="Your edits to Instructions / Runtime / Capabilities will be reverted to the last saved baseline."
+        description="Your unsaved Model / Environment changes will be reverted to the last saved baseline."
         confirmLabel="Discard changes"
         destructive
         onConfirm={() => {
@@ -604,6 +633,25 @@ export function AgentDetailPage() {
           setSaveError(null);
           setConflictMsg(null);
           setDiscardDialogOpen(false);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingNav !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingNav(null);
+        }}
+        title="Leave with unsaved changes?"
+        description="Your unsaved Model / Environment changes will be discarded if you leave this agent."
+        confirmLabel="Discard & leave"
+        destructive
+        onConfirm={() => {
+          const to = pendingNav;
+          draft.resetAll();
+          setSaveError(null);
+          setConflictMsg(null);
+          setPendingNav(null);
+          if (to) navigate(to);
         }}
       />
 
@@ -639,6 +687,7 @@ export function AgentDetailPage() {
                 clients={clientsQuery.data ?? []}
                 selected={bindClientSelected}
                 onSelect={setBindClientSelected}
+                onOpenComputers={() => guardedNavigate("/settings/computers")}
               />
             )}
             {bindClientError && (
@@ -827,12 +876,13 @@ function BindClientList({
   clients,
   selected,
   onSelect,
+  onOpenComputers,
 }: {
   clients: HubClient[];
   selected: string;
   onSelect: (id: string) => void;
+  onOpenComputers: () => void;
 }) {
-  const navigate = useNavigate();
   const bindable = clients.filter(isBindableClient);
   if (bindable.length === 0) {
     return (
@@ -860,14 +910,7 @@ function BindClientList({
               Connect a computer first, then return here to bind this agent.
             </p>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            onClick={() => {
-              navigate("/settings/computers");
-            }}
-          >
+          <Button type="button" variant="outline" size="xs" onClick={onOpenComputers}>
             Open Computers
           </Button>
         </div>

@@ -996,20 +996,19 @@ describe("page SSR smoke coverage", () => {
     const { RuntimeSection } = await import("../agent-detail/runtime-section.js");
 
     const noop = () => undefined;
-    const asyncNoop = async () => undefined;
     const row = <T,>(key: string, value: T) => ({ key, value, baseline: value, status: "unchanged" as const });
     const rendered = renderPage(
       <>
-        <IdentitySection agent={agent()} onSave={asyncNoop} />
-        <AppearanceSection agent={agent()} onSave={asyncNoop} onRefresh={asyncNoop} />
+        <IdentitySection agent={agent()} />
+        <AppearanceSection agent={agent()} />
         <RuntimeSection
           runtimeProvider="claude-code"
           computerLabel="gandy-macbook"
           canBindComputer={false}
           onBindComputer={noop}
-          modelSlot={<ModelSection value="sonnet" baseline="opus" onChange={noop} onRevert={noop} />}
-          effortSlot={<ReasoningEffortSection value="high" baseline="" onChange={noop} onRevert={noop} />}
         />
+        <ModelSection value="sonnet" baseline="opus" onChange={noop} onRevert={noop} />
+        <ReasoningEffortSection value="high" baseline="" onChange={noop} onRevert={noop} />
         <McpSection
           items={AGENT_CONFIG.payload.mcpServers.map((item, index) => row(`mcp-${index}`, item))}
           otherNames={() => new Set()}

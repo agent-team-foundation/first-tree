@@ -1,0 +1,419 @@
+import {
+  AGENT_VISIBILITY,
+  type Agent,
+  AVATAR_COLOR_TOKENS,
+  type AvatarColorToken,
+  type UpdateAgent,
+} from "@first-tree/shared";
+import { useQuery } from "@tanstack/react-query";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { deleteAgentAvatar, listAgents, uploadAgentAvatar } from "../../api/agents.js";
+import { useAuth } from "../../auth/auth-context.js";
+import { AgentChip } from "../../components/agent-chip.js";
+import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
+import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
+import { Input } from "../../components/ui/input.js";
+import { Label } from "../../components/ui/label.js";
+import { Select, type SelectOption } from "../../components/ui/select.js";
+import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
+import { AvatarPreview } from "./appearance-section.js";
+
+/**
+ * PR2 §Profile: one "Edit profile" dialog merging the former Identity and
+ * Appearance dialogs. Two independent save paths, each with its own error so a
+ * partial failure never silently swallows one half:
+ *   - Identity + fallback color → one PATCH /agents/:uuid on the Save button
+ *     (`onSave`). Closes the dialog + flashes "Saved" only when this succeeds.
+ *   - Avatar image → eager PUT/DELETE /agents/:uuid/avatar on pick/remove
+ *     (raw bytes don't share the JSON envelope); never closes the dialog.
+ */
+
+const AVATAR_TARGET_SIZE = 256;
+const ACCEPTED_INPUT_TYPES = "image/png,image/jpeg,image/webp";
+
+const VISIBILITY_LABELS = {
+  [AGENT_VISIBILITY.ORGANIZATION]: "Visible to your team",
+  [AGENT_VISIBILITY.PRIVATE]: "Private to you",
+} as const;
+
+async function resizeToSquareWebp(file: File): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Unable to decode the selected image."));
+      el.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const sx = Math.max(0, Math.round((img.naturalWidth - side) / 2));
+    const sy = Math.max(0, Math.round((img.naturalHeight - side) / 2));
+    const canvas = document.createElement("canvas");
+    canvas.width = AVATAR_TARGET_SIZE;
+    canvas.height = AVATAR_TARGET_SIZE;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D context is unavailable in this browser.");
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, AVATAR_TARGET_SIZE, AVATAR_TARGET_SIZE);
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/webp", 0.85));
+    if (!blob) throw new Error("Failed to encode resized image to WEBP.");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export type ProfileEditDialogProps = {
+  agent: Agent;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (patch: UpdateAgent) => Promise<void>;
+  /** Re-fetch the agent after an eager image mutation that bypasses PATCH. */
+  onRefresh?: () => Promise<void> | void;
+  /** Called after a successful identity+color save (drives the section "Saved" tag). */
+  onSaved?: () => void;
+};
+
+export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh, onSaved }: ProfileEditDialogProps) {
+  const { memberId, role, agentId } = useAuth();
+  const resolveAgent = useAgentIdentityMap();
+
+  const initialColor: AvatarColorToken | null = AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null;
+  const [displayName, setDisplayName] = useState(agent.displayName);
+  const [delegateMention, setDelegateMention] = useState(agent.delegateMention ?? "");
+  const [visibility, setVisibility] = useState(agent.visibility);
+  const [picked, setPicked] = useState<AvatarColorToken | null>(initialColor);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const initializedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      initializedFor.current = null;
+      return;
+    }
+    // Snapshot the form ONCE per (open, agent), not on every agent change. The
+    // eager avatar upload/remove calls onRefresh, which swaps the agent prop
+    // while the dialog is open — re-snapshotting here would silently wipe the
+    // user's unsaved identity/color edits. The ref guards same-agent refreshes;
+    // we still re-init on a fresh open or a switch to a different agent.
+    if (initializedFor.current === agent.uuid) return;
+    initializedFor.current = agent.uuid;
+    setDisplayName(agent.displayName);
+    setDelegateMention(agent.delegateMention ?? "");
+    setVisibility(agent.visibility);
+    setPicked(AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null);
+    setFormError(null);
+    setImageError(null);
+  }, [open, agent]);
+
+  const isHuman = agent.type === "human";
+  const canChangeVisibility = role === "admin" || agent.managerId === memberId;
+  const canEditDelegate = isHuman && agent.uuid === agentId;
+  const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
+
+  const assistantsQuery = useQuery({
+    queryKey: ["agents-for-delegate", memberId],
+    queryFn: async () => {
+      const res = await listAgents({ limit: 100 });
+      return res.items.filter(
+        (a) =>
+          a.type === "agent" && a.visibility === "organization" && a.status === "active" && a.managerId === memberId,
+      );
+    },
+    enabled: open && canEditDelegate,
+  });
+  const delegateOptions: SelectOption[] = useMemo(
+    () => [
+      { value: "", label: "Remove delegate" },
+      ...(assistantsQuery.data?.map((a) => ({
+        value: a.uuid,
+        label: a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid,
+      })) ?? []),
+    ],
+    [assistantsQuery.data],
+  );
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      setFormError("Display name is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      // Identity fields and the fallback color are all PATCH /agents/:uuid, so
+      // they go in one atomic call. Image is handled eagerly below, separately.
+      const patch: UpdateAgent = { displayName: trimmed, avatarColorToken: picked };
+      if (canEditDelegate) patch.delegateMention = delegateMention || null;
+      if (visibility !== agent.visibility) patch.visibility = visibility;
+      await onSave(patch);
+      onSaved?.();
+      onOpenChange(false);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!file) return;
+    setImageError(null);
+    setUploading(true);
+    try {
+      const blob = await resizeToSquareWebp(file);
+      await uploadAgentAvatar(agent.uuid, blob);
+      await onRefresh?.();
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function onRemoveImage() {
+    setImageError(null);
+    setUploading(true);
+    try {
+      await deleteAgentAvatar(agent.uuid);
+      await onRefresh?.();
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const previewAgent: Agent = { ...agent, avatarColorToken: picked };
+  const hasImage = !!agent.avatarImageUrl;
+  const visibilityHelp = canChangeVisibility
+    ? visibility === AGENT_VISIBILITY.ORGANIZATION
+      ? "Anyone on your team can @mention and chat with it."
+      : "Only this agent's owner can see and chat with it."
+    : "Only the owner or an admin can change this agent's visibility.";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit profile</DialogTitle>
+          <DialogDescription>
+            Identity and appearance save immediately. Runtime behavior is configured from the other tabs.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-5">
+          {/* Identity */}
+          <div className="space-y-2">
+            <Label>Agent name</Label>
+            <Input value={agent.name ? `@${agent.name}` : ""} disabled className="font-mono" />
+            <p className="text-caption text-muted-foreground">
+              Agent name is permanent after creation — used in @mentions and CLI commands.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="profile-display">Display name</Label>
+            <Input
+              id="profile-display"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="How teammates see this agent"
+              maxLength={200}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="profile-visibility">Visibility</Label>
+            <Select
+              id="profile-visibility"
+              aria-label="Visibility"
+              value={visibility}
+              onChange={(v) => setVisibility(v as typeof visibility)}
+              disabled={!canChangeVisibility}
+              options={[
+                { value: AGENT_VISIBILITY.ORGANIZATION, label: VISIBILITY_LABELS[AGENT_VISIBILITY.ORGANIZATION] },
+                { value: AGENT_VISIBILITY.PRIVATE, label: VISIBILITY_LABELS[AGENT_VISIBILITY.PRIVATE] },
+              ]}
+            />
+            <p className="text-caption text-muted-foreground">{visibilityHelp}</p>
+          </div>
+          {isHuman && (
+            <div className="space-y-2">
+              <Label htmlFor="profile-delegate">Delegate Mention</Label>
+              {canEditDelegate ? (
+                <Select
+                  id="profile-delegate"
+                  aria-label="Delegate Mention"
+                  value={delegateMention}
+                  onChange={setDelegateMention}
+                  options={delegateOptions}
+                  searchable
+                />
+              ) : (
+                <div className="flex h-9 w-full items-center rounded-[var(--radius-input)] border border-input bg-transparent px-3 text-body opacity-70">
+                  {delegateIdentity ? (
+                    <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
+                  ) : (
+                    <span className="text-muted-foreground">No delegate</span>
+                  )}
+                </div>
+              )}
+              <p className="text-caption text-muted-foreground">
+                {canEditDelegate
+                  ? "Assistant that acts on behalf of this agent."
+                  : "Only the member themselves can set their own delegate."}
+              </p>
+            </div>
+          )}
+
+          {/* Appearance */}
+          <div className="space-y-2">
+            <Label>Avatar</Label>
+            <div className="flex items-center gap-3">
+              <AvatarPreview agent={previewAgent} size={64} />
+              <AvatarPreview agent={previewAgent} size={32} />
+              <span className="text-caption text-muted-foreground">Large and compact surfaces</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Image</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPTED_INPUT_TYPES}
+                onChange={onFileChange}
+                style={{ display: "none" }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || saving}
+              >
+                {uploading ? "Uploading…" : hasImage ? "Replace image" : "Upload image"}
+              </Button>
+              {hasImage && (
+                <Button type="button" variant="ghost" size="sm" onClick={onRemoveImage} disabled={uploading || saving}>
+                  Remove image
+                </Button>
+              )}
+            </div>
+            <p className="text-caption text-muted-foreground">
+              PNG / JPEG / WEBP. Square images work best. An image takes precedence over the color below. Image changes
+              save immediately.
+            </p>
+            {imageError && <p className="text-body text-destructive">{imageError}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Color</Label>
+            <div className="flex flex-wrap gap-2">
+              <Swatch
+                label="Auto"
+                selected={picked === null}
+                onClick={() => setPicked(null)}
+                background={resolveAvatarHue(null, agent.uuid)}
+                isAuto
+              />
+              {AVATAR_COLOR_TOKENS.map((token) => (
+                <Swatch
+                  key={token}
+                  label={token}
+                  selected={picked === token}
+                  onClick={() => setPicked(token)}
+                  background={`var(--avatar-${token})`}
+                />
+              ))}
+            </div>
+            <p className="text-caption text-muted-foreground">
+              Auto chooses a stable color for this agent. The color is used only when no image is set, and saves with
+              the identity fields below.
+            </p>
+          </div>
+
+          {formError && <p className="text-body text-destructive">{formError}</p>}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving || uploading}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving || uploading}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Swatch({
+  label,
+  selected,
+  onClick,
+  background,
+  isAuto,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  background: string;
+  isAuto?: boolean;
+}) {
+  const size = 32;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      title={label}
+      style={{
+        position: "relative",
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background,
+        border: selected ? "var(--hairline-bold) solid var(--fg)" : "var(--hairline) solid var(--border)",
+        cursor: "pointer",
+        padding: 0,
+        outline: "none",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {isAuto && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 4,
+            borderRadius: "50%",
+            background: "var(--bg-raised)",
+            color: "var(--fg-3)",
+            fontSize: 10,
+            fontWeight: 600,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          A
+        </span>
+      )}
+    </button>
+  );
+}

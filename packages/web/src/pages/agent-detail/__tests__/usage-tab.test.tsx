@@ -75,6 +75,7 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     isHuman: baseAgent.type === "human",
     canManageAgent: true,
     canEditConfig: true,
+    guardedNavigate: vi.fn(),
     draft: {} as AgentDetailContext["draft"],
     config: undefined,
     configLoading: false,
@@ -285,7 +286,8 @@ describe("UsageTab", () => {
     await click(
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Launch planning") ?? null,
     );
-    expect(routerMocks.navigate).toHaveBeenCalledWith("/?chat=chat-1");
+    // Opening a chat from Usage goes through the leave guard, not raw navigate.
+    expect(contextMock.value?.guardedNavigate).toHaveBeenCalledWith("/?chat=chat-1");
 
     await act(async () => root.unmount());
   });

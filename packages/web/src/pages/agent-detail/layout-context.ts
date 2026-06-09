@@ -18,6 +18,12 @@ export type AgentDetailContext = {
   canManageAgent: boolean;
   canEditConfig: boolean;
 
+  // Navigate away from this agent's detail page with the unsaved-draft leave
+  // guard applied (confirm + discard if the config draft is dirty). Use this for
+  // any control that LEAVES the current agent — notably PR3's agent switcher.
+  // Same-agent tab navigation should use plain navigate(): the draft persists.
+  guardedNavigate: (to: string) => void;
+
   // Config + draft (shared across Runtime / Prompt / Resources)
   draft: UseConfigDraftResult;
   config: AgentRuntimeConfig | undefined;

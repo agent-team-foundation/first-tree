@@ -8,6 +8,7 @@ import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import { ApiError } from "../../../api/client.js";
+import { UsageTab } from "../usage-tab.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,6 +42,11 @@ const sessionMocks = vi.hoisted(() => ({
   listAgentSessions: vi.fn(),
 }));
 
+const usageMocks = vi.hoisted(() => ({
+  getAgentUsageSummary: vi.fn(),
+  getAgentUsageTurns: vi.fn(),
+}));
+
 const authMock = vi.hoisted(() => ({
   value: {
     memberId: "member-self",
@@ -65,6 +71,12 @@ vi.mock("../../../api/agent-resources.js", () => agentResourceMocks);
 vi.mock("../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/sessions.js")>()),
   listAgentSessions: sessionMocks.listAgentSessions,
+}));
+
+vi.mock("../../../api/usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../api/usage.js")>()),
+  getAgentUsageSummary: usageMocks.getAgentUsageSummary,
+  getAgentUsageTurns: usageMocks.getAgentUsageTurns,
 }));
 
 vi.mock("../../../auth/auth-context.js", () => ({
@@ -275,6 +287,7 @@ async function renderDom(route: string, child: ReactElement): Promise<{ containe
               <Route path="prompt" element={child} />
               <Route path="resources" element={<div>Resources route</div>} />
               <Route path="runtime" element={child} />
+              <Route path="usage" element={<UsageTab />} />
               <Route path="setup" element={<Navigate to="../runtime" replace />} />
             </Route>
             <Route path="/" element={<LocationEcho />} />
@@ -375,6 +388,23 @@ beforeEach(() => {
     client({ id: "client-2", hostname: "alice-linux", os: "linux" }),
   ]);
   sessionMocks.listAgentSessions.mockResolvedValue([{ chatId: "chat-1" }]);
+  usageMocks.getAgentUsageSummary.mockResolvedValue({ daily: [], totals: {} });
+  usageMocks.getAgentUsageTurns.mockResolvedValue({
+    rows: [
+      {
+        chatId: "chat-7",
+        seq: 1,
+        chatTitle: "Launch planning",
+        provider: "claude-code",
+        model: "sonnet",
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 50,
+        createdAt: NOW,
+      },
+    ],
+    nextCursor: null,
+  });
 });
 
 afterEach(() => {
@@ -774,6 +804,76 @@ describe("AgentDetailPage", () => {
         },
       ],
     });
+
+    await act(async () => root.unmount());
+  });
+
+  it("guards leaving with an unsaved config draft (confirm discards, cancel stays)", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+
+    // Dirty the config draft by changing the model — the SaveBar appears.
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+
+    // Leaving via the header Chat button is guarded.
+    await click(container.querySelector('button[aria-label="Start chat"]'));
+    await waitForText(document.body, "Leave with unsaved changes?");
+    expect(container.textContent).not.toContain("/?c=draft");
+
+    // Cancel keeps us on the page (no navigation).
+    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Leave with unsaved changes?"),
+      "Expected leave guard to dismiss on cancel",
+    );
+
+    // Re-trigger and discard → navigation proceeds.
+    await click(container.querySelector('button[aria-label="Start chat"]'));
+    await waitForText(document.body, "Leave with unsaved changes?");
+    await click(exactButtonByText(document.body, "Discard & leave"));
+    await waitForText(container, "/?c=draft&with=agent-1");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not guard same-agent tab navigation (draft persists across tabs)", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+
+    // Switching tabs within the same agent must NOT pop the leave guard.
+    const profileTab = [...container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === "Profile");
+    await click(profileTab ?? null);
+    expect(document.body.textContent).not.toContain("Leave with unsaved changes?");
+
+    await act(async () => root.unmount());
+  });
+
+  it("guards the Usage tab's recent-turn chat link when the draft is dirty", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(container, "Model settings");
+    // Dirty the config draft on Environment, then switch to Usage (same agent —
+    // not guarded; the draft persists across tabs).
+    await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
+    await waitForText(container, "Configuration changes in");
+    const usageTab = [...container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === "Usage");
+    await click(usageTab ?? null);
+    await waitForText(container, "Launch planning");
+
+    // Opening a recent-turn chat leaves the agent → guarded; cancel keeps the page.
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent === "Launch planning") ?? null);
+    await waitForText(document.body, "Leave with unsaved changes?");
+    expect(container.textContent).not.toContain("/?chat=");
+    await click(exactButtonByText(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Leave with unsaved changes?"),
+      "Expected leave guard to dismiss on cancel",
+    );
 
     await act(async () => root.unmount());
   });

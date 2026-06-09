@@ -1,7 +1,6 @@
 import type { UsageAgentSummary, UsageTurnRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
 import { getAgentUsageSummary, getAgentUsageTurns } from "../../api/usage.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
@@ -77,6 +76,9 @@ export function UsageTab(): ReactElement {
         rows={turnsQuery.data?.rows ?? []}
         isLoading={turnsQuery.isLoading}
         isError={turnsQuery.isError}
+        // Opening a chat leaves the agent — route through the leave guard so an
+        // unsaved Environment draft (carried across tabs) isn't silently lost.
+        onOpenChat={(chatId) => ctx.guardedNavigate(`/?chat=${encodeURIComponent(chatId)}`)}
         hasMore={turnsQuery.data?.nextCursor != null && turnsLimit < MAX_TURNS}
         loadingMore={growing}
         onShowMore={() => {
@@ -313,6 +315,7 @@ function RecentTurnsBlock({
   rows,
   isLoading,
   isError,
+  onOpenChat,
   hasMore,
   loadingMore,
   onShowMore,
@@ -320,6 +323,7 @@ function RecentTurnsBlock({
   rows: UsageTurnRow[];
   isLoading: boolean;
   isError: boolean;
+  onOpenChat: (chatId: string) => void;
   hasMore: boolean;
   loadingMore: boolean;
   onShowMore: () => void;
@@ -334,7 +338,7 @@ function RecentTurnsBlock({
         <UsagePlaceholder>No turns recorded in the last 30 days.</UsagePlaceholder>
       ) : (
         <>
-          <TurnsTable rows={rows} />
+          <TurnsTable rows={rows} onOpenChat={onOpenChat} />
           {hasMore ? (
             <div className="flex justify-center" style={{ marginTop: "var(--sp-3)" }}>
               <Button size="xs" variant="outline" disabled={loadingMore} onClick={onShowMore}>
@@ -348,8 +352,13 @@ function RecentTurnsBlock({
   );
 }
 
-function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
-  const navigate = useNavigate();
+function TurnsTable({
+  rows,
+  onOpenChat,
+}: {
+  rows: UsageTurnRow[];
+  onOpenChat: (chatId: string) => void;
+}): ReactElement {
   const totalFor = (r: UsageTurnRow) => r.inputTokens + r.cachedInputTokens + r.outputTokens;
   const max = Math.max(1, ...rows.map(totalFor));
   return (
@@ -378,7 +387,7 @@ function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
                   {r.chatTitle ? (
                     <button
                       type="button"
-                      onClick={() => navigate(`/?chat=${encodeURIComponent(r.chatId)}`)}
+                      onClick={() => onOpenChat(r.chatId)}
                       className="text-body font-medium"
                       style={{
                         background: "transparent",
