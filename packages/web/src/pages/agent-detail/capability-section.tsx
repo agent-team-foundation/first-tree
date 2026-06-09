@@ -3,6 +3,7 @@ import {
   type AgentResourcesOutput,
   deriveRepoLocalPath,
   type EffectiveResourceRow,
+  formatRepoCoordinate,
   noSecretMcpServerSchema,
   type ResourceRow,
   type ResourceType,
@@ -476,9 +477,9 @@ function emptyNoun(type: ResourceType): string {
 /** One-line, human subtitle per resource type. Never the raw `source` enum. */
 function rowSubtitle(row: EffectiveResourceRow): string | null {
   if (row.type === "repo") {
-    const url = row.repo?.url;
-    if (!url) return null;
-    return row.repo?.localPath ? `${url} -> ${row.repo.localPath}` : url;
+    if (!row.repo?.url) return null;
+    // Compact `owner/repo` coordinate; branch/mount path only when non-default.
+    return formatRepoCoordinate(row.repo);
   }
   if (row.type === "prompt") {
     return row.promptBody ? `${row.promptBody.length} chars` : null;

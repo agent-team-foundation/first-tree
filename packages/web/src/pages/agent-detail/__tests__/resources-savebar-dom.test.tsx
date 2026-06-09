@@ -435,7 +435,10 @@ describe("ResourcesTab and SaveBar", () => {
 
     expect(container.textContent).toContain("Repositories");
     expect(container.textContent).toContain("Team repo");
-    expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
+    // Repo peek is the compact `owner/repo` coordinate (default branch + derived
+    // path are omitted), not the full clone URL.
+    expect(container.textContent).toContain("acme/web");
+    expect(container.textContent).not.toContain("https://github.com/acme/web.git");
     expect(container.querySelector('button[aria-label="Add Repo"]')).toBeTruthy();
 
     // Open the repo section's add menu (panel portals to document.body).

@@ -8,7 +8,9 @@ import {
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
+  deriveRepoShortLabel,
   dryRunAgentRuntimeConfigSchema,
+  formatRepoCoordinate,
   getRepoLocalPathSafetyError,
   gitRepoSchema,
   isRedactedEnvValue,
@@ -245,6 +247,33 @@ describe("agent runtime config — git repo localPath safety", () => {
     } finally {
       splitSpy.mockRestore();
     }
+  });
+
+  it("derives a short owner/repo label", () => {
+    expect(deriveRepoShortLabel("https://github.com/acme/repo")).toBe("acme/repo");
+    expect(deriveRepoShortLabel("https://github.com/acme/repo.git")).toBe("acme/repo");
+    expect(deriveRepoShortLabel("git@github.com:acme/repo.git")).toBe("acme/repo");
+    expect(deriveRepoShortLabel("https://github.com/acme/repo.git?ref=dev")).toBe("acme/repo");
+    expect(deriveRepoShortLabel("repo")).toBe("repo");
+    expect(deriveRepoShortLabel("   ")).toBe("");
+  });
+
+  it("formats a repo coordinate, hiding default branch and default path", () => {
+    // Default branch (main/master) and the derived default path are omitted.
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo" })).toBe("acme/repo");
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "main" })).toBe("acme/repo");
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "master" })).toBe("acme/repo");
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", localPath: "repo" })).toBe("acme/repo");
+  });
+
+  it("formats a repo coordinate, surfacing a non-default branch and mount path", () => {
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "staging" })).toBe("acme/repo@staging");
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/design-system", localPath: "packages/ui" })).toBe(
+      "acme/design-system → packages/ui",
+    );
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "dev", localPath: "libs/x" })).toBe(
+      "acme/repo@dev → libs/x",
+    );
   });
 });
 
