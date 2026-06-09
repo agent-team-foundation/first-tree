@@ -186,6 +186,7 @@ describe("claude-code handler startup inject queue", () => {
       chatId: "chat-claude-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 
@@ -228,6 +229,7 @@ describe("claude-code handler startup inject queue", () => {
       chatId: "chat-claude-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 

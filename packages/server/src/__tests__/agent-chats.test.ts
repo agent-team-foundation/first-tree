@@ -114,7 +114,7 @@ describe("Agent Chats API", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  describe("PATCH /chats/:id (set topic)", () => {
+  describe("PATCH /chats/:id (set topic / description)", () => {
     it("updates topic and persists; null clears", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
@@ -139,6 +139,61 @@ describe("Agent Chats API", () => {
       expect(clearRes.json().topic).toBeNull();
     });
 
+    it("updates description and persists; null clears", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `desc-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `desc-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const setRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        description: "reviewing PR #42; CI green; awaiting approval",
+      });
+      expect(setRes.statusCode).toBe(200);
+      expect(setRes.json().description).toBe("reviewing PR #42; CI green; awaiting approval");
+
+      const detailRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
+      expect(detailRes.json().description).toBe("reviewing PR #42; CI green; awaiting approval");
+
+      const clearRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { description: null });
+      expect(clearRes.statusCode).toBe(200);
+      expect(clearRes.json().description).toBeNull();
+    });
+
+    it("updates topic and description together; a single-field update leaves the other untouched", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `both-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `both-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const bothRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        topic: "ship plan",
+        description: "drafting the rollout steps",
+      });
+      expect(bothRes.statusCode).toBe(200);
+      expect(bothRes.json().topic).toBe("ship plan");
+      expect(bothRes.json().description).toBe("drafting the rollout steps");
+
+      // Updating only the description must not clobber the existing topic.
+      const descOnlyRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        description: "rollout steps reviewed",
+      });
+      expect(descOnlyRes.statusCode).toBe(200);
+      expect(descOnlyRes.json().topic).toBe("ship plan");
+      expect(descOnlyRes.json().description).toBe("rollout steps reviewed");
+    });
+
     it("rejects non-participants with 403", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
@@ -156,7 +211,7 @@ describe("Agent Chats API", () => {
       expect(res.statusCode).toBe(403);
     });
 
-    it("rejects malformed body (topic missing)", async () => {
+    it("rejects empty body (no topic or description)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const a1 = await createTestAgent(app, { name: `topic-bad-a1-${uid}` });

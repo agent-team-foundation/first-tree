@@ -306,6 +306,7 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     organizationId: overrides.organizationId ?? "org-1",
     type: overrides.type ?? "group",
     topic: overrides.topic ?? "Launch planning",
+    description: overrides.description ?? null,
     lifecyclePolicy: overrides.lifecyclePolicy ?? null,
     metadata:
       overrides.metadata ??

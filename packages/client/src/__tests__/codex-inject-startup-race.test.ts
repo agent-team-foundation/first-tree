@@ -177,6 +177,7 @@ describe("codex handler startup inject queue", () => {
       chatId: "chat-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 
@@ -203,6 +204,7 @@ describe("codex handler startup inject queue", () => {
       chatId: "chat-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 
@@ -235,6 +237,7 @@ describe("codex handler startup inject queue", () => {
       chatId: "chat-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 
@@ -266,6 +269,7 @@ describe("codex handler startup inject queue", () => {
       chatId: "chat-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 
@@ -299,6 +303,7 @@ describe("codex handler startup inject queue", () => {
       chatId: "chat-startup-race",
       title: "startup race",
       topic: null,
+      description: null,
       participants: [],
     });
 

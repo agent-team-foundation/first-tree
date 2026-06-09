@@ -32,7 +32,7 @@ export type BuildAgentBriefingOptions = {
  *   3. `# Working in First Tree`               — mostly static, with subsections:
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · Asking Humans ·
- *        Chat Topic · CLI Overview
+ *        Chat Topic & Description · CLI Overview
  *   4. `# Required Reading`                    — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
  *   5. `# Context Tree`                        — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
@@ -328,41 +328,56 @@ safety-sensitive action, or any change to core data structures or the database.`
 }
 
 function chatTopicBlock(bin: string): string {
-  return `## Chat Topic
+  return `## Chat Topic & Description
 
-The workspace chat list uses each chat's \`topic\` as its label. A good
-topic is a short (≤ 30 chars) phrase that tells a teammate at a glance
-what this chat is about — e.g. "调研 chat rename 方案" or "本周 ship 计划".
+Each chat carries two pieces of self-describing metadata, both set
+through the **same** \`chat set-topic\` command:
 
-The current value is shown in the "Current Chat Context" block at the
-bottom of this briefing as either an explicit \`Topic: <value>\` or the
-sentinel \`Topic: (unset ...)\`.
+- **topic** — a short (≤ 30 chars) label the workspace chat list shows,
+  e.g. "调研 chat rename 方案" or "本周 ship 计划".
+- **description** — a longer running summary of **what this piece of
+  work is and where it currently stands**: the paragraph you (after a
+  context reset) or a teammate reads to reconstruct the thread.
 
-**Two hard rules:**
+Both current values appear in the "Current Chat Context" block at the
+bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
+<value>\` or the sentinel \`(unset ...)\`.
 
-1. **Topic is unset → set one before ending this turn.**
-   When the context block shows \`Topic: (unset ...)\`, run:
+    ${bin} chat set-topic "<short label>"
+    ${bin} chat set-topic --description "<current state>"
+    ${bin} chat set-topic "<label>" --description "<state>"
 
-       ${bin} chat set-topic "<short phrase>"
+**Hard rules:**
 
-   The fallback label the workspace would otherwise show ("first 50 chars
-   of the first message" / "alice, bob-bot") is rarely distinctive across
-   many chats — naming the chat is a cheap win.
+1. **Topic unset → set one before ending this turn.** The auto-derived
+   fallback ("first 50 chars of the first message" / "alice, bob-bot")
+   is rarely distinctive — naming the chat is a cheap win. Update it
+   when it no longer matches; don't churn it for minor digressions.
 
-2. **Topic is set but no longer matches what this chat is about → update it.**
-   Use judgment: don't churn the topic for minor digressions. Only run
-   \`${bin} chat set-topic "<new phrase>"\` when a teammate scanning the
-   workspace list would be misled by the current value.
+2. **Description unset or stale → write or refresh it before ending
+   this turn.** It is the **present** state, not a log — rewrite it in
+   place (the message history is the log), keep it within ~500
+   characters. It must **name the current task** so anyone scanning
+   \`${bin} chat list\` can tell from the description alone whether this
+   chat is the one their task belongs to — lead with the concrete work
+   ("reviewing PR #X"), not a vague restatement of the topic.
 
-**Exception: GitHub-sourced topics — leave them alone.**
+3. **Language follows the session's working language** — Chinese
+   session, Chinese description; English session, English.
 
-Topics that look like \`PR repo#307: title\`, \`Issue repo#42\`, \`PR
-Review repo#X: ...\`, \`Discussion repo#X\`, or \`Commit repo@sha\` were
-auto-set by First Tree when the chat was minted from a GitHub event, and
-First Tree keeps them in sync with the upstream PR/issue title.
-Overriding them with your own label loses the repo / entity-id anchor
-that makes the chat list useful. **Do not run \`set-topic\` on a chat
-whose topic already has that shape.**`;
+4. **Self-locate by reading descriptions.** When you wake unsure where
+   a thread stands, or hold several chats and must choose what to
+   advance, run \`${bin} chat list\` and read each description to
+   reconstruct what you've done / what's in flight, then drill in with
+   \`${bin} chat history <chat>\`. If \`lastMessageAt\` is newer than
+   \`updatedAt\`, the description has fallen behind — trust the messages
+   and refresh it.
+
+**Exception: GitHub-sourced topics — leave them alone.** Topics like
+\`PR repo#307: title\`, \`Issue repo#42\`, \`Commit repo@sha\` are
+auto-set and kept in sync by First Tree from the upstream entity;
+overriding the topic loses the repo / entity-id anchor. This applies to
+the **topic only** — you still own and maintain the description.`;
 }
 
 function cliOverviewBlock(bin: string): string {

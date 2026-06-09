@@ -80,7 +80,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  // Update chat metadata (currently: `topic` only). Mirrors the user-scope
+  // Update chat metadata (`topic` and/or `description`). Mirrors the user-scope
   // PATCH /api/v1/chats/:chatId so agent-token callers (e.g. `chat set-topic`
   // from inside an agent session) can rename a chat they participate in.
   // Auth: must be a speaker in the chat — same gate as message send.
@@ -88,12 +88,11 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const body = updateChatSchema.parse(request.body);
-    const nextTopic = body.topic && body.topic.length > 0 ? body.topic : null;
-    const [updated] = await app.db
-      .update(chats)
-      .set({ topic: nextTopic, updatedAt: new Date() })
-      .where(eq(chats.id, request.params.chatId))
-      .returning();
+    const patch: { topic?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
+    if (body.topic !== undefined) patch.topic = body.topic && body.topic.length > 0 ? body.topic : null;
+    if (body.description !== undefined)
+      patch.description = body.description && body.description.length > 0 ? body.description : null;
+    const [updated] = await app.db.update(chats).set(patch).where(eq(chats.id, request.params.chatId)).returning();
     if (!updated) throw new Error("Unexpected: chat missing after update");
     return serializeChat(updated);
   });

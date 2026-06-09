@@ -36,6 +36,9 @@ export type ChatContext = {
   title: string;
   /** Raw `chats.topic` column — null when the creator didn't set an explicit topic. */
   topic: string | null;
+  /** Raw `chats.description` column — a running "what + current state"
+   *  summary; null when never written. */
+  description: string | null;
   selfOwner?: { name: string; displayName: string };
   participants: ChatContextParticipant[];
 };
@@ -84,6 +87,7 @@ export async function fetchChatContext(
     chatId,
     title: detail.title,
     topic: detail.topic,
+    description: detail.description,
     ...(selfOwner ? { selfOwner } : {}),
     participants: filteredParticipants,
   };

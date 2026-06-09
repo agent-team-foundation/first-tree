@@ -229,13 +229,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { chatId: string } }>("/:chatId", { config: { otelRecordBody: true } }, async (request) => {
     await requireChatAccess(request, app.db);
     const body = updateChatSchema.parse(request.body);
-    const nextTopic = body.topic && body.topic.length > 0 ? body.topic : null;
+    const patch: { topic?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
+    if (body.topic !== undefined) patch.topic = body.topic && body.topic.length > 0 ? body.topic : null;
+    if (body.description !== undefined)
+      patch.description = body.description && body.description.length > 0 ? body.description : null;
 
-    const [updated] = await app.db
-      .update(chats)
-      .set({ topic: nextTopic, updatedAt: new Date() })
-      .where(eq(chats.id, request.params.chatId))
-      .returning();
+    const [updated] = await app.db.update(chats).set(patch).where(eq(chats.id, request.params.chatId)).returning();
     if (!updated) throw new Error("Unexpected: chat missing after update");
     return {
       ...updated,
