@@ -226,6 +226,12 @@ jobs:
           # - docs/migration/**                          : migration tables show old↔new
           # - .github/workflows/ci.yml                   : this file's own regex literals (self-immunity via [f])
           # - packages/server/drizzle/*.sql              : SQL migrations are immutable historical artifacts
+          # - packages/client/src/runtime/workspace-migrations.ts        : PR #869 hardcoded `v1-retired-source-repo-first-tree-hub`
+          #     migration whose only job is to clean up the retired clone — the
+          #     dirname is the matching key, so the literal cannot be avoided.
+          # - packages/client/src/__tests__/workspace-migrations.test.ts : fixtures for the above migration.
+          # - packages/client/src/runtime/agent-bootstrap.ts             : header comment naming the migration target.
+          # - docs/development/agent-workspace-state.md                  : durable contract doc names the retired repo.
           hits=$(grep -rEn \
             --exclude-dir=migration \
             --exclude-dir=node_modules \
@@ -233,7 +239,7 @@ jobs:
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
             --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
             "[f]irst-tree-hub" packages apps scripts docs skills .github \
-            | grep -v -E '^\.github/workflows/ci\.yml:' \
+            | grep -v -E '^\.github/workflows/ci\.yml:|^packages/client/src/runtime/workspace-migrations\.ts:|^packages/client/src/__tests__/workspace-migrations\.test\.ts:|^packages/client/src/runtime/agent-bootstrap\.ts:|^docs/development/agent-workspace-state\.md:' \
             || true)
           if [ -n "$hits" ]; then
             echo "::error::found a 'first-tree-hub' literal outside the documented allow-list — see N-1 in PR-1 description"
