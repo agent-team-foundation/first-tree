@@ -4,17 +4,21 @@ import {
   PROMPT_APPEND_MAX_LENGTH,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
+import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
+import { agentResourcesMutationHandlers } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { sourceLabel } from "./resource-source.js";
+
+type AvailablePrompt = { id: string; name: string };
 
 export function PromptTab() {
   const ctx = useAgentDetailContext();
@@ -33,11 +37,9 @@ export function PromptTab() {
         bindings: updatePromptBindings(resourcesQuery.data.bindings, editor, body),
       });
     },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["agent-resources", ctx.uuid], next);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", ctx.uuid] });
-      setEditor(null);
-    },
+    // Same hardening as the shared resource hook (stale-GET cancel + 409 refetch),
+    // since the shell now also observes this cache. `onSuccessAfter` closes the editor.
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: () => setEditor(null) }),
   });
   // All prompt-binding management (enable / disable / remove / re-enable) goes
   // through one mutation that submits the full bindings array. The old Resources
@@ -47,10 +49,7 @@ export function PromptTab() {
       if (!resourcesQuery.data) throw new Error("prompt resources not loaded");
       return updateAgentResources(ctx.uuid, { expectedVersion: resourcesQuery.data.version, bindings });
     },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["agent-resources", ctx.uuid], next);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", ctx.uuid] });
-    },
+    ...agentResourcesMutationHandlers(queryClient, ctx.uuid),
   });
   if (ctx.isHuman) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
@@ -118,9 +117,12 @@ export function PromptTab() {
         description="Team and your own instructions for this agent — toggle, customize, or add your own."
         action={
           canEditPrompt && !resourceError && !editor && resources ? (
-            <Button size="xs" variant="outline" onClick={() => openPromptEditor(null)}>
-              Add custom instructions
-            </Button>
+            <AddInstructionsMenu
+              available={availablePrompts}
+              pending={bindingMut.isPending}
+              onAddCustom={() => openPromptEditor(null)}
+              onEnable={enablePrompt}
+            />
           ) : null
         }
       >
@@ -156,46 +158,22 @@ export function PromptTab() {
           </p>
         ) : null}
       </Section>
-      {canEditPrompt && !resourceError && availablePrompts.length > 0 ? (
+      <div id="ad-effective-instructions">
         <Section
-          title="Available team instructions"
-          description="Optional instructions your team offers. Enable the ones you want this agent to use."
+          title="Effective instructions"
+          description="The full instructions this agent runs with, after your changes — team and custom, in order."
         >
-          {availablePrompts.map((resource) => (
-            <div
-              key={resource.id}
-              className="flex items-center justify-between gap-3"
-              style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-            >
-              <p className="m-0 text-body font-medium truncate" style={{ color: "var(--fg)" }}>
-                {resource.name}
-              </p>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={bindingMut.isPending}
-                onClick={() => enablePrompt(resource.id)}
-              >
-                Enable
-              </Button>
-            </div>
-          ))}
+          <div style={{ paddingTop: "var(--sp-3)" }}>
+            <PromptPanel minHeight={prompt ? "10rem" : undefined} sunken={!prompt}>
+              {prompt ? (
+                <Markdown>{prompt}</Markdown>
+              ) : (
+                <span className="text-muted-foreground">No instructions yet.</span>
+              )}
+            </PromptPanel>
+          </div>
         </Section>
-      ) : null}
-      <Section
-        title="Effective instructions"
-        description="The full instructions this agent runs with, after your changes — team and custom, in order."
-      >
-        <div style={{ paddingTop: "var(--sp-3)" }}>
-          <PromptPanel minHeight={prompt ? "10rem" : undefined} sunken={!prompt}>
-            {prompt ? (
-              <Markdown>{prompt}</Markdown>
-            ) : (
-              <span className="text-muted-foreground">No instructions yet.</span>
-            )}
-          </PromptPanel>
-        </div>
-      </Section>
+      </div>
     </div>
   );
 }
@@ -316,6 +294,19 @@ function PromptResourceBlocks(props: {
   onRemoveBinding: (bindingId: string) => void;
   onEditBinding: (bindingId: string) => void;
 }) {
+  // Every instruction block collapses to a short summary by default and expands
+  // to its full body on demand — same affordance whether the block is enabled or
+  // inactive (disabled / overridden). This keeps the list scannable while the
+  // bottom "Effective instructions" panel stays the single full merged preview.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const rows = enabledPromptRows(props.data);
   // Disabled / overridden prompts are hidden from the active list, but the user
   // must still be able to re-enable or revert them — render them below.
@@ -360,14 +351,14 @@ function PromptResourceBlocks(props: {
         action={action}
         separated={index > 0}
       >
-        {/* Only enabled rows are merged into the Effective preview, so only they
-            get the short summary; unavailable rows keep full text to stay inspectable. */}
         {isEditingRow ? (
           editorNode
-        ) : row.mode === "enabled" ? (
-          <PromptSummary body={row.promptBody ?? ""} />
         ) : (
-          <PromptBody body={row.promptBody ?? ""} />
+          <CollapsibleBody
+            body={row.promptBody ?? ""}
+            expanded={expandedIds.has(row.id)}
+            onToggle={() => toggleExpand(row.id)}
+          />
         )}
       </PromptResourceBlock>
     );
@@ -408,9 +399,11 @@ function PromptResourceBlocks(props: {
         action={action}
         separated={blocks.length > 0}
       >
-        {/* Inactive (disabled/overridden) prompts are NOT in the Effective preview,
-            so this row is the only place to inspect the full body — render it in full. */}
-        <PromptBody body={row.promptBody ?? ""} />
+        <CollapsibleBody
+          body={row.promptBody ?? ""}
+          expanded={expandedIds.has(row.id)}
+          onToggle={() => toggleExpand(row.id)}
+        />
       </PromptResourceBlock>,
     );
   }
@@ -566,25 +559,137 @@ function PromptBlockAction(props: { label: string; onClick: () => void; disabled
   );
 }
 
-// Active rows show only a short summary — their full merged text lives in the
-// "Effective instructions" preview at the bottom, so we don't render whole bodies twice.
-function PromptSummary(props: { body: string }) {
-  return props.body ? (
-    <p className="m-0 text-caption line-clamp-2" style={{ color: "var(--fg-3)" }}>
-      {props.body}
-    </p>
-  ) : (
-    <span className="text-muted-foreground">No instructions yet.</span>
+// One instruction block's body: a clamped summary by default, expandable to the
+// full Markdown. The expand toggle only appears when there's more to reveal than
+// the 2-line clamp shows (long body or multi-line), so short prompts stay clean.
+function CollapsibleBody(props: { body: string; expanded: boolean; onToggle: () => void }) {
+  if (!props.body) return <span className="text-muted-foreground">No instructions yet.</span>;
+  const canExpand = props.body.length > 120 || props.body.includes("\n");
+  return (
+    <div>
+      {props.expanded ? (
+        <Markdown>{props.body}</Markdown>
+      ) : (
+        <p className="m-0 text-caption line-clamp-2" style={{ color: "var(--fg-3)" }}>
+          {props.body}
+        </p>
+      )}
+      {canExpand ? <ExpandToggle expanded={props.expanded} onToggle={props.onToggle} /> : null}
+    </div>
   );
 }
 
-// Full body — used for inactive (disabled/overridden) rows, which are absent from
-// the Effective preview and so need their complete text inspectable here.
-function PromptBody(props: { body: string }) {
-  return props.body ? (
-    <Markdown>{props.body}</Markdown>
-  ) : (
-    <span className="text-muted-foreground">No instructions yet.</span>
+function ExpandToggle(props: { expanded: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onToggle}
+      aria-expanded={props.expanded}
+      className="mt-1 bg-transparent border-0 p-0 cursor-pointer text-caption font-medium transition-colors hover:text-[var(--fg)]"
+      style={{ color: "var(--fg-3)" }}
+    >
+      {props.expanded ? "Show less" : "Show full"}
+    </button>
+  );
+}
+
+// Per-section add control on the Instructions tab. One "+" trigger opens a menu:
+// add a custom inline instruction, enable an optional team instruction, or jump
+// to Settings → Resources. Mirrors the Tools & skills "Add" menu so the two add
+// paths (custom vs team) live in one place instead of a separate section.
+function AddInstructionsMenu(props: {
+  available: AvailablePrompt[];
+  pending: boolean;
+  onAddCustom: () => void;
+  onEnable: (resourceId: string) => void;
+}) {
+  const navigate = useNavigate();
+  return (
+    <Popover
+      align="end"
+      trigger={({ open, toggle }) => (
+        <Button
+          size="xs"
+          variant="outline"
+          aria-expanded={open}
+          aria-label="Add instructions"
+          title="Add instructions"
+          onClick={toggle}
+        >
+          <Plus className="h-3 w-3" />
+          Add
+        </Button>
+      )}
+    >
+      {({ close }) => (
+        <div style={{ padding: "var(--sp-1)", minWidth: "var(--sp-45)" }}>
+          <InstructionsMenuButton
+            onClick={() => {
+              props.onAddCustom();
+              close();
+            }}
+          >
+            Add custom instructions…
+          </InstructionsMenuButton>
+          {props.available.length > 0 ? (
+            <>
+              <p className="text-label" style={{ color: "var(--fg-4)", margin: 0, padding: "var(--sp-1) var(--sp-2)" }}>
+                Enable from team
+              </p>
+              {props.available.map((resource) => (
+                <InstructionsMenuButton
+                  key={resource.id}
+                  disabled={props.pending}
+                  onClick={() => {
+                    props.onEnable(resource.id);
+                    close();
+                  }}
+                >
+                  {resource.name}
+                </InstructionsMenuButton>
+              ))}
+            </>
+          ) : null}
+          <div style={{ borderTop: "var(--hairline) solid var(--border-faint)", margin: "var(--sp-1) 0" }} />
+          <InstructionsMenuButton
+            muted
+            onClick={() => {
+              navigate("/settings/resources");
+              close();
+            }}
+          >
+            Manage in Settings → Resources
+          </InstructionsMenuButton>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function InstructionsMenuButton(props: {
+  children: ReactNode;
+  muted?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={props.disabled}
+      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-1_5) var(--sp-2)",
+        borderRadius: "var(--radius-chip)",
+        border: 0,
+        background: "transparent",
+        color: props.muted ? "var(--fg-3)" : "var(--fg)",
+        cursor: "pointer",
+      }}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
   );
 }
 

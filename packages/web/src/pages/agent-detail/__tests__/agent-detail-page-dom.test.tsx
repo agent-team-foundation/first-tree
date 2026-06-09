@@ -351,6 +351,12 @@ beforeEach(() => {
     },
   });
   agentMocks.rebindAgent.mockResolvedValue(agent({ clientId: "client-2", runtimeProvider: "codex" }));
+  // Use mockResolvedValue (persistent), not ...Once: the page shell now also
+  // observes agent-resources (to badge Tools & skills), so the query can be
+  // fetched more than once per render (a stale-time refetch fires when the tab's
+  // own observer mounts). The real GET is idempotent — every call returns the
+  // same state — so per-test overrides below also use mockResolvedValue; a
+  // one-shot mock with an empty fallback would clobber the cache on refetch.
   agentResourceMocks.getAgentResources.mockResolvedValue(agentResources());
   agentResourceMocks.updateAgentResources.mockImplementation(
     async (_agentId: string, body: { bindings: AgentResourcesOutput["bindings"] }) =>
@@ -379,7 +385,7 @@ afterEach(() => {
 describe("AgentDetailPage", () => {
   it("renders prompt resource blocks and edits the custom prompt inline", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: {
           version: 7,
@@ -412,9 +418,9 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Chat");
     expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
-      "Runtime",
+      "Environment",
       "Instructions",
-      "Capabilities",
+      "Tools & skills",
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
@@ -457,7 +463,7 @@ describe("AgentDetailPage", () => {
 
   it("keeps the edit entry visible when an inline prompt binding has an empty body", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: {
           version: 7,
@@ -536,7 +542,7 @@ describe("AgentDetailPage", () => {
 
   it("creates an inline replacement when editing a recommended team prompt", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: {
           version: 7,
@@ -594,7 +600,7 @@ describe("AgentDetailPage", () => {
 
   it("converts an explicit recommended prompt binding to an inline replacement", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: {
           version: 7,
@@ -663,7 +669,7 @@ describe("AgentDetailPage", () => {
 
   it("drops the existing include binding when disabling an explicitly-included recommended prompt", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: {
           version: 7,
@@ -722,7 +728,7 @@ describe("AgentDetailPage", () => {
     agentConfigMocks.getAgentConfig.mockResolvedValueOnce(
       config({ payload: { ...emptyConfig.payload, prompt: { append: "" } } }),
     );
-    agentResourceMocks.getAgentResources.mockResolvedValueOnce(
+    agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
         effective: { version: 7, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
         bindings: [],
@@ -731,7 +737,8 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "No instructions yet.");
-    await click(exactButtonByText(container, "Add custom instructions"));
+    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await click(buttonByText(document.body, "Add custom instructions"));
     await waitForText(container, "Save instructions");
     await click(exactButtonByText(container, "Save instructions"));
     await waitForText(container, "Instructions are required.");
@@ -741,7 +748,8 @@ describe("AgentDetailPage", () => {
       "Expected prompt body validation error to clear",
     );
 
-    await click(exactButtonByText(container, "Add custom instructions"));
+    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await click(buttonByText(document.body, "Add custom instructions"));
     await waitForText(container, "Save instructions");
     expect(container.textContent).not.toContain("Instructions are required.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");

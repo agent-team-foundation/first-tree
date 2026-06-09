@@ -2,6 +2,7 @@ import type { Agent, AgentResourcesOutput, AgentRuntimeConfig } from "@first-tre
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router";
+import { ResourceTypeSection } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { PromptTab } from "./agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./agent-detail/resources-tab.js";
@@ -322,11 +323,21 @@ export function AgentDetailPreviewPage() {
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div className="mx-auto" style={{ maxWidth: 720, padding: "var(--sp-6) var(--sp-4)" }}>
           <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Capabilities tab
+            Environment tab — Repositories
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Code repos / Skills / MCP — each row tagged From your team or Added by you; deviations show Off / Can't
-            load.
+            Code repositories live on the Environment tab now (they're part of the workspace the agent runs in). Saved
+            immediately — not part of the SaveBar draft.
+          </p>
+          <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
+            <ResourceTypeSection type="repo" data={RESOURCES} canEdit pending={false} onMutate={() => {}} />
+          </div>
+
+          <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
+            Tools &amp; skills tab
+          </h1>
+          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+            Skills / MCP — each row tagged From your team or Added by you; deviations show Off / Can't load.
           </p>
           <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
             <TabHost element={<ResourcesTab />} />
@@ -336,8 +347,9 @@ export function AgentDetailPreviewPage() {
             Instructions tab
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Per-instruction management (Customize / Disable / Edit / Remove / Re-enable), optional team instructions to
-            enable, and the read-only merged Effective instructions at the bottom.
+            Per-instruction management (Customize / Disable / Edit / Remove / Re-enable) with each block collapsed to a
+            summary (Show full to expand), an Add menu for custom or team instructions, and the read-only merged
+            Effective instructions at the bottom.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<PromptTab />} />

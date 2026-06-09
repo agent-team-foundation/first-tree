@@ -1,14 +1,20 @@
 import type { UsageAgentSummary, UsageTurnRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { type CSSProperties, type ReactElement, type ReactNode, useMemo, useState } from "react";
+import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAgentUsageSummary, getAgentUsageTurns } from "../../api/usage.js";
+import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
 const ACTIVITY_GRID_DAYS = 90;
 const RECENT_TURNS_LIMIT = 10;
+// "Show more" grows the same single query's page size (the turns endpoint caps
+// at 200 server-side) rather than accumulating cursor pages — simpler, and the
+// volumes here are small.
+const TURNS_STEP = 20;
+const MAX_TURNS = 200;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // Calendar columns are Sunday-first (row index 0 = Sunday, matching JS
@@ -38,13 +44,20 @@ export function UsageTab(): ReactElement {
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
+  const [turnsLimit, setTurnsLimit] = useState(RECENT_TURNS_LIMIT);
+  // Tracks only a user-triggered "Show more" so the button shows "Loading…" for
+  // that, not for the silent 60s background refetch (which also flips isFetching).
+  const [growing, setGrowing] = useState(false);
   const turnsQuery = useQuery({
-    queryKey: ["usage-turns", ctx.agent.uuid, "30d", "first10"],
-    queryFn: () => getAgentUsageTurns(ctx.agent.uuid, { window: "30d", limit: RECENT_TURNS_LIMIT }),
+    queryKey: ["usage-turns", ctx.agent.uuid, "30d", turnsLimit],
+    queryFn: () => getAgentUsageTurns(ctx.agent.uuid, { window: "30d", limit: turnsLimit }),
     enabled: !ctx.isHuman,
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
+  useEffect(() => {
+    if (!turnsQuery.isFetching) setGrowing(false);
+  }, [turnsQuery.isFetching]);
 
   if (ctx.isHuman) {
     return (
@@ -64,6 +77,12 @@ export function UsageTab(): ReactElement {
         rows={turnsQuery.data?.rows ?? []}
         isLoading={turnsQuery.isLoading}
         isError={turnsQuery.isError}
+        hasMore={turnsQuery.data?.nextCursor != null && turnsLimit < MAX_TURNS}
+        loadingMore={growing}
+        onShowMore={() => {
+          setGrowing(true);
+          setTurnsLimit((n) => Math.min(MAX_TURNS, n + TURNS_STEP));
+        }}
       />
     </>
   );
@@ -294,13 +313,19 @@ function RecentTurnsBlock({
   rows,
   isLoading,
   isError,
+  hasMore,
+  loadingMore,
+  onShowMore,
 }: {
   rows: UsageTurnRow[];
   isLoading: boolean;
   isError: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onShowMore: () => void;
 }): ReactElement {
   return (
-    <Section title="Recent turns" description={`Last ${RECENT_TURNS_LIMIT} turns from the last 30 days.`}>
+    <Section title="Recent turns" description="Your most recent turns from the last 30 days.">
       {isError ? (
         <UsagePlaceholder tone="error">Failed to load recent turns.</UsagePlaceholder>
       ) : isLoading ? (
@@ -308,7 +333,16 @@ function RecentTurnsBlock({
       ) : rows.length === 0 ? (
         <UsagePlaceholder>No turns recorded in the last 30 days.</UsagePlaceholder>
       ) : (
-        <TurnsTable rows={rows} />
+        <>
+          <TurnsTable rows={rows} />
+          {hasMore ? (
+            <div className="flex justify-center" style={{ marginTop: "var(--sp-3)" }}>
+              <Button size="xs" variant="outline" disabled={loadingMore} onClick={onShowMore}>
+                {loadingMore ? "Loading…" : "Show more"}
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
     </Section>
   );

@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/utils.js";
 
 // Workspace-style underline tab bar.
@@ -11,13 +11,20 @@ import { cn } from "../../lib/utils.js";
 
 type TabBarProps = HTMLAttributes<HTMLDivElement>;
 
-export function TabBar({ className, style, ...rest }: TabBarProps) {
+export const TabBar = forwardRef<HTMLDivElement, TabBarProps>(function TabBar({ className, style, ...rest }, ref) {
   return (
     <div
+      ref={ref}
       className={cn("flex items-end", className)}
       style={{
         gap: 2,
-        height: 34,
+        // minHeight (not a fixed height): the active Tab uses marginBottom:-1 to
+        // overlap the bar's bottom border, making its content one pixel taller
+        // than the row. With a fixed height + a horizontally-scrolling consumer
+        // (overflowX:auto coerces overflow-y from visible to auto), that extra
+        // pixel surfaced a spurious VERTICAL scrollbar. Letting the bar grow to
+        // its content removes the overflow without clipping the focus ring/underline.
+        minHeight: 34,
         padding: "0 var(--sp-5)",
         borderBottom: "var(--hairline) solid var(--border)",
         background: "var(--bg-raised)",
@@ -26,7 +33,7 @@ export function TabBar({ className, style, ...rest }: TabBarProps) {
       {...rest}
     />
   );
-}
+});
 
 type TabProps = {
   active?: boolean;

@@ -27,11 +27,12 @@ import {
   DialogTitle,
 } from "./../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
-import { Tab, TabBar } from "./../components/ui/tab-bar.js";
+import { Tab, TabBadge, TabBar } from "./../components/ui/tab-bar.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { isBindableClient } from "./agent-detail/action-state.js";
+import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
@@ -45,21 +46,25 @@ const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   effort: "runtime",
   mcp: "capabilities",
   env: "runtime",
-  git: "capabilities",
+  // Repos render on the Environment (runtime) tab now, alongside env vars.
+  git: "runtime",
 };
 
 type TabDef = { key: string; label: string; path: string };
 
+// IA labels only — routing `path` and the `key` (draft / deep-link mapping) are
+// kept stable so existing URLs and `SECTION_TO_TAB` keep resolving:
+//   runtime → "Environment", capabilities → "Tools & skills".
 function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
   const tabs: TabDef[] = [{ key: "profile", label: "Profile", path: "profile" }];
   if (canEditConfig) {
     tabs.push(
-      { key: "runtime", label: "Runtime", path: "runtime" },
+      { key: "runtime", label: "Environment", path: "runtime" },
       { key: "prompt", label: "Instructions", path: "prompt" },
-      { key: "capabilities", label: "Capabilities", path: "capabilities" },
+      { key: "capabilities", label: "Tools & skills", path: "capabilities" },
     );
   } else if (!isHuman) {
-    tabs.push({ key: "capabilities", label: "Capabilities", path: "capabilities" });
+    tabs.push({ key: "capabilities", label: "Tools & skills", path: "capabilities" });
   }
   // Usage is an observation surface, not part of the edit flow. Keep it at
   // the end so configuration tabs read left-to-right as the setup workflow.
@@ -128,6 +133,14 @@ export function AgentDetailPage() {
     enabled: !!uuid && canEditConfig,
     refetchInterval: 30_000,
   });
+
+  // Shared agent-resources cache (skills / MCP / repos). Fetched here so the
+  // Tools & skills badge shows its effective count on first paint — the badge's
+  // whole point is "tell me there's something in here before I click". One light
+  // query in the same tier as agent-config / client-status; the Tools & skills
+  // and Environment tabs then read+write this same ["agent-resources", uuid]
+  // cache, so their useAgentResources calls become cache hits.
+  const toolsResources = useAgentResources(uuid, { enabled: !!uuid && agentQuery.data?.type !== "human" });
 
   const draft = useConfigDraft(cfgQuery.data);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -291,6 +304,18 @@ export function AgentDetailPage() {
     for (const s of draft.summary.dirtySections) set.add(SECTION_TO_TAB[s]);
     return set;
   }, [draft.summary.dirtySections]);
+
+  const tabBadges = useMemo<Record<string, number>>(() => {
+    const badges: Record<string, number> = {};
+    const d = toolsResources.data;
+    if (d) {
+      const count = d.effective.skills.length + d.effective.mcp.length;
+      // Don't badge an empty Tools & skills tab with a "0" — a count only earns
+      // its space when there's something to count.
+      if (count > 0) badges.capabilities = count;
+    }
+    return badges;
+  }, [toolsResources.data]);
 
   const tabs = useMemo(() => buildTabs(canEditConfig, isHumanLocal), [canEditConfig, isHumanLocal]);
   const currentTabKey = useMemo(() => {
@@ -527,7 +552,7 @@ export function AgentDetailPage() {
         <ContextBar runtimeLabel={contextRuntimeLabel} computerLabel={boundClientLabel} visible={contextBarVisible} />
       )}
 
-      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} dirtyTabs={dirtyTabs} />
+      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} dirtyTabs={dirtyTabs} badges={tabBadges} />
 
       <div
         className="w-full flex-1"
@@ -649,35 +674,113 @@ function TabsNav({
   agentUuid,
   currentTabKey,
   dirtyTabs,
+  badges,
 }: {
   tabs: TabDef[];
   agentUuid: string;
   currentTabKey: string;
   dirtyTabs: ReadonlySet<string>;
+  badges: Record<string, number>;
 }) {
   const navigate = useNavigate();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+
+  // A single-tab agent (e.g. a human, who only has Profile) doesn't need a tab
+  // bar at all — rendering one lone underlined tab reads like chrome with no
+  // purpose.
+  const showBar = tabs.length > 1;
+
+  const updateEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft < maxScroll - 1 });
+  }, []);
+
+  // Keep the active tab in view when the route changes (e.g. SaveBar "Jump to",
+  // or a deep link to a tab that sits off the right edge on a narrow screen) and
+  // recompute the overflow fades.
+  // `currentTabKey`, `tabs` and `badges` are intentional dependencies even though
+  // the body reads the active tab from the DOM rather than these variables:
+  //  - currentTabKey: programmatic route changes (SaveBar "Jump to", a deep link
+  //    to an off-screen tab) must re-scroll the active tab into view.
+  //  - tabs / badges: changing the tab set or a tab's badge changes the row's
+  //    scrollWidth, which ResizeObserver (it watches the box, not scrollWidth)
+  //    doesn't catch — so recompute the edge fades when they change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these deps drive the re-run; see comment above.
+  useEffect(() => {
+    if (!showBar) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    updateEdges();
+  }, [showBar, currentTabKey, tabs, badges, updateEdges]);
+
+  useEffect(() => {
+    if (!showBar) return;
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(updateEdges);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showBar, updateEdges]);
+
+  if (!showBar) return null;
+
   return (
-    // The full tab set can overflow a phone-width row, so the bar
-    // scrolls horizontally instead of wrapping; `shrink-0 whitespace-nowrap`
-    // on each Tab keeps labels at natural width and swipeable.
-    <TabBar role="tablist" aria-label="Agent configuration sections" style={{ overflowX: "auto" }}>
-      {tabs.map((t) => {
-        const active = currentTabKey === t.key;
-        return (
-          <Tab
-            key={t.key}
-            role="tab"
-            aria-selected={active}
-            active={active}
-            dirty={dirtyTabs.has(t.key)}
-            onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
-            className="shrink-0 whitespace-nowrap"
-          >
-            {t.label}
-          </Tab>
-        );
-      })}
-    </TabBar>
+    // The full tab set can overflow a phone-width row, so the bar scrolls
+    // horizontally instead of wrapping; `shrink-0 whitespace-nowrap` on each Tab
+    // keeps labels at natural width and swipeable. Edge fades hint at content
+    // scrolled out of view; they sit above the bar and ignore pointer events.
+    <div style={{ position: "relative" }}>
+      <TabBar
+        ref={scrollRef}
+        role="tablist"
+        aria-label="Agent configuration sections"
+        style={{ overflowX: "auto" }}
+        onScroll={updateEdges}
+      >
+        {tabs.map((t) => {
+          const active = currentTabKey === t.key;
+          const badge = badges[t.key];
+          return (
+            <Tab
+              key={t.key}
+              role="tab"
+              aria-selected={active}
+              active={active}
+              dirty={dirtyTabs.has(t.key)}
+              onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
+              className="shrink-0 whitespace-nowrap"
+            >
+              {t.label}
+              {badge != null ? <TabBadge>{badge}</TabBadge> : null}
+            </Tab>
+          );
+        })}
+      </TabBar>
+      {edges.left ? <TabEdgeFade side="left" /> : null}
+      {edges.right ? <TabEdgeFade side="right" /> : null}
+    </div>
+  );
+}
+
+function TabEdgeFade({ side }: { side: "left" | "right" }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        left: side === "left" ? 0 : undefined,
+        right: side === "right" ? 0 : undefined,
+        width: "var(--sp-6)",
+        pointerEvents: "none",
+        background: `linear-gradient(to ${side === "left" ? "right" : "left"}, var(--bg-raised), transparent)`,
+      }}
+    />
   );
 }
 

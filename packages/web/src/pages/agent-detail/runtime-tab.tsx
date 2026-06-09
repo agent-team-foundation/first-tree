@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Navigate } from "react-router";
+import { ResourceTypeSection, useAgentResources } from "./capability-section.js";
 import { EnvSection } from "./env-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ModelSection } from "./model-section.js";
@@ -14,6 +15,15 @@ export function RuntimeTab() {
     return (exceptKey: string | null): ReadonlySet<string> =>
       new Set(active.filter((i) => i.key !== exceptKey).map((i) => i.value.key));
   }, [ctx.draft.draft.env]);
+  // Code repositories are part of the workspace this agent runs in, so they live
+  // on Environment now (not Tools & skills). Unlike model/effort/env, repo
+  // changes save IMMEDIATELY through the agent-resources API — they're NOT part
+  // of the SaveBar draft. The shared `["agent-resources", uuid]` cache keeps this
+  // in sync with the Tools & skills tab (skills + MCP).
+  // Gate on canEditConfig (not just !isHuman): non-editors hit the redirect
+  // below, so there's no point firing an agent-resources GET for them.
+  const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig });
+  const canEditResources = ctx.canManageAgent && ctx.agent.status === "active";
   // Human agents (and any role without canEditConfig) have no runtime to
   // configure. The tab is hidden from buildTabs, but a stale deep link to
   // /agents/:uuid/runtime would otherwise render a blank page; redirect to
@@ -67,6 +77,30 @@ export function RuntimeTab() {
           }
         />
       )}
+      <div id={sectionAnchorId("git")} style={{ marginTop: "var(--sp-8)" }}>
+        {repos.isLoading ? (
+          <div className="text-body" style={{ color: "var(--fg-3)" }}>
+            Loading repositories…
+          </div>
+        ) : repos.error || !repos.data ? (
+          <div className="text-body" style={{ color: "var(--state-error)" }}>
+            {repos.error instanceof Error ? repos.error.message : "Failed to load repositories"}
+          </div>
+        ) : (
+          <ResourceTypeSection
+            type="repo"
+            data={repos.data}
+            canEdit={canEditResources}
+            pending={repos.pending}
+            onMutate={repos.mutateBindings}
+          />
+        )}
+        {repos.saveError ? (
+          <p className="text-body" style={{ color: "var(--state-error)", margin: "var(--sp-2) 0 0" }}>
+            {repos.saveError instanceof Error ? repos.saveError.message : "Failed to save repositories"}
+          </p>
+        ) : null}
+      </div>
       {ctx.config && (
         <div id={sectionAnchorId("env")} style={{ marginTop: "var(--sp-8)" }}>
           <EnvSection

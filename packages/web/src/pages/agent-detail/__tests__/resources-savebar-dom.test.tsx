@@ -237,6 +237,19 @@ async function renderElement(element: ReactElement): Promise<HTMLElement> {
   return container;
 }
 
+// Render a presentational element that only needs a Router (e.g. ResourceTypeSection,
+// whose add menu uses useNavigate) — no outlet context or QueryClient required.
+async function renderRouted(element: ReactElement): Promise<HTMLElement> {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(<MemoryRouter>{element}</MemoryRouter>);
+  });
+  await flush();
+  return container;
+}
+
 async function click(element: Element | null): Promise<void> {
   if (!element) throw new Error("Expected clickable element");
   await act(async () => {
@@ -272,8 +285,11 @@ describe("ResourcesTab and SaveBar", () => {
 
     spy.mockReturnValue(context({ canEditConfig: false, canManageAgent: false }));
     let container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Code repositories");
-    expect(container.textContent).toContain("Code repositories");
+    await waitForText(container, "Integrations (MCP)");
+    expect(container.textContent).toContain("Skills");
+    expect(container.textContent).toContain("Integrations (MCP)");
+    // Code repositories moved to the Environment tab — not on Tools & skills.
+    expect(container.textContent).not.toContain("Repositories");
     expect(container.textContent).not.toContain("Agent repo");
 
     await act(async () => root?.unmount());
@@ -339,15 +355,16 @@ describe("ResourcesTab and SaveBar", () => {
     const { ResourcesTab } = await import("../resources-tab.js");
 
     const container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Code repositories");
+    await waitForText(container, "Skills");
 
-    expect(container.textContent).toContain("Code repositories");
     expect(container.textContent).toContain("Skills");
+    expect(container.textContent).toContain("Integrations (MCP)");
     expect(container.textContent).not.toContain("Prompts");
-    expect(container.textContent).toContain("Team repo");
-    expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
+    // Repos are not on this tab anymore (they moved to Environment).
+    expect(container.textContent).not.toContain("Repositories");
+    expect(container.textContent).not.toContain("Team repo");
     // Each editable section gets a quiet "+" add control (aria "Add <Type>").
-    expect(container.querySelector('button[aria-label="Add Repo"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Add Skill"]')).toBeTruthy();
 
     // Enable an opt-in team skill via the skill section's add menu. The menu
     // panel portals to document.body, so query the item there.
@@ -359,39 +376,66 @@ describe("ResourcesTab and SaveBar", () => {
     });
   });
 
-  it("excludes opt-in (available) repos from the agent repo add menu", async () => {
-    const layoutMocks = await import("../layout-context.js");
-    const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
-    spy.mockReturnValue(context());
-    // A legacy team repo still flagged Opt-in (available). Team repos are now
-    // always On by default, so it must NOT be offered as an "enable from team"
-    // option on the agent.
-    agentResourceMocks.getAgentResources.mockResolvedValue(
-      agentResources({
-        availableTeamResources: [
+  it("renders the repo section (Environment) with rows and an actionable add menu", async () => {
+    const { ResourceTypeSection } = await import("../capability-section.js");
+    // An enabled team repo to render, plus a legacy team repo still flagged
+    // Opt-in (available). Team repos are now always On by default, so the opt-in
+    // one must NOT be offered as an "enable from team" option.
+    const data = agentResources({
+      effective: {
+        version: 3,
+        repos: [
           {
-            id: "repo-available",
-            organizationId: "org-1",
+            id: "resource:repo-1",
+            bindingId: null,
+            resourceId: "repo-1",
+            replacesResourceId: null,
             type: "repo",
+            name: "Team repo",
             scope: "team",
-            ownerAgentId: null,
-            name: "Opt-in repo",
-            repoCanonicalKey: null,
-            defaultEnabled: "available",
-            status: "active",
-            payload: { url: "https://github.com/acme/optin.git" },
-            createdBy: "member-1",
-            updatedBy: "member-1",
-            createdAt: NOW,
-            updatedAt: NOW,
+            source: "team_recommended",
+            mode: "enabled",
+            defaultEnabled: "recommended",
+            payload: { url: "https://github.com/acme/web.git" },
+            repo: { url: "https://github.com/acme/web.git", localPath: "web" },
+            promptBody: null,
+            unavailableReason: null,
+            order: 0,
           },
         ],
-      }),
-    );
-    const { ResourcesTab } = await import("../resources-tab.js");
+        prompts: [],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [
+        {
+          id: "repo-available",
+          organizationId: "org-1",
+          type: "repo",
+          scope: "team",
+          ownerAgentId: null,
+          name: "Opt-in repo",
+          repoCanonicalKey: null,
+          defaultEnabled: "available",
+          status: "active",
+          payload: { url: "https://github.com/acme/optin.git" },
+          createdBy: "member-1",
+          updatedBy: "member-1",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    });
 
-    const container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Code repositories");
+    const container = await renderRouted(
+      <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={vi.fn()} />,
+    );
+
+    expect(container.textContent).toContain("Repositories");
+    expect(container.textContent).toContain("Team repo");
+    expect(container.textContent).toContain("https://github.com/acme/web.git -> web");
+    expect(container.querySelector('button[aria-label="Add Repo"]')).toBeTruthy();
 
     // Open the repo section's add menu (panel portals to document.body).
     await click(container.querySelector('button[aria-label="Add Repo"]'));

@@ -271,7 +271,7 @@ describe("UsageTab", () => {
     expect(container.textContent).toContain("Recent turns");
     expect(container.textContent).toContain("Daily total tokens. Darker cells mean more usage.");
     expect(activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("10.5K total tokens"))).toBeDefined();
-    expect(container.textContent).toContain("Last 10 turns from the last 30 days.");
+    expect(container.textContent).toContain("Your most recent turns from the last 30 days.");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
     expect(container.textContent).toContain("claude-code/sonnet");
