@@ -17,12 +17,14 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * Spec (post-retire of content extraction — see services/message.ts
  * "Routing contract"):
  *
- *   `enforceMention` — reject sends where no recipient (other than the
- *     sender) is declared via `metadata.mentions` (uuids),
- *     `receiverNames` (names, resolved by the server), or
- *     `addressedToAgentIds` (system-routed). The web and agent SDK
- *     endpoints opt-in; adapters and webhooks do not.
- *     `purpose: "agent-final-text"` bypasses the check unconditionally.
+ *   Explicit-recipient enforcement (DEFAULT ON) — reject sends where no
+ *     recipient (other than the sender) is declared via `metadata.mentions`
+ *     (uuids), `receiverNames` (names, resolved by the server), or
+ *     `addressedToAgentIds` (system-routed, counted only when it resolves to
+ *     an active speaker). Every entry point inherits this; there is no opt-in
+ *     flag. `purpose: "agent-final-text"` and the trusted `allowRecipientlessSend`
+ *     opt-out (system delivery paths whose addressing may resolve to no live
+ *     speaker, e.g. github-delivery) bypass the check.
  *     The server NEVER parses `@<name>` tokens out of content — clients
  *     must resolve mentions themselves and declare routing explicitly.
  *
@@ -65,20 +67,14 @@ describe("mention enforcement + content normalisation", () => {
     return { sender, peer, chat };
   }
 
-  // ─── enforceMention ────────────────────────────────────────────────────
+  // ─── explicit-recipient enforcement (default on) ────────────────────────
 
-  describe("enforceMention rejects sends with no declared recipient", () => {
+  describe("explicit-recipient enforcement (default) rejects sends with no recipient", () => {
     it("rejects when no routing is declared at all", async () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: "broadcast" },
-          { enforceMention: true },
-        ),
+        sendMessage(app.db, chat.id, sender.agent.uuid, { source: "api", format: "text", content: "broadcast" }),
       ).rejects.toThrow(/explicit recipient/i);
     });
 
@@ -86,13 +82,12 @@ describe("mention enforcement + content normalisation", () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: "talking to myself", metadata: { mentions: [sender.agent.uuid] } },
-          { enforceMention: true },
-        ),
+        sendMessage(app.db, chat.id, sender.agent.uuid, {
+          source: "api",
+          format: "text",
+          content: "talking to myself",
+          metadata: { mentions: [sender.agent.uuid] },
+        }),
       ).rejects.toThrow(/explicit recipient/i);
     });
 
@@ -105,13 +100,11 @@ describe("mention enforcement + content normalisation", () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
       await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: `@${peerA.name} status?` },
-          { enforceMention: true },
-        ),
+        sendMessage(app.db, chat.id, sender.agent.uuid, {
+          source: "api",
+          format: "text",
+          content: `@${peerA.name} status?`,
+        }),
       ).rejects.toThrow(/explicit recipient/i);
     });
 
@@ -119,13 +112,12 @@ describe("mention enforcement + content normalisation", () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: "ping", metadata: { mentions: [peerA.uuid] } },
-        { enforceMention: true },
-      );
+      const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "ping",
+        metadata: { mentions: [peerA.uuid] },
+      });
       expect(result.message).toBeDefined();
     });
 
@@ -134,13 +126,12 @@ describe("mention enforcement + content normalisation", () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
       if (!peerA.name) throw new Error("peerA name missing");
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: "ping", receiverNames: [peerA.name] },
-        { enforceMention: true },
-      );
+      const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "ping",
+        receiverNames: [peerA.name],
+      });
       expect(result.message).toBeDefined();
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
       expect(meta.mentions).toEqual([peerA.uuid]);
@@ -157,9 +148,46 @@ describe("mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "system event" },
-        { enforceMention: true, addressedToAgentIds: [peerA.uuid] },
+        { addressedToAgentIds: [peerA.uuid] },
       );
       expect(result.message).toBeDefined();
+    });
+
+    it("rejects when addressedToAgentIds resolves to no active speaker (resolution-based, not array length)", async () => {
+      // The guard counts a system-routing override only when it resolves to an
+      // active, non-sender speaker of this chat — array length alone is not
+      // enough. An id that is not a live speaker reaches no one, so it must not
+      // satisfy the explicit-recipient requirement.
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const { sender, chat } = await setupGroup(uid);
+      await expect(
+        sendMessage(
+          app.db,
+          chat.id,
+          sender.agent.uuid,
+          { source: "api", format: "text", content: "system event" },
+          { addressedToAgentIds: [crypto.randomUUID()] },
+        ),
+      ).rejects.toThrow(/explicit recipient/i);
+    });
+
+    it("accepts a recipientless system send when allowRecipientlessSend opts out (degenerate addressing)", async () => {
+      // The trusted opt-out is what lets a system delivery path (github-delivery)
+      // write a history/context row when its addressing resolves to no live
+      // speaker — without it, the resolution-based guard above would throw.
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const { sender, chat } = await setupGroup(uid);
+      const result = await sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        { source: "api", format: "text", content: "system event" },
+        { addressedToAgentIds: [crypto.randomUUID()], allowRecipientlessSend: true },
+      );
+      expect(result.message).toBeDefined();
+      expect(result.recipients).toHaveLength(0);
     });
 
     it("explicit metadata.mentions is the single source of truth (content @<name> ignored)", async () => {
@@ -169,13 +197,12 @@ describe("mention enforcement + content normalisation", () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, peerB, chat } = await setupGroup(uid);
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: `@${peerA.name} ping`, metadata: { mentions: [peerB.uuid] } },
-        { enforceMention: true },
-      );
+      const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: `@${peerA.name} ping`,
+        metadata: { mentions: [peerB.uuid] },
+      });
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
       expect(meta.mentions).toEqual([peerB.uuid]);
     });
@@ -189,37 +216,35 @@ describe("mention enforcement + content normalisation", () => {
       const app = getApp();
       const { sender, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
       await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: "hi" },
-          { enforceMention: true },
-        ),
+        sendMessage(app.db, chat.id, sender.agent.uuid, { source: "api", format: "text", content: "hi" }),
       ).rejects.toThrow(/explicit recipient/i);
     });
 
     it("accepts a 1:1 send when the peer is declared in metadata.mentions (web composer pattern)", async () => {
       const app = getApp();
       const { sender, peer, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
+      const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "hi",
+        metadata: { mentions: [peer.uuid] },
+      });
+      expect(result.message).toBeDefined();
+    });
+
+    it("does NOT enforce when allowRecipientlessSend opts out (trusted system delivery paths)", async () => {
+      // The default-on guard is the contract; the only escape hatch for a
+      // trusted server-internal path whose addressing can be empty (e.g.
+      // github-delivery) is the explicit `allowRecipientlessSend` opt-out.
+      const app = getApp();
+      const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       const result = await sendMessage(
         app.db,
         chat.id,
         sender.agent.uuid,
-        { source: "api", format: "text", content: "hi", metadata: { mentions: [peer.uuid] } },
-        { enforceMention: true },
+        { source: "api", format: "text", content: "system broadcast" },
+        { allowRecipientlessSend: true },
       );
-      expect(result.message).toBeDefined();
-    });
-
-    it("does NOT enforce when the flag is off (adapters / webhooks / system tasks)", async () => {
-      const app = getApp();
-      const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
-      const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
-        source: "api",
-        format: "text",
-        content: "system broadcast",
-      });
       expect(result.message).toBeDefined();
     });
   });
@@ -408,7 +433,7 @@ describe("mention enforcement + content normalisation", () => {
 
   // ─── Combined: enforce + normalise on the same call ────────────────────
 
-  describe("enforceMention + normalizeMentionsInContent together (the agent endpoint configuration)", () => {
+  describe("default enforcement + normalizeMentionsInContent together (the agent endpoint configuration)", () => {
     it("rejects unaddressed sends even when normalisation is on", async () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
@@ -418,7 +443,7 @@ describe("mention enforcement + content normalisation", () => {
           chat.id,
           sender.agent.uuid,
           { source: "api", format: "text", content: "hi" },
-          { enforceMention: true, normalizeMentionsInContent: true },
+          { normalizeMentionsInContent: true },
         ),
       ).rejects.toThrow(/explicit recipient/i);
     });
@@ -434,7 +459,7 @@ describe("mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
-        { enforceMention: true, normalizeMentionsInContent: true },
+        { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} 今天是 2026-04-27。`);
 
@@ -564,7 +589,7 @@ describe("mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         { source: "api", format: "text", content: "ok", metadata: { mentions: [peerA.uuid] } },
-        { enforceMention: true, normalizeMentionsInContent: true },
+        { normalizeMentionsInContent: true },
       );
       const [row] = await app.db.select().from(messages).where(eq(messages.id, result.message.id)).limit(1);
       if (!row) throw new Error("message row missing");
@@ -578,13 +603,7 @@ describe("mention enforcement + content normalisation", () => {
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       const beforeCount = await app.db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chat.id));
       await expect(
-        sendMessage(
-          app.db,
-          chat.id,
-          sender.agent.uuid,
-          { source: "api", format: "text", content: "broadcast" },
-          { enforceMention: true },
-        ),
+        sendMessage(app.db, chat.id, sender.agent.uuid, { source: "api", format: "text", content: "broadcast" }),
       ).rejects.toThrow();
       const afterCount = await app.db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chat.id));
       expect(afterCount.length).toBe(beforeCount.length);

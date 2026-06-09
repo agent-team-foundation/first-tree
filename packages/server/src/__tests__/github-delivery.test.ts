@@ -134,6 +134,81 @@ describe("deliverNormalizedEvent", () => {
     expect(content.reason).toBe("subscribed");
   });
 
+  it("delivers a recipientless card when the delegate is not a live speaker (trusted opt-out, wakes no one)", async () => {
+    // Empty-addressing system path: github-delivery addresses the delegate via
+    // `addressedToAgentIds`, but on some events that delegate is not an active
+    // speaker of the bound chat, so the addressing resolves to no live
+    // recipient. The default explicit-recipient guard would reject such a send;
+    // github-delivery declares `allowRecipientlessSend` so the card still lands
+    // as a history/context row for human observers. This pins that the trusted
+    // opt-out is load-bearing — the delivery must NOT throw and must wake no one.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+
+    // Bind a chat for the entity, but make ONLY the human a speaker — the
+    // delegate is deliberately not a member, so the card's addressing resolves
+    // to no live speaker.
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(chatMembership).values({
+      chatId,
+      agentId: human,
+      role: "owner",
+      accessMode: "speaker",
+      mode: "full",
+      source: "manual",
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#201",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#201",
+    });
+
+    const stats = await deliverNormalizedEvent(app, event, [target]);
+
+    // Delivery succeeds (no throw despite recipientless addressing).
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.format).toBe("card");
+    // Wakes no one: the delegate has no inbox row at all (not a participant),
+    // so nothing was fanned out / notified.
+    const delegateEntries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
+    expect(delegateEntries).toHaveLength(0);
+  });
+
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

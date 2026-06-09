@@ -114,22 +114,34 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
     // First answer from the target → -1.
-    await sendMessage(app.db, chat.id, human.uuid, {
-      source: "web",
-      format: "text",
-      content: "Let's do 5%.",
-      inReplyTo: question.id,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      {
+        source: "web",
+        format: "text",
+        content: "Let's do 5%.",
+        inReplyTo: question.id,
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
 
     // A second reply to the SAME question must NOT decrement again (idempotent,
     // floored at zero).
-    await sendMessage(app.db, chat.id, human.uuid, {
-      source: "web",
-      format: "text",
-      content: "...actually still 5%.",
-      inReplyTo: question.id,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      {
+        source: "web",
+        format: "text",
+        content: "...actually still 5%.",
+        inReplyTo: question.id,
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
@@ -147,11 +159,17 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
     // Human chats without inReplyTo — not an answer to the question.
-    await sendMessage(app.db, chat.id, human.uuid, {
-      source: "web",
-      format: "text",
-      content: "give me a sec",
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      {
+        source: "web",
+        format: "text",
+        content: "give me a sec",
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
   });
 
@@ -199,21 +217,33 @@ describe("open-question (format=request) + open_request_count", () => {
 
     // The ASKER (not the target) replies to its own request with a plain text
     // message → active close/withdraw → the target's count clears.
-    await sendMessage(app.db, chat.id, asker.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "Never mind — resolved this offline, closing.",
-      inReplyTo: question.id,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "Never mind — resolved this offline, closing.",
+        inReplyTo: question.id,
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
 
     // A second close (or any later reply) is a no-op — floored at zero.
-    await sendMessage(app.db, chat.id, asker.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "(still closed)",
-      inReplyTo: question.id,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "(still closed)",
+        inReplyTo: question.id,
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
@@ -233,7 +263,13 @@ describe("open-question (format=request) + open_request_count", () => {
       content: "ratio?",
       metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
     });
-    await sendMessage(app.db, chat.id, human.uuid, { source: "web", format: "text", content: "5%", inReplyTo: q1.id });
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      { source: "web", format: "text", content: "5%", inReplyTo: q1.id },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
 
     // Asker follows up with a NEW request replying to the resolved q1.
@@ -315,12 +351,18 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
     expect(listAfterRaise.rows.find((r) => r.chatId === chat.id)?.openRequestCount).toBe(1);
 
     // Human answers (reply threaded to the question) → counter clears.
-    await sendMessage(app.db, chat.id, admin.humanAgentUuid, {
-      source: "web",
-      format: "text",
-      content: "yes, ship it",
-      inReplyTo: question.id,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      admin.humanAgentUuid,
+      {
+        source: "web",
+        format: "text",
+        content: "yes, ship it",
+        inReplyTo: question.id,
+      },
+      { allowRecipientlessSend: true },
+    );
 
     const listAfterAnswer = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,

@@ -73,7 +73,7 @@ async function runKickoff(args: {
   try {
     // `createAgentChat` constructs a 1:1 chat with the bootstrap agent —
     // declare the agent as the explicit recipient so the server's
-    // `enforceMention` check passes (the legacy 1:1 implicit-wake
+    // explicit-recipient enforcement check passes (the legacy 1:1 implicit-wake
     // bypass is gone). Without this, the kickoff message would 400.
     await sendChatMessage(chat.id, args.bootstrap, [agent.uuid]);
   } catch (err) {

@@ -105,11 +105,17 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, obsA, chat } = await setupGroup(app, uid);
 
-    await sendMessage(app.db, chat.id, sender.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: `@mf-obsA-${uid} please review`,
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      sender.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: `@mf-obsA-${uid} please review`,
+      },
+      { allowRecipientlessSend: true },
+    );
 
     expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(0);
   });
@@ -120,11 +126,17 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
     await setParticipantMode(app, chat.id, obsA.uuid, "full");
 
-    await sendMessage(app.db, chat.id, sender.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "nothing specific, team",
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      sender.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "nothing specific, team",
+      },
+      { allowRecipientlessSend: true },
+    );
 
     expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(0);
     expect(await inboxEntriesFor(app, chat.id, obsB.uuid)).toHaveLength(0);
@@ -221,11 +233,17 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, chat } = await setupGroup(app, uid);
 
-    await sendMessage(app.db, chat.id, sender.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "earlier chatter",
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      sender.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "earlier chatter",
+      },
+      { allowRecipientlessSend: true },
+    );
 
     const { agent: late } = await createTestAgent(app, { name: `mf-late-${uid}` });
     await app.db.update(agents).set({ managerId: sender.memberId }).where(eq(agents.uuid, late.uuid));
@@ -240,11 +258,17 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, chat } = await setupGroup(app, uid);
-    const { message } = await sendMessage(app.db, chat.id, sender.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "generic chatter",
-    });
+    const { message } = await sendMessage(
+      app.db,
+      chat.id,
+      sender.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "generic chatter",
+      },
+      { allowRecipientlessSend: true },
+    );
     const meta = (message.metadata ?? {}) as Record<string, unknown>;
     expect(meta).not.toHaveProperty("mentions");
   });
@@ -265,22 +289,17 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(1);
   });
 
-  it("rejects a no-recipient send under enforceMention: there is no no-mention path", async () => {
+  it("rejects a no-recipient send: there is no no-mention path", async () => {
     // A group chat has no no-recipient send. A message that names no one is
     // rejected regardless of caller — there is no broadcast opt-in that lets
-    // an un-addressed message through.
+    // an un-addressed message through. Enforcement is the default now, so a
+    // bare send carries no flag and still rejects.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, chat } = await setupGroup(app, uid);
 
     await expect(
-      sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: "no recipient" },
-        { enforceMention: true },
-      ),
+      sendMessage(app.db, chat.id, sender.agent.uuid, { source: "api", format: "text", content: "no recipient" }),
     ).rejects.toThrow(/recipient/i);
   });
 });

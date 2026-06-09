@@ -70,13 +70,13 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
         identity.uuid,
         body,
         {
-          // Explicit-only contract: agent SDK callers (CLI `chat send`,
-          // result-sink, etc.) declare routing via `receiverNames` or
-          // `metadata.mentions`, or set `purpose: "agent-final-text"` for
-          // silent history-only sends. The server no longer parses
-          // `@<name>` out of content — see `services/message.ts`
-          // Routing contract.
-          enforceMention: true,
+          // Explicit-recipient enforcement is the default in `sendMessage()`;
+          // this route carries no business flag. Agent SDK callers (CLI
+          // `chat send`, result-sink, etc.) declare routing via `receiverNames`
+          // or `metadata.mentions`, or set `purpose: "agent-final-text"` for
+          // silent history-only sends. The server no longer parses `@<name>`
+          // out of content — see `services/message.ts` Routing contract.
+          //
           // Auto-prepend `@<name>` for declared mentions missing from the
           // body so the rendered message matches the routing decision
           // (mainly: result-sink puts the trigger sender in `mentions` but

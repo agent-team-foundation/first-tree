@@ -124,7 +124,13 @@ describe("chat-first workspace service layer", () => {
     });
 
     // peer sends a message into the chat
-    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "hello @managed" });
+    await sendMessage(
+      app.db,
+      chatId,
+      peer.agent.uuid,
+      { source: "api", format: "text", content: "hello @managed" },
+      { allowRecipientlessSend: true },
+    );
 
     // admin's human agent (the watcher) must NOT have an inbox entry for this chat
     const inboxRows = await app.db.execute<{ count: number }>(sql`
@@ -551,11 +557,17 @@ describe("chat-first workspace service layer", () => {
     // peer @-mentions admin (the watcher) by name. Mention extraction reads
     // speakers only, so admin is NOT in the candidate set — the resulting
     // message must NOT bump admin's `unread_mention_count`.
-    await sendMessage(app.db, chatId, peer.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: `Hi @${admin.username}, please look`,
-    });
+    await sendMessage(
+      app.db,
+      chatId,
+      peer.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: `Hi @${admin.username}, please look`,
+      },
+      { allowRecipientlessSend: true },
+    );
 
     const [adminStateRow] = await app.db.execute<{ unread_mention_count: number | null }>(sql`
       SELECT unread_mention_count FROM chat_user_state
@@ -583,7 +595,13 @@ describe("chat-first workspace service layer", () => {
     const c3 = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, c1.chatId, admin.humanAgentUuid, { source: "api", format: "text", content: "hi" });
+    await sendMessage(
+      app.db,
+      c1.chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "hi" },
+      { allowRecipientlessSend: true },
+    );
 
     // Page size 2: first page is [c1, one of c2/c3]; second page returns
     // exactly the missing one.
@@ -734,7 +752,13 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
 
-    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "ping" });
+    await sendMessage(
+      app.db,
+      chatId,
+      peer.agent.uuid,
+      { source: "api", format: "text", content: "ping" },
+      { allowRecipientlessSend: true },
+    );
 
     const [row] = await app.db.execute<{ engagement_status: string }>(
       sql`SELECT engagement_status FROM chat_user_state
@@ -753,7 +777,13 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "deleted");
 
-    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "ping" });
+    await sendMessage(
+      app.db,
+      chatId,
+      peer.agent.uuid,
+      { source: "api", format: "text", content: "ping" },
+      { allowRecipientlessSend: true },
+    );
 
     const [row] = await app.db.execute<{ engagement_status: string }>(
       sql`SELECT engagement_status FROM chat_user_state

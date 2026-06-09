@@ -46,11 +46,17 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
       type: "group",
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, chat.id, owner.agent.uuid, {
-      source: "api",
-      format: "text",
-      content: "Let's coordinate the design review tomorrow",
-    });
+    await sendMessage(
+      app.db,
+      chat.id,
+      owner.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "Let's coordinate the design review tomorrow",
+      },
+      { allowRecipientlessSend: true },
+    );
     const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid);
     expect(detail.topic).toBeNull();
     expect(detail.title).toBe("Let's coordinate the design review tomorrow");

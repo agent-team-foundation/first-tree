@@ -157,11 +157,17 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
-      source: "api",
-      format: "text",
-      content: "hi, no mentions",
-    });
+    await sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      {
+        source: "api",
+        format: "text",
+        content: "hi, no mentions",
+      },
+      { allowRecipientlessSend: true },
+    );
 
     expect(await notifyInboxRows(chatId, peer.agent.uuid)).toHaveLength(0);
     expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBe(0);

@@ -1265,7 +1265,7 @@ export function ChatView({
       setUploading(true);
       setUploadError(null);
       // Carry the routing mentions onto each image message so the
-      // server's `enforceMention` check accepts file-format sends.
+      // server's explicit-recipient enforcement check accepts file-format sends.
       // `effectiveSendMentions` already includes the 1:1 peer (per the
       // explicit-only contract), so the file path works in both DM and
       // group chats — without this every image POST would 400.
@@ -2271,7 +2271,7 @@ export function ChatView({
    *     resolved. The send-button gate (`requiresMention &&
    *     draftMentions.length === 0`) already prevents sending with an
    *     empty mention set in groups, matching the server's
-   *     `enforceMention` check.
+   *     explicit-recipient enforcement check.
    */
   const peerAgentId = useMemo<string | null>(() => {
     if (!chatDetail || !myAgentId) return null;

@@ -127,6 +127,18 @@ export async function deliverNormalizedEvent(
           // so HTTP boundaries cannot impersonate the GitHub sender in the
           // chat UI. This is the one trusted-internal path.
           allowSystemSender: true,
+          // Opt out of the default explicit-recipient guard. This trusted
+          // system delivery owns and validates its own addressing
+          // (`addressedToAgentIds` derived from the resolved audience row),
+          // but the delegate may not be a speaker of the bound chat on some
+          // events, so the addressing resolves to no live recipient. Such a
+          // card is still a valid history/context row for human observers;
+          // without this opt-out the default guard would make this trusted path
+          // start throwing. (A delegate that IS a speaker but suspended/deleted
+          // is rejected earlier by the addressed-recipient status check — that
+          // is a separate, intentional guard, not covered by this opt-out.)
+          // See SendMessageOptions docs.
+          allowRecipientlessSend: true,
         },
       );
       notifyRecipients(app.notifier, recipients, message.id);

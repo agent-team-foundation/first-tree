@@ -44,11 +44,17 @@ describe("sendMessage returns recipients", () => {
       participantIds: [],
     });
 
-    const result = await sendMessage(app.db, chat.id, a1.uuid, {
-      source: "api",
-      format: "text",
-      content: "talking to myself",
-    });
+    const result = await sendMessage(
+      app.db,
+      chat.id,
+      a1.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "talking to myself",
+      },
+      { allowRecipientlessSend: true },
+    );
 
     expect(result.recipients).toHaveLength(0);
   });

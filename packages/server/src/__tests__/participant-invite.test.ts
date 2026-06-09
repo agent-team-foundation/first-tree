@@ -225,11 +225,17 @@ describe("inviteParticipantsToChat", () => {
       participantIds: [peer.agent.uuid],
     });
     for (let i = 0; i < 6; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, {
-        source: "api",
-        format: "text",
-        content: `inv-${i}`,
-      });
+      await sendMessage(
+        app.db,
+        chat.id,
+        owner.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: `inv-${i}`,
+        },
+        { allowRecipientlessSend: true },
+      );
     }
 
     await inviteParticipantsToChat(app.db, {
