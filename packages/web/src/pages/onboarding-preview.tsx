@@ -483,13 +483,6 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "connect-code", net: { installed: true, repos: [] } },
   },
   {
-    id: "admin-code-scope",
-    label: "Scope missing",
-    group: "4 · Connect code",
-    role: "admin",
-    wizard: { step: "connect-code", net: { installed: true, repos: "scope" } },
-  },
-  {
     id: "admin-code-loadfailed",
     label: "Load failed",
     group: "4 · Connect code",

@@ -9,6 +9,7 @@ import { ALLOWED_POST_INSTALL_NEXT, resolvePostInstallNext } from "../github-app
 describe("resolvePostInstallNext", () => {
   it("passes through allowlisted internal paths", () => {
     expect(resolvePostInstallNext("/onboarding")).toBe("/onboarding");
+    expect(resolvePostInstallNext("/onboarding/connected")).toBe("/onboarding/connected");
     expect(resolvePostInstallNext("/settings/github")).toBe("/settings/github");
   });
 
@@ -24,7 +25,7 @@ describe("resolvePostInstallNext", () => {
     expect(resolvePostInstallNext("")).toBe("/settings/github");
   });
 
-  it("only allows the two known internal destinations", () => {
-    expect([...ALLOWED_POST_INSTALL_NEXT].sort()).toEqual(["/onboarding", "/settings/github"]);
+  it("only allows the known internal destinations", () => {
+    expect([...ALLOWED_POST_INSTALL_NEXT].sort()).toEqual(["/onboarding", "/onboarding/connected", "/settings/github"]);
   });
 });

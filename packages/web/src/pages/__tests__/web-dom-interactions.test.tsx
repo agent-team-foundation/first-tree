@@ -1331,6 +1331,10 @@ describe("web DOM interaction coverage", () => {
       configurable: true,
       value: { ...window.location, assign, href: "http://localhost/onboarding" },
     });
+    // connect-code opens the install in a new tab (popup) and fills its location
+    // once the URL is minted; stub window.open to capture that.
+    const installTab = { location: { href: "" }, close: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
 
     const disconnected = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Install on GitHub", disconnected.container);
@@ -1339,14 +1343,15 @@ describe("web DOM interaction coverage", () => {
         button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding");
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
     expect(sessionStorage.getItem("onboarding:connect-code:install-attempt")).toBeTruthy();
-    expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    expect(installTab.location.href).toBe("https://github.com/apps/first-tree/installations/new");
 
     // Skip is one click now — a legitimate, recoverable choice goes straight
     // through with no confirm gate (the old "Skip connecting code?" panel +
     // Keep-connecting / Skip-anyway was confirmshaming and was removed).
-    expect(disconnected.container.textContent).toContain("You can connect a repo anytime from Settings.");
+    expect(disconnected.container.textContent).toContain("connect anytime from Settings.");
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -1403,14 +1408,17 @@ describe("web DOM interaction coverage", () => {
       createdAt: NOW,
       updatedAt: NOW,
     });
-    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
-    const scopeMissing = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Reconnect GitHub with repo access", scopeMissing.container);
-    await unmountRoot(scopeMissing.root);
+    // A 403 from the org repo endpoint is `requireOrgAdmin` ("not an org
+    // admin"), not a GitHub-scope problem (the repos come from the App
+    // installation token, not the caller's OAuth). It folds into the same
+    // honest load-failed message — there's no "reconnect GitHub" recovery.
+    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "admin required"));
+    const adminForbidden = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Couldn't load your team's repos", adminForbidden.container);
+    await unmountRoot(adminForbidden.root);
 
-    // A non-403 failure from the org repo endpoint (502 upstream / 503
-    // no_installation|suspended) must show an honest load-failed message, not
-    // fall through to the empty "no projects" state.
+    // A 502 (upstream) / 503 (no_installation|suspended) failure shows the same
+    // honest load-failed message, not the empty "no projects" state.
     githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
       installationId: 42,
       accountLogin: "acme",

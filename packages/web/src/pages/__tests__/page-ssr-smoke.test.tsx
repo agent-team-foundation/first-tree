@@ -1239,7 +1239,7 @@ describe("page SSR smoke coverage", () => {
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
     ).toContain("online yet");
-    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Which repos");
+    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Pick repos");
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
       "Use your team&#x27;s Context Tree",
     );

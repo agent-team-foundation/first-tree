@@ -89,12 +89,13 @@ export function StepConnectCode() {
     queryFn: () => listOrgGithubRepos(organizationId ?? ""),
     enabled: installed && !!organizationId,
   });
-  const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
-  // The installation-backed endpoint can fail with 502 (upstream) / 503
-  // (no_installation / suspended / not_configured). Treat any non-403 error
-  // as a load failure with an honest message rather than letting it fall
-  // through to the empty "no projects" state.
-  const loadFailed = !!reposQuery.error && !scopeMissing;
+  // Any repo-list error → one honest "couldn't load" message. The repos come
+  // from the App *installation* token (server-minted), not the caller's OAuth,
+  // so failures are 502 (upstream) / 503 (no_installation / suspended /
+  // not_configured). A 403 here is `requireOrgAdmin` ("not an org admin"), not
+  // a GitHub-scope problem — and connect-code is admin-only, so it's
+  // effectively unreachable; a "reconnect GitHub" wouldn't fix it anyway.
+  const loadFailed = !!reposQuery.error;
   const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
 
   // Default the picker to every granted repo so the user doesn't re-pick what
@@ -110,25 +111,25 @@ export function StepConnectCode() {
     if (selectedRepoUrls.length === 0) setSelectedRepoUrls(loaded.map((r) => r.cloneUrl));
   }, [reposQuery.data]);
 
-  // Connected confirmation: org (when all repos share one owner) + count.
-  const grantedRepos = reposQuery.data ?? [];
-  const grantedOwners = [...new Set(grantedRepos.map((r) => r.fullName.split("/")[0] ?? ""))];
-  const grantedOrg = grantedOwners.length === 1 ? grantedOwners[0] || null : null;
-  const connectedLabel =
-    grantedRepos.length > 0
-      ? COPY.connectCode.connectedSummary(grantedRepos.length, grantedOrg)
-      : COPY.connectCode.connected;
-
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
     setInstallError(null);
     setRedirecting(true);
+    // Open the tab synchronously inside the click gesture so the browser doesn't
+    // treat the post-await window.open as a blocked popup; fill its location once
+    // the install URL is minted (or close it on failure). GitHub installs in that
+    // tab and lands it on /onboarding/connected to auto-close, while this tab
+    // keeps polling and advances on its own.
+    const installTab = window.open("", "_blank");
     try {
-      const url = await getGithubAppInstallUrl(organizationId, "/onboarding");
+      const url = await getGithubAppInstallUrl(organizationId, "/onboarding/connected");
       window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
       setAttempted(true);
-      window.location.assign(url);
+      if (installTab) installTab.location.href = url;
+      else window.location.assign(url); // popup blocked — fall back to a full redirect
+      setRedirecting(false);
     } catch (err) {
+      installTab?.close();
       setRedirecting(false);
       if (err instanceof ApiError && err.status === 503) setInstallError("not_configured");
       else if (err instanceof ApiError && err.status === 403) setInstallError("not_admin");
@@ -184,8 +185,13 @@ export function StepConnectCode() {
                 {COPY.skipForNow}
               </Button>
             </div>
+            {/* Merged caveat + skip reassurance; the gating fact is bolded. */}
             <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-              {COPY.connectCode.skipReassure}
+              {COPY.connectCode.notOwnerHint.pre}
+              <span className="font-medium" style={{ color: "var(--fg-3)" }}>
+                {COPY.connectCode.notOwnerHint.emphasis}
+              </span>
+              {COPY.connectCode.notOwnerHint.post}
             </p>
 
             {installError === "generic" && (
@@ -205,21 +211,6 @@ export function StepConnectCode() {
               <StatusRow state="waiting" label={COPY.connectCode.waiting} />
             ) : null}
 
-            {/* Non-owner hint. We can't hand the user a shareable install
-                URL because the OAuth state JWT is paired with a per-browser
-                `oauth_state_nonce` cookie — a copied URL opened in the org
-                owner's browser would fail the callback's state-nonce check.
-                Instead, lean on GitHub's own "request approval" flow: if a
-                non-owner clicks the Install button, GitHub itself routes
-                the request to org owners for approval, and once approved
-                the bounce-back lands in the original (cookie-bearing)
-                browser. So: just tell them to click Install anyway.
-                Server-side shareable links (signed token instead of cookie
-                nonce) is a follow-up. */}
-            <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-              {COPY.connectCode.notOwnerHint}
-            </p>
-
             <ShowMeHow open={helpOpen} onToggle={setHelpOpen}>
               <InstallGuide />
               <InstallTroubleshooting />
@@ -234,25 +225,18 @@ export function StepConnectCode() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
       <PhaseNav phase="pick" />
-      <StatusRow state="ok" label={connectedLabel} />
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
-          {COPY.connectCode.pickProject}
-        </p>
+        {/* The "which repos" prompt only makes sense when there's a list to
+            pick from — in loading / load-failed / empty states it would ask
+            the user to choose repos we can't even show. */}
+        {hasPickableRepos && (
+          <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+            {COPY.connectCode.pickProject}
+          </p>
+        )}
 
-        {scopeMissing ? (
-          <FlowHint>
-            {COPY.connectCode.scopeMissing}{" "}
-            <a
-              href="/api/v1/auth/github/start?next=/onboarding"
-              className="font-medium"
-              style={{ color: "var(--primary)" }}
-            >
-              {COPY.connectCode.reconnect}
-            </a>
-          </FlowHint>
-        ) : reposQuery.isLoading ? (
+        {reposQuery.isLoading ? (
           <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
             {COPY.connectCode.loading}
           </p>

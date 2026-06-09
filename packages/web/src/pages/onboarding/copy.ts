@@ -50,7 +50,7 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     // clearer than the beginner-softened "project". Role-framed and agent-centric,
     // matching the connect-computer title; NOT "your agent's repo" (the repo
     // belongs to the user/team, the agent only works on it).
-    title: "Connect the repo your agent works on",
+    title: "Connect the repos your agent works on",
     // Answer "why connect a repo?" in value terms (the issue-834 UR gap): connecting
     // isn't just access — it's how the agent learns the repo and turns it
     // into the team's shared context. The second clause reassures the user the
@@ -138,11 +138,8 @@ export const COPY = {
     phases: ["Connect GitHub", "Pick repos"],
     cta: "Install on GitHub",
     waiting: "Waiting for GitHub…",
-    connected: "Connected",
-    /** Richer connected confirmation once repos are known: org (when there's a
-        single owner) + count, e.g. "Connected to acme · 3 repos". */
-    connectedSummary: (count: number, org: string | null) =>
-      `Connected${org ? ` to ${org}` : ""} · ${count} repo${count === 1 ? "" : "s"}`,
+    // (connected status row removed — the PhaseNav's "✓ Connect GitHub" already
+    // signals the connection, and the repo picker shows the org + repos.)
     pickProject: "Which repos should your agent work on?",
     /** Loading state for the repo picker (was hardcoded in the step). */
     loading: "Loading your repos…",
@@ -166,17 +163,16 @@ export const COPY = {
     continueNoProject: "Continue without a repo",
     pickHint: "Pick one or more repos for your agent — or continue without any for now.",
     /**
-     * Non-owner hint shown under the primary CTA. We deliberately don't hand
-     * out a copy-the-install-link button — GitHub's install URL is bound to
-     * a per-browser `oauth_state_nonce` cookie, so a link opened in someone
-     * else's browser would fail the callback. GitHub already routes
-     * non-owner installs through an owner-approval flow, so the right
-     * advice is to click Install anyway and let GitHub handle the ask.
+     * Shown under the CTA/Skip row: the install caveat (who can install) merged
+     * with the skip reassurance into one muted line. `emphasis` renders bold so
+     * the gating fact ("a GitHub org owner") stands out. The Request-instead-of-
+     * Install mechanic lives in Need help? (step 3), keeping this one tight line.
      */
-    notOwnerHint:
-      "Only a GitHub org owner can install First Tree. If you're not one, GitHub shows Request instead of Install — sending it asks an owner to approve.",
-    /** Connected but GitHub access lacks repo scope — explain; the link carries the verb. */
-    scopeMissing: "Couldn't see your repos — First Tree needs permission to read them.",
+    notOwnerHint: {
+      pre: "Only ",
+      emphasis: "a GitHub org owner",
+      post: " can install First Tree — if that's not you, clicking Install asks an owner to approve. You can skip and connect anytime from Settings.",
+    },
     /**
      * Replaces the "Waiting for GitHub…" status once the user returns from the
      * install dialog without an installation (postAttemptStuck). Guidance-y, so
@@ -205,19 +201,7 @@ export const COPY = {
     troubleshootTitle: "If it didn't connect:",
     troubleshootBody:
       "Make sure you clicked Install (or Request) on GitHub. If you're not a GitHub org owner, an owner has to approve it — once they do, it connects here automatically.",
-    /**
-     * Calm, always-visible reassurance shown beside the skip affordance so
-     * the choice is *informed before* clicking. Replaces the old confirm
-     * panel (a "Skip connecting code?" title + consequence bullets +
-     * Keep-connecting / Skip-anyway), which confirmshamed a legitimate,
-     * fully-recoverable choice — re-asking the question, leading with a
-     * teammates-will-hit-errors scare, and under-weighting the real exit.
-     * The "agent starts with just an intro" consequence is already stated
-     * honestly on the kickoff no-project screen, so one recovery line is
-     * enough here; the team-level consequence (invitees need the install)
-     * is caught gracefully by the invitee no-installation screen.
-     */
-    skipReassure: "You can connect a repo anytime from Settings.",
+    // (skipReassure merged into `notOwnerHint` — one muted line under the row.)
   },
   /** connect-computer states */
   connectComputer: {
