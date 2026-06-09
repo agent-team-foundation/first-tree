@@ -95,7 +95,13 @@ export {
   installGlobalSpec,
   PACKAGE_NAME,
 } from "./update.js";
-export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
+export {
+  createExecuteUpdate,
+  declineUpdate,
+  promptUpdate,
+  refreshServerUpdateTarget,
+  SELF_RESTART_EXIT_CODE,
+} from "./update-glue.js";
 export {
   defaultUpdateStatePath,
   isLoopGuarded,

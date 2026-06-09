@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree/client";
+import type { ExecuteUpdateFn, RefreshUpdateTargetFn, UpdatePromptFn } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
-import { detectInstallMode, installGlobalSpec, PACKAGE_NAME } from "./update.js";
+import { detectInstallMode, fetchServerCommandVersion, installGlobalSpec, PACKAGE_NAME } from "./update.js";
 import { isLoopGuarded, recordUpdateAttempt } from "./update-state.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
@@ -38,6 +38,11 @@ export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersi
  * instead of blocking on a TTY confirm.
  */
 export const declineUpdate: UpdatePromptFn = async () => false;
+
+export const refreshServerUpdateTarget: RefreshUpdateTargetFn = async () => {
+  const result = await fetchServerCommandVersion();
+  return result.ok ? { ok: true, targetVersion: result.version } : result;
+};
 
 export type UpdateFailedPayload = {
   targetVersion: string;

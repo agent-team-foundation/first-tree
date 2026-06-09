@@ -57,6 +57,15 @@ export type ExecuteUpdateResult = {
  */
 export type ExecuteUpdateFn = (opts: { currentVersion: string; targetVersion: string }) => Promise<ExecuteUpdateResult>;
 
+export type RefreshUpdateTargetResult = { ok: true; targetVersion: string } | { ok: false; reason: string };
+
+/**
+ * Optional command-layer hook for re-reading the server's current update target
+ * immediately before an automatic install. This stays outside the Client
+ * package so UpdateManager does not learn CLI config or HTTP bootstrap details.
+ */
+export type RefreshUpdateTargetFn = () => Promise<RefreshUpdateTargetResult>;
+
 export type UpdateManagerOptions = {
   currentVersion: string;
   updateConfig: ClientConfig["update"];
@@ -66,6 +75,7 @@ export type UpdateManagerOptions = {
   getQuietGateSnapshot: () => QuietGateSnapshot;
   prompt: UpdatePromptFn;
   executeUpdate: ExecuteUpdateFn;
+  refreshServerTarget?: RefreshUpdateTargetFn;
 };
 
 /**
@@ -77,6 +87,7 @@ export type UpdateHooks = {
   updateConfig: ClientConfig["update"];
   prompt: UpdatePromptFn;
   executeUpdate: ExecuteUpdateFn;
+  refreshServerTarget?: RefreshUpdateTargetFn;
 };
 
 /**
@@ -91,6 +102,12 @@ export class UpdateManager {
   private updateInFlight = false;
   private quietGateTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /**
+   * Last valid server target observed while an update decision is running.
+   * Later observations replace earlier ones even when the version is lower:
+   * server target rollback from B to C must install C, not semver-max(B, C).
+   */
+  private latestObservedTarget: string | null = null;
   /**
    * Set when a standalone (unmanaged) executeUpdate reports `installed: true`
    * without exiting. The new bits are on disk; subsequent welcome frames must
@@ -127,27 +144,40 @@ export class UpdateManager {
   }
 
   private async onWelcome(welcome: ServerWelcome): Promise<void> {
-    if (this.disposed || this.updateInFlight || this.pendingRestart) return;
+    if (this.disposed || this.pendingRestart) return;
+    const target = this.normalizeAdvertisedTarget(welcome.frame.serverCommandVersion);
+    if (!target) return;
+    if (this.updateInFlight) {
+      this.latestObservedTarget = target;
+      this.options.log("debug", `Coalesced server update target ${target} while update decision is in flight`);
+      return;
+    }
     // Claim the slot for the entire decision flow (not just runUpdate): a
     // `policy=auto` TTY path awaits a 5s sleep + the quiet gate, and a
     // reconnect storm inside that window would otherwise fan out parallel
     // decisions.
+    this.latestObservedTarget = target;
     this.updateInFlight = true;
     try {
-      await this.decide(welcome);
+      await this.decide(welcome, target);
     } finally {
       this.updateInFlight = false;
+      this.latestObservedTarget = null;
     }
   }
 
-  private async decide(welcome: ServerWelcome): Promise<void> {
-    const { serverCommandVersion: target } = welcome.frame;
+  private normalizeAdvertisedTarget(target: string): string | null {
+    const normalized = semver.valid(target);
+    if (!normalized) {
+      this.options.log("warn", `Server advertised invalid version "${target}"; skipping drift check`);
+      return null;
+    }
+    return normalized;
+  }
+
+  private async decide(welcome: ServerWelcome, target: string): Promise<void> {
     const current = this.options.currentVersion;
 
-    if (!semver.valid(target)) {
-      this.options.log("warn", `Server advertised invalid version "${target}"; skipping drift check`);
-      return;
-    }
     if (!semver.valid(current)) {
       this.options.log("warn", `Own version "${current}" is not valid SemVer; skipping drift check`);
       return;
@@ -209,7 +239,60 @@ export class UpdateManager {
       await this.waitForQuietGate();
       if (this.disposed) return;
     }
-    await this.runUpdate(current, target);
+    const resolvedTarget = await this.resolveAutoTargetBeforeUpdate(current, target);
+    if (this.disposed || resolvedTarget === null) return;
+    await this.runUpdate(current, resolvedTarget);
+  }
+
+  private async resolveAutoTargetBeforeUpdate(current: string, initialTarget: string): Promise<string | null> {
+    let target = this.latestObservedTarget ?? initialTarget;
+    const refreshedTarget = await this.refreshServerTarget(target);
+    if (refreshedTarget) {
+      target = refreshedTarget;
+    } else {
+      target = this.latestObservedTarget ?? target;
+    }
+
+    if (semver.eq(target, current)) {
+      this.options.log("info", `Server update target ${target} now matches running version; skipping self-update`);
+      return null;
+    }
+    if (semver.lt(target, current)) {
+      this.options.log("info", `Server update target ${target} is older than running ${current}; skipping self-update`);
+      return null;
+    }
+    return target;
+  }
+
+  private async refreshServerTarget(fallbackTarget: string): Promise<string | null> {
+    const refresh = this.options.refreshServerTarget;
+    if (!refresh) return null;
+    try {
+      const result = await refresh();
+      if (!result.ok) {
+        this.options.log(
+          "warn",
+          `Could not refresh server update target (${result.reason}); continuing with ${fallbackTarget}`,
+        );
+        return null;
+      }
+      const normalized = semver.valid(result.targetVersion);
+      if (!normalized) {
+        this.options.log(
+          "warn",
+          `Server target refresh returned invalid version "${result.targetVersion}"; continuing with ${fallbackTarget}`,
+        );
+        return null;
+      }
+      if (normalized !== fallbackTarget) {
+        this.options.log("info", `Server update target refreshed: ${fallbackTarget} -> ${normalized}`);
+      }
+      return normalized;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.options.log("warn", `Server target refresh threw: ${msg}; continuing with ${fallbackTarget}`);
+      return null;
+    }
   }
 
   private async waitForQuietGate(): Promise<void> {

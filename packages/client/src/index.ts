@@ -69,6 +69,8 @@ export type {
   ExecuteUpdateFn,
   ExecuteUpdateResult,
   QuietGateSnapshot,
+  RefreshUpdateTargetFn,
+  RefreshUpdateTargetResult,
   UpdateHooks,
   UpdateLogger,
   UpdateLogLevel,
