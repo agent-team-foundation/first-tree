@@ -21,7 +21,7 @@ import {
  * - {@link writeWorkspaceManifest}: persist a validated manifest (single
  *   `writeFileSync`; single-writer local file — no temp-and-rename).
  * - {@link computeWorkspaceStatus}: derive the report (bound sources,
- *   unbound git siblings, missing sources). The `first-tree tree status`
+ *   unbound git siblings, missing sources). The `<binName> tree status`
  *   command that used to render this was retired in 2026-06; the helper
  *   stays around for any future caller / debugging tool that wants the
  *   same structured view.
@@ -240,7 +240,7 @@ export function pickImmediateWorkspaceSources(
 /**
  * Compute the read-only status report for a workspace. Used today by
  * tests asserting drift conditions, and by ad-hoc debugging callers
- * that want the structured view that the retired `first-tree tree
+ * that want the structured view that the retired `<binName> tree
  * status` command used to render.
  *
  * Performs no mutations and no network calls.

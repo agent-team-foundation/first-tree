@@ -320,7 +320,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
     <div className={embedded ? "" : "-m-6"}>
       <PageHeader
         title="Computers"
-        subtitle="Machines connected to first-tree"
+        subtitle="Machines connected to First Tree"
         right={
           showHeaderConnectButton ? (
             <Button variant="outline" size="sm" onClick={openNewConnection}>
@@ -679,7 +679,7 @@ function TeamComputersTable({
             <DenseTableHead>Hostname</DenseTableHead>
             <DenseTableHead>Owner</DenseTableHead>
             <DenseTableHead>OS</DenseTableHead>
-            <DenseTableHead>first-tree</DenseTableHead>
+            <DenseTableHead>First Tree</DenseTableHead>
             <DenseTableHead>Agents</DenseTableHead>
             <DenseTableHead>Last seen</DenseTableHead>
             <DenseTableHead>Status</DenseTableHead>
@@ -820,7 +820,7 @@ function ProviderRow({
   }
 }
 
-// Column count in member mode — `chevron | Hostname | OS | first-tree |
+// Column count in member mode — `chevron | Hostname | OS | First Tree |
 // Agents | Last seen | Status | Actions`. admin mode inserts an Owner column
 // between Hostname and OS, bumping the count by 1.
 const MEMBER_COLSPAN = 8;

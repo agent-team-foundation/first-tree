@@ -152,7 +152,7 @@ describe("doctor core checks", () => {
     });
     expect(stale.ok).toBe(false);
     expect(stale.detail).toContain("moved [pinned to another client: client-2]");
-    expect(stale.detail).toContain("run `first-tree agent prune`");
+    expect(stale.detail).toContain("run `first-tree-dev agent prune`");
   });
 
   it("handles reconciliation failures and background-service states", async () => {
@@ -239,7 +239,7 @@ describe("doctor core checks", () => {
     expect(checkBackgroundService()).toEqual({
       label: "Background service",
       ok: false,
-      detail: "not installed — re-run `first-tree login <token>` to install",
+      detail: "not installed — re-run `first-tree-dev login <token>` to install",
     });
 
     printResults([

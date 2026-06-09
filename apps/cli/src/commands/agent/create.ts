@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../../core/bootstrap.js";
+import { channelConfig } from "../../core/channel.js";
 import { cliFetch } from "../../core/cli-fetch.js";
 import { print } from "../../core/output.js";
 
@@ -11,7 +12,7 @@ export function registerAgentCreateCommand(agent: Command): void {
     .requiredOption("--type <type>", "Agent type (human, agent)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) that will run this agent — must be owned by you. Run `first-tree login <token>` on that machine first.",
+      `Client (machine) that will run this agent — must be owned by you. Run \`${channelConfig.binName} login <token>\` on that machine first.`,
     )
     .option(
       "--runtime <runtime>",

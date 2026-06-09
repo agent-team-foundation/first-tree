@@ -3,6 +3,7 @@ import type { PromptDef } from "@first-tree/shared/config";
 import { collectMissingPrompts, defaultConfigDir, defaultHome, setConfigValue } from "@first-tree/shared/config";
 import { input, password, select } from "@inquirer/prompts";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
+import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 
 /**
@@ -85,14 +86,14 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
   // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
   // throw a cryptic message after the user already typed a UUID.
   if (loadCredentials() === null) {
-    throw new Error("Not connected. Run `first-tree login <token>` first.");
+    throw new Error(`Not connected. Run \`${channelConfig.binName} login <token>\` first.`);
   }
   let serverUrl: string;
   try {
     serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg} Run \`first-tree login <token>\` or set FIRST_TREE_SERVER_URL.`);
+    throw new Error(`${msg} Run \`${channelConfig.binName} login <token>\` or set FIRST_TREE_SERVER_URL.`);
   }
 
   const agentId =

@@ -20,7 +20,7 @@ type OfflineCardBodyProps = {
  * stopped) render dimmed.
  *
  * Layout:
- *   Meta:           Last seen 2d ago · first-tree X · OS  (top)
+ *   Meta:           Last seen 2d ago · First Tree X · OS  (top)
  *   Runtimes:       ✓ Claude Code v0.2.130 (dimmed)
  *   Agents:         per-agent list (dimmed)
  *   Disclosure:     ⌄ Daemon not running? → wake command
@@ -34,6 +34,7 @@ export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardB
   const summary = summarizeBoundAgents(boundAgents);
   const reportedProviders = PROVIDER_ORDER.filter((p) => client.capabilities[p] != null);
   const [showCommand, setShowCommand] = useState(false);
+  const daemonStartCommand = `${client.binName} daemon start`;
   return (
     <div className="flex flex-col">
       <CardSection>
@@ -79,7 +80,7 @@ export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardB
             <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
               Run on this computer:
             </p>
-            <InlineCommand command="first-tree daemon start" ariaLabel="Daemon wake command" />
+            <InlineCommand command={daemonStartCommand} ariaLabel="Daemon wake command" />
           </div>
         )}
       </CardSection>

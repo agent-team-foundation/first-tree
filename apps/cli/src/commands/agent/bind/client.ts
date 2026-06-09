@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { fail, success } from "../../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../../core/bootstrap.js";
+import { channelConfig } from "../../../core/channel.js";
 import { cliFetch } from "../../../core/cli-fetch.js";
 import { print } from "../../../core/output.js";
 import { resolveAgent } from "../../_shared/resolve-agent.js";
@@ -11,7 +12,7 @@ export function registerAgentBindClientCommand(bind: Command): void {
     .description("Bind an unbound agent to a client machine (first-time bind only — ID is immutable once set)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) ID — must be owned by you. Run `first-tree login <token>` on that machine first.",
+      `Client (machine) ID — must be owned by you. Run \`${channelConfig.binName} login <token>\` on that machine first.`,
     )
     .option("--server <url>", "First Tree server URL")
     .action(async (agentName: string, options: { clientId: string; server?: string }) => {

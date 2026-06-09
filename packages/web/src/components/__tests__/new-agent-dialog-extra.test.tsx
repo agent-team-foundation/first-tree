@@ -97,6 +97,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     userId: overrides.userId ?? "user-self",
     status: overrides.status ?? "connected",
     authState: overrides.authState ?? "ok",
+    binName: overrides.binName ?? "first-tree-dev",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",
@@ -234,6 +235,7 @@ beforeEach(() => {
     token: "connect-token",
     expiresIn: 600,
     command: "first-tree-dev login connect-token",
+    bootstrapCommand: "first-tree-dev login connect-token",
   });
   authMock.value.refreshMe.mockClear();
 });
@@ -365,6 +367,7 @@ describe("NewAgentDialog extra branches", () => {
       token: "old-token",
       expiresIn: 600,
       command: "first-tree-dev login old-token",
+      bootstrapCommand: "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
     });
 
     const container = await renderDom(
@@ -372,9 +375,12 @@ describe("NewAgentDialog extra branches", () => {
     );
 
     await waitForText(container, "No computer connected yet.");
+    await waitForText(container, "npm install -g first-tree-dev");
     await waitForText(container, "first-tree-dev login old-token");
     await click(buttonByText(document.body, "Copy"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev login old-token");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
+    );
     expect(document.body.textContent).toContain("Copied");
   });
 

@@ -10,6 +10,7 @@ import {
 import { fail } from "../../cli/output.js";
 import { resolveSenderName } from "../../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
+import { channelConfig } from "../../core/channel.js";
 import { CLI_USER_AGENT } from "../../core/version.js";
 
 /**
@@ -50,7 +51,7 @@ export function resolveLocalAgent(
   if (resolution.kind === "ok") {
     resolvedName = resolution.name;
   } else if (resolution.kind === "none") {
-    fail("MISSING_AGENT", "No agent configured. Run `first-tree agent add` first.", 2);
+    fail("MISSING_AGENT", `No agent configured. Run \`${channelConfig.binName} agent add\` first.`, 2);
   } else if (resolution.kind === "envMismatch") {
     const hint = extraHint?.envMismatch ?? "Pick one explicitly with `--agent <senderName>`.";
     fail(
@@ -120,7 +121,11 @@ export function readClientId(): string {
   };
   const id = cfg.client?.id;
   if (typeof id !== "string" || id.length === 0) {
-    fail("MISSING_CLIENT_ID", "No client.id found in client.yaml. Run `first-tree login <token>` first.", 2);
+    fail(
+      "MISSING_CLIENT_ID",
+      `No client.id found in client.yaml. Run \`${channelConfig.binName} login <token>\` first.`,
+      2,
+    );
   }
   return id;
 }

@@ -84,7 +84,7 @@ export type ClientConnectionConfig = {
   userAgent?: string;
   /**
    * Optional accessor for the most recent self-update outcome — the
-   * command layer reads `~/.first-tree/state/update-state.json` and
+   * command layer reads `$FIRST_TREE_HOME/state/update-state.json` and
    * returns the parsed record. The connection forwards it on every
    * `client:register` so the server can persist into
    * `clients.metadata.lastUpdateAttempt`, giving the admin dashboard
@@ -163,7 +163,7 @@ type ClientConnectionEvents = {
    * Server announced that an agent has been pinned to this client (either
    * created with `clientId` or bound via PATCH NULL → ID). Consumers can use
    * this to auto-register the agent locally without a manual
-   * `first-tree agent add`.
+   * `agent add`.
    */
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
@@ -173,7 +173,7 @@ type ClientConnectionEvents = {
    * Unrecoverable auth failure — the credential provider rejected with an
    * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
    * has stopped trying to reconnect; the consumer should surface a recovery
-   * prompt to the operator (re-run `first-tree login <token>`) and
+   * prompt to the operator (re-run `<binName> login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
    *
    * Bug 2 fix (client-resilience design §5.2): consumers should NO LONGER
@@ -188,7 +188,7 @@ type ClientConnectionEvents = {
    * recover the current session and we are deliberately not retrying.
    * Reconnect attempts are suspended until {@link ClientConnection.clearPaused}
    * is called (typically by a credentials-file watcher that detects a fresh
-   * `first-tree login`). The WebSocket may be closed at the time of emit;
+   * channel-aware login). The WebSocket may be closed at the time of emit;
    * the connection still answers `isConnected === false` and `isPaused
    * === true`.
    */
@@ -234,7 +234,7 @@ export class ClientOrgMismatchError extends Error {
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
  * `instanceof` and guides the operator to run
- * `first-tree login <token> --override` to take ownership (which unpins
+ * `<binName> login <token> --override` to take ownership (which unpins
  * the previous owner's agents from this machine). See decouple-client-from-
  * identity §4.4.
  */
@@ -499,7 +499,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /**
    * Clear paused mode and kick off a reconnect attempt. Intended to be
    * called by the consumer's credentials-file watcher after the operator
-   * runs `first-tree login <new-token>` (which writes a fresh JWT to
+   * runs `<binName> login <new-token>` (which writes a fresh JWT to
    * credentials.json).
    */
   clearPaused(): void {
@@ -1008,7 +1008,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.authLogger.error({ err }, "failed to obtain access token");
           // Refresh token expired / revoked is unrecoverable from inside the
           // process — no amount of retrying will succeed without the
-          // operator running `first-tree login <new-token>`. Mark the
+          // operator running `<binName> login <new-token>`. Mark the
           // connection closed so `ws.on("close")` doesn't reschedule, and
           // surface an `auth:fatal` event so the consumer (typically the
           // CLI) can print a recovery prompt and exit, letting systemd /
@@ -1021,7 +1021,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           if (e.name === "AuthRefreshFailedError") {
             // Bug 2: instead of marking the connection permanently closed and
             // letting the consumer process.exit, enter paused mode. The
-            // operator can recover by running `first-tree login` and the
+            // operator can recover by running the channel-aware login command and the
             // credentials-watcher will call clearPaused() to resume.
             this.enterPausedMode("auth_refresh_failed", e);
           } else if (e.name === "AuthRefreshRateLimitedError") {

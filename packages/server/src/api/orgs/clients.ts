@@ -1,3 +1,4 @@
+import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin } from "../../scope/require-org.js";
 import { expiryToSeconds } from "../../services/auth.js";
@@ -16,11 +17,13 @@ export async function orgClientRoutes(app: FastifyInstance): Promise<void> {
     const scope = await requireOrgAdmin(request, app.db);
     const clients = await clientService.listClientsForOrgAdmin(app.db, scope.organizationId);
     const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
+    const binName = getChannelConfig(app.config.channel).binName;
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
       status: c.status,
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
+      binName,
       sdkVersion: c.sdkVersion,
       hostname: c.hostname,
       os: c.os,

@@ -87,7 +87,7 @@ export function clearWorkspaceInitComplete(agentHome: string): void {
  *
  * Per proposal §0.6 Q6 and §⑤, disk reclamation for the agent home and for
  * legacy `<chatId>/` directories is an explicit operator action via a future
- * `first-tree agent prune-legacy` CLI surface, not a background sweep.
+ * `agent prune-legacy` CLI surface, not a background sweep.
  */
 export function cleanWorkspaces(
   _workspaceRoot: string,

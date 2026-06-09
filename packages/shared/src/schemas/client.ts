@@ -35,6 +35,8 @@ export const clientSchema = z.object({
   status: clientStatusSchema,
   /** See {@link clientAuthStateSchema}. Computed server-side; not persisted. */
   authState: clientAuthStateSchema,
+  /** Channel-aware CLI binary name for command-line UX. */
+  binName: z.string(),
   sdkVersion: z.string().max(50).nullable(),
   hostname: z.string().max(100).nullable(),
   os: z.string().max(50).nullable(),

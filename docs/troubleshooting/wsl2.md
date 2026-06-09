@@ -3,9 +3,9 @@
 Known issues that only occur on WSL2 (and their fixes). If you are not on
 WSL2, skip this doc.
 
-## `first-tree daemon start` fails with "Failed to connect to bus"
+## `<binName> daemon start` fails with "Failed to connect to bus"
 
-Symptom — after rebooting Windows, the very first `first-tree client
+Symptom — after rebooting Windows, the very first `<binName> daemon
 start` reports:
 
 ```
@@ -25,16 +25,22 @@ WSL2 + WSLg layers two `tmpfs` mounts at `/run/user/1000`:
 | top    | `0755` (owner `root`)     | `wayland-0` symlink (so Linux GUI apps can find WSLg's Wayland socket), `dbus-1/`, `pulse/` | WSLg, mounted shortly after systemd starts |
 
 The top `tmpfs` over-mounts the bottom one, so any user-space tool (your
-shell, `systemctl --user`, the `first-tree` CLI) only sees the WSLg
+shell, `systemctl --user`, the First Tree CLI) only sees the WSLg
 overlay. The systemd user manager is happily listening on
 `/run/user/1000/bus` in the bottom layer (verifiable with `ss -lxp`), but
 no client can reach it because the path resolves to the empty WSLg
 overlay instead.
 
 Effect: `systemctl --user` always fails with `Failed to connect to bus`,
-even though the `first-tree-client.service` unit may already be
-running fine — `systemd` itself was started before the over-mount and
-has the right view.
+even though the channel-specific service unit (`first-tree.service`,
+`first-tree-staging.service`, or `first-tree-dev.service`) may already
+be running fine — `systemd` itself was started before the over-mount
+and has the right view.
+
+Use the binary and service unit for your install channel:
+`first-tree` / `first-tree.service`, `first-tree-staging` /
+`first-tree-staging.service`, or `first-tree-dev` /
+`first-tree-dev.service`.
 
 ### Quick fix (one-off, after every reboot)
 
@@ -42,7 +48,7 @@ has the right view.
 sudo umount -l /run/user/$(id -u)   # lazy unmount; existing fds keep working
 ls /run/user/$(id -u)/              # should now show: bus  gnupg  systemd  ...
 systemctl --user status             # should now succeed
-first-tree daemon start
+<binName> daemon start
 ```
 
 `umount -l` (lazy) is required — a plain `umount` always reports
@@ -112,7 +118,7 @@ ls /run/user/$(id -u)/
 journalctl -t strip-wslg-overlay --no-pager
 # Expect: "stripped overlay after Ns" (typically 1–10s).
 
-systemctl --user status first-tree-client --no-pager | head -5
+systemctl --user status <channel-service-unit> --no-pager | head -5
 # Expect: Active: active (running)
 ```
 
@@ -136,7 +142,7 @@ chown -h "$uid:$uid" "$d/wayland-0" "$d/wayland-0.lock"
 
 ### Why not just `--foreground`?
 
-`first-tree daemon start --foreground` skips the service manager
+`<binName> daemon start --foreground` skips the service manager
 entirely and runs the client inline. That works for debugging but loses
 the systemd supervision: no auto-restart, no boot-time start via
 `loginctl enable-linger`, no clean separation from your shell. Use the

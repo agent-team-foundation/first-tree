@@ -1,6 +1,6 @@
 import type { ClientCapabilities } from "@first-tree/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";
+import { type ConnectTokenResponse, getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";
 import { api } from "../../api/client.js";
 import { runVisibilityAwareInterval } from "../../lib/visibility-interval.js";
 
@@ -135,10 +135,7 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
       for (let attempt = 0; attempt < TOKEN_MINT_ATTEMPTS; attempt++) {
         if (cancelled) return;
         try {
-          const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
-            "/me/connect-tokens",
-            {},
-          );
+          const r = await api.post<ConnectTokenResponse>("/me/connect-tokens", {});
           if (cancelled) return;
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
@@ -189,8 +186,7 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
         .map(([provider]) => provider)
     : [];
 
-  const cliCommand =
-    bootstrapCommand ?? (connectToken ? `npm install -g first-tree\nfirst-tree login ${connectToken}` : null);
+  const cliCommand = bootstrapCommand;
 
   return {
     connectedClient,

@@ -2,11 +2,12 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfigDir } from "@first-tree/shared/config";
 import type { Command } from "commander";
+import { channelConfig } from "../core/channel.js";
 import { getClientServiceStatus, isServiceSupported, stopClientService } from "../core/index.js";
 import { print } from "../core/output.js";
 
 /**
- * `first-tree logout` — symmetric counterpart to `login`. Stops the
+ * `logout` — symmetric counterpart to `login`. Stops the
  * background daemon and removes persisted credentials. `client.yaml` is
  * kept by default (it carries harmless config like `server.url` and the
  * stable `client.id`); `--purge` opts in to wiping that too.
@@ -39,6 +40,6 @@ export function registerLogoutCommand(program: Command): void {
           print.line(`  ✓ Removed client.yaml\n`);
         }
       }
-      print.line(`\n  Logged out. Run \`first-tree login <token>\` to reconnect.\n\n`);
+      print.line(`\n  Logged out. Run \`${channelConfig.binName} login <token>\` to reconnect.\n\n`);
     });
 }

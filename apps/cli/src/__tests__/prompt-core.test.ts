@@ -152,7 +152,7 @@ describe("prompt core", () => {
     }));
     const { promptAddAgent } = await import("../core/prompt.js");
 
-    await expect(promptAddAgent({ agentId: "agent-1" })).rejects.toThrow("first-tree login <token>");
+    await expect(promptAddAgent({ agentId: "agent-1" })).rejects.toThrow("first-tree-dev login <token>");
 
     writeCredentials();
     process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";

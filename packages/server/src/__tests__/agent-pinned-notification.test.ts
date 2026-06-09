@@ -14,7 +14,7 @@ import { createTestApp } from "./helpers.js";
  * Regression guard for the "auto agent add" fix: when an admin creates (or
  * binds) an agent with a `clientId` pinned to a live client WebSocket, the
  * server must push an `agent:pinned` frame so the client runtime can
- * materialise its local config without a manual `first-tree agent add`.
+ * materialise its local config without a manual `agent add`.
  */
 describe("Agent WS — agent:pinned push on create/bind", () => {
   let app: FastifyInstance;
@@ -268,7 +268,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
   it("backfills agent:pinned for agents pinned while the client was offline", async () => {
     // Models the gap the realtime push doesn't cover: an admin pins an agent
     // while the client process isn't connected. Without backfill the operator
-    // would still need a manual `first-tree agent add` after restart.
+    // would still need a manual `agent add` after restart.
     const seed = await seedConnectedClient("backfill");
 
     // Seed two agents pinned to this client BEFORE we open any WS, so the

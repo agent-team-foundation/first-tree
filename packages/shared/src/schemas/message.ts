@@ -9,7 +9,7 @@ import { z } from "zod";
  *
  *   - "web"     — First Tree web UI (POST /chats/:id/messages from a browser
  *                 session).
- *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
+ *   - "cli"     — Agent's First Tree CLI (`chat send` / `chat invite`
  *                 / etc.).
  *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
  *                 in-process tool integrations); the catch-all for client

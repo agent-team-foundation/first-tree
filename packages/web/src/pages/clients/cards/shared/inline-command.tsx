@@ -28,7 +28,7 @@ type InlineCommandProps = {
  *
  * Used by:
  *   - Setup-incomplete card → install + login command per runtime
- *   - Offline card → wake guide command (`first-tree daemon start`)
+ *   - Offline card → wake guide command (`<binName> daemon start`)
  *
  * A11y: wrapped in `<figure>` with a `<figcaption>` (visually hidden) so
  * the command block has an accessible name. The Copy button references

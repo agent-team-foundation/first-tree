@@ -203,11 +203,11 @@ describe("client org mismatch handler", () => {
     await handleClientOrgMismatch(new Error("wrong org") as never, {
       managed: false,
       configDir: tempDir,
-      rerunCommand: "first-tree login token",
+      rerunCommand: "first-tree-dev login token",
     });
     expect(process.exit).toHaveBeenLastCalledWith(0);
     expect(readFileSync(yamlPath, "utf8")).toContain("client_");
-    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree login token");
+    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree-dev login token");
 
     writeFileSync(yamlPath, stringifyYaml({ client: { id: "client_22222222" } }));
     vi.mocked(process.exit).mockImplementationOnce((() => undefined) as never);
@@ -224,7 +224,7 @@ describe("client org mismatch handler", () => {
       handleClientOrgMismatch(new Error("wrong org") as never, {
         managed: false,
         configDir: join(tempDir, "missing"),
-        rerunCommand: "first-tree login token",
+        rerunCommand: "first-tree-dev login token",
       }),
     ).rejects.toMatchObject({ code: 1 });
 
@@ -233,7 +233,7 @@ describe("client org mismatch handler", () => {
       handleClientOrgMismatch(new Error("wrong org") as never, {
         managed: false,
         configDir: join(tempDir, "missing"),
-        rerunCommand: "first-tree login token",
+        rerunCommand: "first-tree-dev login token",
       }),
     ).rejects.toMatchObject({ code: 1 });
     expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("Failed to rotate");

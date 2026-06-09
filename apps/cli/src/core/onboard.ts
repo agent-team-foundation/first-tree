@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfigDir, defaultHome, setConfigValue } from "@first-tree/shared/config";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
+import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
@@ -64,7 +65,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "connect",
       label: "Signed in",
       status: "missing_required",
-      hint: "Run `first-tree login <token>` first",
+      hint: `Run \`${channelConfig.binName} login <token>\` first`,
     });
   }
 
@@ -269,7 +270,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
 
   if (runtimeAgent) {
     print.line("\n  Start the agent:\n");
-    print.line("    first-tree daemon start\n");
+    print.line(`    ${channelConfig.binName} daemon start\n`);
   }
   print.line("\n");
 }

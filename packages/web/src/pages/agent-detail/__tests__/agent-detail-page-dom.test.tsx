@@ -192,6 +192,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     userId: overrides.userId ?? "user-self",
     status: overrides.status ?? "connected",
     authState: overrides.authState ?? "ok",
+    binName: overrides.binName ?? "first-tree-dev",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",

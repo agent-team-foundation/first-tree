@@ -56,11 +56,14 @@ describe("GET /me/clients", () => {
       headers: { authorization: `Bearer ${a.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as Array<{ id: string; userId: string }>;
+    const body = res.json() as Array<{ binName: string; id: string; userId: string }>;
     const ids = body.map((c) => c.id).sort();
     expect(ids).toEqual([a.clientId, aSecond].sort());
     expect(ids).not.toContain(b.clientId);
-    for (const row of body) expect(row.userId).toBe(a.userId);
+    for (const row of body) {
+      expect(row.userId).toBe(a.userId);
+      expect(row.binName).toBe("first-tree-dev");
+    }
   });
 
   it("returns the caller's clients across all their orgs", async () => {

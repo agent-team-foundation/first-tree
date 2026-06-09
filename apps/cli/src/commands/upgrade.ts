@@ -17,7 +17,7 @@ import {
 import { print } from "../core/output.js";
 
 /**
- * `first-tree upgrade` — user-driven CLI upgrade.
+ * `upgrade` — user-driven CLI upgrade.
  *
  * Lives at the top level (not under `daemon`) because the tarball bundles
  * server / client / web / shared into a single artifact: upgrading affects
@@ -33,7 +33,7 @@ import { print } from "../core/output.js";
 export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
-    .description("Upgrade first-tree to the server-recommended version and restart the daemon")
+    .description("Upgrade this First Tree CLI to the server-recommended version and restart the daemon")
     .option("--check", "Only check whether a newer version is available; do not install")
     .option("--latest", "Bypass the server target and install npm latest")
     .option("--no-restart", "Install the new version but skip restarting the background service")
@@ -50,7 +50,7 @@ export function registerUpgradeCommand(program: Command): void {
         // PACKAGE_NAME is never null in this branch: dev channel (null
         // pkg) short-circuits to mode==="source" above. Defend anyway so
         // the message stays readable if that contract ever changes.
-        const installHint = PACKAGE_NAME ?? "first-tree";
+        const installHint = PACKAGE_NAME ?? binName;
         print.line(`  Install globally first:  npm i -g ${installHint}\n\n`);
         return;
       }

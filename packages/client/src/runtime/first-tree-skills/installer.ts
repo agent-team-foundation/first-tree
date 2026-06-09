@@ -1,7 +1,7 @@
 // Inline skill payload installer. Replaces the previous shell-out to
-// `first-tree tree skill install --root <workspace>` so the Client owns
+// `<binName> tree skill install --root <workspace>` so the Client owns
 // the full agent-workspace bootstrap with no out-of-process dependency
-// (no need for `first-tree` on PATH, no `npx -y first-tree@latest`
+// (no need for the First Tree CLI on PATH, no `npx -y first-tree@latest`
 // download on first run, no channel binding to thread through).
 //
 // Design notes:

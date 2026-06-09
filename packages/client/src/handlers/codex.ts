@@ -1155,7 +1155,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       // Re-fetch chat-context every resume so newly-joined participants
       // surface in AGENTS.md. The sentinel still gates the expensive
-      // `first-tree tree skill install` shell-out.
+      // `<binName> tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       await prepareSourceRepos(payload, cwd, sessionCtx, resumePayloadResolved);

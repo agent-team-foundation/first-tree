@@ -73,7 +73,7 @@ export function StepConnectComputer() {
             open={helpOpen}
             onToggle={setHelpOpen}
           >
-            <TerminalGuide />
+            <TerminalGuide command={cliCommand} />
             <ConnectTroubleshooting />
           </ShowMeHow>
         </>

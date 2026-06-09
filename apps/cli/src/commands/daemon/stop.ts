@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { channelConfig } from "../../core/channel.js";
 import { getClientServiceStatus, isServiceSupported, stopClientService } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -28,6 +29,8 @@ export function registerDaemonStopCommand(daemon: Command): void {
         process.exit(1);
       }
       print.line(`\n  Stopped ${svc.platform} service.\n`);
-      print.line("  Auto-start on next login is preserved. Run `first-tree daemon start` to bring it back.\n\n");
+      print.line(
+        `  Auto-start on next login is preserved. Run \`${channelConfig.binName} daemon start\` to bring it back.\n\n`,
+      );
     });
 }

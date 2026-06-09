@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { readSourceBindingContract } from "./binding-contract.js";
 import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
@@ -16,7 +17,7 @@ const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/mu;
 const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/mu;
 const UNCHECKED_RE = /^- \[ \] (.+)$/gmu;
 
-export const VERIFY_USAGE = `usage: first-tree tree verify [--tree-path PATH]
+export const VERIFY_USAGE = `usage: ${channelConfig.binName} tree verify [--tree-path PATH]
 
 Run validation checks against a Context Tree repo.
 
@@ -79,7 +80,7 @@ function formatSourceRepoError(targetRoot: string): string {
   const sourceBinding = readSourceBindingContract(targetRoot);
   const treeRepoName = sourceBinding?.treeRepoName;
   const examplePath = treeRepoName ? `../${treeRepoName}` : "../<tree-repo>";
-  return `This repo only has source/workspace integration installed. Verify the tree repo instead, for example \`first-tree tree verify --tree-path ${examplePath}\`.`;
+  return `This repo only has source/workspace integration installed. Verify the tree repo instead, for example \`${channelConfig.binName} tree verify --tree-path ${examplePath}\`.`;
 }
 
 function verifyTreeRoot(targetRoot: string): VerifySummary {

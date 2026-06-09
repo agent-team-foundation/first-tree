@@ -344,7 +344,7 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(print.status).toHaveBeenCalledWith("", "no agents configured yet.");
     expect(print.status).toHaveBeenCalledWith(
       "",
-      "add one with: first-tree agent create <name> --type claude-code --client-id <id>",
+      "add one with: first-tree-dev agent create <name> --type claude-code --client-id <id>",
     );
     await rt.stop();
   });

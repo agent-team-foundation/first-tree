@@ -81,7 +81,7 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
     "",
     goalLine,
     "",
-    "Once the tree repo is up on GitHub, record its URL in First Tree with the first-tree CLI so future teammates' agents can find it.",
+    "Once the tree repo is up on GitHub, record its URL in First Tree with the First Tree CLI so future teammates' agents can find it.",
     "",
     walkthrough,
     "",

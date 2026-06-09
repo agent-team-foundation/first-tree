@@ -139,7 +139,7 @@ describe("local agent shared helpers", () => {
     expect(() => resolveLocalAgent()).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith(
       "MISSING_AGENT",
-      "No agent configured. Run `first-tree agent add` first.",
+      "No agent configured. Run `first-tree-dev agent add` first.",
       2,
     );
 
@@ -173,7 +173,7 @@ describe("local agent shared helpers", () => {
     expect(() => readClientId()).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith(
       "MISSING_CLIENT_ID",
-      "No client.id found in client.yaml. Run `first-tree login <token>` first.",
+      "No client.id found in client.yaml. Run `first-tree-dev login <token>` first.",
       2,
     );
   });

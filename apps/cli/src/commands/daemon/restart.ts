@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { channelConfig } from "../../core/channel.js";
 import { getClientServiceStatus, isServiceSupported, restartClientService } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -15,7 +16,7 @@ export function registerDaemonRestartCommand(daemon: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("\n  No background service installed.\n");
-        print.line("  Run `first-tree login <token>` first.\n\n");
+        print.line(`  Run \`${channelConfig.binName} login <token>\` first.\n\n`);
         process.exit(1);
       }
       const res = restartClientService();

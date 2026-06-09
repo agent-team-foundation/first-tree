@@ -413,10 +413,10 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
 /**
  * Per-agent-home pin file for the CLI version that performed the last
  * bootstrap. Distinct from {@link CONTEXT_TREE_HEAD_REL}: this drifts when
- * the operator upgrades the `first-tree` binary (a new shipped skills
+ * the operator upgrades the CLI binary (a new shipped skills
  * payload typically ships with it), even if the Context Tree HEAD is
  * unchanged. Without this trigger, agent homes silently keep stale
- * `.agents/skills/*` after a `first-tree upgrade` until the Context Tree
+ * `.agents/skills/*` after an upgrade until the Context Tree
  * happens to move.
  */
 export const BUNDLED_CLI_VERSION_REL = join(FIRST_TREE_RUNTIME_DIR, "cli-version");
@@ -727,11 +727,11 @@ export type InstallCoreSkillsOptions = {
  * continues. The agent session still starts — the missing skill just
  * isn't reachable on disk.
  *
- * Pre-2026-06 history: this used to shell out to `first-tree tree skill
+ * Pre-2026-06 history: this used to shell out to `<binName> tree skill
  * install --root <workspacePath>`. The CLI dependency was removed when
  * the @first-tree/client package started bundling skill payloads
  * directly (see `scripts/copy-bundled-skills.mjs`). No more `npx -y
- * first-tree@latest` cold-download on first run, no more `binName` PATH
+ * `first-tree@latest` cold-download on first run, no more `binName` PATH
  * resolution, no more channel-aware fallback dance.
  */
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {

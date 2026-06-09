@@ -120,7 +120,8 @@ function WindowDots() {
 }
 
 /** Mock terminal: what the connect-a-computer command looks like in action. */
-export function TerminalGuide() {
+export function TerminalGuide({ command }: { command: string | null }) {
+  const commandLines = command?.split("\n").filter((line) => line.length > 0) ?? [];
   return (
     <div>
       <div
@@ -150,24 +151,26 @@ export function TerminalGuide() {
           className="mono text-label flex flex-col"
           style={{ padding: "var(--sp-2_5) var(--sp-3)", gap: "var(--sp-1)" }}
         >
-          <div style={{ color: "var(--fg-3)" }}>
-            <span style={{ color: "var(--fg-4)" }}>$ </span>npm install -g first-tree
-          </div>
-          <div style={{ color: "var(--fg-3)" }}>
-            <span style={{ color: "var(--fg-4)" }}>$ </span>first-tree login a1b2c3…
-            <span
-              aria-hidden="true"
-              className="onboarding-guide-caret"
-              style={{
-                display: "inline-block",
-                width: "var(--sp-1_5)",
-                height: "1em",
-                marginLeft: "var(--sp-0_5)",
-                verticalAlign: "text-bottom",
-                background: "var(--primary)",
-              }}
-            />
-          </div>
+          {commandLines.map((line, index) => (
+            <div key={line} style={{ color: "var(--fg-3)" }}>
+              <span style={{ color: "var(--fg-4)" }}>$ </span>
+              {line}
+              {index === commandLines.length - 1 ? (
+                <span
+                  aria-hidden="true"
+                  className="onboarding-guide-caret"
+                  style={{
+                    display: "inline-block",
+                    width: "var(--sp-1_5)",
+                    height: "1em",
+                    marginLeft: "var(--sp-0_5)",
+                    verticalAlign: "text-bottom",
+                    background: "var(--primary)",
+                  }}
+                />
+              ) : null}
+            </div>
+          ))}
           <div
             className="inline-flex items-center"
             style={{ gap: "var(--sp-1)", color: "var(--success)", marginTop: "var(--sp-1)" }}
