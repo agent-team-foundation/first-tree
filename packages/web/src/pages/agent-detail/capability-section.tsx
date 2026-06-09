@@ -359,7 +359,7 @@ function EffectiveRow(props: {
       {props.canEdit && canDisable ? (
         <Button
           size="xs"
-          variant="outline"
+          variant="ghost"
           disabled={props.pending}
           onClick={() => props.onDisable(props.row.resourceId ?? "")}
         >
@@ -513,7 +513,7 @@ function rowSubtitle(row: EffectiveResourceRow): string | null {
  * state, so normal rows stay clean. `Off` (not `Disabled`) avoids colliding
  * with the row's own `Disable` action button.
  */
-function statusMarker(mode: EffectiveResourceRow["mode"]): { label: string; color: string } | null {
+export function statusMarker(mode: EffectiveResourceRow["mode"]): { label: string; color: string } | null {
   if (mode === "disabled") return { label: "Off", color: "var(--fg-4)" };
   if (mode === "replaced") return { label: "Overridden", color: "var(--fg-4)" };
   if (mode === "unavailable") return { label: "Can't load", color: "var(--state-error)" };

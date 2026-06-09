@@ -4,7 +4,7 @@ import {
   PROMPT_APPEND_MAX_LENGTH,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
@@ -12,9 +12,17 @@ import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../../components/ui/dialog.js";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { Textarea } from "../../components/ui/textarea.js";
-import { agentResourcesMutationHandlers } from "./capability-section.js";
+import { agentResourcesMutationHandlers, statusMarker } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
@@ -123,18 +131,21 @@ export function PromptTab() {
         title={titleWithSemantics("Instructions", "immediate", justSaved)}
         description="Team and your own instructions for this agent — toggle, customize, or add your own."
         action={
-          canEditPrompt && !resourceError && !editor && resources ? (
-            <AddInstructionsMenu
-              available={availablePrompts}
-              pending={bindingMut.isPending}
-              onAddCustom={() => openPromptEditor(null)}
-              onEnable={enablePrompt}
-              onNavigateAway={ctx.guardedNavigate}
-            />
-          ) : null
+          <div className="flex items-center gap-2">
+            <EffectiveInstructionsTrigger prompt={prompt} />
+            {canEditPrompt && !resourceError && !editor && resources ? (
+              <AddInstructionsMenu
+                available={availablePrompts}
+                pending={bindingMut.isPending}
+                onAddCustom={() => openPromptEditor(null)}
+                onEnable={enablePrompt}
+                onNavigateAway={ctx.guardedNavigate}
+              />
+            ) : null}
+          </div>
         }
       >
-        <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+        <div>
           {resources ? (
             <PromptResourceBlocks
               data={resources}
@@ -166,23 +177,45 @@ export function PromptTab() {
           </p>
         ) : null}
       </Section>
-      <div id="ad-effective-instructions">
-        <Section
-          title="Effective instructions"
-          description="The full instructions this agent runs with, after your changes — team and custom, in order."
-        >
-          <div style={{ paddingTop: "var(--sp-3)" }}>
-            <PromptPanel minHeight={prompt ? "10rem" : undefined} sunken={!prompt}>
-              {prompt ? (
-                <Markdown>{prompt}</Markdown>
-              ) : (
-                <span className="text-muted-foreground">No instructions yet.</span>
-              )}
-            </PromptPanel>
-          </div>
-        </Section>
-      </div>
     </div>
+  );
+}
+
+// On-demand `Effective instructions` dialog. Replaces the always-on bottom
+// section: the merged runtime truth (`ctx.config.payload.prompt.append`, after
+// every override) is revealed in a centered modal — same dialog pattern as the
+// rest of the app — only when asked for. Long bodies scroll inside the modal.
+function EffectiveInstructionsTrigger(props: { prompt: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-label="Effective instructions"
+          title="Effective instructions"
+        >
+          <Eye className="h-3 w-3" />
+          Effective instructions
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Effective instructions</DialogTitle>
+          <DialogDescription>
+            The full instructions this agent runs with, after your changes — team and custom, in order.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="text-body" style={{ maxHeight: "60vh", overflowY: "auto" }}>
+          {props.prompt ? (
+            <Markdown>{props.prompt}</Markdown>
+          ) : (
+            <span className="text-muted-foreground">No instructions yet.</span>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -348,27 +381,19 @@ function PromptResourceBlocks(props: {
     />
   ) : null;
 
-  const blocks: ReactNode[] = rows.map((row, index) => {
+  const blocks: ReactNode[] = rows.map((row) => {
     const isEditingRow = !!props.editor && editorIsInline && props.editor.rowId === row.id;
     const action = props.editor || !props.canEdit ? null : promptRowAction(row, props);
-    const marker = row.mode === "unavailable" ? "Unavailable" : undefined;
     return (
       <PromptResourceBlock
         key={row.id}
-        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={marker} />}
+        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={statusMarker(row.mode)} />}
         action={action}
-        separated={index > 0}
-      >
-        {isEditingRow ? (
-          editorNode
-        ) : (
-          <CollapsibleBody
-            body={row.promptBody ?? ""}
-            expanded={expandedIds.has(row.id)}
-            onToggle={() => toggleExpand(row.id)}
-          />
-        )}
-      </PromptResourceBlock>
+        body={row.promptBody ?? ""}
+        expanded={expandedIds.has(row.id)}
+        onToggle={() => toggleExpand(row.id)}
+        editor={isEditingRow ? editorNode : null}
+      />
     );
   });
 
@@ -377,15 +402,15 @@ function PromptResourceBlocks(props: {
       <PromptResourceBlock
         key="agent-custom-editor"
         title={<PromptBlockHeading name={null} source="inline_prompt" />}
-        separated={blocks.length > 0}
-      >
-        {editorNode}
-      </PromptResourceBlock>,
+        body=""
+        expanded
+        onToggle={() => {}}
+        editor={editorNode}
+      />,
     );
   }
 
   for (const row of inactiveRows) {
-    const marker = row.mode === "disabled" ? "Off" : "Overridden";
     // Disabled team prompt → Re-enable. Overridden prompt with no live replacement
     // row (e.g. an empty inline replacement) → Remove, so it never gets stuck.
     const manageable =
@@ -396,6 +421,7 @@ function PromptResourceBlocks(props: {
     const action = manageable ? (
       <PromptBlockAction
         label={row.mode === "disabled" ? "Re-enable" : "Remove"}
+        icon={row.mode === "disabled" ? undefined : "remove"}
         disabled={props.busy}
         onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
       />
@@ -403,16 +429,12 @@ function PromptResourceBlocks(props: {
     blocks.push(
       <PromptResourceBlock
         key={row.id}
-        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={marker} />}
+        title={<PromptBlockHeading name={promptBlockName(row)} source={row.source} marker={statusMarker(row.mode)} />}
         action={action}
-        separated={blocks.length > 0}
-      >
-        <CollapsibleBody
-          body={row.promptBody ?? ""}
-          expanded={expandedIds.has(row.id)}
-          onToggle={() => toggleExpand(row.id)}
-        />
-      </PromptResourceBlock>,
+        body={row.promptBody ?? ""}
+        expanded={expandedIds.has(row.id)}
+        onToggle={() => toggleExpand(row.id)}
+      />,
     );
   }
 
@@ -428,26 +450,34 @@ function PromptResourceBlocks(props: {
         action={
           props.editor || !props.canEdit ? null : (
             <div className="flex gap-2">
-              <PromptBlockAction icon label="Edit custom instructions" onClick={() => props.onEditBinding(bindingId)} />
+              <PromptBlockAction
+                icon="edit"
+                label="Edit custom instructions"
+                onClick={() => props.onEditBinding(bindingId)}
+              />
               <PromptBlockAction
                 label="Remove"
+                icon="remove"
                 disabled={props.busy}
                 onClick={() => props.onRemoveBinding(bindingId)}
               />
             </div>
           )
         }
-        separated={blocks.length > 0}
-      >
-        {isEditingOrphan ? editorNode : <span className="text-muted-foreground">No instructions yet.</span>}
-      </PromptResourceBlock>,
+        body=""
+        expanded={isEditingOrphan}
+        onToggle={() => {}}
+        editor={isEditingOrphan ? editorNode : null}
+      />,
     );
   }
 
-  return (
-    <PromptPanel>
-      {blocks.length > 0 ? blocks : <span className="text-muted-foreground">No instructions yet.</span>}
-    </PromptPanel>
+  return blocks.length > 0 ? (
+    <>{blocks}</>
+  ) : (
+    <p className="text-body text-muted-foreground" style={{ margin: 0, padding: "var(--sp-3) 0" }}>
+      No instructions yet.
+    </p>
   );
 }
 
@@ -467,20 +497,26 @@ function promptRowAction(
     <PromptBlockAction
       key="remove"
       label="Remove"
+      icon="remove"
       disabled={props.busy}
       onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
     />
   );
   if (row.source === "inline_prompt") {
     buttons.push(
-      <PromptBlockAction key="edit" icon label="Edit custom instructions" onClick={() => props.onStartEdit(row)} />,
+      <PromptBlockAction
+        key="edit"
+        icon="edit"
+        label="Edit custom instructions"
+        onClick={() => props.onStartEdit(row)}
+      />,
     );
     if (row.bindingId) buttons.push(remove);
   } else if (row.source.startsWith("team_") && row.resourceId) {
     buttons.push(
       <PromptBlockAction
         key="customize"
-        icon
+        icon="edit"
         label="Customize for this agent"
         onClick={() => props.onStartEdit(row)}
       />,
@@ -532,72 +568,106 @@ function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: 
   );
 }
 
+// One instruction row, matching the shared `EffectiveRow` skeleton (Environment /
+// Tools & skills): a flat two-line row — line 1 = title + source + status + right-
+// aligned ghost actions + chevron; line 2 = a one-line truncated content peek. The
+// row expands in place: the full Markdown (or the inline editor) renders in a sunken
+// contained block below. Short, single-line prompts have no chevron, so the list
+// stays calm.
 function PromptResourceBlock(props: {
   title: ReactNode;
   action?: ReactNode;
-  children: ReactNode;
-  separated?: boolean;
+  body: string;
+  expanded: boolean;
+  onToggle: () => void;
+  /** When present (editor active), the sunken area always shows this instead of Markdown. */
+  editor?: ReactNode;
 }) {
-  return (
-    <div
-      style={{
-        paddingTop: props.separated ? "var(--sp-3)" : undefined,
-        marginTop: props.separated ? "var(--sp-3)" : undefined,
-        borderTop: props.separated ? "var(--hairline) solid var(--border-faint)" : undefined,
-      }}
-    >
-      <div
-        className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
-        style={{ marginBottom: "var(--sp-2)" }}
-      >
-        <h3 className="text-subtitle m-0">{props.title}</h3>
-        {props.action}
-      </div>
-      {props.children}
-    </div>
-  );
-}
-
-function PromptBlockAction(props: { label: string; onClick: () => void; disabled?: boolean; icon?: boolean }) {
-  return (
-    <Button type="button" size="xs" variant="outline" disabled={props.disabled} onClick={props.onClick}>
-      {props.icon ? <Pencil className="h-3 w-3" /> : null}
-      {props.label}
-    </Button>
-  );
-}
-
-// One instruction block's body: a clamped summary by default, expandable to the
-// full Markdown. The expand toggle only appears when there's more to reveal than
-// the 2-line clamp shows (long body or multi-line), so short prompts stay clean.
-function CollapsibleBody(props: { body: string; expanded: boolean; onToggle: () => void }) {
-  if (!props.body) return <span className="text-muted-foreground">No instructions yet.</span>;
+  const peek = peekLine(props.body);
+  // Keep the existing guard: trivially-short single-line prompts need no expander.
   const canExpand = props.body.length > 120 || props.body.includes("\n");
+  const showSunken = props.editor ? true : props.expanded && !!props.body;
   return (
-    <div>
-      {props.expanded ? (
-        <Markdown>{props.body}</Markdown>
+    <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">{props.title}</div>
+        {props.action ? <div className="flex items-center gap-1">{props.action}</div> : null}
+        {props.editor ? null : canExpand ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-expanded={props.expanded}
+            aria-label={props.expanded ? "Collapse instructions" : "Expand instructions"}
+            onClick={props.onToggle}
+          >
+            {props.expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </Button>
+        ) : null}
+      </div>
+      {showSunken ? (
+        <div
+          className="text-body"
+          style={{
+            marginTop: "var(--sp-2)",
+            background: "var(--bg-sunken)",
+            border: "var(--hairline) solid var(--border-faint)",
+            borderRadius: "var(--radius-panel)",
+            padding: "var(--sp-3)",
+          }}
+        >
+          {props.editor ? props.editor : <Markdown>{props.body}</Markdown>}
+        </div>
+      ) : peek ? (
+        <p className="m-0 text-caption truncate" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+          {peek}
+        </p>
       ) : (
-        <p className="m-0 text-caption line-clamp-2" style={{ color: "var(--fg-3)" }}>
-          {props.body}
+        <p className="m-0 text-caption text-muted-foreground" style={{ marginTop: "var(--sp-0_5)" }}>
+          No instructions yet.
         </p>
       )}
-      {canExpand ? <ExpandToggle expanded={props.expanded} onToggle={props.onToggle} /> : null}
     </div>
   );
 }
 
-function ExpandToggle(props: { expanded: boolean; onToggle: () => void }) {
+// First non-empty line of the body, for the single-line truncated peek. Markdown
+// heading markers are stripped so the peek reads as plain text.
+function peekLine(body: string): string {
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/^#+\s*/, "").trim();
+    if (line) return line;
+  }
+  return "";
+}
+
+function PromptBlockAction(props: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  /** "edit" → pencil + label; "remove" → trash icon only; undefined → label only. */
+  icon?: "edit" | "remove";
+}) {
+  if (props.icon === "remove") {
+    return (
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost"
+        disabled={props.disabled}
+        aria-label={props.label}
+        title={props.label}
+        onClick={props.onClick}
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    );
+  }
   return (
-    <button
-      type="button"
-      onClick={props.onToggle}
-      aria-expanded={props.expanded}
-      className="mt-1 bg-transparent border-0 p-0 cursor-pointer text-caption font-medium transition-colors hover:text-[var(--fg)]"
-      style={{ color: "var(--fg-3)" }}
-    >
-      {props.expanded ? "Show less" : "Show full"}
-    </button>
+    <Button type="button" size="xs" variant="ghost" disabled={props.disabled} onClick={props.onClick}>
+      {props.icon === "edit" ? <Pencil className="h-3 w-3" /> : null}
+      {props.label}
+    </Button>
   );
 }
 
@@ -619,14 +689,13 @@ function AddInstructionsMenu(props: {
       trigger={({ open, toggle }) => (
         <Button
           size="xs"
-          variant="outline"
+          variant="ghost"
           aria-expanded={open}
           aria-label="Add instructions"
           title="Add instructions"
           onClick={toggle}
         >
-          <Plus className="h-3 w-3" />
-          Add
+          <Plus className="h-4 w-4" />
         </Button>
       )}
     >
@@ -711,25 +780,34 @@ function enabledPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
 }
 
 function promptBlockName(row: EffectivePromptRow): string | null {
-  // Inline prompts have no meaningful resource name — the source label says it all.
-  if (row.source === "inline_prompt") return null;
+  // Inline custom prompts have no resource name — give them a literal title so the
+  // row stays structurally parallel to team rows (the body peek carries identity).
+  if (row.source === "inline_prompt") return "Custom instructions";
   return row.name;
 }
 
-function PromptBlockHeading(props: { name: string | null; source: EffectivePromptRow["source"]; marker?: string }) {
+function PromptBlockHeading(props: {
+  name: string | null;
+  source: EffectivePromptRow["source"];
+  marker?: { label: string; color: string } | null;
+}) {
   return (
     <span className="inline-flex items-center gap-2">
-      {props.name ? <span>{props.name}</span> : null}
+      {props.name ? (
+        <span className="text-body font-medium truncate" style={{ color: "var(--fg)" }}>
+          {props.name}
+        </span>
+      ) : null}
       <span className="text-caption font-normal" style={{ color: "var(--fg-4)" }}>
         {sourceLabel(props.source)}
       </span>
       {props.marker ? (
         <span
           className="mono inline-flex items-center gap-1.5 text-caption font-normal"
-          style={{ color: "var(--fg-4)" }}
+          style={{ color: props.marker.color }}
         >
-          <StatusGlyph colorVar="var(--fg-4)" shape="dot" size={7} ariaLabel={props.marker} />
-          {props.marker}
+          <StatusGlyph colorVar={props.marker.color} shape="dot" size={7} ariaLabel={props.marker.label} />
+          {props.marker.label}
         </span>
       ) : null}
     </span>
