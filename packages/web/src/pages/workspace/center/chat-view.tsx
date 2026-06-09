@@ -64,6 +64,7 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
+import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -492,23 +493,40 @@ function TextRow({
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
       ) : (
-        <Avatar
+        <AgentHovercard
+          agentId={msg.senderId}
+          chatId={msg.chatId}
           name={senderName}
-          imageUrl={agentAvatarFn(msg.senderId)}
-          seed={msg.senderId}
-          colorToken={agentColorTokenFn(msg.senderId)}
-        />
+          placement="right"
+          triggerClassName="block cursor-pointer self-start rounded-full"
+        >
+          <Avatar
+            name={senderName}
+            imageUrl={agentAvatarFn(msg.senderId)}
+            seed={msg.senderId}
+            colorToken={agentColorTokenFn(msg.senderId)}
+          />
+        </AgentHovercard>
       )}
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span
-            className="mono text-body font-semibold"
-            style={{
-              color: isSelf ? "var(--fg)" : "var(--primary)",
-            }}
-          >
-            {senderName}
-          </span>
+          {isGithubSystem ? (
+            <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+              {senderName}
+            </span>
+          ) : (
+            <AgentHovercard
+              agentId={msg.senderId}
+              chatId={msg.chatId}
+              name={senderName}
+              placement="bottom"
+              triggerClassName="cursor-pointer hover:underline"
+            >
+              <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+                {senderName}
+              </span>
+            </AgentHovercard>
+          )}
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             {formatClockTime(msg.createdAt)}
           </span>
