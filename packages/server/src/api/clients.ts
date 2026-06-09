@@ -1,4 +1,5 @@
 import { updateClientCapabilitiesSchema } from "@first-tree/shared";
+import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
@@ -22,11 +23,13 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const capabilities =
       metadata.capabilities && typeof metadata.capabilities === "object" ? metadata.capabilities : {};
     const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
+    const binName = getChannelConfig(app.config.channel).binName;
     return {
       id: client.id,
       userId: client.userId,
       status: client.status,
       authState: clientService.deriveAuthState(client, refreshExpirySeconds),
+      binName,
       sdkVersion: client.sdkVersion,
       hostname: client.hostname,
       os: client.os,

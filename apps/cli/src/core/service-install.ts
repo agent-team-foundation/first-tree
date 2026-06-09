@@ -73,7 +73,7 @@ export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reaso
 // Service identifiers derived from the binary's channel — see
 // `packages/shared/src/channel/`. Every channel (dev / staging / prod)
 // owns its own unit name / launchd label, so multiple daemons coexist
-// without colliding on the same `first-tree-client.service`.
+// without colliding on the same service identifier.
 const SYSTEMD_UNIT = channelConfig.serviceUnitFile;
 const LAUNCHD_LABEL = channelConfig.launchdLabel;
 // `SyslogIdentifier` is the bare service name without `.service`. The
@@ -452,7 +452,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree login <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`${channelConfig.binName} login <token>\`.`,
     );
   }
 
@@ -533,7 +533,7 @@ export function renderSystemdUnit(
   //     UpdateManager exits 75 after `npm i -g`, systemd sees it as a
   //     "must restart" signal and brings up the new binary.
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
-  // Logs go through journald — `journalctl --user -u first-tree-client` is
+  // Logs go through journald — `journalctl --user -u <service-unit>` is
   // the documented surface. The client itself still writes its rotating NDJSON
   // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
@@ -625,8 +625,8 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
 function installSystemd(): ServiceInfo {
   // Legacy unit auto-cleanup deliberately not done here — same reason
   // as `installLaunchd` above. A blanket `disable --now` + `rm` of
-  // `first-tree-client.service` / `first-tree-client-dev.service` /
-  // etc. would silently wipe a peer staging/prod install that the
+  // a retired or sibling channel service unit would silently wipe a peer
+  // staging/prod install that the
   // operator hasn't migrated yet. MIGRATION.md Phase 2 documents the
   // operator-driven `systemctl --user stop` + `rm` snippet instead.
   const invocation = resolveCliInvocation();
@@ -657,7 +657,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree login <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <token>\`.`,
     );
   }
 
@@ -714,7 +714,7 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
-      "Run `first-tree daemon start` manually to keep the computer online.",
+      `Run \`${channelConfig.binName} daemon start\` manually to keep the computer online.`,
   );
 }
 

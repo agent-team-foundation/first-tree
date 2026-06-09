@@ -182,9 +182,8 @@ function looksLikeVersion(spec: string): boolean {
  * function remains side-effect-scoped).
  *
  * Why both shapes exist: the auto-update path and the default manual
- * `first-tree upgrade` command receive an exact target version from the
- * server and MUST install that exact version. The explicit
- * `first-tree upgrade --latest` escape hatch keeps the dist-tag form for
+ * `upgrade` command receive an exact target version from the server and MUST
+ * install that exact version. The explicit `upgrade --latest` escape hatch keeps the dist-tag form for
  * operators who want the freshest package directly from npm.
  */
 export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
@@ -293,7 +292,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
 
 /**
  * Back-compat shim: install `<pkg>@latest`. Used by
- * `first-tree upgrade --latest`; managed update paths prefer
+ * `upgrade --latest`; managed update paths prefer
  * `installGlobalSpec` with the server-advertised target version.
  */
 export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {

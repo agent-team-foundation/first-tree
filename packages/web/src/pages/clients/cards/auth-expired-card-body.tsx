@@ -18,7 +18,7 @@ type AuthExpiredCardBodyProps = {
  * last successful heartbeat) renders dimmed.
  *
  * Layout:
- *   Meta:      Hasn't checked in for 8 days · first-tree X · OS
+ *   Meta:      Hasn't checked in for 8 days · First Tree X · OS
  *   Runtimes:  ✓ Claude Code v0.2.130 (dimmed)
  *   Agents:    per-agent list (dimmed)
  *

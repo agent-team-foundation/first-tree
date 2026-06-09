@@ -62,7 +62,7 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         const message = err instanceof Error ? err.message : String(err);
-        print.line(`[first-tree] warning: could not read ${dir}/package.json: ${message}\n`);
+        print.line(`[${channelConfig.binName}] warning: could not read ${dir}/package.json: ${message}\n`);
       }
     }
     const parent = dirname(dir);

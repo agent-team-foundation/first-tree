@@ -134,7 +134,7 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
   // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
-  // shipped skills payload tracks `first-tree upgrade` even when the Context
+  // shipped skills payload tracks CLI upgrades even when the Context
   // Tree HEAD is unchanged. Same fail-open rule as tree drift.
   const currentCliVersion = resolveBundledCliVersion();
   const cachedCliVersion = readCachedBundledCliVersion(workspace);

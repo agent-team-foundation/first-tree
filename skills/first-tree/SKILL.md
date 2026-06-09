@@ -156,7 +156,7 @@ For exhaustive flags / env vars / behavior of each command, see
 
 ## Mandatory Pre-Task Hygiene
 
-Before invoking any first-tree CLI command on the current repo, run these
+Before invoking any First Tree CLI command on the current repo, run these
 three checks **in order**. They are cheap, they prevent the most common
 class of mistakes (acting on stale state or the wrong role), and the
 downstream skills assume you have done them.
@@ -165,7 +165,7 @@ downstream skills assume you have done them.
 
 The workspace-rooted layout (W1, shipped 2026-06) consolidates binding
 state into a single file at `<workspace-root>/.first-tree/workspace.json`.
-There is no longer a `first-tree tree status` CLI to read it — the `tree`
+There is no longer a `<binName> tree status` CLI to read it — the `tree`
 namespace was retired down to just `verify` in 2026-06. Read the file
 yourself (it is small JSON):
 

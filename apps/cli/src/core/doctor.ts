@@ -9,6 +9,7 @@ import {
 } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
+import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
@@ -226,7 +227,7 @@ export async function reconcileAgentConfigs(opts: {
       `${localCount} configured locally, ${activePinnedCount} active` +
       `${suspendedLocalCount > 0 ? `, ${suspendedLocalCount} suspended/disabled` : ""}; ` +
       `${stale.length} stale: ${staleSummary}${truncated} — ` +
-      "run `first-tree agent prune` to clean up",
+      `run \`${channelConfig.binName} agent prune\` to clean up`,
   };
 }
 
@@ -256,7 +257,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: "not installed — re-run `first-tree login <token>` to install",
+    detail: `not installed — re-run \`${channelConfig.binName} login <token>\` to install`,
   };
 }
 

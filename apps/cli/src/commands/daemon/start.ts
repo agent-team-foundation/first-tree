@@ -20,6 +20,7 @@ import {
 } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
+import { channelConfig } from "../../core/channel.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
@@ -51,6 +52,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
     .option("--no-interactive", "Skip interactive prompts (for Docker/CI)")
     .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
     .action(async (options: { interactive?: boolean; foreground?: boolean }) => {
+      const binName = channelConfig.binName;
       // Fail closed: never spin up the runtime without persisted credentials.
       // Hooking this in BEFORE the service-delegation branch keeps the policy
       // uniform — supervisor child, foreground debug, or background daemon
@@ -59,7 +61,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
       if (!loadCredentials()) {
         fail(
           "NO_CREDENTIALS",
-          "no credentials — run `first-tree login <token>` to sign in before starting the daemon.",
+          `no credentials — run \`${binName} login <token>\` to sign in before starting the daemon.`,
           1,
         );
       }
@@ -81,7 +83,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           if (svc.state === "active") {
             print.line("\n");
             print.line(`  Service is already running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""}).\n`);
-            print.line("  Use `first-tree daemon restart` to restart, or `--foreground` to run inline.\n\n");
+            print.line(`  Use \`${binName} daemon restart\` to restart, or \`--foreground\` to run inline.\n\n`);
             return;
           }
           if (svc.state === "inactive") {
@@ -136,7 +138,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             print.line(
               `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
             );
-            print.line("  Inspect with `first-tree daemon doctor`, or pass `--foreground` to bypass.\n\n");
+            print.line(`  Inspect with \`${binName} daemon doctor\`, or pass \`--foreground\` to bypass.\n\n`);
             process.exit(1);
           }
           // state === "not-installed" → fall through to inline run.
@@ -290,14 +292,14 @@ export function registerDaemonStartCommand(daemon: Command): void {
                   if (pinnedByAgentId && !pinned) {
                     print.status(
                       "⚠️",
-                      `skills upload for ${name} skipped: local agent ${c.agentId} is not pinned to this user; run \`first-tree agent prune --dry-run\` to inspect stale aliases.`,
+                      `skills upload for ${name} skipped: local agent ${c.agentId} is not pinned to this user; run \`${binName} agent prune --dry-run\` to inspect stale aliases.`,
                     );
                     return;
                   }
                   if (pinned && pinned.clientId !== config.client.id) {
                     print.status(
                       "⚠️",
-                      `skills upload for ${name} skipped: local agent ${c.agentId} is pinned to another client (${pinned.clientId}); run \`first-tree agent prune --dry-run\` to inspect stale aliases.`,
+                      `skills upload for ${name} skipped: local agent ${c.agentId} is pinned to another client (${pinned.clientId}); run \`${binName} agent prune --dry-run\` to inspect stale aliases.`,
                     );
                     return;
                   }
@@ -338,7 +340,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (error instanceof ClientUserMismatchError) {
           print.line("\n");
           print.line("  ⚠️  This client.yaml is owned by a different user.\n");
-          print.line("  Run `first-tree login <token> --override` to transfer ownership\n");
+          print.line(`  Run \`${binName} login <token> --override\` to transfer ownership\n`);
           print.line("  to your account. The previous owner's agents will be unpinned\n");
           print.line("  from this machine.\n\n");
           process.exit(1);
@@ -347,7 +349,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           await handleClientOrgMismatch(error, {
             managed: options.interactive === false,
             configDir: defaultConfigDir(),
-            rerunCommand: "first-tree daemon start",
+            rerunCommand: `${binName} daemon start`,
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

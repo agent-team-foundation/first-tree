@@ -46,7 +46,7 @@ const ORG_ID = "org-acme";
 const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
 const DEFAULT_AGENT_NAME = "Gandy's assistant";
-const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+const SAMPLE_CLI = "npm install -g <package>\n<binName> login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 
 const NOW_ISO = new Date().toISOString();
 
@@ -55,6 +55,7 @@ const HOST: HubClient = {
   userId: "user-1",
   status: "connected",
   authState: "ok",
+  binName: "first-tree",
   sdkVersion: "0.42.0",
   hostname: "gandys-macbook",
   os: "darwin",

@@ -370,6 +370,11 @@ stay in the node body.
 
 ## CLI Surface
 
+CLI examples in this skill use the canonical prod binary `first-tree` for
+readability. Substitute the channel-correct binary from AGENTS / current
+channel (`first-tree` on prod, `first-tree-staging` on staging,
+`first-tree-dev` on dev) before running them.
+
 The Context-management CLI you actually depend on while reading or
 writing is small. Today only one command is operationally required:
 

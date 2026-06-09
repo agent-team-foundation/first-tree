@@ -17,13 +17,13 @@ import { writeWorkspaceManifest } from "./workspace.js";
 
 /**
  * Workspace migration helper (was the implementation of the retired
- * `first-tree tree migrate-to-w1` command). Converges a workspace from
+ * `<binName> tree migrate-to-w1` command). Converges a workspace from
  * the legacy multi-mode binding model onto the workspace-rooted layout
  * (§W1) defined in:
  *   first-tree-context: first-tree-skill-cli/workspace-layout-simplification.md
  *
  * The CLI wrapper was retired in 2026-06 along with the rest of the
- * `first-tree tree` namespace; this helper stays around for one-off
+ * `<binName> tree` namespace; this helper stays around for one-off
  * scripted use and for legacy workspaces that need a manual run.
  *
  * The migration is one-way and non-transactional but never commits to git:
@@ -454,7 +454,7 @@ export function detectMigrationState(cwd: string): MigrationDetection {
 
   return {
     kind: "not-applicable",
-    reason: `No legacy first-tree state detected at ${resolved} (looked for .first-tree-workspace, tree/.first-tree/bindings/, and .first-tree/source.json).`,
+    reason: `No legacy First Tree state detected at ${resolved} (looked for .first-tree-workspace, tree/.first-tree/bindings/, and .first-tree/source.json).`,
   };
 }
 

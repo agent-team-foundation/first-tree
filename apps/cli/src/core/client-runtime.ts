@@ -19,6 +19,7 @@ import type { AgentConfig } from "@first-tree/shared/config";
 import { agentConfigSchema, defaultConfigDir, defaultDataDir, loadAgents } from "@first-tree/shared/config";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 import { readUpdateState } from "./update-state.js";
 import { CLI_USER_AGENT } from "./version.js";
@@ -91,13 +92,13 @@ export class ClientRuntime {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Directory we write auto-registered agent configs into (same path that
-   * `first-tree agent add` uses). Set by `watchAgentsDir` so the
+   * `agent add` uses). Set by `watchAgentsDir` so the
    * `agent:pinned` handler knows where to materialise new configs.
    */
   private agentsDir: string | null = null;
   /**
    * Watcher on credentials.json (Bug 2 paused-mode recovery). Detects a
-   * fresh `first-tree login <token>` while the runtime is paused and tells
+   * fresh login while the runtime is paused and tells
    * the connection to clear paused mode and reconnect with the new token.
    */
   private credentialsWatcher: FSWatcher | null = null;
@@ -144,14 +145,17 @@ export class ClientRuntime {
     // failing state, leaking claude / playwright subprocesses every cycle),
     // enter paused mode. The connection holds, agent slots stop processing
     // inbox messages, and a credentials.json watcher waits for the operator
-    // to run `first-tree login <new-token>`. On change we call
+    // to run the channel-aware login command. On change we call
     // `connection.clearPaused()` to resume.
     this.connection.on("auth:paused", (reason, err) => {
       print.blank();
       print.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
       print.status("", authPausedDetail(err));
       print.status("", "Recovery: get a new connect token from the First Tree web console");
-      print.status("", "          (Computers → + New Connection), then re-run `first-tree login <token>`.");
+      print.status(
+        "",
+        `          (Computers → + New Connection), then re-run \`${channelConfig.binName} login <token>\`.`,
+      );
       print.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
       this.ensureCredentialsWatcher();
     });
@@ -175,7 +179,7 @@ export class ClientRuntime {
     });
 
     // Server tells us an agent has just been pinned to this client — mirror
-    // what `first-tree agent add` does (write local config) and let the
+    // what `agent add` does (write local config) and let the
     // scanForNewAgents helper start the slot. The fs watcher, when active,
     // is also a fallback path for the same flow.
     this.connection.on("agent:pinned", (message) => {
@@ -273,7 +277,10 @@ export class ClientRuntime {
     if (this.agents.length === 0) {
       print.blank();
       print.status("", "no agents configured yet.");
-      print.status("", "add one with: first-tree agent create <name> --type claude-code --client-id <id>");
+      print.status(
+        "",
+        `add one with: ${channelConfig.binName} agent create <name> --type claude-code --client-id <id>`,
+      );
       print.blank();
       return;
     }
@@ -341,7 +348,7 @@ export class ClientRuntime {
 
   /**
    * Bug 2 paused-mode recovery: watch credentials.json for changes. When
-   * the file content changes (operator ran `first-tree login`), tell the
+   * the file content changes (operator ran the channel-aware login command), tell the
    * connection to clear paused state. The connection's reconnect loop then
    * picks up the new JWT via `ensureFreshAccessToken`.
    */
@@ -451,7 +458,7 @@ export class ClientRuntime {
 
   /**
    * React to an `agent:pinned` server push by writing the local config file
-   * (same shape `first-tree agent add` produces) and scheduling the new
+   * (same shape `agent add` produces) and scheduling the new
    * slot — so the operator doesn't have to run `agent add` manually after
    * creating an agent from the admin UI or API.
    */

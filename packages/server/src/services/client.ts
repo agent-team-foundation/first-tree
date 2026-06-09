@@ -45,7 +45,7 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `first-tree login <token> --override` to take
+ *     operator through `<binName> login <token> --override` to take
  *     ownership, which unpins the previous owner's agents from the machine.
  */
 export async function registerClient(
@@ -243,7 +243,7 @@ export function extractCapabilities(metadata: unknown): ClientCapabilities {
  * List the active agents currently pinned to a client. Used by the WS
  * registration handshake to backfill `agent:pinned` notifications missed while
  * the client was offline — without it, an admin who pinned an agent during a
- * client outage would still need a manual `first-tree agent add`.
+ * client outage would still need a manual `agent add`.
  *
  * Only returns active agents. Suspended/deleted agents are intentionally not
  * startup candidates, so clients do not attempt binds the server will reject.

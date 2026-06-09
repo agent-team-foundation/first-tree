@@ -43,7 +43,7 @@ export type SetupDevUserOptions = {
  *   2. POST /me/connect-tokens → short-lived connect-token (mimics the web
  *      "Add CLI" button)
  *   3. POST /auth/connect-token → user JWT pair from the connect-token (the
- *      `first-tree login` command's `exchangeToken` step)
+ *      login command's `exchangeToken` step)
  *   4. Plant credentials.json + client.yaml on disk under `${runHome}-devuser`
  *      so the spawned CLI doesn't need to run an interactive login
  *   5. spawn `daemon start --foreground --no-interactive`, which is what a
@@ -52,7 +52,7 @@ export type SetupDevUserOptions = {
  *      `clients.metadata.capabilities`, which the web onboarding flow then
  *      reads to decide "no runtime ready on this computer" vs. "ready"
  *
- * `first-tree login <token> --no-start` is deliberately NOT used here:
+ * `login <token> --no-start` is deliberately NOT used here:
  * its inline-running path skips the capabilities probe, leaving
  * `clients.metadata` NULL and the web onboarding step 2 stuck on
  * "No runtime ready on this computer". `daemon start --foreground` is the

@@ -88,7 +88,7 @@ export function configureClientLoggerForService(logDir: string): void {
     maxFiles: SERVICE_LOG_MAX_FILES,
   });
   // Pretty ANSI codes in a log file are noise; lock format to NDJSON. Tail with
-  // `tail -f ~/.first-tree/logs/client.log` and pipe through `jq` to format.
+  // `tail -f $FIRST_TREE_HOME/logs/client.log` and pipe through `jq` to format.
   applyClientLoggerConfig({ format: "json", destination: stream });
 }
 

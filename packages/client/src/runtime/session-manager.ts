@@ -1563,7 +1563,7 @@ export class SessionManager {
     const selfSlug = basename(this.config.handlerConfig.workspaceRoot);
     // Resolve the self-fence SYNCHRONOUSLY from the already-populated config
     // cache so it can ride the agent's env (`buildAgentEnv` is sync). This
-    // lets a `first-tree chat send` sub-process snapshot referenced docs
+    // lets a `<binName> chat send` sub-process snapshot referenced docs
     // exactly like result-sink does (L3: unify capture across send paths).
     // result-sink keeps its own async `getSelfFence`; both read the same cache
     // (`refreshIfNewer(_, 0)` returns the cached payload), so the fence they

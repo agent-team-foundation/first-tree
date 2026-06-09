@@ -285,7 +285,7 @@ describe("login command", { timeout: 15_000 }, () => {
     );
     expect(handleClientOrgMismatchMock).toHaveBeenCalledWith(
       expect.any(client.ClientOrgMismatchError),
-      expect.objectContaining({ managed: false, rerunCommand: "first-tree login <token>" }),
+      expect.objectContaining({ managed: false, rerunCommand: "first-tree-dev login <token>" }),
     );
 
     stderrMock.mockClear();

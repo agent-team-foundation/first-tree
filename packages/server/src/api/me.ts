@@ -446,11 +446,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const list = await clientService.listClients(app.db, { userId });
     const refreshExpirySeconds = authService.expiryToSeconds(app.config.auth.refreshTokenExpiry);
+    const binName = getChannelConfig(app.config.channel).binName;
     return list.map((c) => ({
       id: c.id,
       userId: c.userId,
       status: c.status,
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
+      binName,
       sdkVersion: c.sdkVersion,
       hostname: c.hostname,
       os: c.os,

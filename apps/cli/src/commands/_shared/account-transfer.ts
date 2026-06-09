@@ -3,6 +3,7 @@ import { confirm } from "@inquirer/prompts";
 import { fail } from "../../cli/output.js";
 import { findStaleAliases, formatStaleReason, removeLocalAgent } from "../../core/agent-prune.js";
 import { ensureFreshAccessToken } from "../../core/bootstrap.js";
+import { channelConfig } from "../../core/channel.js";
 import { cliFetch } from "../../core/cli-fetch.js";
 import { print } from "../../core/output.js";
 import { CLI_USER_AGENT } from "../../core/version.js";
@@ -89,7 +90,7 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
           }).catch(() => false);
 
     if (!approved) {
-      print.line("  Skipped. Run `first-tree agent prune` later to clean up.\n");
+      print.line(`  Skipped. Run \`${channelConfig.binName} agent prune\` later to clean up.\n`);
       return;
     }
 
@@ -110,6 +111,6 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(`  (Could not check for stale aliases: ${msg.slice(0, 100)})\n`);
-    print.line("  Run `first-tree agent prune` after reconnecting.\n");
+    print.line(`  Run \`${channelConfig.binName} agent prune\` after reconnecting.\n`);
   }
 }

@@ -98,8 +98,8 @@ export type SessionContext = HandlerContext & {
   markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
-   * Build env for CLI sub-processes that shell out to the `first-tree`
-   * CLI. Layers First Tree envelope vars (server/agent/inbox/chat IDs) on
+   * Build env for CLI sub-processes that shell out to the First Tree CLI.
+   * Layers First Tree envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
    */
   buildAgentEnv: (parentEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;

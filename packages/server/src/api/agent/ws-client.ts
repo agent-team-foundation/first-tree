@@ -781,7 +781,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // Backfill `agent:pinned` for any agent already bound to this
               // client at registration time. Without this, an admin who pins an
               // agent while the client is offline would still need a manual
-              // `first-tree agent add` after restart — the realtime push in
+              // `agent add` after restart — the realtime push in
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               try {

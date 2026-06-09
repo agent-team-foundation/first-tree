@@ -169,6 +169,7 @@ const CLIENTS: HubClient[] = [
     userId: "user-self",
     status: "connected",
     authState: "ok",
+    binName: "first-tree-dev",
     sdkVersion: "0.5.0",
     hostname: "gandy-macbook",
     os: "darwin",
@@ -199,6 +200,7 @@ const CLIENTS: HubClient[] = [
     userId: "user-alice",
     status: "disconnected",
     authState: "expired",
+    binName: "first-tree-dev",
     sdkVersion: "0.5.0",
     hostname: "alice-linux",
     os: "linux",
@@ -1210,7 +1212,7 @@ describe("page SSR smoke coverage", () => {
         <ConnectCommandPanel command={null} phase="error" errorContent="Could not mint a token" />
         <ConnectStuckPanel />
         <ShowMeHow>
-          <TerminalGuide />
+          <TerminalGuide command="first-tree-dev login token" />
           <InstallGuide />
         </ShowMeHow>
       </>,

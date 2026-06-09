@@ -111,6 +111,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     userId: overrides.userId ?? "user-self",
     status: overrides.status ?? "connected",
     authState: overrides.authState ?? "ok",
+    binName: overrides.binName ?? "first-tree-dev",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
     ...(overrides.serverCommandVersion !== undefined ? { serverCommandVersion: overrides.serverCommandVersion } : {}),
     hostname: overrides.hostname ?? "gandy-macbook",
@@ -374,9 +375,9 @@ describe("ClientsPage computer cards", () => {
     await waitForText(container, "probe failed");
 
     await click(buttonByText(container, "Daemon not running?"));
-    await waitForText(container, "first-tree daemon start");
-    await click(copyButtonForCommand(container, "first-tree daemon start"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree daemon start");
+    await waitForText(container, "first-tree-dev daemon start");
+    await click(copyButtonForCommand(container, "first-tree-dev daemon start"));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev daemon start");
 
     await click(exactButton(container, "Show"));
     await waitForText(container, "Team computers");

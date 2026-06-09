@@ -19,7 +19,7 @@ export type ComputerStatus = {
  * actionable first:
  *
  *   1. `auth_expired` — credentials are dead, the user must rerun
- *      `first-tree login` on the machine.
+ *      the channel-aware login command on the machine.
  *   2. `offline`      — credentials are alive but the machine is not.
  *   3. `ready`        — connected and at least one runtime is `ok`.
  *   4. `setup_incomplete` — connected but no runtime is `ok` yet.

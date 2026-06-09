@@ -18,6 +18,7 @@ function client(overrides: Partial<HubClient>): HubClient {
     userId: "u-1",
     status: "connected",
     authState: "ok",
+    binName: "first-tree-dev",
     sdkVersion: "v1.3.2",
     hostname: "MacBook-Pro.local",
     os: "macOS",

@@ -16,7 +16,7 @@
 //
 // This test fails fast on either path if anyone adds a `first-tree tree
 // <retired>` reference back. Documentation prose that describes the
-// deletion (e.g. "the `first-tree tree status` CLI was retired in
+// deletion (e.g. "the tree status CLI was retired in
 // 2026-06") is allowed; only ACTIVE instructions to run the command
 // are caught. The discrimination is structural: we only flag matches
 // inside fenced ```bash code blocks (where they would be copy-pasted

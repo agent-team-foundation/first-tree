@@ -26,18 +26,20 @@ everything online.
 ## End-to-end flow
 
 ```bash
+FT_BIN=<binName> # first-tree, first-tree-staging, or first-tree-dev
+
 # 1. Sign this machine in. Persists credentials and installs the
 #    background daemon on macOS / Linux.
-first-tree login <connect-token>
+$FT_BIN login <connect-token>
 
 # 2. Create the agent record on the server and bind it to this client.
 #    The same JWT signs every request — no per-agent token.
-first-tree agent create alice \
+$FT_BIN agent create alice \
   --type human \
-  --client-id "$(first-tree config get client.id | awk '{print $2}')"
+  --client-id "$($FT_BIN config get client.id | awk '{print $2}')"
 
 # 3. Start the daemon (no-op if `login` already started it).
-first-tree daemon start
+$FT_BIN daemon start
 ```
 
 `--type` accepts `human` or `agent`. The `client-id` argument is required
@@ -45,10 +47,10 @@ because an agent is permanently bound to exactly one client machine.
 
 ## What `first-tree login` writes
 
-- `~/.first-tree/config/credentials.json` (mode `0600`) —
+- `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL derived from the
   token's `iss` claim.
-- `~/.first-tree/config/client.yaml` — `client.id` (auto-generated
+- `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level
   service so the machine stays online across reboots. Pass `--no-start`
@@ -61,7 +63,7 @@ there are no per-agent bearer tokens.
 
 When an admin creates an agent with `--client-id <thisClientId>` (or
 binds an existing one via PATCH), the server pushes an `agent:pinned`
-frame and the running daemon writes `~/.first-tree/config/agents/<name>/agent.yaml`
+frame and the running daemon writes `$FIRST_TREE_HOME/config/agents/<name>/agent.yaml`
 automatically. On reconnect, the server backfills any pins that landed
 while the client was offline.
 
@@ -108,7 +110,7 @@ retained as a read-only debug endpoint.
 
 | Variable | Purpose |
 |---|---|
-| `FIRST_TREE_HOME` | Override config/data home directory (default: `~/.first-tree`) |
+| `FIRST_TREE_HOME` | Override config/data home directory. By default this is channel-dependent: `~/.first-tree` for prod, `~/.first-tree-staging` for staging, `~/.first-tree-dev` for dev. |
 | `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
 
 ## Using the SDK

@@ -6,10 +6,10 @@ import { Client as PgClient } from "pg";
 
 /**
  * E2E credentials helper — provisions the **minimum** set of rows needed for
- * a spawned `first-tree daemon start --foreground` to authenticate +
+ * a spawned channel-aware `daemon start --foreground` to authenticate +
  * register against the server, plus a `credentials.json` + `client.yaml` on
- * disk so the CLI picks them up as if the user had run `first-tree
- * connect`. Direct PG writes are kept deliberately narrow:
+ * disk so the CLI picks them up as if the user had run the login flow.
+ * Direct PG writes are kept deliberately narrow:
  *
  *   1. `users`        — id, username, password_hash, display_name
  *   2. `agents` (human) — uuid, organization_id, type, display_name, inbox_id,

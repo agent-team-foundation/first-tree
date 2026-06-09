@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, renameSync, statSync } from "nod
 import { join } from "node:path";
 import { migrateLegacyRuntimeLayout } from "@first-tree/client";
 import { parse as parseYaml } from "yaml";
+import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
@@ -309,7 +310,7 @@ export async function migrateLocalAgentDirs(opts: {
       if (orphanSessions.length > 0) parts.push(`sessions: ${orphanSessions.join(", ")}`);
       print.status(
         "",
-        `orphaned local state detected (${parts.join("; ")}). Run \`first-tree agent workspace clean\` to reclaim disk.`,
+        `orphaned local state detected (${parts.join("; ")}). Run \`${channelConfig.binName} agent workspace clean\` to reclaim disk.`,
       );
     }
   } catch {

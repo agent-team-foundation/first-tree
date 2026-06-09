@@ -18,7 +18,7 @@ type SetupIncompleteCardBodyProps = {
  * Install a runtime.
  *
  * Meta line matches Ready's `heartbeat` mode (`Heartbeat 7 seconds
- * ago · first-tree X · OS`) so the four pill states share one rhythm.
+ * ago · First Tree X · OS`) so the four pill states share one rhythm.
  * The earlier `Online · no runtime ready` prefix was dropped: the
  * yellow "Setup incomplete" pill already says it, and the install
  * boxes below are the action.

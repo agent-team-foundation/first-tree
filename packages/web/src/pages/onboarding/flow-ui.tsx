@@ -174,7 +174,7 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
 /**
  * The terminal one-liner(s) the user pastes to connect a computer. Renders
  * whatever lines the server's bootstrap command contains — typically two
- * (`npm install -g …` then `first-tree login <token>`), but dev channels
+ * (`npm install -g …` then `<binName> login <token>`), but dev channels
  * return only the login line, and a future channel might add more. Each
  * line nowraps and ellipsizes on overflow so a long opaque token shows as
  * much as fits without word-breaking; Copy puts the full multi-line command

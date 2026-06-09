@@ -77,9 +77,14 @@ Definitions, signals, and worked examples in
 
 The CLI / filesystem surface this skill uses today:
 
+CLI examples in this skill use the canonical prod binary `first-tree` for
+readability. Substitute the channel-correct binary from AGENTS / current
+channel (`first-tree` on prod, `first-tree-staging` on staging,
+`first-tree-dev` on dev) before running them.
+
 - **Workspace binding** — read `<workspaceRoot>/.first-tree/workspace.json`
   directly (the schema is `{ tree: "<dir>", sources: ["<dir>", ...] }`).
-  The `first-tree tree status` CLI that used to wrap this read was
+  The `<binName> tree status` CLI that used to wrap this read was
   retired in 2026-06 along with the rest of the `tree` namespace; the
   manifest is small JSON, just `cat` / `jq` it. Walk up from cwd to
   find the workspace root.

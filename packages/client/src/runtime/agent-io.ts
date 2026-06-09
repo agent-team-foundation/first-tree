@@ -12,7 +12,7 @@ import { findImagePath } from "./image-store.js";
 /**
  * Cross-handler plumbing for First Tree ↔ agent-runtime interaction.
  *
- * Every handler that shells out to the `first-tree` CLI or otherwise acts
+ * Every handler that shells out to the First Tree CLI or otherwise acts
  * on behalf of the agent needs the same envelope variables (server URL, agent
  * id, inbox id, chat id). And every handler that hands inbound messages to an
  * LLM benefits from the same `[From: <name>]` attribution header so the LLM
@@ -23,7 +23,7 @@ import { findImagePath } from "./image-store.js";
  */
 
 /**
- * Build the env for CLI sub-processes that need to call `first-tree ...`.
+ * Build the env for CLI sub-processes that need to call `<binName> ...`.
  * Layers the First Tree envelope variables on top of the parent env. Handlers
  * that start sub-processes should call this so every one of them sees the
  * same envelope — enabling replyTo inference, access-token propagation, and

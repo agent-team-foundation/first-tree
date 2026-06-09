@@ -161,6 +161,7 @@ describe("onboarding hooks and flow", () => {
       userId: "user-self",
       status: "connected",
       authState: "ok",
+      binName: "first-tree-dev",
       sdkVersion: "0.5.0",
       hostname: "gandy-macbook",
       os: "darwin",

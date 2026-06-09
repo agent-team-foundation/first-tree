@@ -216,7 +216,7 @@ export function createExecuteUpdate({
       //
       // Best-effort: failure logs and falls through to exit-75 anyway
       // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
-      // operator can recover with `first-tree logout && login` if the
+      // operator can recover with logout + login if the
       // unit ends up stale).
       refreshServiceUnit();
       print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
@@ -230,8 +230,8 @@ export function createExecuteUpdate({
 }
 
 /**
- * Spawn the newly-installed `first-tree` binary (now on PATH at
- * `/usr/local/bin/first-tree` or the equivalent global location) to
+ * Spawn the newly-installed channel binary (now on PATH at
+ * `/usr/local/bin/<binName>` or the equivalent global location) to
  * rewrite the service unit using its OWN templates.
  *
  * Why a subprocess: this whole function runs inside the OLD daemon process,

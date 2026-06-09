@@ -258,7 +258,7 @@ export function NewConnectionDialog({
           <DialogTitle>{titleOverride ?? "Connect computer"}</DialogTitle>
           <DialogDescription>
             {descriptionOverride ??
-              "Run this command on the machine you want to pair with First Tree. If first-tree isn't installed yet, the command includes the install step."}
+              "Run this command on the machine you want to pair with First Tree. If the CLI isn't installed yet, the command includes the install step."}
           </DialogDescription>
         </DialogHeader>
 

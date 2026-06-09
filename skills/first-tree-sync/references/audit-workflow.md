@@ -4,11 +4,16 @@ Sync's first phase: walk the tree and the code, produce a `drifts[]` list.
 The current CLI does not have a single `tree audit` command yet; this
 workflow uses `tree verify` plus manual reading.
 
+CLI examples in this workflow use the canonical prod binary `first-tree` for
+readability. Substitute the channel-correct binary from AGENTS / current
+channel (`first-tree` on prod, `first-tree-staging` on staging,
+`first-tree-dev` on dev) before running them.
+
 ## Inputs
 
 - one tree repo at `<workspaceRoot>/<tree>`, resolved by reading
   `<workspaceRoot>/.first-tree/workspace.json` directly (schema:
-  `{ tree: "<dir>", sources: [...] }`). The `first-tree tree status`
+  `{ tree: "<dir>", sources: [...] }`). The `<binName> tree status`
   CLI was retired in 2026-06 — the manifest is small JSON, `cat` it.
 - one or more source repos at `<workspaceRoot>/<name>` for each
   `name` in `sources`.

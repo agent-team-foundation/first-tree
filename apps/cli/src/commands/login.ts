@@ -14,6 +14,7 @@ import {
 import { select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
+import { channelConfig } from "../core/channel.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
@@ -87,7 +88,7 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * `first-tree login <token>` — single entry point. The connect token's
+ * `login <token>` — single entry point. The connect token's
  * `iss` claim carries the server URL so prod / staging / local environments are
  * tagged at issuance and the operator can never accidentally cross-target.
  *
@@ -176,7 +177,9 @@ export function registerLoginCommand(program: Command): void {
 
         if (options.start === false) {
           print.line("  (--no-start) credentials written; daemon not launched.\n");
-          print.line("  Run `first-tree daemon start` when ready, or re-run `login` without `--no-start`.\n\n");
+          print.line(
+            `  Run \`${channelConfig.binName} daemon start\` when ready, or re-run \`login\` without \`--no-start\`.\n\n`,
+          );
           return;
         }
 
@@ -230,7 +233,7 @@ export function registerLoginCommand(program: Command): void {
           await handleClientOrgMismatch(error, {
             managed: false,
             configDir: defaultConfigDir(),
-            rerunCommand: "first-tree login <token>",
+            rerunCommand: `${channelConfig.binName} login <token>`,
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

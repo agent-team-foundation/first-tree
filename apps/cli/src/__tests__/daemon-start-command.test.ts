@@ -334,7 +334,7 @@ describe("daemon start command", () => {
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
     expect(coreMocks.handleClientOrgMismatch).toHaveBeenCalledWith(
       expect.any(client.ClientOrgMismatchError),
-      expect.objectContaining({ managed: false, rerunCommand: "first-tree daemon start" }),
+      expect.objectContaining({ managed: false, rerunCommand: "first-tree-dev daemon start" }),
     );
   });
 
