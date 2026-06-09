@@ -13,7 +13,7 @@
 // Design:
 //
 //   - Each migration has a stable `id`. The set of already-applied ids is
-//     persisted to `.agent/migrations-applied.json` so each migration runs
+//     persisted to `.first-tree-workspace/migrations-applied.json` so each migration runs
 //     at most once per workspace, even if it's later removed from the
 //     registry (the marker stays as forward protection).
 //   - Migrations are idempotent — re-running a migration on an already-
@@ -42,10 +42,19 @@ import { type RemoveCloneOutcome, tryRemoveCloneSafely } from "./source-repo-cle
 import { isSourceRepoPathInUse } from "./source-repos.js";
 
 /**
- * Path inside the agent home where {@link applyPendingMigrations} persists
- * the set of already-applied migration ids.
+ * The per-agent runtime directory name. Mirrors `bootstrap.ts ::
+ * FIRST_TREE_RUNTIME_DIR` — inlined to avoid a top-level import cycle (see
+ * the matching note in `managed-state.ts`). Keep in sync with the source
+ * of truth in `bootstrap.ts`.
  */
-export const MIGRATIONS_APPLIED_REL = join(".agent", "migrations-applied.json");
+const RUNTIME_DIR = ".first-tree-workspace";
+
+/**
+ * Path inside the agent home where {@link applyPendingMigrations} persists
+ * the set of already-applied migration ids. Same runtime-dir convention as
+ * `identity.json`, `cli-version`, and `managed.json`.
+ */
+export const MIGRATIONS_APPLIED_REL = join(RUNTIME_DIR, "migrations-applied.json");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -161,7 +170,7 @@ function hasLegacySnapshotSignature(dir: string): boolean {
  * "Yes" only when the live `ctx.currentSourceRepoNames` is non-null — the
  * caller resolved a payload from the server / cache for this session. When
  * it's `null` (cache miss, default-payload fallback), callers MUST return
- * `"deferred"`: persisted `.agent/managed.json::sourceRepos` proves a
+ * `"deferred"`: persisted `.first-tree-workspace/managed.json::sourceRepos` proves a
  * PREVIOUS config, not the current one, and falling back to it after a
  * fresh config edit (web-console add + immediate cache miss on the next
  * start) is the same "unknown config looks authoritative" deletion class
@@ -171,7 +180,7 @@ function hasLegacySnapshotSignature(dir: string): boolean {
  * The trade-off: a workspace whose cache is **permanently** broken never
  * runs the one-shot sweep. That's acceptable because such a workspace
  * cannot reach the resolved-payload codepath that materialises
- * `.agent/managed.json` in the first place — its config-dependent state
+ * `.first-tree-workspace/managed.json` in the first place — its config-dependent state
  * is already inconsistent, and accumulating a few legacy directories on
  * disk is a strictly smaller cost than risking deletion of a currently-
  * configured source repo.
@@ -405,6 +414,63 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       }
     },
   },
+  {
+    id: "v1-orphan-skills",
+    description:
+      "Remove `.agents/skills/<name>/` payloads (and matching `.claude/skills/<name>` symlinks) for a hardcoded list of historical skill names that the CLI used to ship but has since retired. PR #869's state-based `reconcileTreeSkillState` only removes skills it previously recorded in `managed.json::skills`; legacy residue installed before state tracking existed sits on disk forever without an explicit sweep. Because the marker is one-shot per workspace, even if a future bundle re-introduces one of these names, the migration cannot redelete it on a workspace that already applied this id. PR #898 follow-up.",
+    apply: (workspacePath, log) => {
+      // Historical skill names — once shipped with the CLI, since retired.
+      // Each gets its `.agents/skills/<name>/` payload removed AND its
+      // `.claude/skills/<name>` companion symlink removed when present.
+      // Add new names to the end of this list when retiring a bundled
+      // skill; never remove or reorder existing entries (marker is by id,
+      // not by list contents).
+      const historicalNames = [
+        "attention",
+        "first-tree-cloud",
+        "first-tree-github-scan",
+        "first-tree-onboarding",
+        "first-tree-write",
+        "github-scan",
+      ];
+      let removed = 0;
+      for (const name of historicalNames) {
+        const agentsPath = join(workspacePath, ".agents", "skills", name);
+        const claudePath = join(workspacePath, ".claude", "skills", name);
+        let removedAny = false;
+        if (existsSync(agentsPath) && isDirectory(agentsPath)) {
+          rmSync(agentsPath, { recursive: true, force: true });
+          removedAny = true;
+        }
+        // Only unlink the `.claude/skills/<name>` entry when it really is a
+        // symlink — a user-authored regular directory there would NOT be
+        // touched (defensive, mirrors the `v1-whitepaper-symlink` shape
+        // check). The companion symlink is always how the installer wires
+        // these up, so a real-FT install will match.
+        let claudeStat: ReturnType<typeof lstatSync> | null = null;
+        try {
+          claudeStat = lstatSync(claudePath);
+        } catch {
+          // missing — nothing to do
+        }
+        if (claudeStat?.isSymbolicLink()) {
+          try {
+            unlinkSync(claudePath);
+            removedAny = true;
+          } catch {
+            // best-effort; the payload removal above is the main goal
+          }
+        }
+        if (removedAny) {
+          log(`workspace-migrations: v1-orphan-skills removed legacy skill ${name}/`);
+          removed += 1;
+        }
+      }
+      if (removed > 0) {
+        log(`workspace-migrations: v1-orphan-skills removed ${removed} legacy skill(s)`);
+      }
+    },
+  },
 ];
 
 // `readCurrentSourceRepoNames` was the round-3/4 fallback for "live ctx
@@ -439,7 +505,7 @@ function readAppliedRecord(workspacePath: string): AppliedRecord {
 }
 
 function writeAppliedRecord(workspacePath: string, record: AppliedRecord): void {
-  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  mkdirSync(join(workspacePath, RUNTIME_DIR), { recursive: true });
   const finalPath = join(workspacePath, MIGRATIONS_APPLIED_REL);
   const tempPath = `${finalPath}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(tempPath, `${JSON.stringify(record, null, 2)}\n`, "utf-8");

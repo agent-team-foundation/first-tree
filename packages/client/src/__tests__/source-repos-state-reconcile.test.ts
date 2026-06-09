@@ -106,7 +106,7 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), "state-reconcile-"));
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, ".first-tree-workspace"), { recursive: true });
   });
 
   afterEach(() => {
@@ -201,7 +201,7 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
       sourceRepos: ["repo-a", "repo-b"],
       skills: [],
     });
-    const stateBefore = readFileSync(join(workspace, ".agent", "managed.json"), "utf-8");
+    const stateBefore = readFileSync(join(workspace, ".first-tree-workspace", "managed.json"), "utf-8");
 
     const { manager } = makeManager();
     await prepareSourceRepos({
@@ -217,7 +217,7 @@ describe("prepareSourceRepos — state-based reconcile (PR #869 P1-3)", () => {
     expect(existsSync(join(workspace, "repo-a"))).toBe(true);
     expect(existsSync(join(workspace, "repo-b"))).toBe(true);
     // State unchanged — no write happens when reconcile is suppressed.
-    const stateAfter = readFileSync(join(workspace, ".agent", "managed.json"), "utf-8");
+    const stateAfter = readFileSync(join(workspace, ".first-tree-workspace", "managed.json"), "utf-8");
     expect(stateAfter).toBe(stateBefore);
   });
 

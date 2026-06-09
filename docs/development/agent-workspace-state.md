@@ -2,7 +2,7 @@
 
 This page documents the CLI-owned state files that live inside an agent's
 home directory and the contract they enforce. If you're touching anything
-under `<workspace>/.agent/`, anything that calls `prepareSourceRepos`,
+under `<workspace>/.first-tree-workspace/`, anything that calls `prepareSourceRepos`,
 `installFirstTreeSkills`, or `ensureAgentBootstrap`, or you're proposing a
 new directory-structure migration — start here.
 
@@ -25,13 +25,13 @@ sit on disk forever. The state files below are that record.
 
 | Path (relative to workspace root) | Owner | What it is |
 | --- | --- | --- |
-| `.agent/managed.json` | `runtime/managed-state.ts` | Schema-versioned record of the CLI-managed resources currently materialised in this workspace. Two arrays: `sourceRepos` (localPath names) and `skills` (skill names). Diffed on every session start to discover removals. |
-| `.agent/migrations-applied.json` | `runtime/workspace-migrations.ts` | Set of one-shot directory-structure migration ids that have already run in this workspace. Each migration runs at most once even if it's later removed from the registry; the marker stays as forward protection. |
+| `.first-tree-workspace/managed.json` | `runtime/managed-state.ts` | Schema-versioned record of the CLI-managed resources currently materialised in this workspace. Two arrays: `sourceRepos` (localPath names) and `skills` (skill names). Diffed on every session start to discover removals. |
+| `.first-tree-workspace/migrations-applied.json` | `runtime/workspace-migrations.ts` | Set of one-shot directory-structure migration ids that have already run in this workspace. Each migration runs at most once even if it's later removed from the registry; the marker stays as forward protection. |
 
 Both files use atomic writes (temp + rename) so a crashed writer never
 leaves a half-formed JSON record on disk.
 
-### `.agent/managed.json` schema
+### `.first-tree-workspace/managed.json` schema
 
 ```json
 {
@@ -55,7 +55,7 @@ When the file is missing or malformed, the reconcile path treats it as
 "first run on this workspace" and performs no deletions — the safe
 default.
 
-### `.agent/migrations-applied.json` schema
+### `.first-tree-workspace/migrations-applied.json` schema
 
 ```json
 { "schemaVersion": 1, "applied": ["v1-uuid-snapshots", "v1-whitepaper-symlink"] }
@@ -183,4 +183,4 @@ sweep:
 - `runtime/agent-bootstrap.ts` — wires migrations into session start
 - `packages/shared/src/schemas/workspace-manifest.ts` — the W1 binding
   manifest at `<workspace>/.first-tree/workspace.json` (distinct from
-  `.agent/`; never touched by this machinery)
+  `.first-tree-workspace/`; never touched by this machinery)

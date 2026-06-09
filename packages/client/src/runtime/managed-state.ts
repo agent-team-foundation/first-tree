@@ -4,7 +4,7 @@
 //
 // Scope is deliberately narrow: a list of source-repo localPaths and a list
 // of skill names. Anything else CLI puts in the workspace (AGENTS.md,
-// .agent/identity.json, .claude/skills symlinks, etc.) is owned by other
+// .first-tree-workspace/identity.json, .claude/skills symlinks, etc.) is owned by other
 // flows and not tracked here.
 //
 // Path-level precision: the diff is "prev∖current" → delete. The flip side
@@ -17,12 +17,23 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { join } from "node:path";
 
 /**
+ * The per-agent runtime directory name. Mirrors `bootstrap.ts ::
+ * FIRST_TREE_RUNTIME_DIR` (which itself aliases `FIRST_TREE_WORKSPACE_MARKER`);
+ * inlined as a literal here to avoid a top-level import cycle
+ * (`bootstrap` → `first-tree-skills/installer` → `managed-state` →
+ * `bootstrap` would evaluate the constant before bootstrap finishes
+ * initialising, leaving it `undefined`). Keep in sync with the source of
+ * truth in `bootstrap.ts`.
+ */
+const RUNTIME_DIR = ".first-tree-workspace";
+
+/**
  * Path inside the agent home where {@link readManagedState} /
  * {@link writeManagedState} persist the record. Lives alongside
- * `.agent/identity.json`, `.agent/cli-version`, etc. — same `.agent/`
+ * `identity.json`, `cli-version`, etc. — same per-agent runtime-dir
  * convention every other client-owned state file uses.
  */
-export const MANAGED_STATE_REL = join(".agent", "managed.json");
+export const MANAGED_STATE_REL = join(RUNTIME_DIR, "managed.json");
 
 /**
  * Schema-versioned record of the resources the CLI currently manages in a
@@ -84,7 +95,7 @@ function readStringArray(value: unknown): string[] {
  * leak siblings.
  */
 export function writeManagedState(workspacePath: string, state: ManagedState): void {
-  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  mkdirSync(join(workspacePath, RUNTIME_DIR), { recursive: true });
   const finalPath = join(workspacePath, MANAGED_STATE_REL);
   const tempPath = `${finalPath}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
