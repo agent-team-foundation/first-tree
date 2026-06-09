@@ -468,7 +468,7 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Use the team style guide.");
     expect(container.textContent).toContain("Added by you");
 
-    await click(exactButtonByText(container, "Edit custom instructions"));
+    await click(container.querySelector('button[aria-label="Edit custom instructions"]'));
     await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Use the team style guide.");
@@ -550,7 +550,7 @@ describe("AgentDetailPage", () => {
     await waitForText(container, "Added by you");
     expect(container.textContent).toContain("No instructions yet.");
 
-    await click(exactButtonByText(container, "Edit custom instructions"));
+    await click(container.querySelector('button[aria-label="Edit custom instructions"]'));
     await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Use the team style guide.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -610,7 +610,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    await click(exactButtonByText(container, "Customize for this agent"));
+    await click(container.querySelector('button[aria-label="Customize for this agent"]'));
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
@@ -678,7 +678,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    await click(exactButtonByText(container, "Customize for this agent"));
+    await click(container.querySelector('button[aria-label="Customize for this agent"]'));
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
