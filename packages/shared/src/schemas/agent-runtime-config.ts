@@ -431,3 +431,33 @@ export function deriveRepoLocalPath(url: string): string {
   const lastSegment = noQuery.split(/[/:]/).filter(Boolean).pop() ?? "";
   return lastSegment.replace(/\.git$/i, "");
 }
+
+const DEFAULT_BRANCH_NAMES: ReadonlySet<string> = new Set(["main", "master"]);
+
+/**
+ * Short `owner/repo` label from a repo URL — drops the host, the `.git` suffix,
+ * and any query/fragment. Falls back to the bare repo name when no owner segment
+ * is present. For compact, non-technical repo display (vs the full URL).
+ */
+export function deriveRepoShortLabel(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  const noQuery = trimmed.split(/[?#]/)[0] ?? "";
+  const segments = noQuery.split(/[/:]/).filter(Boolean);
+  const repo = (segments.pop() ?? "").replace(/\.git$/i, "");
+  const owner = segments.pop() ?? "";
+  return owner ? `${owner}/${repo}` : repo;
+}
+
+/**
+ * One-line repo coordinate for display: `owner/repo`, with `@branch` appended
+ * only for a non-default branch and `→ localPath` only for a non-default mount
+ * path. Defaults (main/master, the path derived from the repo name) are omitted
+ * so common repos stay clean and only deviations draw the eye.
+ */
+export function formatRepoCoordinate(repo: { url: string; ref?: string; localPath?: string }): string {
+  const base = deriveRepoShortLabel(repo.url);
+  const branchPart = repo.ref && !DEFAULT_BRANCH_NAMES.has(repo.ref) ? `@${repo.ref}` : "";
+  const pathPart = repo.localPath && repo.localPath !== deriveRepoLocalPath(repo.url) ? ` → ${repo.localPath}` : "";
+  return `${base}${branchPart}${pathPart}`;
+}
