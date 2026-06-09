@@ -38,7 +38,12 @@ import type { ComputerConnection } from "./onboarding/use-computer-connection.js
  */
 
 const ORG_ID = "org-acme";
-const TEAM_NAME = "Acme";
+// Mirror the real signup default: the server auto-names a solo team
+// `${login}'s team` (see packages/server/src/api/auth/github.ts), and the
+// welcome step pre-fills the input with that value verbatim. Using the real
+// shape here (vs a generic "Acme") keeps the gallery faithful for design
+// review and matches the file's existing "Gandy" persona (DEFAULT_AGENT_NAME).
+const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
 const DEFAULT_AGENT_NAME = "Gandy's assistant";
 const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
