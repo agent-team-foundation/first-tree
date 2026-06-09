@@ -119,6 +119,9 @@ See the SKILL.md Communication Principles' Decision guide table and the
 - **Human**, needs a decision / approval / answer → `chat send <name>
   --request --question "..."` (tracked ask, not buried in final text).
 - **Agent** → explicit `chat send <name>` (final text does not wake them).
+  After the handoff, continue only independent work; if their reply is the
+  only remaining input, end the turn and wait to be woken. Do not poll status
+  or escalate on delayed replies alone.
 - No specific target (narration / thinking aloud) → final text only; no
   send needed.
 - Current Chat Context block missing from prompt → conservative mode, all

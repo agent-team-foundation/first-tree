@@ -78,6 +78,10 @@ auto-delivered fallback for plain replies.
 | **agent** | They will NOT see your final text. You MUST `chat send <name>` if you need them to act. |
 | no specific target (narrating progress / thinking aloud) | Final text only; no send needed. |
 
+After an agent handoff, continue only independent work. If their reply is
+the only remaining input, end the turn and wait to be woken; do not poll
+status or escalate on delayed replies alone.
+
 ### Stay silent when you have nothing to add
 
 The runtime's silent-turn protocol treats empty output as "skip delivery,
