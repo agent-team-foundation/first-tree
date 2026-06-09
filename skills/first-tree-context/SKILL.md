@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.8.1
+version: 0.8.2
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -183,21 +183,52 @@ goes in frontmatter:
 - **What** — the decision, design choice, or constraint, **as it
   stands today**. High-level: the durable claim, not the
   implementation; current state, not a timeline of prior states.
-  When the decision changes, rewrite *What* in place to reflect the
-  new state; do not preserve the old state alongside it (`git log`,
-  and any raw-archive domain your tree may have, are where prior
-  states live). The Source-System Boundary table above is the
-  canonical guide for which "whats" belong.
-- **Why** — the rationale: alternatives considered, why they lost, the
-  thinking that produced the decision. **A node without a Why is a
-  fact, not a decision record.** Why-content is the most commonly lost
-  axis — protect it deliberately during the rush to land a PR or close
-  a meeting.
-  - Common sources of Why: meeting discussions, PR review threads,
-    human↔agent design conversations.
+  When the design ends up somewhere the first draft did not — a
+  different architectural choice, an extra constraint, a
+  course-correct on the initial proposal — **the new direction
+  is the What.** Write it as the durable claim of the design,
+  not as "what we changed to" or "what the reviewer asked for".
+  When the decision later changes again, rewrite *What* in place
+  to reflect the new state; do not preserve the old state
+  alongside it (`git log`, and any raw-archive domain your tree
+  may have, are where prior states live). The Source-System
+  Boundary table above is the canonical guide for which "whats"
+  belong.
+- **Why** — the path the design took to its final state: the
+  concerns weighed, the alternatives considered, the
+  course-corrections made and what triggered each one. The final
+  decision is the *What*; the path to it is the *Why*. **A node
+  without a Why is a fact, not a decision record.** Why-content is
+  the most commonly lost axis — protect it deliberately during the
+  rush to land a PR or close a meeting.
+  - **Why lives in the design phase, not the final state.** The
+    concerns, course-corrections, and dropped alternatives are
+    generated *during* design — the moment somebody flags "won't
+    this break X?", the moment a first proposal is corrected, the
+    moment an option is dropped because it conflicts with another
+    domain. By the time the PR lands the design is settled, but
+    the reasoning that settled it lives only in chat / review
+    threads / meeting notes and decays fast.
+  - **Course-corrections are the canonical Why.** Each correction
+    encodes two things at once: an alternative that was *actually
+    pursued* (not abstractly considered), and the constraint or
+    insight that ruled it out. Both are exactly the content that
+    keeps the next agent from re-litigating the same path. In a
+    copilot team most corrections come from human↔agent
+    back-and-forth — capture them while you still have them.
+  - **Translate corrections into present-tense rationale, not
+    narration.** "The agent first proposed a global cache; the
+    human said no" is a timeline (Hard Rule 8 forbids it). "Cache
+    is per-tenant because multi-tenancy isolation is a hard
+    constraint" is the surviving Why. Keep the *constraint* the
+    correction introduced; drop the *story* of how it happened.
+  - Other rich sources: meeting discussions where a decision was
+    reached; PR review threads that changed the design.
   - Self-check: "Six months from now, if a reader reads only the
-    *What*, will they be tempted to re-litigate this decision?" If
-    yes, the Why is under-documented.
+    *What*, will they be tempted to re-litigate this decision?"
+    If yes, the Why is under-documented — the most common gap is
+    a concern or course-correction from the design phase that
+    lived only in chat and never made it into the node.
 - **Who** — ownership, carried by `owners` frontmatter and
   `members/<id>/NODE.md` nodes. **Do not put ownership in the body.**
   Changes here go through humans (Hard Rule 6).
@@ -332,6 +363,50 @@ Belongs: nothing. Naming is implementation detail.
 Belongs: constraints that came out of it ("session tokens must be
 HMAC-signed before storage"); the accountable owner.
 Does not belong: the specific vulnerabilities or how they were patched.
+
+**Trigger: course-correction during design — partway through, a
+reviewer says "no, the cache should be per-tenant, not global;
+multi-tenancy was the whole point of last quarter's work."**
+Belongs (What): "cache is keyed per-tenant".
+Belongs (Why): the multi-tenancy constraint that ruled global caching
+out, written as a *current* constraint ("multi-tenancy isolation is a
+hard constraint; a shared cache violates it"). The correction is the
+canonical Why — without it, the next agent reading the cache code
+alone has no way to re-derive the constraint.
+Does not belong: "we originally proposed a global cache, then switched
+after review" — that is timeline narration (Hard Rule 8). State the
+surviving constraint, not the path to it.
+
+**Trigger: a constraint surfaces during design — partway through,
+somebody points out "this also has to work offline-first for the
+mobile client; we cannot assume connectivity."**
+Belongs (What): "writes are offline-first; the client buffers and
+reconciles on reconnect".
+Belongs (Why): "the mobile client operates without connectivity for
+hours at a time; designs requiring server round-trips do not satisfy
+this constraint." This is the canonical Why a future reader will need
+— no amount of reading the source repo alone would surface the
+offline-first requirement, because it lives only in somebody's head
+until the design phase forces it out and the node records it.
+Does not belong: "the first cut of the design didn't consider
+offline, then we added it after a teammate flagged the mobile case"
+— that is timeline narration (Hard Rule 8). Record the surviving
+constraint, not the path that surfaced it.
+
+**Trigger: design-phase direction picked between options — the
+candidates were A and B; the chosen direction is "B, because A would
+block the auth-rewrite landing next quarter."**
+Belongs (What): the decision to go with B, stated as the durable
+claim of the design.
+Belongs (Why): the cross-domain interaction with the upcoming
+auth-rewrite, named as a present-tense constraint ("the auth-rewrite
+in `/auth/NODE.md` constrains this domain to B-shaped designs"). This
+is the kind of constraint that only surfaces when somebody carrying
+the broader org context weighs in during design — and exactly the Why
+nobody will reconstruct from the code six months from now.
+Does not belong: "option A was considered and rejected because…" as
+historical narration. Phrase the surviving constraint, not the
+past-tense rejection.
 
 **Trigger: PR that flips a policy default — e.g. "approvals required"
 goes from 1 to 0.**
