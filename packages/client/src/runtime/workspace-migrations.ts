@@ -217,7 +217,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-uuid-snapshots",
     description:
-      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently listed in `.agent/managed.json::sourceRepos` (or in the live `ctx.currentSourceRepoNames` when available) so a user with a UUID-shaped `gitRepos.localPath` is never deleted. Per round-4: defers when neither signal is available — a UUID-shaped current source repo whose cloned content ships an AGENTS.md would otherwise match the legacy signature and be `rmSync`'d on the first cache-miss start before any resolved payload could write managed.json.",
+      "Remove legacy UUID-named per-chat snapshot directories at workspace root. Per PR #869 baixiaohang P0: scoped to entries that BOTH match the UUID shape AND carry the legacy snapshot signature (a top-level `AGENTS.md` / `CLAUDE.md` file from when each chat had a self-contained cwd). Also skips anything currently in the live `ctx.currentSourceRepoNames` so a user with a UUID-shaped `gitRepos.localPath` is never deleted. Per round-5: defers when ctx is null — a UUID-shaped current source repo whose cloned content ships an AGENTS.md would otherwise match the legacy signature and be `rmSync`'d before any resolved payload could prove it's still configured.",
     apply: (workspacePath, log, ctx) => {
       if (!hasResolvedConfig(ctx)) {
         log(
@@ -264,11 +264,11 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
     apply: (workspacePath, log, ctx) => {
       const target = join(workspacePath, "first-tree-hub");
       if (!existsSync(target) || !isDirectory(target)) return;
-      // Same defer rule as the UUID + orphan paths: when neither the live
-      // ctx nor the persisted state can confirm whether `first-tree-hub`
-      // is currently configured, refuse to act. The broken-pointer shape
-      // check below would otherwise nuke a clone the user re-added before
-      // the cache had a chance to populate.
+      // Same defer rule as the UUID + orphan paths: when the live ctx
+      // cannot confirm whether `first-tree-hub` is currently configured,
+      // refuse to act. The broken-pointer shape check below would otherwise
+      // nuke a clone the user re-added before the cache had a chance to
+      // populate.
       if (!hasResolvedConfig(ctx)) {
         log(
           "workspace-migrations: v1-retired-source-repo-first-tree-hub deferred — no authoritative current source-repo set; will retry next resolved session",
@@ -276,9 +276,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         return "deferred";
       }
       // Skip if `first-tree-hub` is in the agent's current source-repos
-      // config — a future re-add would otherwise lose its checkout. The
-      // live `ctx.currentSourceRepoNames` is authoritative; fall back to the
-      // persisted state file when the live set is unknown (cache miss).
+      // config — a future re-add would otherwise lose its checkout.
       const currentRepos = ctx.currentSourceRepoNames;
       if (currentRepos.has("first-tree-hub")) {
         log(
@@ -356,13 +354,13 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       'Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace\'s current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869. **Requires an authoritative current source-repo set** (`ctx.currentSourceRepoNames !== null`); on a cache-miss session it returns `"deferred"` so it retries when the next resolved session arrives. PR #869 baixiaohang round-3 P0.',
     apply: (workspacePath, log, ctx) => {
       // The migration relies on "absent from current source-repos config"
-      // to identify orphans. When the live config is unresolved AND the
-      // persisted state file is empty (the common first-upgrade case), an
-      // empty fallback would treat every clean steady-state FT clone as
-      // orphaned and `rm` it. Defer instead — `tryRemoveCloneSafely`'s
+      // to identify orphans. When the live ctx is unresolved, treating it
+      // as an empty set would mark every clean steady-state FT clone as
+      // orphan and `rm` it. Defer instead — `tryRemoveCloneSafely`'s
       // safety guards still protect dirty / ahead / worktree clones, but
       // a clean repo with no work to lose is exactly what we'd
-      // accidentally nuke without an authoritative set.
+      // accidentally nuke without an authoritative set. See
+      // `hasResolvedConfig` for the full round-5 rationale.
       if (!hasResolvedConfig(ctx)) {
         log(
           "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved); will retry next resolved session",
