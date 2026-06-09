@@ -34,7 +34,6 @@ export function StepConnectCode() {
   const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
-  const [postAttemptStuck, setPostAttemptStuck] = useState(false);
   // Whether the user has actually kicked off an install (this tab). We only
   // show the "Waiting for GitHub…" status once they have — before the first
   // click there's nothing to wait for, and a pre-action "Waiting…" reads as
@@ -54,32 +53,18 @@ export function StepConnectCode() {
 
   const installed = !!installQuery.data;
 
-  // Detect "user clicked Install, went to GitHub, came back without an
-  // install row". If we observe the attempt marker but still no installation
-  // a few seconds after the query has settled, surface a soft hint with
-  // recovery options. (Polling continues, so a slow webhook still wins.)
+  // In the new-tab flow the original tab never navigates away — it just keeps
+  // polling (above) and advances once the installation row appears. So we can't
+  // infer "stuck" from elapsed time: a timer would fire mid-install, and
+  // re-enabling the CTA on it let a second mint overwrite the first attempt's
+  // `oauth_state_nonce` cookie and break its callback. Recovery is instead an
+  // explicit, user-initiated "Start over" (handleStartOver). Here we only clear
+  // the attempt marker once the install actually lands.
   useEffect(() => {
-    if (installed) {
-      window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
-      setPostAttemptStuck(false);
-      return;
-    }
-    if (typeof window === "undefined") return;
-    const attempted = window.sessionStorage.getItem(INSTALL_ATTEMPT_KEY);
-    if (!attempted) return;
-    if (installQuery.isLoading) return;
-    // Give the post-redirect webhook a moment before crying foul.
-    const t = window.setTimeout(() => setPostAttemptStuck(true), 5000);
-    return () => window.clearTimeout(t);
-  }, [installed, installQuery.isLoading]);
+    if (installed) window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
+  }, [installed]);
 
-  // "Need help?" auto-opens when the user returns from GitHub without an
-  // install — same "stuck → help opens" behavior as connect-computer (just
-  // triggered by a failed return rather than a timer).
   const [helpOpen, setHelpOpen] = useState(false);
-  useEffect(() => {
-    if (postAttemptStuck) setHelpOpen(true);
-  }, [postAttemptStuck]);
 
   // Team-by-default: the admin picks from the team's *org* code, sourced
   // from the GitHub App installation's repo grant (not the admin's personal
@@ -114,9 +99,6 @@ export function StepConnectCode() {
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
     setInstallError(null);
-    // Re-arm the "waiting" window on a retry so the stuck hint and the CTA
-    // disable behave as if this were a fresh attempt.
-    setPostAttemptStuck(false);
     setRedirecting(true);
     // Open the tab synchronously inside the click gesture so the browser doesn't
     // treat the post-await window.open as a blocked popup; fill its location once
@@ -124,8 +106,14 @@ export function StepConnectCode() {
     // tab and lands it on /onboarding/connected to auto-close, while this tab
     // keeps polling and advances on its own.
     const installTab = window.open("", "_blank");
+    // The post-install landing differs by path: a real popup (has an opener)
+    // lands on /onboarding/connected to auto-close; but if the popup was blocked
+    // we redirect THIS tab, so it must return to the wizard itself (/onboarding)
+    // — sending it to /onboarding/connected would strand the user on a "close
+    // this tab — setup continues in your other tab" screen with no other tab.
+    const postInstallNext = installTab ? "/onboarding/connected" : "/onboarding";
     try {
-      const url = await getGithubAppInstallUrl(organizationId, "/onboarding/connected");
+      const url = await getGithubAppInstallUrl(organizationId, postInstallNext);
       window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
       setAttempted(true);
       if (installTab) installTab.location.href = url;
@@ -147,6 +135,16 @@ export function StepConnectCode() {
   const handleSkip = (): void => {
     window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
     goNext();
+  };
+
+  // Explicit, user-initiated retry: abandon the in-flight attempt and re-enable
+  // the CTA for a fresh mint. Deliberate by design — a new install URL
+  // overwrites the `oauth_state_nonce` cookie, so this must be a conscious
+  // "the GitHub tab didn't work, start fresh", never an auto-unlocked re-click.
+  const handleStartOver = (): void => {
+    window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
+    setAttempted(false);
+    setInstallError(null);
   };
 
   const toggleRepo = (cloneUrl: string): void => {
@@ -180,14 +178,15 @@ export function StepConnectCode() {
                 footer. Skip goes straight through (no confirm gate); the
                 muted reassurance line below keeps the choice informed. */}
             <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-              {/* Disable while a launch is in flight AND during the post-launch
-                  "waiting" window, so a second click can't open another install
-                  tab / re-mint. Re-enable once we detect the user came back
-                  without an install (postAttemptStuck) so they can retry. */}
+              {/* Lock the CTA once an attempt is in flight. The original tab
+                  never navigates away here, so a second mint would overwrite the
+                  first attempt's `oauth_state_nonce` cookie and break its
+                  callback — retry is the explicit "Start over" below, never a
+                  timed auto-unlock. */}
               <Button
                 type="button"
                 onClick={() => void handleConnect()}
-                disabled={redirecting || (attempted && !postAttemptStuck) || !organizationId}
+                disabled={redirecting || attempted || !organizationId}
               >
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
@@ -211,15 +210,22 @@ export function StepConnectCode() {
               </FlowHint>
             )}
             {/* Status only after the user has actually started an install:
-                before the first click there's nothing to wait for, so showing
-                "Waiting for GitHub…" up front reads as "waiting for what?".
-                Once they come back without an install, a flat "Waiting…" would
-                contradict the auto-opened help that says it didn't go through —
-                swap to a guidance line that points there. */}
-            {postAttemptStuck ? (
-              <FlowHint>{COPY.connectCode.stuckStatus}</FlowHint>
-            ) : attempted ? (
-              <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+                before the first click there's nothing to wait for. The original
+                tab keeps polling and advances on its own once the install lands;
+                if the GitHub tab didn't work, "Start over" re-mints (the only
+                safe way to retry — see the CTA-lock note above). */}
+            {attempted ? (
+              <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+                <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto self-start p-0 text-label"
+                  onClick={handleStartOver}
+                >
+                  {COPY.connectCode.restartInstall}
+                </Button>
+              </div>
             ) : null}
 
             <ShowMeHow open={helpOpen} onToggle={setHelpOpen}>

@@ -173,13 +173,12 @@ export const COPY = {
       emphasis: "a GitHub org owner",
       post: " can install First Tree — if that's not you, clicking Install asks an owner to approve. You can skip and connect anytime from Settings.",
     },
-    /**
-     * Replaces the "Waiting for GitHub…" status once the user returns from the
-     * install dialog without an installation (postAttemptStuck). Guidance-y, so
-     * the auto-opened "Need help?" below isn't missed — not a flat "still
-     * waiting" (which would contradict the help saying it didn't go through).
-     */
-    stuckStatus: "Still not connected? The Need help? steps below can fix it.",
+    /** Explicit "abandon the in-flight attempt and re-mint" action, shown under
+        the "Waiting for GitHub…" status. Retry is deliberate (not an
+        auto-unlocked button) because a fresh install URL overwrites the
+        `oauth_state_nonce` cookie — re-minting while the first install tab is
+        mid-flow would fail its callback. */
+    restartInstall: "Start over",
     /**
      * Troubleshooting shown inside the "Need help?" disclosure (alongside the
      * InstallGuide how-to), mirroring connect-computer. The disclosure

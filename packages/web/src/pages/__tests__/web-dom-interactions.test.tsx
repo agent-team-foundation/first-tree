@@ -1466,6 +1466,7 @@ describe("web DOM interaction coverage", () => {
     // Popup blocked → window.open returns null → we must fall back to a
     // full-page redirect rather than silently dropping the install.
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    githubAppMocks.getGithubAppInstallUrl.mockClear();
 
     const blocked = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Install on GitHub", blocked.container);
@@ -1474,10 +1475,42 @@ describe("web DOM interaction coverage", () => {
         button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
+    // Blocked path redirects THIS tab, so it must come back to the wizard
+    // (/onboarding) — not the popup auto-close page, which would strand it.
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding");
     expect(openSpy).toHaveBeenCalledWith("", "_blank");
     expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
     await unmountRoot(blocked.root);
+  });
+
+  it("locks the Install CTA after launch and re-enables only via Start over", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    sessionStorage.removeItem("onboarding:connect-code:install-attempt");
+    const installTab = { location: { href: "" }, close: vi.fn() };
+    vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
+    githubAppMocks.getGithubAppInstallUrl.mockClear();
+
+    const view = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Install on GitHub", view.container);
+    const installBtn = (): HTMLButtonElement | null =>
+      [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        b.textContent?.includes("Install on GitHub"),
+      ) ?? null;
+
+    await click(installBtn());
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledTimes(1);
+    // The original tab stays mounted and polls; the CTA must lock so a second
+    // click can't re-mint and clobber the in-flight attempt's state nonce.
+    expect(installBtn()?.disabled).toBe(true);
+    await click(installBtn());
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledTimes(1);
+
+    // Retry is explicit + user-initiated, never a timed auto-unlock.
+    await click(
+      [...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start over")) ?? null,
+    );
+    expect(installBtn()?.disabled).toBe(false);
+    await unmountRoot(view.root);
   });
 
   it("drives StepKickoff admin and invitee start flows", async () => {
