@@ -589,20 +589,27 @@ function PromptResourceBlock(props: {
   const showSunken = props.editor ? true : props.expanded && !!props.body;
   return (
     <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-      <div className="flex items-start gap-3">
+      {/* Title + actions. On mobile they stack (title row, then the action group
+          wraps below) so the long management buttons never overflow a phone width;
+          on sm+ they sit on one row with the actions right-aligned. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
         <div className="min-w-0 flex-1">{props.title}</div>
-        {props.action ? <div className="flex items-center gap-1">{props.action}</div> : null}
-        {props.editor ? null : canExpand ? (
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            aria-expanded={props.expanded}
-            aria-label={props.expanded ? "Collapse instructions" : "Expand instructions"}
-            onClick={props.onToggle}
-          >
-            {props.expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </Button>
+        {props.action || (!props.editor && canExpand) ? (
+          <div className="flex flex-wrap items-center gap-1 shrink-0">
+            {props.action}
+            {props.editor ? null : canExpand ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                aria-expanded={props.expanded}
+                aria-label={props.expanded ? "Collapse instructions" : "Expand instructions"}
+                onClick={props.onToggle}
+              >
+                {props.expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       {showSunken ? (
@@ -645,10 +652,13 @@ function PromptBlockAction(props: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  /** "edit" → pencil + label; "remove" → trash icon only; undefined → label only. */
+  /** "edit" → pencil icon only; "remove" → trash icon only; undefined → text label.
+   *  Icon-only keeps the widest controls (e.g. "Customize for this agent") from
+   *  overflowing the flat row on narrow screens; the label moves to aria-label/title. */
   icon?: "edit" | "remove";
 }) {
-  if (props.icon === "remove") {
+  if (props.icon) {
+    const Icon = props.icon === "remove" ? Trash2 : Pencil;
     return (
       <Button
         type="button"
@@ -659,13 +669,12 @@ function PromptBlockAction(props: {
         title={props.label}
         onClick={props.onClick}
       >
-        <Trash2 className="h-4 w-4" />
+        <Icon className="h-4 w-4" />
       </Button>
     );
   }
   return (
     <Button type="button" size="xs" variant="ghost" disabled={props.disabled} onClick={props.onClick}>
-      {props.icon === "edit" ? <Pencil className="h-3 w-3" /> : null}
       {props.label}
     </Button>
   );
