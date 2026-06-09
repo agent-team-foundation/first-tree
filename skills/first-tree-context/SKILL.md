@@ -1,6 +1,6 @@
 ---
 name: first-tree-context
-version: 0.8.2
+version: 0.8.3
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
@@ -194,21 +194,28 @@ goes in frontmatter:
   may have, are where prior states live). The Source-System
   Boundary table above is the canonical guide for which "whats"
   belong.
-- **Why** — the path the design took to its final state: the
-  concerns weighed, the alternatives considered, the
-  course-corrections made and what triggered each one. The final
-  decision is the *What*; the path to it is the *Why*. **A node
-  without a Why is a fact, not a decision record.** Why-content is
-  the most commonly lost axis — protect it deliberately during the
-  rush to land a PR or close a meeting.
-  - **Why lives in the design phase, not the final state.** The
-    concerns, course-corrections, and dropped alternatives are
-    generated *during* design — the moment somebody flags "won't
-    this break X?", the moment a first proposal is corrected, the
-    moment an option is dropped because it conflicts with another
-    domain. By the time the PR lands the design is settled, but
-    the reasoning that settled it lives only in chat / review
-    threads / meeting notes and decays fast.
+- **Why** — the surviving rationale behind the *What*: the
+  constraints that won, the reasons each alternative lost,
+  recorded as present-tense constraint and reasoning. The design
+  phase is where this rationale is **produced** (concerns weighed,
+  alternatives considered, course-corrections introduced), but the
+  node records the **outcome** of that process — not its
+  chronology (Hard Rule 8). The final decision is the *What*; its
+  surviving rationale is the *Why*. **A node without a Why is a
+  fact, not a decision record.** Why-content is the most commonly
+  lost axis — protect it deliberately during the rush to land a PR
+  or close a meeting.
+  - **Why is generated in the design phase, captured in the
+    node.** The concerns, course-corrections, and dropped
+    alternatives that shape the design are generated *during*
+    design — the moment somebody flags "won't this break X?", the
+    moment a first proposal is corrected, the moment an option is
+    dropped because it conflicts with another domain. By the time
+    the PR lands the design is settled, but the reasoning that
+    settled it lives only in chat / review threads / meeting notes
+    and decays fast. The node captures the *outcome* of those
+    moments (the surviving constraints and reasons), not the
+    moments themselves.
   - **Course-corrections are the canonical Why.** Each correction
     encodes two things at once: an alternative that was *actually
     pursued* (not abstractly considered), and the constraint or
