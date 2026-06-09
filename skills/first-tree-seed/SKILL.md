@@ -302,10 +302,16 @@ only sanctioned start signal. The agent does **not** poll the remote,
 the inbox, or any other source between phases; the seed skill is not
 running between PR1 and PR2. When the ping arrives, run a fresh
 self-check that PR1's structure is actually on the tree's default
-branch (`git fetch && git ls-tree origin/main -- <top-level>` for the
-approved domains) before dispatching sub-agents — protects against
-the case where the user pinged before merging, or merged a different
-branch.
+branch before dispatching sub-agents — protects against the case
+where the user pinged before merging, or merged a different branch.
+Resolve the default branch name dynamically rather than hard-coding
+`main` (some tree repos use `master` / `trunk`):
+
+```bash
+git -C <tree> fetch origin
+DEFAULT=$(git -C <tree> symbolic-ref refs/remotes/origin/HEAD | sed 's|^refs/remotes/origin/||')
+git -C <tree> ls-tree "origin/$DEFAULT" -- <top-level>  # for each approved domain
+```
 
 ### Sub-agent dispatch
 
