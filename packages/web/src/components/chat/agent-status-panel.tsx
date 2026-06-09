@@ -8,6 +8,7 @@ import { toneOf } from "../../lib/tones.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { AgentHovercard } from "./agent-hovercard.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { WorkingChip } from "./working-chip.js";
 
@@ -118,36 +119,52 @@ function AgentStatusRow({
       className="flex items-center transition-colors hover:bg-[var(--bg-hover)]"
       style={{ gap: "var(--sp-2_5)", padding: "var(--sp-1_75) var(--sp-2)", borderRadius: "var(--radius-input)" }}
     >
-      <div className="relative shrink-0" style={{ width: 28, height: 28 }}>
-        <Avatar
-          src={agent.avatarImageUrl}
-          name={agent.displayName}
-          seed={agent.agentId}
-          colorToken={agent.avatarColorToken}
-          size={28}
-        />
-        {view ? (
-          <span
-            className="absolute"
-            style={{
-              right: -2,
-              bottom: -3,
-            }}
-          >
-            <StatusGlyph
-              colorVar={view.colorVar}
-              shape={view.shape}
-              pulse={view.pulse}
-              size={9}
-              ariaLabel={view.label}
-              separator
-            />
-          </span>
-        ) : null}
-      </div>
+      <AgentHovercard
+        agentId={agent.agentId}
+        chatId={chatId}
+        name={agent.displayName}
+        placement="left"
+        triggerClassName="block shrink-0 cursor-pointer rounded-full"
+      >
+        <span className="relative block" style={{ width: 28, height: 28 }}>
+          <Avatar
+            src={agent.avatarImageUrl}
+            name={agent.displayName}
+            seed={agent.agentId}
+            colorToken={agent.avatarColorToken}
+            size={28}
+          />
+          {view ? (
+            <span
+              className="absolute"
+              style={{
+                right: -2,
+                bottom: -3,
+              }}
+            >
+              <StatusGlyph
+                colorVar={view.colorVar}
+                shape={view.shape}
+                pulse={view.pulse}
+                size={9}
+                ariaLabel={view.label}
+                separator
+              />
+            </span>
+          ) : null}
+        </span>
+      </AgentHovercard>
 
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
-        <div className="truncate text-subtitle">{agent.displayName}</div>
+        <AgentHovercard
+          agentId={agent.agentId}
+          chatId={chatId}
+          name={agent.displayName}
+          placement="left"
+          triggerClassName="block max-w-full cursor-pointer truncate text-left text-subtitle hover:underline"
+        >
+          {agent.displayName}
+        </AgentHovercard>
         <SecondLine status={status} mounted={mounted} />
       </div>
 
