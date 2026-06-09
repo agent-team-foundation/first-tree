@@ -17,7 +17,8 @@ function describe(): string {
     "running summary of the work and its current state, surfaced to the agent " +
     "each turn and used to locate the chat via `chat list`. By default acts on " +
     "the caller's current chat (FIRST_TREE_CHAT_ID); use --chat <id> to target " +
-    "another."
+    "another. Only the chat's owner (the agent that created it) may set topic or " +
+    "description; a non-owner participant is refused."
   );
 }
 

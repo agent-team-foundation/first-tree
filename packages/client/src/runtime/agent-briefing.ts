@@ -347,15 +347,30 @@ bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
     ${bin} chat set-topic --description "<current state>"
     ${bin} chat set-topic "<label>" --description "<state>"
 
+**Only the chat's owner maintains these.** The owner is the agent that
+created the chat; topic and description are chat-level fields it owns on
+everyone's behalf. If you did not create this chat you are **not** asked
+to set or refresh them, and the command refuses you with a 403 — leave
+them to the owner. Rules 1–2 below are the owner's duty; rules 3–4 apply
+to everyone (reading a description to self-locate needs no ownership).
+
 **Hard rules:**
 
-1. **Topic unset → set one before ending this turn.** The auto-derived
+1. **(Owner) Topic unset → set one before ending this turn.** The auto-derived
    fallback ("first 50 chars of the first message" / "alice, bob-bot")
-   is rarely distinctive — naming the chat is a cheap win. Update it
-   when it no longer matches; don't churn it for minor digressions.
+   is rarely distinctive — naming the chat is a cheap win.
 
-2. **Description unset or stale → write or refresh it before ending
-   this turn.** It is the **present** state, not a log — rewrite it in
+   **Once set, treat the topic as a stable anchor — do not rename it
+   casually.** Users and agents locate a specific chat by its topic, so a
+   chat that keeps changing names becomes hard to find again. Rename only
+   when the topic is genuinely wrong or misleading because the chat's
+   subject itself changed — never to track progress or reflect a passing
+   focus. Progress belongs in the description, not the topic.
+
+2. **(Owner) Description unset or stale → write or refresh it before ending
+   this turn.** Unlike the topic, the description is **meant to move with
+   the work** — refresh it freely as the state changes. It is the
+   **present** state, not a log — rewrite it in
    place (the message history is the log), keep it within ~500
    characters. It must **name the current task** so anyone scanning
    \`${bin} chat list\` can tell from the description alone whether this
@@ -369,14 +384,14 @@ bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
    a thread stands, or hold several chats and must choose what to
    advance, run \`${bin} chat list\` and read each description to
    reconstruct what you've done / what's in flight, then drill in with
-   \`${bin} chat history <chat>\`. Refresh any description that no longer
-   matches what the thread has actually done.
+   \`${bin} chat history <chat>\`. If you own the chat, refresh any
+   description that no longer matches what the thread has actually done.
 
 **Exception: GitHub-sourced topics — leave them alone.** Topics like
 \`PR repo#307: title\`, \`Issue repo#42\`, \`Commit repo@sha\` are
 auto-set and kept in sync by First Tree from the upstream entity;
 overriding the topic loses the repo / entity-id anchor. This applies to
-the **topic only** — you still own and maintain the description.`;
+the **topic only** — the owner still maintains the description.`;
 }
 
 function cliOverviewBlock(bin: string): string {

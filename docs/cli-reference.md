@@ -287,6 +287,8 @@ first-tree chat history <chatId>
 # Self-description: a short topic label + a longer running work summary,
 # both set through set-topic. Agents read descriptions via `chat list` to
 # self-locate across threads (see the agent briefing's "Chat Topic & Description").
+# Only the chat's owner (the agent that created it) may set topic/description;
+# a non-owner participant is refused with 403.
 first-tree chat set-topic "review PR #916"
 first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
 first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"

@@ -296,6 +296,33 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
 }
 
 /**
+ * Assert the agent is the chat's **owner** (its creator — membership
+ * `role == "owner"`). Topic and description are chat-level self-description
+ * that only the owning agent maintains, so the agent-scope PATCH route gates
+ * on ownership rather than mere participation. A non-owner speaker — and any
+ * non-participant — is refused. This is the agent route only; the human/web
+ * route stays participation-gated so a managing human can still rename from
+ * the console.
+ */
+export async function assertOwner(db: Database, chatId: string, agentId: string): Promise<void> {
+  const [row] = await db
+    .select({ role: chatMembership.role })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, agentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
+    .limit(1);
+
+  if (!row || row.role !== "owner") {
+    throw new ForbiddenError("Only the chat owner can change a chat's topic or description");
+  }
+}
+
+/**
  * Non-throwing membership check. Used by callers that need a boolean
  * "is this agent a speaker of this chat?" answer without raising.
  */

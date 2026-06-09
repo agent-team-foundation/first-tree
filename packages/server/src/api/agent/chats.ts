@@ -80,13 +80,16 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  // Update chat metadata (`topic` and/or `description`). Mirrors the user-scope
-  // PATCH /api/v1/chats/:chatId so agent-token callers (e.g. `chat set-topic`
-  // from inside an agent session) can rename a chat they participate in.
-  // Auth: must be a speaker in the chat — same gate as message send.
+  // Update chat metadata (`topic` and/or `description`) from inside an agent
+  // session (`chat set-topic`). Unlike the user-scope PATCH /api/v1/chats/:chatId
+  // (which stays participation-gated so a managing human can still rename from
+  // the console), this agent route is **owner-gated**: only the chat's creator
+  // (membership `role == "owner"`) may rename or re-describe it. Topic and
+  // description are chat-level self-description the owning agent maintains; a
+  // non-owner speaker is refused with 403.
   app.patch<{ Params: { chatId: string } }>("/:chatId", { config: { otelRecordBody: true } }, async (request) => {
     const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    await chatService.assertOwner(app.db, request.params.chatId, identity.uuid);
     const body = updateChatSchema.parse(request.body);
     const patch: { topic?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
     if (body.topic !== undefined) patch.topic = body.topic && body.topic.length > 0 ? body.topic : null;

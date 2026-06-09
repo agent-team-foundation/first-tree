@@ -211,6 +211,33 @@ describe("Agent Chats API", () => {
       expect(res.statusCode).toBe(403);
     });
 
+    it("rejects non-owner participants (speakers) with 403 — only the owner may rename", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `topic-owner-${uid}` });
+      const a2 = await createTestAgent(app, { name: `topic-member-${uid}` });
+
+      // a1 creates the chat (→ membership role "owner"); a2 joins as a speaker
+      // (role "member"). a2 is a full participant but NOT the owner.
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.agent.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      // Owner succeeds.
+      const ownerRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "owner set" });
+      expect(ownerRes.statusCode).toBe(200);
+
+      // Non-owner participant is refused even though it can speak in the chat.
+      const memberRes = await a2.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "member tries" });
+      expect(memberRes.statusCode).toBe(403);
+
+      // Topic is unchanged by the rejected write.
+      const detailRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
+      expect(detailRes.json().topic).toBe("owner set");
+    });
+
     it("rejects empty body (no topic or description)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
