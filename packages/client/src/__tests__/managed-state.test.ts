@@ -15,7 +15,7 @@ describe("managed-state", () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), "managed-state-test-"));
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, ".first-tree-workspace"), { recursive: true });
   });
 
   afterEach(() => {
@@ -120,7 +120,7 @@ describe("managed-state", () => {
     };
     writeManagedState(workspace, state);
     // The directory should contain only the final file, no `.tmp` siblings.
-    const agentDir = join(workspace, ".agent");
+    const agentDir = join(workspace, ".first-tree-workspace");
     const entries = readdirSync(agentDir);
     expect(entries.filter((entry) => entry.includes(".tmp"))).toEqual([]);
     expect(entries).toContain("managed.json");

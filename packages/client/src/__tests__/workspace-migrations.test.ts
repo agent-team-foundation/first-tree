@@ -21,7 +21,7 @@ describe("workspace-migrations registry", () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), "workspace-migrations-test-"));
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, ".first-tree-workspace"), { recursive: true });
   });
 
   afterEach(() => {
@@ -69,7 +69,7 @@ describe("workspace-migrations registry", () => {
     mkdirSync(uuidDir);
     writeFileSync(join(uuidDir, "AGENTS.md"), "# legacy snapshot\n");
     writeFileSync(
-      join(workspace, ".agent", "managed.json"),
+      join(workspace, ".first-tree-workspace", "managed.json"),
       JSON.stringify({
         schemaVersion: 1,
         cliVersion: "test",
@@ -109,7 +109,7 @@ describe("workspace-migrations registry", () => {
     mkdirSync(uuidRepo);
     writeFileSync(join(uuidRepo, "AGENTS.md"), "# this repo happens to ship AGENTS.md\n");
     writeFileSync(
-      join(workspace, ".agent", "managed.json"),
+      join(workspace, ".first-tree-workspace", "managed.json"),
       JSON.stringify({
         schemaVersion: 1,
         cliVersion: "test",
@@ -175,7 +175,7 @@ describe("workspace-migrations registry", () => {
     mkdirSync(target);
     writeFileSync(join(target, ".git"), "gitdir: /tmp/somewhere\n");
     writeFileSync(
-      join(workspace, ".agent", "managed.json"),
+      join(workspace, ".first-tree-workspace", "managed.json"),
       JSON.stringify({
         schemaVersion: 1,
         cliVersion: "test",
@@ -352,7 +352,7 @@ describe("workspace-migrations registry", () => {
     initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
     initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
     writeFileSync(
-      join(workspace, ".agent", "managed.json"),
+      join(workspace, ".first-tree-workspace", "managed.json"),
       JSON.stringify({
         schemaVersion: 1,
         cliVersion: "test",
@@ -375,7 +375,7 @@ describe("applyPendingMigrations applier", () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), "workspace-migrations-applier-test-"));
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, ".first-tree-workspace"), { recursive: true });
   });
 
   afterEach(() => {

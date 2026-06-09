@@ -52,7 +52,7 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
   beforeEach(() => {
     tmpBase = mkdtempSync(join(tmpdir(), "skill-reconcile-"));
     workspace = join(tmpBase, "ws");
-    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    mkdirSync(join(workspace, ".first-tree-workspace"), { recursive: true });
     bundledSkillsRoot = makeBundledSkillsRoot(tmpBase);
   });
 
