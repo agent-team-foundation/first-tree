@@ -481,56 +481,68 @@ function AgentDetailPageView() {
 
   return (
     <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
-      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-3)" }}>
-        {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
-            (and back to Team) without losing the agent context. Leaving via it is
-            leave-guarded. */}
-        <div style={{ marginBottom: "var(--sp-2)" }}>
-          <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={guardedNavigate} />
-        </div>
-        <div className="flex w-full items-center gap-2">
-          <Avatar
-            src={agent.avatarImageUrl}
-            name={agent.displayName}
-            size={28}
-            colorToken={agent.avatarColorToken}
-            seed={agent.uuid}
-          />
-          <div className="flex min-w-0 flex-1 items-baseline gap-2">
-            <h1 className="m-0 text-subtitle truncate" style={{ color: "var(--fg)" }} title={`agt_${shortId}`}>
-              {agent.displayName}
-            </h1>
-            {!isNarrow && (
-              <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                @{agent.name ?? shortId}
-              </span>
-            )}
+      <div style={{ padding: "var(--sp-4) 0 var(--sp-3)" }}>
+        {/* Inner content sits in the same centered rail as the tabs + tab content,
+            so the switcher and title row align with everything below. */}
+        <div
+          style={{
+            maxWidth: "var(--agent-detail-rail)",
+            marginLeft: "auto",
+            marginRight: "auto",
+            paddingLeft: "var(--sp-5)",
+            paddingRight: "var(--sp-5)",
+          }}
+        >
+          {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
+              (and back to Team) without losing the agent context. Leaving via it is
+              leave-guarded. */}
+          <div style={{ marginBottom: "var(--sp-2)" }}>
+            <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={guardedNavigate} />
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* One status cluster: presence (with label) + active-session count
-                folded in, instead of scattered indicators. */}
-            <span className="inline-flex items-center gap-1.5">
-              <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
-              {activeSessions > 0 && (
-                <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                  · {activeSessions} active
+          <div className="flex w-full items-center gap-2">
+            <Avatar
+              src={agent.avatarImageUrl}
+              name={agent.displayName}
+              size={28}
+              colorToken={agent.avatarColorToken}
+              seed={agent.uuid}
+            />
+            <div className="flex min-w-0 flex-1 items-baseline gap-2">
+              <h1 className="m-0 text-subtitle truncate" style={{ color: "var(--fg)" }} title={`agt_${shortId}`}>
+                {agent.displayName}
+              </h1>
+              {!isNarrow && (
+                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                  @{agent.name ?? shortId}
                 </span>
               )}
-            </span>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => {
-                const search = new URLSearchParams({ c: "draft", with: agent.uuid });
-                guardedNavigate(`/?${search.toString()}`);
-              }}
-              title="Start a chat with this agent"
-              aria-label="Start chat"
-              style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
-            >
-              <MessageSquare className="h-4 w-4" />
-              Chat
-            </Button>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {/* One status cluster: presence (with label) + active-session count
+                folded in, instead of scattered indicators. */}
+              <span className="inline-flex items-center gap-1.5">
+                <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
+                {activeSessions > 0 && (
+                  <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                    · {activeSessions} active
+                  </span>
+                )}
+              </span>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => {
+                  const search = new URLSearchParams({ c: "draft", with: agent.uuid });
+                  guardedNavigate(`/?${search.toString()}`);
+                }}
+                title="Start a chat with this agent"
+                aria-label="Start chat"
+                style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
+              >
+                <MessageSquare className="h-4 w-4" />
+                Chat
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -557,10 +569,11 @@ function AgentDetailPageView() {
           flexDirection: "column",
           gap: "var(--sp-5)",
           width: "100%",
-          maxWidth:
-            currentTabKey === "capabilities" || currentTabKey === "usage"
-              ? "var(--agent-detail-wide-rail)"
-              : "var(--agent-detail-rail)",
+          // One uniform rail across every tab (no per-tab 52↔70 jump), centered
+          // to match the context / team / settings pages.
+          maxWidth: "var(--agent-detail-rail)",
+          marginLeft: "auto",
+          marginRight: "auto",
         }}
       >
         <Outlet context={outletContext} />
@@ -761,33 +774,54 @@ function TabsNav({
         ref={scrollRef}
         role="tablist"
         aria-label="Agent configuration sections"
+        // The bar's bottom border + background stay FULL-BLEED (the horizontal
+        // rule reads cleaner edge-to-edge); only the tab labels are constrained
+        // to the centered rail by the inner wrapper below. So drop the baked-in
+        // `padding: 0 var(--sp-5)` here and re-apply it on the rail wrapper.
+        //
         // overflowY:hidden (not just minHeight): the active Tab's marginBottom:-1
         // makes its border-box one pixel taller than the bar, and overflowX:auto
         // coerces overflow-y from visible to auto → a spurious VERTICAL scrollbar
         // over that extra pixel. Hiding overflow-y suppresses the scrollbar while
         // keeping the active underline on the baseline and the focus ring intact
         // (verified visually).
-        style={{ overflowX: "auto", overflowY: "hidden" }}
+        style={{ overflowX: "auto", overflowY: "hidden", padding: 0 }}
         onScroll={updateEdges}
       >
-        {tabs.map((t) => {
-          const active = currentTabKey === t.key;
-          const badge = badges[t.key];
-          return (
-            <Tab
-              key={t.key}
-              role="tab"
-              aria-selected={active}
-              active={active}
-              dirty={dirtyTabs.has(t.key)}
-              onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
-              className="shrink-0 whitespace-nowrap"
-            >
-              {t.label}
-              {badge != null ? <TabBadge>{badge}</TabBadge> : null}
-            </Tab>
-          );
-        })}
+        {/* Centered rail for the tab labels: caps the labels to the same width as
+            the header + content, while the TabBar (scroll container) and its
+            border stay full-width. */}
+        <div
+          className="flex items-end"
+          style={{
+            gap: 2,
+            width: "100%",
+            maxWidth: "var(--agent-detail-rail)",
+            marginLeft: "auto",
+            marginRight: "auto",
+            paddingLeft: "var(--sp-5)",
+            paddingRight: "var(--sp-5)",
+          }}
+        >
+          {tabs.map((t) => {
+            const active = currentTabKey === t.key;
+            const badge = badges[t.key];
+            return (
+              <Tab
+                key={t.key}
+                role="tab"
+                aria-selected={active}
+                active={active}
+                dirty={dirtyTabs.has(t.key)}
+                onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
+                className="shrink-0 whitespace-nowrap"
+              >
+                {t.label}
+                {badge != null ? <TabBadge>{badge}</TabBadge> : null}
+              </Tab>
+            );
+          })}
+        </div>
       </TabBar>
       {edges.left ? <TabEdgeFade side="left" /> : null}
       {edges.right ? <TabEdgeFade side="right" /> : null}

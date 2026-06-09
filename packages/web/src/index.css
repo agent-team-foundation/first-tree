@@ -476,10 +476,10 @@
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
 
-  /* Agent detail content rails. Profile / Runtime / Prompt favour a readable
-     settings width; Resources / Usage need a wider rail for tables and grids. */
+  /* Agent detail content rail — one uniform readable width across every tab
+     (header, tabs, and content all share it), centered like the context / team
+     / settings pages. */
   --agent-detail-rail: 52rem;
-  --agent-detail-wide-rail: 70rem;
   --agent-detail-error-rail: 30rem;
 
   /* Default color-scheme so native form controls, scrollbars, and the
