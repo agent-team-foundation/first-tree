@@ -144,10 +144,15 @@ export function HoverCard({
       if (triggerRef.current?.contains(target) || cardRef.current?.contains(target)) return;
       close();
     };
-    const onScroll = () => close();
+    // Capture scroll on any scroller closes the card — except a scroll that
+    // originates inside the card body (if it ever becomes scrollable), so the
+    // card doesn't dismiss itself when the user scrolls its own content.
+    const onScroll = (e: Event) => {
+      if (cardRef.current?.contains(e.target as Node)) return;
+      close();
+    };
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onPointerDown, true);
-    // Capture scroll on any scroller; ignore scrolls inside the card itself.
     window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("keydown", onKey, true);

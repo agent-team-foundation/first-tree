@@ -309,13 +309,16 @@ describe("AgentHovercard", () => {
     );
     await flush();
     const card = await openCard();
+    // Wait for the degraded END state, not the loading state: while getAgent is
+    // still pending, detailsAccessible is true and Owner/Runs-on/Open details
+    // render (with skeletons). Fold the negatives + the Chat-only button set
+    // into the waited condition so the assertions run only after the 404 lands.
     await waitFor(() => {
       expect(card.textContent).toContain("Aria");
-      expect(card.textContent).toContain("Chat");
+      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Chat"]);
+      expect(card.textContent).not.toContain("Owner");
+      expect(card.textContent).not.toContain("Runs on");
+      expect(card.textContent).not.toContain("Open details");
     });
-    // No Pass-B fields and no Open details (it would 404 the same way).
-    expect(card.textContent).not.toContain("Owner");
-    expect(card.textContent).not.toContain("Runs on");
-    expect(card.textContent).not.toContain("Open details");
   });
 });
