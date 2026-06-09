@@ -59,7 +59,7 @@ export function SaveBar(props: SaveBarProps) {
                 style={{
                   width: "var(--sp-2)",
                   height: "var(--sp-2)",
-                  borderRadius: "50%",
+                  borderRadius: "var(--radius-full)",
                   background: "var(--fg-4)",
                   flexShrink: 0,
                 }}
@@ -74,7 +74,7 @@ export function SaveBar(props: SaveBarProps) {
                     key={s}
                     type="button"
                     onClick={() => props.onJumpTo(s)}
-                    className="text-caption transition-colors hover:bg-accent border border-border rounded-[var(--radius-chip)] focus-visible:outline-none focus-visible:border-ring"
+                    className="text-caption transition-colors hover:bg-[var(--bg-hover)] border border-border rounded-[var(--radius-chip)] focus-visible:outline-none focus-visible:border-ring"
                     style={{
                       padding: "var(--sp-0_5) var(--sp-1_5)",
                       background: "var(--bg-raised)",

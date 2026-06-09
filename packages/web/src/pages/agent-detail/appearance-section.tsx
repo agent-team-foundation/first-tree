@@ -31,7 +31,7 @@ export function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
         alt={agent.displayName}
         width={size}
         height={size}
-        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", display: "block" }}
+        style={{ width: size, height: size, borderRadius: "var(--radius-full)", objectFit: "cover", display: "block" }}
       />
     );
   }
@@ -47,7 +47,7 @@ export function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
         justifyContent: "center",
         width: size,
         height: size,
-        borderRadius: "50%",
+        borderRadius: "var(--radius-full)",
         background: resolveAvatarHue(agent.avatarColorToken, agent.uuid),
         color: "var(--fg-on-vivid)",
         fontSize: initialFontSize,
@@ -78,8 +78,8 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
       aria-label="Edit avatar"
       title="Edit avatar"
       onClick={onEdit}
-      className="relative inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0"
-      style={{ width: 56, height: 56, borderRadius: "50%" }}
+      className="relative inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 rounded-[var(--radius-full)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
+      style={{ width: 56, height: 56 }}
     >
       <AvatarPreview agent={agent} size={56} />
       <span
@@ -90,7 +90,7 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
           bottom: -2,
           width: 20,
           height: 20,
-          borderRadius: "50%",
+          borderRadius: "var(--radius-full)",
           background: "var(--bg-raised)",
           border: "var(--hairline) solid var(--border)",
           color: "var(--fg-2)",
