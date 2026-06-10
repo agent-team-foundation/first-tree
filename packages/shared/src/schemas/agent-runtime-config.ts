@@ -19,8 +19,35 @@ const MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:/;
 
+export const promptSectionScopeSchema = z.enum(["team", "agent"]);
+export type PromptSectionScope = z.infer<typeof promptSectionScopeSchema>;
+
+/**
+ * One resolved entry of the effective prompt stack, tagged by provenance.
+ *
+ * `scope: "team"` rows come from team prompt resources (read-only for the
+ * agent); `scope: "agent"` rows come from the agent's own inline prompt
+ * fragment (the thing `agent config prompt set` edits). The client briefing
+ * renders the two scopes under separate, provenance-labelled headings so an
+ * agent can never mistake team-shared content for its own editable prompt.
+ */
+export const promptSectionSchema = z.object({
+  scope: promptSectionScopeSchema,
+  name: z.string().default(""),
+  body: z.string().default(""),
+});
+export type PromptSection = z.infer<typeof promptSectionSchema>;
+
 export const promptConfigSchema = z.object({
   append: z.string().max(PROMPT_APPEND_MAX_LENGTH).default(""),
+  /**
+   * Structured projection of the effective prompt stack, resolved server-side
+   * by the resources service at read time — never persisted. `append` keeps
+   * carrying the legacy merged string so older clients keep working; new
+   * clients render `sections`. Optional (not defaulted) so stored payloads
+   * and patch bodies don't have to carry it.
+   */
+  sections: z.array(promptSectionSchema).optional(),
 });
 export type PromptConfig = z.infer<typeof promptConfigSchema>;
 
@@ -340,7 +367,10 @@ export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
  */
 const agentRuntimeConfigPatchShape = z
   .object({
-    prompt: promptConfigSchema,
+    // `sections` is a read-side projection computed by the resources service;
+    // it is never writable, so the patch prompt shape omits it (and Zod's
+    // default strip mode silently drops it if a client echoes it back).
+    prompt: promptConfigSchema.omit({ sections: true }),
     model: z.string(),
     mcpServers: z.array(mcpServerSchema),
     env: z.array(envEntrySchema),

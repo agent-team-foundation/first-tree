@@ -206,7 +206,11 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
-├── append-prompt <agent> [-f <file>]               # reads stdin if no file
+├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
+├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
+│                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
+│                                                   #   briefing headings); --force overrides the heading heuristic.
+├── append-prompt <agent> [-f <file>]               # deprecated alias of `prompt set`
 ├── add-mcp <agent> --name <id> --transport <t> [--command <c> --args <a>... | --url <u>]
 ├── set-env <agent> KEY=VALUE [--sensitive]
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]

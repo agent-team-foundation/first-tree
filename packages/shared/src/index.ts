@@ -1,5 +1,11 @@
 // Schemas
 
+// -- Assembled-briefing copy guard (shared by server validation and CLI prompt writes) --
+export {
+  AGENT_BRIEFING_GENERATED_MARKER,
+  type BriefingFingerprint,
+  findAssembledBriefingFingerprint,
+} from "./agent-briefing-guard.js";
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -104,7 +110,11 @@ export {
   mcpServerSchema,
   PROMPT_APPEND_MAX_LENGTH,
   type PromptConfig,
+  type PromptSection,
+  type PromptSectionScope,
   promptConfigSchema,
+  promptSectionSchema,
+  promptSectionScopeSchema,
   type RuntimeResourceSkill,
   runtimeResourceSkillSchema,
   type UpdateAgentRuntimeConfig,

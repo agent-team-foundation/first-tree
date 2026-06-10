@@ -126,4 +126,32 @@ describe("agent config fetch helpers", () => {
     expect(output()).toContain("OPENAI_API_KEY=*** (sensitive)");
     expect(output()).toContain("https://github.com/acme/web.git@main");
   });
+
+  it("prints the effective prompt stack with provenance when prompt.sections is present", async () => {
+    const { printConfig } = await import("../commands/agent/config/_shared/fetchers.js");
+    const base = config();
+
+    printConfig(
+      config({
+        payload: {
+          ...base.payload,
+          prompt: {
+            append: "merged legacy blob",
+            sections: [
+              { scope: "team", name: "Review rules", body: "Always review twice." },
+              { scope: "agent", name: "", body: "Prefer terse replies." },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(output()).toContain("Effective prompt stack (2 section(s)");
+    expect(output()).toContain("[team] Review rules (");
+    expect(output()).toContain("[agent] per-agent fragment (");
+    // Pointer to the round-trippable editing flow for the only editable source.
+    expect(output()).toContain("`agent config prompt show --raw` / `prompt set`");
+    // The legacy single-blob rendering must not also appear.
+    expect(output()).not.toContain("Prompt append:");
+  });
 });

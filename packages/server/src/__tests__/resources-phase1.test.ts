@@ -1,4 +1,5 @@
 import {
+  AGENT_BRIEFING_GENERATED_MARKER,
   AGENT_VISIBILITY,
   type AgentVisibility,
   canonicalizeResourceRepoUrl,
@@ -116,6 +117,101 @@ describe("Resources Phase 1", () => {
     const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
     expect(resolved.payload.prompt.append).toContain("Use the agent-local replacement.");
     expect(resolved.payload.prompt.append).not.toContain("Use the team baseline.");
+  });
+
+  it("projects the effective prompt stack into structured prompt.sections with provenance scopes", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const teamPrompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Review rules",
+        defaultEnabled: "available",
+        payload: { body: "Always review twice." },
+      },
+      owner.memberId,
+    );
+
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 1,
+        bindings: [
+          { type: "prompt", mode: "include", resourceId: teamPrompt.id },
+          { type: "prompt", mode: "include", resourceId: null, inlinePromptBody: "Prefer terse replies." },
+        ],
+      },
+      owner.memberId,
+    );
+
+    const baseConfig = await app.configService.get(agent.uuid);
+    const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
+
+    // Structured projection: provenance scope per row, inline fragment with
+    // an empty name (it has no resource name — the client labels it).
+    expect(resolved.payload.prompt.sections).toEqual([
+      { scope: "team", name: "Review rules", body: "Always review twice." },
+      { scope: "agent", name: "", body: "Prefer terse replies." },
+    ]);
+
+    // Legacy merged blob stays populated for older clients, with the
+    // provenance-honest heading labels (the old `## Agent-Specific Prompt`
+    // nesting is what trained agents to copy team content into their own
+    // fragment).
+    expect(resolved.payload.prompt.append).toContain("## Team Prompt: Review rules");
+    expect(resolved.payload.prompt.append).toContain("## Agent Prompt (this agent only)");
+    expect(resolved.payload.prompt.append).toContain("Always review twice.");
+    expect(resolved.payload.prompt.append).toContain("Prefer terse replies.");
+  });
+
+  it("rejects an inline prompt body carrying the generated-briefing marker, but lets bare briefing headings through", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    // Conclusive tier: the marker only exists in the generated AGENTS.md
+    // banner, so its presence means the caller pasted the assembled file.
+    await expect(
+      app.resourcesService.replaceAgentResources(
+        agent.uuid,
+        {
+          expectedVersion: 1,
+          bindings: [
+            {
+              type: "prompt",
+              mode: "include",
+              resourceId: null,
+              inlinePromptBody: `<!-- ${AGENT_BRIEFING_GENERATED_MARKER} — rebuilt every session -->\n# Identity\n\nYou are…`,
+            },
+          ],
+        },
+        owner.memberId,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      attrs: { code: "assembled_briefing_in_prompt" },
+    });
+
+    // Heuristic tier stays CLI-side (where --force can override): a body
+    // that merely contains a briefing-shaped heading must pass the server.
+    const accepted = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "# Working in First Tree\n\nA legitimate quote of the heading.",
+          },
+        ],
+      },
+      owner.memberId,
+    );
+    expect(accepted.version).toBe(2);
   });
 
   it("rejects concurrent agent resource writes with the same expected version", async () => {
