@@ -1,4 +1,10 @@
-import { addParticipantSchema, createChatSchema, paginationQuerySchema, updateChatSchema } from "@first-tree/shared";
+import {
+  addParticipantSchema,
+  createChatSchema,
+  createChatWithInitialMessageSchema,
+  paginationQuerySchema,
+  updateChatSchema,
+} from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chats } from "../../db/schema/chats.js";
@@ -7,6 +13,7 @@ import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
+import { notifyRecipients } from "../../services/notifier.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -29,6 +36,22 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
         ...p,
         joinedAt: p.joinedAt.toISOString(),
       })),
+    });
+  });
+
+  app.post("/create-and-send", { config: { otelRecordBody: true } }, async (request, reply) => {
+    const identity = requireAgent(request);
+    const body = createChatWithInitialMessageSchema.parse(request.body);
+    const result = await chatService.createChatWithInitialMessage(app.db, identity.uuid, body);
+    notifyRecipients(app.notifier, result.recipients, result.message.id);
+    return reply.status(result.replayed ? 200 : 201).send({
+      chat: result.chat,
+      message: result.message,
+      operationId: result.operationId,
+      replayed: result.replayed,
+      senderAgentId: result.senderAgentId,
+      recipientAgentIds: result.recipientAgentIds,
+      participantAgentIds: result.participantAgentIds,
     });
   });
 

@@ -157,6 +157,41 @@ describe("FirstTreeHubSDK public surface", () => {
     ]);
   });
 
+  it("creates a chat with an initial message through the agent endpoint", async () => {
+    const response = {
+      chat: { id: "chat-1" },
+      message: { id: "msg-1" },
+      operationId: "op-1",
+      replayed: false,
+      senderAgentId: "agent-1",
+      recipientAgentIds: ["agent-2"],
+      participantAgentIds: ["agent-1", "agent-2"],
+    };
+    const fetchMock = makeFetchMock([jsonResponse(response)]);
+
+    await expect(
+      makeSdk().createChatWithInitialMessage({
+        operationId: "op-1",
+        to: ["name:peer"],
+        with: [],
+        message: { format: "text", content: "hello", source: "cli" },
+      }),
+    ).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://first-tree.example/api/v1/agent/chats/create-and-send",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          operationId: "op-1",
+          to: ["name:peer"],
+          with: [],
+          message: { format: "text", content: "hello", source: "cli" },
+        }),
+      }),
+    );
+  });
+
   it("covers void requests and plain-text SDK errors", async () => {
     makeFetchMock([new Response(null, { status: 204 }), textResponse("plain failure", 409)]);
     const sdk = makeSdk();
@@ -265,6 +300,28 @@ describe("FirstTreeHubSDK public surface", () => {
     });
   });
 
+  it("preserves structured server error fields", async () => {
+    makeFetchMock([
+      jsonResponse(
+        {
+          code: "CHAT_CREATE_TARGET_NOT_FOUND",
+          error: "Agent not found.",
+          details: { option: "--to", input: "missing", hint: "Try another target." },
+          traceId: "trace-1",
+        },
+        400,
+      ),
+    ]);
+
+    await expect(makeSdk().listChats()).rejects.toMatchObject({
+      statusCode: 400,
+      message: "Agent not found.",
+      serverCode: "CHAT_CREATE_TARGET_NOT_FOUND",
+      details: { option: "--to", input: "missing", hint: "Try another target." },
+      traceId: "trace-1",
+    });
+  });
+
   it("keeps requests unscoped when no agent id is configured", async () => {
     const fetchMock = makeFetchMock([jsonResponse({ items: [], nextCursor: null })]);
     const sdk = new FirstTreeHubSDK({
@@ -284,10 +341,13 @@ describe("FirstTreeHubSDK public surface", () => {
   });
 
   it("constructs SdkError directly", () => {
-    const err = new SdkError(418, "teapot");
+    const err = new SdkError(418, "teapot", { serverCode: "TEAPOT", details: { hint: "short" }, traceId: "trace" });
 
     expect(err.name).toBe("SdkError");
     expect(err.statusCode).toBe(418);
     expect(err.message).toBe("teapot");
+    expect(err.serverCode).toBe("TEAPOT");
+    expect(err.details).toEqual({ hint: "short" });
+    expect(err.traceId).toBe("trace");
   });
 });

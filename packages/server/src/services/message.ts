@@ -10,6 +10,7 @@ import {
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -24,6 +25,9 @@ import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
 
 const log = createLogger("message");
+
+// biome-ignore lint/suspicious/noExplicitAny: Drizzle transaction clients do not expose a concrete schema type here.
+type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 /**
  * Metadata keys reserved for trusted-internal write paths. Stripped from
@@ -66,6 +70,11 @@ export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
   recipients: string[];
+};
+
+export type SendMessagePostCommitPlan = SendMessageResult & {
+  recipientAgentIds: string[];
+  organizationId: string;
 };
 
 export type SendMessageOptions = {
@@ -144,9 +153,17 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
-  return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), () =>
-    sendMessageInner(db, chatId, senderId, data, options),
-  );
+  // Preserve the public fail-fast contract for callers/tests that validate
+  // file payload shape without needing a real DB transaction.
+  if (data.format === "file") {
+    validateFileContent(data.content);
+  }
+
+  return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), async () => {
+    const txResult = await db.transaction((tx) => sendMessageInTransaction(tx, chatId, senderId, data, options));
+    await runSendMessagePostCommitEffects(db, chatId, txResult);
+    return { message: txResult.message, recipients: txResult.recipients };
+  });
 }
 
 /**
@@ -177,461 +194,465 @@ export async function sendMessage(
  * auto-inject the peer's uuid into `metadata.mentions` in 2-speaker chats.
  */
 
-async function sendMessageInner(
-  db: Database,
+export async function sendMessageInTransaction(
+  tx: DbLike,
   chatId: string,
   senderId: string,
   data: SendMessage,
   options: SendMessageOptions,
-): Promise<SendMessageResult> {
-  // Fail fast before opening a transaction: `format: "file"` content must be a
-  // valid image ref / batch (the route's schema leaves content unknown).
+): Promise<SendMessagePostCommitPlan> {
+  // Keep the same guard for transaction-level callers that bypass sendMessage().
   if (data.format === "file") {
     validateFileContent(data.content);
   }
 
-  const txResult = await db.transaction(async (tx) => {
-    // 1. Load participants and sender (inbox + org) in parallel — both are
-    //    needed for fan-out + mention enforcement + post-tx session
-    //    activation. Running concurrently keeps the hot send path on a
-    //    single round-trip rather than two sequential lookups. Sender's
-    //    organizationId is reused for predictive session activation
-    //    (chat-internal participants share the same org under multi-tenant).
-    //
-    //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
-    //    reads it. Likewise `chats.type` is locked to 'group' since
-    //    first-tree-context PR #465 and no longer drives any decision here.
-    const [participants, [senderRow]] = await Promise.all([
-      tx
-        .select({
-          agentId: chatMembership.agentId,
-          inboxId: agents.inboxId,
-          name: agents.name,
-          displayName: agents.displayName,
-          status: agents.status,
-          type: agents.type,
-        })
-        .from(chatMembership)
-        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"))),
-      tx
-        .select({ inboxId: agents.inboxId, organizationId: agents.organizationId, type: agents.type })
-        .from(agents)
-        .where(eq(agents.uuid, senderId))
-        .limit(1),
-    ]);
-    if (!senderRow) {
-      throw new NotFoundError(`Sender agent "${senderId}" not found`);
-    }
-
-    // 1b. Defensive: unwrap content that was JSON.stringify-ed once before the
-    //     agent passed it to the CLI / API. The bad shape is an outer `"..."`
-    //     wrapper + interior `\n` / `\"` escape sequences; the UI renders it
-    //     as a raw quoted line instead of markdown. See issue #389.
-    //
-    //     Guarded by sender type (human-typed quoted phrases never touched)
-    //     and by a strict structural match (see `maybeUnwrapDoubleEncoded`).
-    //     Non-string content (e.g. structured card payloads) is bypassed.
-    let effectiveContent: SendMessage["content"] = data.content;
-    if (senderRow.type !== "human" && typeof effectiveContent === "string") {
-      const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
-      if (unwrapped !== null) {
-        log.warn(
-          { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
-          "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
-        );
-        effectiveContent = unwrapped;
-      }
-    }
-
-    // 2. Decide the mention set. Two explicit sources contribute:
-    //   - `metadata.mentions: [uuid]` — caller already resolved uuids
-    //     (web composer, agent runtime / result-sink, adapter inbound).
-    //   - `data.receiverNames: [name]` — caller knows the recipient by name
-    //     and wants the server to resolve it against the chat's participant
-    //     list (CLI `chat send <name>`). An unknown name is a 400 with a
-    //     `chat invite` hint — never silently dropped.
-    //
-    // The server does NOT parse `@<name>` tokens out of `content` — see the
-    // file-level "Routing contract" comment above.
-    const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
-    // Server-side bottom-line on `metadata.documentContext`: shape via shared
-    // schema + byte budgets and sha256 calibration. Snapshot content arrives
-    // from a trusted runtime, but server still has to verify so a client bug
-    // can't lodge mismatched hash/size into immutable message history. The
-    // chat scope additionally rejects a cross-agent snapshot key whose owner
-    // is not a speaker participant of this chat (cross-workspace doc preview
-    // provenance check).
-    validateDocumentContext(incomingMeta, {
-      chatId,
-      participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
-    });
-    const explicitMentionsRaw = incomingMeta.mentions;
-    const explicitMentions = Array.isArray(explicitMentionsRaw)
-      ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
-      : [];
-
-    // Resolve `receiverNames` against the chat's speaker list.
-    const receiverNames = data.receiverNames ?? [];
-    const speakersByName = new Map<string, string>();
-    for (const p of participants) {
-      if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
-    }
-    const resolvedFromNames: string[] = [];
-    const unresolvedNames: string[] = [];
-    for (const name of receiverNames) {
-      const id = speakersByName.get(name.toLowerCase());
-      if (id) resolvedFromNames.push(id);
-      else unresolvedNames.push(name);
-    }
-    if (unresolvedNames.length > 0) {
-      const sample = unresolvedNames[0];
-      throw new BadRequestError(
-        `Cannot route to "${sample}" — they are not a participant of this chat. ` +
-          "Add them first:\n" +
-          `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-          "Then retry your send. Or ask a human in this chat to add them.",
-      );
-    }
-
-    const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
-    const participantsById = new Map(participants.map((p) => [p.agentId, p]));
-    const routedRecipientIds = new Set([
-      ...mergedMentions.filter((id) => id !== senderId),
-      ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
-    ]);
-    for (const id of routedRecipientIds) {
-      const participant = participantsById.get(id);
-      if (!participant || participant.status === "active") continue;
-      const label = participant.displayName || participant.name || id;
-      const recovery =
-        participant.status === "suspended"
-          ? "Reactivate it before sending."
-          : "Deleted agents cannot receive new messages.";
-      throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
-    }
-    const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
-
-    // Open-question contract: a `format=request` message is an "ask" directed
-    // at exactly one human (the sole `metadata.mentions` entry). Enforce here
-    // so the body (`content`) + `metadata.request.question` split and the
-    // open_request_count counter (below) have a single, validated target.
-    if (data.format === MESSAGE_FORMATS.REQUEST) {
-      const targetId = mergedMentions[0];
-      if (mergedMentions.length !== 1 || !targetId) {
-        throw new BadRequestError(
-          `A 'request' message must mention exactly one recipient (got ${mergedMentions.length}). ` +
-            "An open question is directed at a single human.",
-        );
-      }
-      const target = participantsById.get(targetId);
-      if (!target || target.type !== "human") {
-        throw new BadRequestError("A 'request' message must be directed at a human member.");
-      }
-    }
-
-    // Centralise the bypass contract for `purpose` values. Each flag
-    // describes what this purpose means for a downstream decision; adding a
-    // new `purpose` value means defining its profile here once, not hunting
-    // through the call sites below.
-    //
-    // `agent-final-text` profile rationale:
-    //   - skip mention enforcement (final-text is the one legal mentions-
-    //     empty case: a handler-initiated forward of the agent's own response
-    //     for human observers, not a message addressed into the room).
-    //   - force every fan-out row to notify=false (final text lands in
-    //     chat history for human observers but never wakes another
-    //     session). v1 §四 改造 4 (b) bypass channel.
-    const isAgentFinalText = data.purpose === "agent-final-text";
-    const purposeProfile = isAgentFinalText
-      ? {
-          skipMentionEnforcement: true,
-          forceSilentFanOut: true,
-        }
-      : {
-          skipMentionEnforcement: false,
-          forceSilentFanOut: false,
-        };
-
-    // Mention enforcement (explicit-only contract) — DEFAULT ON. Reject the
-    // send when no routing intent is declared — `metadata.mentions`,
-    // `receiverNames`, and `addressedToAgentIds` are the three legal
-    // declarations. The invariant lives here in the write path so every entry
-    // point inherits it; a new send caller cannot silently re-open the
-    // "write to chat history with no recipient" footgun by forgetting a flag.
-    //
-    // Applies to every chat shape (1:1 included): the previous "1:1
-    // implicit wake" bypass was removed when the explicit contract took
-    // its place; web clients now auto-inject the peer's uuid into
-    // `metadata.mentions` for 2-speaker chats so this check passes
-    // transparently.
-    //
-    // Two send shapes legitimately carry no recipient and bypass the guard:
-    //   - `purpose === "agent-final-text"` (via
-    //     `purposeProfile.skipMentionEnforcement`) — silent-by-construction
-    //     final text, never needs to name a recipient.
-    //   - `options.allowRecipientlessSend` — trusted server-internal opt-out
-    //     for system delivery paths whose addressing can legitimately resolve
-    //     to no live speaker (today: github-delivery). See the option's doc.
-    const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
-    if (!skipRecipientEnforcement) {
-      const recipientMentions = mergedMentions.filter((id) => id !== senderId);
-      // A system-routing override (`addressedToAgentIds`) only satisfies the
-      // guard when it resolves to an active, non-sender speaker of this chat.
-      // Counting raw array length instead would let addressing that reaches no
-      // one slip through (`[undefined]`, `[senderId]`, or an id that is not a
-      // live speaker) — the same silent-dead-end the guard exists to prevent.
-      // A trusted system path whose addressing can legitimately resolve to no
-      // speaker (github-delivery) declares `allowRecipientlessSend` to opt out
-      // above rather than lean on that hole.
-      const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
-        (id) => id !== senderId && participantsById.get(id)?.status === "active",
-      );
-      if (recipientMentions.length === 0 && !hasActiveAddressed) {
-        throw new BadRequestError(
-          "Sending a message requires an explicit recipient. " +
-            "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
-            'or set `purpose: "agent-final-text"` for silent history-only sends.',
-        );
-      }
-    }
-
-    // Agent-path content normalisation: if the caller declared mentions
-    // in metadata but didn't write the corresponding `@<name>` in the
-    // text, prepend the missing tokens. This keeps the visible message
-    // in sync with the routing decision — most importantly when an agent
-    // replies in a group. Web composer leaves this off
-    // because the human typed the @ themselves and we don't want server
-    // to silently mutate human-typed content.
-    let outboundContent = effectiveContent;
-    if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
-      const present = new Set(scanMentionTokens(outboundContent));
-      const missingNames: string[] = [];
-      for (const id of mergedMentions) {
-        if (id === senderId) continue;
-        const p = participants.find((q) => q.agentId === id);
-        if (!p?.name) continue;
-        if (present.has(p.name.toLowerCase())) continue;
-        missingNames.push(p.name);
-      }
-      if (missingNames.length > 0) {
-        const prefix = missingNames.map((n) => `@${n}`).join(" ");
-        outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
-      }
-    }
-
-    // 3. Store the message (with merged metadata + normalised content).
-    // UUID v7 per the "UUID v7 as Message ID" architecture rule in
-    // CLAUDE.md — time-ordered so message id lex order matches creation
-    // order. randomUUID() (v4) was the pre-existing implementation; the
-    // mismatch was caught when the web client's "new messages" divider
-    // relied on lex ordering to find newer-than-anchor messages and
-    // silently dropped some (PR #286, rev 8).
-    const messageId = uuidv7();
-    const [msg] = await tx
-      .insert(messages)
-      .values({
-        id: messageId,
-        chatId,
-        senderId,
-        format: data.format,
-        content: outboundContent,
-        metadata: metadataToStore,
-        inReplyTo: data.inReplyTo ?? null,
-        source: data.source,
+  // 1. Load participants and sender (inbox + org) in parallel — both are
+  //    needed for fan-out + mention enforcement + post-tx session
+  //    activation. Running concurrently keeps the hot send path on a
+  //    single round-trip rather than two sequential lookups. Sender's
+  //    organizationId is reused for predictive session activation
+  //    (chat-internal participants share the same org under multi-tenant).
+  //
+  //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
+  //    reads it. Likewise `chats.type` is locked to 'group' since
+  //    first-tree-context PR #465 and no longer drives any decision here.
+  const [participants, [senderRow]] = await Promise.all([
+    tx
+      .select({
+        agentId: chatMembership.agentId,
+        inboxId: agents.inboxId,
+        name: agents.name,
+        displayName: agents.displayName,
+        status: agents.status,
+        type: agents.type,
       })
-      .returning();
+      .from(chatMembership)
+      .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"))),
+    tx
+      .select({ inboxId: agents.inboxId, organizationId: agents.organizationId, type: agents.type })
+      .from(agents)
+      .where(eq(agents.uuid, senderId))
+      .limit(1),
+  ]);
+  if (!senderRow) {
+    throw new NotFoundError(`Sender agent "${senderId}" not found`);
+  }
 
-    // 4. Fan-out: create inbox entries for every non-sender participant.
-    //    The `notify` flag splits them in two:
-    //    - `notify=true`  — wakes the recipient's session (the existing path).
-    //    - `notify=false` — silent context row, written so a future active
-    //      delivery to the same chat can replay it as preceding history.
-    //
-    //    Explicit-only contract (see file-level "Routing contract"):
-    //    - sender is always filtered out (no self-delivery).
-    //    - explicit wake triggers `notify=true`:
-    //        * agentId in `addressedToAgentIds` (system-routed override), OR
-    //        * agentId in `metadata.mentions` (mergedMentions, post-resolve).
-    //    - `purposeProfile.forceSilentFanOut` (today = `purpose ===
-    //      "agent-final-text"`) forces notify=false for every row regardless.
-    //      Inbox entries are still written so history replay still works;
-    //      nobody is woken.
-    const mentionSet = new Set(mergedMentions);
-    const addressedSet = new Set(options.addressedToAgentIds ?? []);
-    // Build a single fan-out structure that carries agentId alongside the
-    // inbox row. agentId is needed by the post-tx session-activation step
-    // (Step 1b) but is not part of the inbox_entries schema — it's stripped
-    // back out at insert time below.
-    const fanout = participants
-      .filter((p) => p.agentId !== senderId)
-      .filter((p) => p.status === "active")
-      .map((p) => ({
-        agentId: p.agentId,
-        inboxId: p.inboxId,
-        notify: !purposeProfile.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
-      }));
-
-    if (fanout.length > 0) {
-      await tx
-        .insert(inboxEntries)
-        .values(fanout.map((f) => ({ inboxId: f.inboxId, messageId, chatId, notify: f.notify })));
+  // 1b. Defensive: unwrap content that was JSON.stringify-ed once before the
+  //     agent passed it to the CLI / API. The bad shape is an outer `"..."`
+  //     wrapper + interior `\n` / `\"` escape sequences; the UI renders it
+  //     as a raw quoted line instead of markdown. See issue #389.
+  //
+  //     Guarded by sender type (human-typed quoted phrases never touched)
+  //     and by a strict structural match (see `maybeUnwrapDoubleEncoded`).
+  //     Non-string content (e.g. structured card payloads) is bypassed.
+  let effectiveContent: SendMessage["content"] = data.content;
+  if (senderRow.type !== "human" && typeof effectiveContent === "string") {
+    const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
+    if (unwrapped !== null) {
+      log.warn(
+        { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
+        "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
+      );
+      effectiveContent = unwrapped;
     }
+  }
 
-    // notify=true entries serve two consumers:
-    //   - `recipients` (inboxIds) — feeds the route-layer PG NOTIFY for
-    //     wake-up. Silent entries piggy-back on the next active delivery
-    //     (see services/inbox.ts pollInbox).
-    //   - `recipientAgentIds` — feeds the post-transaction predictive
-    //     session-activation block (Step 1b below; M-plan N1-B range).
-    const notified = fanout.filter((f) => f.notify);
-    const recipients = notified.map((f) => f.inboxId);
-    const recipientAgentIds = notified.map((f) => f.agentId);
+  // 2. Decide the mention set. Two explicit sources contribute:
+  //   - `metadata.mentions: [uuid]` — caller already resolved uuids
+  //     (web composer, agent runtime / result-sink, adapter inbound).
+  //   - `data.receiverNames: [name]` — caller knows the recipient by name
+  //     and wants the server to resolve it against the chat's participant
+  //     list (CLI `chat send <name>`). An unknown name is a 400 with a
+  //     `chat invite` hint — never silently dropped.
+  //
+  // The server does NOT parse `@<name>` tokens out of `content` — see the
+  // file-level "Routing contract" comment above.
+  const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
+  // Server-side bottom-line on `metadata.documentContext`: shape via shared
+  // schema + byte budgets and sha256 calibration. Snapshot content arrives
+  // from a trusted runtime, but server still has to verify so a client bug
+  // can't lodge mismatched hash/size into immutable message history. The
+  // chat scope additionally rejects a cross-agent snapshot key whose owner
+  // is not a speaker participant of this chat (cross-workspace doc preview
+  // provenance check).
+  validateDocumentContext(incomingMeta, {
+    chatId,
+    participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
+  });
+  const explicitMentionsRaw = incomingMeta.mentions;
+  const explicitMentions = Array.isArray(explicitMentionsRaw)
+    ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
+    : [];
 
-    // 5. Update chat.updatedAt so chat list sorting reflects latest activity
-    await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
+  // Resolve `receiverNames` against the chat's speaker list.
+  const receiverNames = data.receiverNames ?? [];
+  const speakersByName = new Map<string, string>();
+  for (const p of participants) {
+    if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
+  }
+  const resolvedFromNames: string[] = [];
+  const unresolvedNames: string[] = [];
+  for (const name of receiverNames) {
+    const id = speakersByName.get(name.toLowerCase());
+    if (id) resolvedFromNames.push(id);
+    else unresolvedNames.push(name);
+  }
+  if (unresolvedNames.length > 0) {
+    const sample = unresolvedNames[0];
+    throw new BadRequestError(
+      `Cannot route to "${sample}" — they are not a participant of this chat. ` +
+        "Add them first:\n" +
+        `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
+        "Then retry your send. Or ask a human in this chat to add them.",
+    );
+  }
 
-    if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
+  const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
+  const participantsById = new Map(participants.map((p) => [p.agentId, p]));
+  const routedRecipientIds = new Set([
+    ...mergedMentions.filter((id) => id !== senderId),
+    ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
+  ]);
+  for (const id of routedRecipientIds) {
+    const participant = participantsById.get(id);
+    if (!participant || participant.status === "active") continue;
+    const label = participant.displayName || participant.name || id;
+    const recovery =
+      participant.status === "suspended"
+        ? "Reactivate it before sending."
+        : "Deleted agents cannot receive new messages.";
+    throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
+  }
+  const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
-    // 6. Chat-first workspace projection (append-only, post-fan-out).
-    //    Updates chats.last_message_*, increments speaker + watcher mention
-    //    counters. New code; no existing path is modified — see
-    //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
-    // Chat-list preview: prefer string content (text/markdown) verbatim;
-    // fall back to the caption of a batched image send (`format: "file"`
-    // with `{caption?, attachments[]}` shape) so a "text + N images" send
-    // still surfaces its text in the conversation list. Pure single-image
-    // messages (no caption) stay empty — same as before.
-    const previewText =
-      typeof outboundContent === "string" ? outboundContent.trim() : extractCaption(outboundContent).trim();
-    await applyAfterFanOut(tx, {
+  // Open-question contract: a `format=request` message is an "ask" directed
+  // at exactly one human (the sole `metadata.mentions` entry). Enforce here
+  // so the body (`content`) + `metadata.request.question` split and the
+  // open_request_count counter (below) have a single, validated target.
+  if (data.format === MESSAGE_FORMATS.REQUEST) {
+    const targetId = mergedMentions[0];
+    if (mergedMentions.length !== 1 || !targetId) {
+      throw new BadRequestError(
+        `A 'request' message must mention exactly one recipient (got ${mergedMentions.length}). ` +
+          "An open question is directed at a single human.",
+      );
+    }
+    const target = participantsById.get(targetId);
+    if (!target || target.type !== "human") {
+      throw new BadRequestError("A 'request' message must be directed at a human member.");
+    }
+  }
+
+  // Centralise the bypass contract for `purpose` values. Each flag
+  // describes what this purpose means for a downstream decision; adding a
+  // new `purpose` value means defining its profile here once, not hunting
+  // through the call sites below.
+  //
+  // `agent-final-text` profile rationale:
+  //   - skip mention enforcement (final-text is the one legal mentions-
+  //     empty case: a handler-initiated forward of the agent's own response
+  //     for human observers, not a message addressed into the room).
+  //   - force every fan-out row to notify=false (final text lands in
+  //     chat history for human observers but never wakes another
+  //     session). v1 §四 改造 4 (b) bypass channel.
+  const isAgentFinalText = data.purpose === "agent-final-text";
+  const purposeProfile = isAgentFinalText
+    ? {
+        skipMentionEnforcement: true,
+        forceSilentFanOut: true,
+      }
+    : {
+        skipMentionEnforcement: false,
+        forceSilentFanOut: false,
+      };
+
+  // Mention enforcement (explicit-only contract) — DEFAULT ON. Reject the
+  // send when no routing intent is declared — `metadata.mentions`,
+  // `receiverNames`, and `addressedToAgentIds` are the three legal
+  // declarations. The invariant lives here in the write path so every entry
+  // point inherits it; a new send caller cannot silently re-open the
+  // "write to chat history with no recipient" footgun by forgetting a flag.
+  //
+  // Applies to every chat shape (1:1 included): the previous "1:1
+  // implicit wake" bypass was removed when the explicit contract took
+  // its place; web clients now auto-inject the peer's uuid into
+  // `metadata.mentions` for 2-speaker chats so this check passes
+  // transparently.
+  //
+  // Two send shapes legitimately carry no recipient and bypass the guard:
+  //   - `purpose === "agent-final-text"` (via
+  //     `purposeProfile.skipMentionEnforcement`) — silent-by-construction
+  //     final text, never needs to name a recipient.
+  //   - `options.allowRecipientlessSend` — trusted server-internal opt-out
+  //     for system delivery paths whose addressing can legitimately resolve
+  //     to no live speaker (today: github-delivery). See the option's doc.
+  const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
+  if (!skipRecipientEnforcement) {
+    const recipientMentions = mergedMentions.filter((id) => id !== senderId);
+    // A system-routing override (`addressedToAgentIds`) only satisfies the
+    // guard when it resolves to an active, non-sender speaker of this chat.
+    // Counting raw array length instead would let addressing that reaches no
+    // one slip through (`[undefined]`, `[senderId]`, or an id that is not a
+    // live speaker) — the same silent-dead-end the guard exists to prevent.
+    // A trusted system path whose addressing can legitimately resolve to no
+    // speaker (github-delivery) declares `allowRecipientlessSend` to opt out
+    // above rather than lean on that hole.
+    const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
+      (id) => id !== senderId && participantsById.get(id)?.status === "active",
+    );
+    if (recipientMentions.length === 0 && !hasActiveAddressed) {
+      throw new BadRequestError(
+        "Sending a message requires an explicit recipient. " +
+          "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
+          'or set `purpose: "agent-final-text"` for silent history-only sends.',
+      );
+    }
+  }
+
+  // Agent-path content normalisation: if the caller declared mentions
+  // in metadata but didn't write the corresponding `@<name>` in the
+  // text, prepend the missing tokens. This keeps the visible message
+  // in sync with the routing decision — most importantly when an agent
+  // replies in a group. Web composer leaves this off
+  // because the human typed the @ themselves and we don't want server
+  // to silently mutate human-typed content.
+  let outboundContent = effectiveContent;
+  if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
+    const present = new Set(scanMentionTokens(outboundContent));
+    const missingNames: string[] = [];
+    for (const id of mergedMentions) {
+      if (id === senderId) continue;
+      const p = participants.find((q) => q.agentId === id);
+      if (!p?.name) continue;
+      if (present.has(p.name.toLowerCase())) continue;
+      missingNames.push(p.name);
+    }
+    if (missingNames.length > 0) {
+      const prefix = missingNames.map((n) => `@${n}`).join(" ");
+      outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
+    }
+  }
+
+  // 3. Store the message (with merged metadata + normalised content).
+  // UUID v7 per the "UUID v7 as Message ID" architecture rule in
+  // CLAUDE.md — time-ordered so message id lex order matches creation
+  // order. randomUUID() (v4) was the pre-existing implementation; the
+  // mismatch was caught when the web client's "new messages" divider
+  // relied on lex ordering to find newer-than-anchor messages and
+  // silently dropped some (PR #286, rev 8).
+  const messageId = uuidv7();
+  const [msg] = await tx
+    .insert(messages)
+    .values({
+      id: messageId,
       chatId,
-      messageId: msg.id,
       senderId,
-      mentionedAgentIds: mergedMentions,
-      contentPreview: previewText,
-      messageCreatedAt: msg.createdAt,
-      // Restrict the final-text unread bump to non-human senders.
-      // `purpose` lives on the shared sendMessage schema, so a human-
-      // authored web send could in principle set it; gating here keeps
-      // the human-as-sender path out of the new projection branch even
-      // if the rest of `agent-final-text` semantics (skipMentionEnforcement,
-      // forceSilentFanOut) happen to fire for that caller.
-      bumpForAgentFinalText: isAgentFinalText && senderRow.type !== "human",
-    });
+      format: data.format,
+      content: outboundContent,
+      metadata: metadataToStore,
+      inReplyTo: data.inReplyTo ?? null,
+      source: data.source,
+    })
+    .returning();
 
-    // 7. Open-question counter (`chat_user_state.open_request_count`) — see
-    //    proposals/group-chat-unified-send §D1. TWO INDEPENDENT effects:
-    //      +1 — ANY `format=request` opens a question for its single human
-    //           target. (A request-shaped reply also +1's — it is a new,
-    //           independently-answerable question; it does NOT auto-close the
-    //           one it replies to. Superseding is now an explicit close.)
-    //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
-    //           pointed at a prior open question (the human's clean answer, or
-    //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
-    //           no longer resolves anything — it is pure threading, so a
-    //           "chat about this" discussion can thread under the question
-    //           without clearing the red dot. Idempotent — only the first
-    //           resolution decrements; `GREATEST(0, …)` floors at zero.
-    const requestTarget = mergedMentions[0];
-    if (data.format === MESSAGE_FORMATS.REQUEST && requestTarget) {
-      await tx.execute(sql`
+  // 4. Fan-out: create inbox entries for every non-sender participant.
+  //    The `notify` flag splits them in two:
+  //    - `notify=true`  — wakes the recipient's session (the existing path).
+  //    - `notify=false` — silent context row, written so a future active
+  //      delivery to the same chat can replay it as preceding history.
+  //
+  //    Explicit-only contract (see file-level "Routing contract"):
+  //    - sender is always filtered out (no self-delivery).
+  //    - explicit wake triggers `notify=true`:
+  //        * agentId in `addressedToAgentIds` (system-routed override), OR
+  //        * agentId in `metadata.mentions` (mergedMentions, post-resolve).
+  //    - `purposeProfile.forceSilentFanOut` (today = `purpose ===
+  //      "agent-final-text"`) forces notify=false for every row regardless.
+  //      Inbox entries are still written so history replay still works;
+  //      nobody is woken.
+  const mentionSet = new Set(mergedMentions);
+  const addressedSet = new Set(options.addressedToAgentIds ?? []);
+  // Build a single fan-out structure that carries agentId alongside the
+  // inbox row. agentId is needed by the post-tx session-activation step
+  // (Step 1b) but is not part of the inbox_entries schema — it's stripped
+  // back out at insert time below.
+  const fanout = participants
+    .filter((p) => p.agentId !== senderId)
+    .filter((p) => p.status === "active")
+    .map((p) => ({
+      agentId: p.agentId,
+      inboxId: p.inboxId,
+      notify: !purposeProfile.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
+    }));
+
+  if (fanout.length > 0) {
+    await tx
+      .insert(inboxEntries)
+      .values(fanout.map((f) => ({ inboxId: f.inboxId, messageId, chatId, notify: f.notify })));
+  }
+
+  // notify=true entries serve two consumers:
+  //   - `recipients` (inboxIds) — feeds the route-layer PG NOTIFY for
+  //     wake-up. Silent entries piggy-back on the next active delivery
+  //     (see services/inbox.ts pollInbox).
+  //   - `recipientAgentIds` — feeds the post-transaction predictive
+  //     session-activation block (Step 1b below; M-plan N1-B range).
+  const notified = fanout.filter((f) => f.notify);
+  const recipients = notified.map((f) => f.inboxId);
+  const recipientAgentIds = notified.map((f) => f.agentId);
+
+  // 5. Update chat.updatedAt so chat list sorting reflects latest activity
+  await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
+
+  if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
+
+  // 6. Chat-first workspace projection (append-only, post-fan-out).
+  //    Updates chats.last_message_*, increments speaker + watcher mention
+  //    counters. New code; no existing path is modified — see
+  //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
+  // Chat-list preview: prefer string content (text/markdown) verbatim;
+  // fall back to the caption of a batched image send (`format: "file"`
+  // with `{caption?, attachments[]}` shape) so a "text + N images" send
+  // still surfaces its text in the conversation list. Pure single-image
+  // messages (no caption) stay empty — same as before.
+  const previewText =
+    typeof outboundContent === "string" ? outboundContent.trim() : extractCaption(outboundContent).trim();
+  await applyAfterFanOut(tx, {
+    chatId,
+    messageId: msg.id,
+    senderId,
+    mentionedAgentIds: mergedMentions,
+    contentPreview: previewText,
+    messageCreatedAt: msg.createdAt,
+    // Restrict the final-text unread bump to non-human senders.
+    // `purpose` lives on the shared sendMessage schema, so a human-
+    // authored web send could in principle set it; gating here keeps
+    // the human-as-sender path out of the new projection branch even
+    // if the rest of `agent-final-text` semantics (skipMentionEnforcement,
+    // forceSilentFanOut) happen to fire for that caller.
+    bumpForAgentFinalText: isAgentFinalText && senderRow.type !== "human",
+  });
+
+  // 7. Open-question counter (`chat_user_state.open_request_count`) — see
+  //    proposals/group-chat-unified-send §D1. TWO INDEPENDENT effects:
+  //      +1 — ANY `format=request` opens a question for its single human
+  //           target. (A request-shaped reply also +1's — it is a new,
+  //           independently-answerable question; it does NOT auto-close the
+  //           one it replies to. Superseding is now an explicit close.)
+  //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
+  //           pointed at a prior open question (the human's clean answer, or
+  //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
+  //           no longer resolves anything — it is pure threading, so a
+  //           "chat about this" discussion can thread under the question
+  //           without clearing the red dot. Idempotent — only the first
+  //           resolution decrements; `GREATEST(0, …)` floors at zero.
+  const requestTarget = mergedMentions[0];
+  if (data.format === MESSAGE_FORMATS.REQUEST && requestTarget) {
+    await tx.execute(sql`
         INSERT INTO chat_user_state (chat_id, agent_id, open_request_count)
         VALUES (${chatId}, ${requestTarget}, 1)
         ON CONFLICT (chat_id, agent_id)
         DO UPDATE SET open_request_count = chat_user_state.open_request_count + 1
       `);
-    }
-    // ANY presence of the reserved `resolves` key must parse — a malformed
-    // shape (e.g. bogus `kind`) is rejected, not stored as inert metadata.
-    // Storing it would both mislead readers and poison the prior-resolution
-    // idempotency scan below (which matches on `resolves ->> 'request'`),
-    // permanently blocking the legitimate decrement.
-    if (data.metadata?.resolves !== undefined && !requestResolutionSchema.safeParse(data.metadata.resolves).success) {
+  }
+
+  // ANY presence of the reserved `resolves` key must parse — a malformed
+  // shape (e.g. bogus `kind`) is rejected, not stored as inert metadata.
+  // Storing it would both mislead readers and poison the prior-resolution
+  // idempotency scan below (which matches on `resolves ->> 'request'`),
+  // permanently blocking the legitimate decrement.
+  if (data.metadata?.resolves !== undefined && !requestResolutionSchema.safeParse(data.metadata.resolves).success) {
+    throw new BadRequestError(
+      'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
+    );
+  }
+  const resolution = requestResolutionSchema.safeParse(data.metadata?.resolves);
+  if (resolution.success) {
+    const requestId = resolution.data.request;
+    // Lock the target request row FIRST so concurrent resolutions of the
+    // SAME question serialise — otherwise two could both observe no prior
+    // resolution under READ COMMITTED and each decrement (double-decrement).
+    const [parent] = await tx
+      .select({ format: messages.format, metadata: messages.metadata, senderId: messages.senderId })
+      .from(messages)
+      .where(and(eq(messages.id, requestId), eq(messages.chatId, chatId)))
+      .for("update")
+      .limit(1);
+    // FAIL LOUD on an invalid resolution target. Throwing here rolls back
+    // the whole transaction (including the message INSERT above), so no
+    // misleading "answered"/"closed" message with a dangling
+    // `metadata.resolves.request` / `inReplyTo` ever lands in history.
+    if (!parent) {
       throw new BadRequestError(
-        'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
+        `Cannot resolve "${requestId}": no such message in this chat. Pass the id of the open question you asked.`,
       );
     }
-    const resolution = requestResolutionSchema.safeParse(data.metadata?.resolves);
-    if (resolution.success) {
-      const requestId = resolution.data.request;
-      // Lock the target request row FIRST so concurrent resolutions of the
-      // SAME question serialise — otherwise two could both observe no prior
-      // resolution under READ COMMITTED and each decrement (double-decrement).
-      const [parent] = await tx
-        .select({ format: messages.format, metadata: messages.metadata, senderId: messages.senderId })
-        .from(messages)
-        .where(and(eq(messages.id, requestId), eq(messages.chatId, chatId)))
-        .for("update")
-        .limit(1);
-      // FAIL LOUD on an invalid resolution target. Throwing here rolls back
-      // the whole transaction (including the message INSERT above), so no
-      // misleading "answered"/"closed" message with a dangling
-      // `metadata.resolves.request` / `inReplyTo` ever lands in history.
-      if (!parent) {
-        throw new BadRequestError(
-          `Cannot resolve "${requestId}": no such message in this chat. Pass the id of the open question you asked.`,
-        );
-      }
-      const parentMentions = Array.isArray(parent.metadata?.mentions) ? parent.metadata.mentions : [];
-      const target =
-        parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
-      if (typeof target !== "string") {
-        throw new BadRequestError(
-          `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
-        );
-      }
-      // Only the target (a direct answer) or the asking agent (answer/close
-      // after judging the discussion) may resolve a question.
-      if (senderId !== target && senderId !== parent.senderId) {
-        throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
-      }
-      // Idempotency: only the FIRST resolution decrements (exclude the row we
-      // just inserted). A prior resolution is any other message in this chat
-      // whose `metadata.resolves.request` points at the same question — but
-      // ONLY from an authorized resolver (the target or the asker). Without
-      // the sender scope, any participant could pre-write a stray
-      // `metadata.resolves` for this question (which itself never decrements,
-      // being unauthorized) and have it count as a "prior", permanently
-      // blocking the legitimate resolution from clearing the red dot.
-      // (Unauthorized resolves are rejected above nowadays, but rows written
-      // before that gate existed may still be present — keep the scope.)
-      // A re-resolve of an already-resolved question stays a soft success:
-      // it threads as a confirmation and simply skips the decrement, so the
-      // human-answers-while-agent-closes race never errors either side.
-      const resolvers = [target, parent.senderId];
-      const priors = await tx
-        .select({ id: messages.id })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.chatId, chatId),
-            ne(messages.id, messageId),
-            sql`${messages.metadata} -> 'resolves' ->> 'request' = ${requestId}`,
-            // Only schema-valid resolution rows count as a "prior" — a
-            // malformed legacy row (pre-validation `kind`) must not block
-            // the legitimate resolution from clearing the red dot.
-            sql`${messages.metadata} -> 'resolves' ->> 'kind' IN ('answered', 'closed')`,
-            inArray(messages.senderId, resolvers),
-          ),
-        );
-      if (priors.length === 0) {
-        await tx.execute(sql`
-          UPDATE chat_user_state
-             SET open_request_count = GREATEST(0, open_request_count - 1)
-           WHERE chat_id = ${chatId} AND agent_id = ${target}
-        `);
-      }
+    const parentMentions = Array.isArray(parent.metadata?.mentions) ? parent.metadata.mentions : [];
+    const target =
+      parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
+    if (typeof target !== "string") {
+      throw new BadRequestError(
+        `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
+      );
     }
+    // Only the target (a direct answer) or the asking agent (answer/close
+    // after judging the discussion) may resolve a question.
+    if (senderId !== target && senderId !== parent.senderId) {
+      throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
+    }
+    // Idempotency: only the FIRST resolution decrements (exclude the row we
+    // just inserted). A prior resolution is any other message in this chat
+    // whose `metadata.resolves.request` points at the same question — but
+    // ONLY from an authorized resolver (the target or the asker). Without
+    // the sender scope, any participant could pre-write a stray
+    // `metadata.resolves` for this question (which itself never decrements,
+    // being unauthorized) and have it count as a "prior", permanently
+    // blocking the legitimate resolution from clearing the red dot.
+    // (Unauthorized resolves are rejected above nowadays, but rows written
+    // before that gate existed may still be present — keep the scope.)
+    // A re-resolve of an already-resolved question stays a soft success:
+    // it threads as a confirmation and simply skips the decrement, so the
+    // human-answers-while-agent-closes race never errors either side.
+    const resolvers = [target, parent.senderId];
+    const priors = await tx
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          ne(messages.id, messageId),
+          sql`${messages.metadata} -> 'resolves' ->> 'request' = ${requestId}`,
+          // Only schema-valid resolution rows count as a "prior" — a
+          // malformed legacy row (pre-validation `kind`) must not block
+          // the legitimate resolution from clearing the red dot.
+          sql`${messages.metadata} -> 'resolves' ->> 'kind' IN ('answered', 'closed')`,
+          inArray(messages.senderId, resolvers),
+        ),
+      );
+    if (priors.length === 0) {
+      await tx.execute(sql`
+        UPDATE chat_user_state
+           SET open_request_count = GREATEST(0, open_request_count - 1)
+         WHERE chat_id = ${chatId} AND agent_id = ${target}
+      `);
+    }
+  }
 
-    return {
-      message: msg,
-      recipients,
-      recipientAgentIds,
-      organizationId: senderRow.organizationId,
-    };
-  });
+  return {
+    message: msg,
+    recipients,
+    recipientAgentIds,
+    organizationId: senderRow.organizationId,
+  };
+}
 
+export async function runSendMessagePostCommitEffects(
+  db: Database,
+  chatId: string,
+  txResult: SendMessagePostCommitPlan,
+): Promise<void> {
   // Predictive session-state activation: after the main transaction commits,
   // best-effort upsert an `active` agent_chat_sessions row for every notify=true
   // recipient so the First Tree UI list refreshes immediately on send (see M-plan
@@ -660,8 +681,36 @@ async function sendMessageInner(
   // inbox NOTIFY; this is what reaches watcher rows (no inbox entry → no
   // wake-up otherwise). Failure is dropped; web reconnect refetches.
   fireChatMessageKick(chatId, txResult.message.id);
+}
 
-  return { message: txResult.message, recipients: txResult.recipients };
+export async function loadSendMessagePostCommitPlan(
+  db: DbLike,
+  chatId: string,
+  messageId: string,
+): Promise<SendMessagePostCommitPlan> {
+  const [[message], [chat], notifyRows] = await Promise.all([
+    db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, messageId), eq(messages.chatId, chatId)))
+      .limit(1),
+    db.select({ organizationId: chats.organizationId }).from(chats).where(eq(chats.id, chatId)).limit(1),
+    db
+      .select({ inboxId: inboxEntries.inboxId, agentId: agents.uuid })
+      .from(inboxEntries)
+      .innerJoin(agents, eq(agents.inboxId, inboxEntries.inboxId))
+      .where(
+        and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.messageId, messageId), eq(inboxEntries.notify, true)),
+      ),
+  ]);
+  if (!message) throw new NotFoundError(`Message "${messageId}" not found in chat "${chatId}"`);
+  if (!chat) throw new NotFoundError(`Chat "${chatId}" not found`);
+  return {
+    message,
+    recipients: notifyRows.map((row) => row.inboxId),
+    recipientAgentIds: notifyRows.map((row) => row.agentId),
+    organizationId: chat.organizationId,
+  };
 }
 
 /**

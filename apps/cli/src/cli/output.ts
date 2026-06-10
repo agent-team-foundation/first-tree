@@ -3,12 +3,14 @@
  * `core/output.ts` (the Print layer). Keep these thin wrappers so callers that
  * only depend on `cli/output.ts` keep working during the migration.
  */
+
+import type { FailureOutputOptions } from "../core/output.js";
 import { print } from "../core/output.js";
 
 export function success(data: unknown): void {
   print.result(data);
 }
 
-export function fail(code: string, message: string, exitCode = 1): never {
-  return print.fail(code, message, exitCode);
+export function fail(code: string, message: string, exitCode = 1, options?: FailureOutputOptions): never {
+  return print.fail(code, message, exitCode, options);
 }

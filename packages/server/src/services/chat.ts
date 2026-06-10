@@ -1,28 +1,75 @@
-import { randomUUID } from "node:crypto";
-import type { AddParticipant, CreateChat } from "@first-tree/shared";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  type AddParticipant,
+  AGENT_STATUSES,
+  type CreateChat,
+  type CreateChatWithInitialMessage,
+  type CreateChatWithInitialMessageResult,
+  MESSAGE_SOURCES,
+  type SendMessage,
+} from "@first-tree/shared";
+import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { chatCreateOperations } from "../db/schema/chat-create-operations.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError, StructuredAppError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
+import { loadSendMessagePostCommitPlan, runSendMessagePostCommitEffects, sendMessageInTransaction } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import { leaveAsParticipant } from "./watcher.js";
 
-export async function createChat(db: Database, creatorId: string, data: CreateChat) {
-  const chatId = randomUUID();
+// biome-ignore lint/suspicious/noExplicitAny: Drizzle transaction clients do not expose a concrete schema type here.
+type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
-  // Ensure creator is included in participants
-  const allParticipantIds = new Set([creatorId, ...data.participantIds]);
+type CreateChatParticipantBaseRow = {
+  id: string;
+  organizationId: string;
+  type: string;
+  visibility: string;
+  managerId: string;
+  status: string;
+};
 
-  // Verify all participants exist and belong to the same organization
+type CreateChatTargetContext = {
+  option: "--to" | "--with";
+  input: string;
+};
+
+function targetContextDetails(
+  targetId: string,
+  contextByAgentId?: ReadonlyMap<string, CreateChatTargetContext>,
+): { option?: "--to" | "--with"; input?: string } {
+  const context = contextByAgentId?.get(targetId);
+  return context ? { option: context.option, input: context.input } : {};
+}
+
+function chatCreateStructuredError(
+  statusCode: number,
+  publicCode: string,
+  message: string,
+  details: Record<string, unknown>,
+): StructuredAppError {
+  return new StructuredAppError(statusCode, publicCode, message, details);
+}
+
+export async function validateCreateChatParticipantBaseGate(
+  db: DbLike,
+  creatorId: string,
+  participantIds: ReadonlyArray<string>,
+  options: { contextByAgentId?: ReadonlyMap<string, CreateChatTargetContext> } = {},
+): Promise<{ orgId: string; rows: CreateChatParticipantBaseRow[]; creator: CreateChatParticipantBaseRow }> {
+  const allParticipantIds = [...new Set([creatorId, ...participantIds])];
+
+  // Verify all participants exist and belong to the same organization.
   const existingAgents = await db
     .select({
       id: agents.uuid,
@@ -30,13 +77,22 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
       type: agents.type,
       visibility: agents.visibility,
       managerId: agents.managerId,
+      status: agents.status,
     })
     .from(agents)
-    .where(inArray(agents.uuid, [...allParticipantIds]));
+    .where(inArray(agents.uuid, allParticipantIds));
 
-  if (existingAgents.length !== allParticipantIds.size) {
+  if (existingAgents.length !== allParticipantIds.length) {
     const found = new Set(existingAgents.map((a) => a.id));
-    const missing = [...allParticipantIds].filter((id) => !found.has(id));
+    const missing = allParticipantIds.filter((id) => !found.has(id));
+    const firstMissing = missing[0] ?? "";
+    const details = targetContextDetails(firstMissing, options.contextByAgentId);
+    if (details.input) {
+      throw chatCreateStructuredError(400, "CHAT_CREATE_TARGET_NOT_FOUND", `Agent "${details.input}" was not found.`, {
+        ...details,
+        hint: "Use an active agent name, id:<uuid>, or name:<agent-name> from the sender's organization.",
+      });
+    }
     throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
   }
 
@@ -46,6 +102,19 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
+    const first = crossOrg[0];
+    const details = first ? targetContextDetails(first.id, options.contextByAgentId) : {};
+    if (details.input) {
+      throw chatCreateStructuredError(
+        403,
+        "CHAT_CREATE_TARGET_NOT_VISIBLE",
+        `Agent "${details.input}" cannot be added by this sender.`,
+        {
+          ...details,
+          hint: "Use an organization-visible agent or an agent owned by the same member.",
+        },
+      );
+    }
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
   }
 
@@ -66,47 +135,413 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     .map((a) => ({ uuid: a.id, visibility: a.visibility, managerId: a.managerId }));
   const rejectedTargets = rejectedPrivateTargets({ agentId: creator.id, memberId: creator.managerId }, targetsForGate);
   if (rejectedTargets.length > 0) {
+    const firstRejected = rejectedTargets[0];
+    const details = firstRejected ? targetContextDetails(firstRejected.uuid, options.contextByAgentId) : {};
+    if (details.input) {
+      throw chatCreateStructuredError(
+        403,
+        "CHAT_CREATE_TARGET_NOT_VISIBLE",
+        `Agent "${details.input}" cannot be added by this sender.`,
+        {
+          ...details,
+          hint: "Use an organization-visible agent or an agent owned by the same member.",
+        },
+      );
+    }
     throw new ForbiddenError(
       `Only the owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
     );
   }
 
-  return db.transaction(async (tx) => {
-    const [chat] = await tx
-      .insert(chats)
-      .values({
-        id: chatId,
-        organizationId: orgId,
-        type: data.type,
-        topic: data.topic ?? null,
-        metadata: data.metadata ?? {},
-      })
-      .returning();
+  return { orgId, rows: existingAgents, creator };
+}
 
-    // Mode is derived per-row by `addChatParticipants` from
-    // `(chats.type, agents.type)` — `services/participant-mode.ts` is the
-    // single authoritative encoder. The helper also encloses the watcher
-    // recompute (so every active manager whose managed non-human agent is
-    // now in the chat lands in the "Watching" set) and the silent-context
-    // backfill (no-op here because the chat has no messages yet). Do NOT
-    // pass `mode` and do NOT call `recomputeChatWatchers` again.
-    await addChatParticipants(
-      tx,
-      chatId,
-      [...allParticipantIds].map((agentId) => ({
-        agentId,
-        role: agentId === creatorId ? "owner" : "member",
-      })),
+export async function insertChatWithParticipants(
+  tx: DbLike,
+  creatorId: string,
+  orgId: string,
+  participantIds: ReadonlyArray<string>,
+  data: Pick<CreateChat, "type" | "topic" | "metadata">,
+) {
+  const chatId = randomUUID();
+  const allParticipantIds = [...new Set([creatorId, ...participantIds])];
+  const [chat] = await tx
+    .insert(chats)
+    .values({
+      id: chatId,
+      organizationId: orgId,
+      type: data.type,
+      topic: data.topic ?? null,
+      metadata: data.metadata ?? {},
+    })
+    .returning();
+
+  // Mode is derived per-row by `addChatParticipants` from
+  // `(chats.type, agents.type)` — `services/participant-mode.ts` is the
+  // single authoritative encoder. The helper also encloses the watcher
+  // recompute (so every active manager whose managed non-human agent is
+  // now in the chat lands in the "Watching" set) and the silent-context
+  // backfill (no-op here because the chat has no messages yet). Do NOT
+  // pass `mode` and do NOT call `recomputeChatWatchers` again.
+  await addChatParticipants(
+    tx,
+    chatId,
+    allParticipantIds.map((agentId) => ({
+      agentId,
+      role: agentId === creatorId ? "owner" : "member",
+    })),
+  );
+
+  const participants = await tx
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+
+  if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
+  return { ...chat, participants };
+}
+
+export async function createChat(db: Database, creatorId: string, data: CreateChat) {
+  const gate = await validateCreateChatParticipantBaseGate(db, creatorId, data.participantIds);
+  return db.transaction((tx) =>
+    insertChatWithParticipants(tx, creatorId, gate.orgId, data.participantIds, {
+      type: data.type,
+      topic: data.topic,
+      metadata: data.metadata,
+    }),
+  );
+}
+
+type ResolvedCreateTarget = {
+  agentId: string;
+  option: "--to" | "--with";
+  input: string;
+  status: string;
+};
+
+type CreateChatWithInitialMessageServiceResult = CreateChatWithInitialMessageResult & {
+  recipients: string[];
+};
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  const entries = Object.entries(value)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableJson(entryValue)}`).join(",")}}`;
+}
+
+function createChatRequestHash(input: CreateChatWithInitialMessage): string {
+  const payload = {
+    to: input.to,
+    with: input.with,
+    message: {
+      format: input.message.format,
+      content: input.message.content,
+      source: input.message.source ?? MESSAGE_SOURCES.API,
+      metadata: input.message.metadata,
+    },
+    topic: input.topic,
+    metadata: input.metadata,
+  };
+  return createHash("sha256").update(stableJson(payload)).digest("hex");
+}
+
+function selectorParts(input: string): { kind: "id" | "name" | "raw"; value: string } {
+  if (input.startsWith("id:")) return { kind: "id", value: input.slice("id:".length) };
+  if (input.startsWith("name:")) return { kind: "name", value: input.slice("name:".length) };
+  return { kind: "raw", value: input };
+}
+
+function createTargetErrorDetails(option: "--to" | "--with", input: string, hint: string): Record<string, unknown> {
+  return { option, input, hint };
+}
+
+async function resolveCreateChatTarget(
+  tx: DbLike,
+  orgId: string,
+  option: "--to" | "--with",
+  input: string,
+): Promise<ResolvedCreateTarget> {
+  const selector = selectorParts(input);
+  const base = and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED));
+  const where =
+    selector.kind === "id"
+      ? and(base, eq(agents.uuid, selector.value))
+      : selector.kind === "name"
+        ? and(base, eq(agents.name, selector.value))
+        : and(base, or(eq(agents.uuid, selector.value), eq(agents.name, selector.value)));
+  const rows = await tx.select({ uuid: agents.uuid, status: agents.status }).from(agents).where(where).limit(2);
+
+  if (rows.length === 0) {
+    throw chatCreateStructuredError(
+      400,
+      "CHAT_CREATE_TARGET_NOT_FOUND",
+      `Agent "${input}" was not found.`,
+      createTargetErrorDetails(
+        option,
+        input,
+        "Use an active agent name, id:<uuid>, or name:<agent-name> from the sender's organization.",
+      ),
     );
+  }
+  if (rows.length > 1) {
+    throw chatCreateStructuredError(
+      400,
+      "CHAT_CREATE_SELECTOR_AMBIGUOUS",
+      `Agent selector "${input}" matches more than one target.`,
+      createTargetErrorDetails(option, input, "Retry with id:<uuid> or name:<agent-name>."),
+    );
+  }
+  const row = rows[0];
+  if (!row) throw new Error("Unexpected: target query returned no row");
+  return { agentId: row.uuid, option, input, status: row.status };
+}
 
-    const participants = await tx
-      .select()
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+function assertNoDuplicateInputs(inputs: ReadonlyArray<string>, option: "--to" | "--with"): void {
+  const seen = new Set<string>();
+  for (const input of inputs) {
+    if (seen.has(input)) {
+      throw chatCreateStructuredError(
+        400,
+        "CHAT_CREATE_DUPLICATE_TARGET",
+        `Duplicate target "${input}" passed to ${option}.`,
+        createTargetErrorDetails(option, input, "Remove duplicate --to/--with values and retry."),
+      );
+    }
+    seen.add(input);
+  }
+}
 
-    if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return { ...chat, participants };
+function validateResolvedCreateTargets(senderId: string, targets: ReadonlyArray<ResolvedCreateTarget>): void {
+  const byAgentId = new Map<string, ResolvedCreateTarget>();
+  for (const target of targets) {
+    if (target.agentId === senderId) {
+      throw chatCreateStructuredError(
+        400,
+        "CHAT_CREATE_SELF_TARGET",
+        "The sender is automatically added to the new chat and cannot be listed as a target.",
+        createTargetErrorDetails(target.option, target.input, "Remove the sender from --to/--with and retry."),
+      );
+    }
+    if (target.status !== AGENT_STATUSES.ACTIVE) {
+      throw chatCreateStructuredError(
+        400,
+        "CHAT_CREATE_TARGET_INACTIVE",
+        `Agent "${target.input}" is ${target.status} and cannot be added to a new task chat.`,
+        createTargetErrorDetails(target.option, target.input, "Reactivate the agent or choose another active target."),
+      );
+    }
+    const existing = byAgentId.get(target.agentId);
+    if (existing) {
+      throw chatCreateStructuredError(
+        400,
+        "CHAT_CREATE_DUPLICATE_TARGET",
+        `Agent "${target.input}" is listed more than once.`,
+        {
+          targets: [
+            { option: existing.option, input: existing.input },
+            { option: target.option, input: target.input },
+          ],
+          hint: "A target may appear in --to or --with, but not both and not more than once.",
+        },
+      );
+    }
+    byAgentId.set(target.agentId, target);
+  }
+}
+
+async function reserveOrReplayChatCreateOperation(
+  tx: DbLike,
+  senderAgentId: string,
+  operationId: string,
+  requestHash: string,
+): Promise<{ kind: "reserved" } | { kind: "replay"; chatId: string; messageId: string }> {
+  const [inserted] = await tx
+    .insert(chatCreateOperations)
+    .values({ senderAgentId, operationId, requestHash })
+    .onConflictDoNothing({
+      target: [chatCreateOperations.senderAgentId, chatCreateOperations.operationId],
+    })
+    .returning({
+      senderAgentId: chatCreateOperations.senderAgentId,
+      operationId: chatCreateOperations.operationId,
+    });
+  if (inserted) return { kind: "reserved" };
+
+  const [existing] = await tx
+    .select({
+      requestHash: chatCreateOperations.requestHash,
+      chatId: chatCreateOperations.chatId,
+      messageId: chatCreateOperations.messageId,
+    })
+    .from(chatCreateOperations)
+    .where(
+      and(eq(chatCreateOperations.senderAgentId, senderAgentId), eq(chatCreateOperations.operationId, operationId)),
+    )
+    .for("update")
+    .limit(1);
+  if (!existing) {
+    throw new Error("Unexpected: operation conflict without readable existing row");
+  }
+  if (existing.requestHash !== requestHash) {
+    throw chatCreateStructuredError(
+      409,
+      "CHAT_CREATE_IDEMPOTENCY_KEY_REUSED",
+      "This operationId was already used with a different chat create request.",
+      {
+        operationId,
+        hint: "Use the original request body with this operationId, or retry the new request with a fresh operationId.",
+      },
+    );
+  }
+  if (!existing.chatId || !existing.messageId) {
+    throw chatCreateStructuredError(
+      409,
+      "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
+      "This chat create operation is not finalized yet.",
+      {
+        operationId,
+        hint: "Retry with the same --operation-id; if the first request committed, the server will return the same chat/message.",
+      },
+    );
+  }
+  return { kind: "replay", chatId: existing.chatId, messageId: existing.messageId };
+}
+
+async function completeChatCreateOperation(
+  tx: DbLike,
+  senderAgentId: string,
+  operationId: string,
+  chatId: string,
+  messageId: string,
+): Promise<void> {
+  await tx
+    .update(chatCreateOperations)
+    .set({ chatId, messageId })
+    .where(
+      and(eq(chatCreateOperations.senderAgentId, senderAgentId), eq(chatCreateOperations.operationId, operationId)),
+    );
+}
+
+async function listChatSpeakerIds(tx: DbLike, chatId: string): Promise<string[]> {
+  const rows = await tx
+    .select({ agentId: chatMembership.agentId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+  return rows.map((row) => row.agentId);
+}
+
+export async function createChatWithInitialMessage(
+  db: Database,
+  senderAgentId: string,
+  input: CreateChatWithInitialMessage,
+): Promise<CreateChatWithInitialMessageServiceResult> {
+  const requestHash = createChatRequestHash(input);
+  const txResult = await db.transaction(async (tx) => {
+    const operation = await reserveOrReplayChatCreateOperation(tx, senderAgentId, input.operationId, requestHash);
+    if (operation.kind === "replay") {
+      const postCommitPlan = await loadSendMessagePostCommitPlan(tx, operation.chatId, operation.messageId);
+      const participantAgentIds = await listChatSpeakerIds(tx, operation.chatId);
+      return {
+        replayed: true,
+        postCommitPlan,
+        result: {
+          chat: { id: operation.chatId },
+          message: { id: operation.messageId },
+          operationId: input.operationId,
+          replayed: true,
+          senderAgentId,
+          recipientAgentIds: postCommitPlan.recipientAgentIds,
+          participantAgentIds,
+        },
+      };
+    }
+
+    if (input.to.length === 0) {
+      throw chatCreateStructuredError(
+        400,
+        "CHAT_CREATE_MISSING_TO",
+        "`chat create` requires at least one --to target.",
+        {
+          option: "--to",
+          hint: "Pass --to <agent-name-or-id> for each first-message recipient.",
+        },
+      );
+    }
+    if (input.message.content.trim().length === 0) {
+      throw chatCreateStructuredError(400, "CHAT_CREATE_EMPTY_MESSAGE", "`chat create` requires a non-empty message.", {
+        option: "--message",
+        input: input.message.content,
+        hint: "Pass --message <text> or pipe non-empty stdin.",
+      });
+    }
+    assertNoDuplicateInputs(input.to, "--to");
+    assertNoDuplicateInputs(input.with, "--with");
+
+    const [sender] = await tx
+      .select({ organizationId: agents.organizationId })
+      .from(agents)
+      .where(eq(agents.uuid, senderAgentId))
+      .limit(1);
+    if (!sender) throw new NotFoundError(`Sender agent "${senderAgentId}" not found`);
+
+    const toTargets: ResolvedCreateTarget[] = [];
+    for (const target of input.to) {
+      toTargets.push(await resolveCreateChatTarget(tx, sender.organizationId, "--to", target));
+    }
+    const withTargets: ResolvedCreateTarget[] = [];
+    for (const target of input.with) {
+      withTargets.push(await resolveCreateChatTarget(tx, sender.organizationId, "--with", target));
+    }
+    const allTargets = [...toTargets, ...withTargets];
+    validateResolvedCreateTargets(senderAgentId, allTargets);
+
+    const contextByAgentId = new Map<string, CreateChatTargetContext>();
+    for (const target of allTargets) {
+      contextByAgentId.set(target.agentId, { option: target.option, input: target.input });
+    }
+    const participantAgentIds = [...new Set([senderAgentId, ...allTargets.map((target) => target.agentId)])];
+    await validateCreateChatParticipantBaseGate(tx, senderAgentId, participantAgentIds, { contextByAgentId });
+
+    const chat = await insertChatWithParticipants(tx, senderAgentId, sender.organizationId, participantAgentIds, {
+      type: "group",
+      topic: input.topic,
+      metadata: input.metadata,
+    });
+    const recipientAgentIds = toTargets.map((target) => target.agentId);
+    const messageData: SendMessage = {
+      format: input.message.format,
+      content: input.message.content,
+      metadata: { ...(input.message.metadata ?? {}), mentions: recipientAgentIds },
+      source: input.message.source ?? MESSAGE_SOURCES.API,
+    };
+    const postCommitPlan = await sendMessageInTransaction(tx, chat.id, senderAgentId, messageData, {
+      normalizeMentionsInContent: true,
+    });
+    await completeChatCreateOperation(tx, senderAgentId, input.operationId, chat.id, postCommitPlan.message.id);
+
+    return {
+      replayed: false,
+      postCommitPlan,
+      result: {
+        chat: { id: chat.id },
+        message: { id: postCommitPlan.message.id },
+        operationId: input.operationId,
+        replayed: false,
+        senderAgentId,
+        recipientAgentIds,
+        participantAgentIds: chat.participants.map((participant) => participant.agentId),
+      },
+    };
   });
+
+  await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
+  return {
+    ...txResult.result,
+    recipients: txResult.postCommitPlan.recipients,
+  };
 }
 
 export async function getChat(db: Database, chatId: string) {

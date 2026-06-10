@@ -5,10 +5,18 @@ const clientMocks = vi.hoisted(() => {
     constructor(
       public readonly statusCode: number,
       message: string,
+      public readonly opts: { serverCode?: string; details?: unknown; traceId?: string } = {},
     ) {
       super(message);
       this.name = "SdkError";
+      this.serverCode = opts.serverCode;
+      this.details = opts.details;
+      this.traceId = opts.traceId;
     }
+
+    public readonly serverCode: string | undefined;
+    public readonly details: unknown;
+    public readonly traceId: string | undefined;
   }
 
   return {
@@ -186,6 +194,25 @@ describe("local agent shared helpers", () => {
 
     expect(() => handleSdkError(new clientMocks.SdkError(500, "down"))).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("HTTP_500", "down", 1);
+
+    expect(() =>
+      handleSdkError(
+        new clientMocks.SdkError(400, "missing", {
+          serverCode: "CHAT_CREATE_TARGET_NOT_FOUND",
+          details: { option: "--to", input: "missing", hint: "Use another target." },
+          traceId: "trace-1",
+        }),
+      ),
+    ).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "CHAT_CREATE_TARGET_NOT_FOUND",
+      "missing",
+      1,
+      expect.objectContaining({
+        details: { option: "--to", input: "missing", hint: "Use another target." },
+        traceId: "trace-1",
+      }),
+    );
 
     expect(() => handleSdkError(new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") }))).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("CONNECTION_ERROR", "Cannot connect to server: fetch failed", 6);

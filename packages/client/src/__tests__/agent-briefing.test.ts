@@ -587,6 +587,8 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // contract now is "always chat send for cross-participant", so the
     // "drop to conservative mode" branch is redundant.
     expect(briefing).not.toContain("**Fallback**");
+    expect(briefing).toContain("chat create --to <name> --message");
+    expect(briefing).toContain("does not switch the current\nsession or mutate `FIRST_TREE_CHAT_ID`");
 
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("`first-tree` skill");
@@ -615,6 +617,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     try {
       const briefing = buildAgentBriefing(makeOpts());
       expect(briefing).toContain("first-tree-staging chat send");
+      expect(briefing).toContain("first-tree-staging chat create");
       // The hardcoded prod name must NOT leak through as a CLI literal
       // (anchor on the literal CLI form `first-tree chat ` only — backtick
       // pointer text mentioning `first-tree` is fine).
