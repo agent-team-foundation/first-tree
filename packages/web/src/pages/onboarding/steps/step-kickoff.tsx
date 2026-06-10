@@ -35,7 +35,6 @@ function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamRe
 /** Shared "create the chat + send the first task + finish" sequence. */
 async function runKickoff(args: {
   bootstrap: string;
-  gitRepoUrls: string[];
   orgWrites: { organizationId: string; sourceRepos: string[]; contextTreeUrl: string | null } | null;
   treeMode: "new" | "existing";
   joinPath?: "invite";
@@ -164,7 +163,6 @@ function AdminKickoff() {
       if (!hasRepos) {
         await runKickoff({
           bootstrap: NO_REPO_BOOTSTRAP,
-          gitRepoUrls: [],
           orgWrites: null,
           treeMode: "new",
           complete: completeAndEnterChat,
@@ -178,7 +176,6 @@ function AdminKickoff() {
         : buildCreateBootstrap(selectedRepoUrls);
       await runKickoff({
         bootstrap,
-        gitRepoUrls: selectedRepoUrls,
         orgWrites: organizationId
           ? {
               organizationId,
@@ -373,7 +370,6 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
       // not the admin's "reflect these repos into the tree".
       await runKickoff({
         bootstrap: buildInviteeBootstrap(treeUrl),
-        gitRepoUrls: [],
         orgWrites: null,
         treeMode: "existing",
         joinPath: "invite",
@@ -439,7 +435,6 @@ function InviteeBlocked({ title, why, status }: { title: string; why: string; st
     try {
       await runKickoff({
         bootstrap: NO_REPO_BOOTSTRAP,
-        gitRepoUrls: [],
         orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
         joinPath: "invite",

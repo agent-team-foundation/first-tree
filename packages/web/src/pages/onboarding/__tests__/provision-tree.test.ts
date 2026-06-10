@@ -139,6 +139,10 @@ describe("kickoffErrorMessage", () => {
     );
     expect(msg).toMatch(/GitHub organization/);
     expect(msg).not.toMatch(/administration: write/);
+    // repo_unavailable (repo name collision the App can't access) is mapped too.
+    expect(kickoffErrorMessage(new ApiError(409, "not accessible", undefined, "repo_unavailable"), "fallback")).toMatch(
+      /can't access it/,
+    );
   });
   it("falls back for an ApiError with an unknown / missing code (never leaks the server string)", () => {
     expect(kickoffErrorMessage(new ApiError(500, "internal detail"), "fallback")).toBe("fallback");

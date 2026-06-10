@@ -1382,6 +1382,13 @@ describe("web DOM interaction coverage", () => {
     });
     await waitForText("Which repos should your agent work on?", connected.container);
     await waitForText("acme/web", connected.container);
+    // 0 repos picked but the list is pickable → friction: the consequence line
+    // shows and the strong primary "Continue" is absent (only the quiet
+    // "Continue without a repo" link remains; never disabled).
+    await waitForText("Pick a repo so your agent can build your team's Context Tree", connected.container);
+    expect([...connected.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Continue")).toBe(
+      false,
+    );
     await click(
       [...connected.container.querySelectorAll("label")].find((label) => label.textContent?.includes("acme/web")) ??
         null,

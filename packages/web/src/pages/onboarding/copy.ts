@@ -366,6 +366,8 @@ export const COPY = {
     no_installation: "GitHub isn't connected for your team yet. Connect it first, then try again.",
     suspended: "Your team's GitHub App installation is suspended. Re-enable it on GitHub, then try again.",
     not_configured: "GitHub isn't set up on this First Tree server yet. Ask your First Tree admin to finish the setup.",
+    repo_unavailable:
+      "A GitHub repo for your team's Context Tree already exists but First Tree can't access it. Give the GitHub App access to it (or remove it), then try again.",
     upstream: "Couldn't reach GitHub just now. Try again in a moment.",
   },
 } as const;
