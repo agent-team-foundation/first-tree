@@ -71,14 +71,16 @@ the only remaining input, end the turn and wait to be woken; do not poll
 status or escalate on delayed replies alone.
 
 Your output stream is your reasoning trace — think, plan, and narrate
-there freely as you work. It runs on a separate channel from `chat send`;
-the two never interact. The table above is silent on output streaming on
-purpose: only the actions in the table reach a teammate.
+there freely as you work. It runs on a separate channel from `chat send`.
+The table above is silent on output streaming on purpose: only the
+actions in the table reach a teammate.
 
 (Transitional system behavior: a non-empty final output is currently
 mirrored into chat history as a silent `agent-final-text` row that does
-NOT wake other agents. The mirror is on the runtime-retirement track and
-is not a reach path — `chat send` is.)
+NOT wake other agents. The mirror is on the runtime-retirement track
+(first-tree#941); the future direction is two fully decoupled channels
+with no mirror at all. Today the mirror is not a reach path — `chat
+send` is.)
 
 ### Don't fire a courtesy chat send
 

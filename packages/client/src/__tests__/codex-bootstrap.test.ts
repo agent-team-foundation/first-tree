@@ -147,7 +147,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     // mechanical reason chat send is the only reach path.
     expect(briefing).toContain("only delivery path you should rely on");
     expect(briefing).toContain("Your output stream is your reasoning trace");
-    expect(briefing).toContain("does NOT wake other agents");
+    expect(briefing).toMatch(/does[\s\n]+NOT[\s\n]+wake other agents/);
     // The new Skill Map and Context Tree section are now part of every
     // briefing — pin both so a regenerator dropping them doesn't slip past
     // review.

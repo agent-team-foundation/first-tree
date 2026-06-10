@@ -432,35 +432,52 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits the runtime intro block with output-stream / chat-send full decoupling, transitional mirror fact, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // Output stream and chat send are two fully decoupled channels —
-    // the briefing must never tie agent behavior on one to activity on
-    // the other. yuezengwu 2026-06-10: "chat send 和 output streaming
+    // Output stream and chat send are two separate channels — the
+    // briefing must never tie agent behavior on one to activity on the
+    // other. yuezengwu 2026-06-10: "chat send 和 output streaming
     // 完全解耦，不应当有任何互相影响。在系统 message 里记录是过渡状态，
-    // 未来 output streaming 不进入 message"
+    // 未来 output streaming 不进入 message" — "完全解耦" is the future
+    // direction; the briefing must be honest that today's runtime still
+    // mirrors the output stream as a transitional system row (the two
+    // channels DO interact today via that mirror).
     expect(briefing).toContain("Your output stream is your reasoning trace");
     expect(briefing).toMatch(/separate channel from[\s\n]+`?chat send`?/);
-    expect(briefing).toMatch(/the two never[\s\n]+interact/);
     expect(briefing).toContain("To reach a teammate");
     expect(briefing).toContain("first-tree chat send <name>");
     expect(briefing).toContain("only delivery path you should rely on");
+
+    // Coupling guard — the false present-tense claim "the two never
+    // interact" must not appear today (mirror = interaction). The
+    // honest framing is "separate channel" today + "two fully decoupled
+    // channels" as the future direction (see below).
+    expect(briefing).not.toMatch(/never[\s\n]+interact/);
 
     // Transitional system behavior — the runtime currently mirrors
     // non-empty final output into chat history as a silent
     // `agent-final-text` row that does NOT wake other agents. The
     // briefing acknowledges the fact and names the runtime-retirement
-    // track, but issues NO instruction conditioning the agent's output
-    // on chat-send activity (that would re-couple the channels).
-    // The note wraps across template-literal lines, so use regex
-    // matches that tolerate intra-bullet whitespace / newlines.
+    // track + the "two fully decoupled channels" future direction, but
+    // issues NO instruction conditioning the agent's output on chat-
+    // send activity (that would re-couple the channels at the agent
+    // layer). The note wraps across template-literal lines, so use
+    // regex matches that tolerate intra-bullet whitespace / newlines.
     expect(briefing).toMatch(/non-empty[\s\n]+final[\s\n]+output is currently[\s\n]+mirrored/);
     expect(briefing).toContain("agent-final-text");
-    expect(briefing).toContain("does NOT wake other agents");
+    expect(briefing).toMatch(/does[\s\n]+NOT[\s\n]+wake other agents/);
     expect(briefing).toMatch(/runtime-retirement[\s\n]+track/);
+    expect(briefing).toMatch(/future direction[\s\n]+is[\s\n]+two fully decoupled[\s\n]+channels/);
     expect(briefing).toMatch(/not a reach path/);
 
     // Coupling guard — these phrasings would condition agent output on
     // chat-send activity. They MUST NOT appear in the briefing under the
     // full-decoupling principle.
+    //
+    // Note: these are *regression* guards for the specific phrasings the
+    // PR removed (ad40745d's "don't restate ..." / "don't rely on ... for
+    // delivery"). Principle-level enforcement against *any* future
+    // re-coupling phrasing (e.g. "after chat send, keep final output
+    // minimal" / "if you just chat-send-ed, end the turn") is human-review
+    // only; mechanical guards cannot recognise every paraphrase.
     expect(briefing).not.toMatch(/don't restate/i);
     expect(briefing).not.toMatch(/don't rely on it for delivery/i);
 

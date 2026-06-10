@@ -24,12 +24,14 @@ import type { AgentIdentity } from "./handler.js";
  * history as a silent `agent-final-text` row (visible to humans, never wakes
  * another session). Under the chat-send-only contract (see the top-level
  * `first-tree` skill — its SKILL.md "Communication Principles" decision
- * table and `references/agent-communication.md`), the agent-facing model is
- * that the output stream and `chat send` are two fully decoupled channels:
- * `chat send` is the reach path; this mirror is transitional system
- * behavior, never a delivery commitment. Retiring this forward entirely
- * (so non-empty final output stops landing in chat history at all) is the
- * runtime-side follow-up that closes the transitional state.
+ * table and `references/agent-communication.md`), the agent-facing model
+ * treats the output stream and `chat send` as separate channels: `chat
+ * send` is the reach path; this mirror is transitional system behavior,
+ * never a delivery commitment. The future direction is two fully
+ * decoupled channels with no mirror at all — retiring this forward (so
+ * non-empty final output stops landing in chat history) is the runtime-
+ * side follow-up that closes the transitional state, tracked at
+ * first-tree#941.
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
