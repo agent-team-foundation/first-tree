@@ -322,8 +322,10 @@ export const COPY = {
     // token is injected), so a joining member without access to a private team
     // repo can't reach it. "works with your team's repos" stays true regardless.
     inviteeReadyWithRepos: "Your team's all set up — your agent works with your team's repos and shared Context Tree.",
+    // No "add from Settings": connecting team repos is admin-only, and this is
+    // shown to a joining member, so it must not imply they can do it themselves.
     inviteeReadyNoRepos:
-      "Your team's all set up — your agent will start with a quick intro. Repos can be added anytime from Settings.",
+      "Your team's all set up — your agent will start with a quick intro. An admin can connect team repos anytime.",
     startWorking: "Start working",
 
     // shared launch transition
