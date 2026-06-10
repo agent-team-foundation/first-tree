@@ -14,19 +14,12 @@ import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
-import { provisionNewTree } from "../provision-tree.js";
+import { ensureSourceReposRegistered, provisionNewTree, repoLabel } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
-
-function repoLabel(url: string): string {
-  return url
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^git@[^:]+:/, "")
-    .replace(/\.git$/, "");
-}
 
 function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
   return resources
@@ -62,21 +55,29 @@ async function runKickoff(args: {
     await provisionNewTree(args.orgWrites.organizationId);
   }
 
-  // Org-level writes are a convenience cache for future teammates — never
-  // let them block the user's first chat.
+  // Org-level writes. The context-tree-URL cache is best-effort. Source-repo
+  // resources are best-effort for an EXISTING tree (a convenience cache for
+  // future teammates), but REQUIRED for a NEW tree — they're the only path by
+  // which the selected repos reach the agent's gitRepos / on-disk sources /
+  // workspace.json that `first-tree-seed` needs, so a dropped write must
+  // surface as a retryable error rather than an empty/incomplete seed.
   if (args.orgWrites) {
     const orgWrites = args.orgWrites;
     if (orgWrites.sourceRepos.length > 0) {
-      await Promise.allSettled(
-        orgWrites.sourceRepos.map((url) =>
-          createTeamResourceForOrg(orgWrites.organizationId, {
-            type: "repo",
-            name: repoLabel(url),
-            defaultEnabled: "recommended",
-            payload: { url },
-          }),
-        ),
-      );
+      if (args.treeMode === "new") {
+        await ensureSourceReposRegistered(orgWrites.organizationId, orgWrites.sourceRepos);
+      } else {
+        await Promise.allSettled(
+          orgWrites.sourceRepos.map((url) =>
+            createTeamResourceForOrg(orgWrites.organizationId, {
+              type: "repo",
+              name: repoLabel(url),
+              defaultEnabled: "recommended",
+              payload: { url },
+            }),
+          ),
+        );
+      }
     }
     if (orgWrites.contextTreeUrl) {
       await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});

@@ -1,6 +1,21 @@
 import { ApiError } from "../../api/client.js";
 import { initializeContextTree } from "../../api/context-tree.js";
 import { getContextTreeSetting } from "../../api/org-settings.js";
+import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../api/resources.js";
+
+/** Reduce a repo URL to its `owner/name` path (protocol/host/.git stripped). */
+export function repoLabel(url: string): string {
+  return url
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .replace(/^git@[^:]+:/, "")
+    .replace(/\.git$/, "");
+}
+
+/** Canonical form for matching a selected repo against a registered resource
+ *  (case-insensitive, protocol/host/.git-insensitive). */
+function repoCanonical(url: string): string {
+  return repoLabel(url).toLowerCase();
+}
 
 /**
  * Provision a fresh Context Tree for the new-tree onboarding path: create the
@@ -28,5 +43,54 @@ export async function provisionNewTree(organizationId: string): Promise<void> {
       if (setting?.repo) return; // a tree binding exists — treat as provisioned
     }
     throw err;
+  }
+}
+
+/**
+ * Register the selected source repos as `recommended` team repo resources —
+ * REQUIRED for new-tree mode, because that is the only path by which they reach
+ * the agent's runtime `gitRepos` → on-disk sources → `workspace.json.sources` →
+ * the source set `first-tree-seed` requires. Without this, a silently-dropped
+ * resource write would leave onboarding with a provisioned tree but a missing
+ * bound source, and the seed flow would refuse or seed an incomplete set.
+ *
+ * Creates each resource (tolerating "already exists" conflicts from a re-run —
+ * the canonical-key unique index makes a duplicate create throw 409), then
+ * **verifies** every selected repo is actually registered and throws if any is
+ * missing, so the caller surfaces an actionable error and the user retries
+ * rather than seeding an empty/incomplete source set.
+ */
+export async function ensureSourceReposRegistered(organizationId: string, repoUrls: readonly string[]): Promise<void> {
+  if (repoUrls.length === 0) return;
+
+  // Best-effort create; duplicates (and transient failures) are reconciled by
+  // the authoritative verify below.
+  await Promise.allSettled(
+    repoUrls.map((url) =>
+      createTeamResourceForOrg(organizationId, {
+        type: "repo",
+        name: repoLabel(url),
+        defaultEnabled: "recommended",
+        payload: { url },
+      }),
+    ),
+  );
+
+  const registered = new Set(
+    (await listTeamResourcesForOrg(organizationId))
+      .filter((resource) => resource.type === "repo" && resource.defaultEnabled === "recommended")
+      .map((resource) => {
+        const url = (resource.payload as { url?: unknown }).url;
+        return typeof url === "string" ? repoCanonical(url) : "";
+      }),
+  );
+
+  const missing = repoUrls.filter((url) => !registered.has(repoCanonical(url)));
+  if (missing.length > 0) {
+    throw new Error(
+      `Couldn't register ${missing.length} source repo${missing.length > 1 ? "s" : ""} for the new Context Tree (${missing
+        .map(repoLabel)
+        .join(", ")}). Try again.`,
+    );
   }
 }
