@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listManagedAgents, type ManagedAgent } from "../../../api/agents.js";
 import { Select } from "../../../components/ui/select.js";
 import { writeOnboardingAgentUuid } from "../../../utils/onboarding-flags.js";
@@ -26,10 +26,12 @@ export function BuildTreeAgentPanel({ onReady }: { onReady?: (ready: boolean) =>
     enabled: !!organizationId,
   });
 
-  // Managed, non-human agents in THIS org, newest first (uuid v7 is
+  // Usable (active, non-human) agents in THIS org, newest first (uuid v7 is
   // time-ordered, so a descending string sort puts the newest at the top).
+  // Suspended agents are excluded — they can't bind/run, so seeding a tree with
+  // one would create a chat against an agent that never wakes.
   const candidates: ManagedAgent[] = (agentsQuery.data ?? [])
-    .filter((a) => a.type !== "human" && a.organizationId === organizationId)
+    .filter((a) => a.type !== "human" && a.status === "active" && a.organizationId === organizationId)
     .sort((a, b) => b.uuid.localeCompare(a.uuid));
 
   // Report whether a usable agent exists, so the kickoff step can disable
@@ -42,13 +44,17 @@ export function BuildTreeAgentPanel({ onReady }: { onReady?: (ready: boolean) =>
 
   const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
 
-  // Default to the newest candidate once the list loads, and seed the stash so
-  // an untouched picker still resolves to that agent at kickoff. Re-runs only
-  // when the resolved default changes (not on every render).
+  // Seed the default (newest) ONCE, when the list first loads — write it to the
+  // stash so an untouched picker still resolves to that agent at kickoff. Guarded
+  // by a ref so a later `defaultUuid` change (a new agent appears mid-mount)
+  // can't clobber an explicit user pick: after the first seed, only `onChange`
+  // updates the stash.
   const defaultUuid = candidates[0]?.uuid ?? null;
+  const seededRef = useRef(false);
   useEffect(() => {
-    if (!defaultUuid) return;
-    setSelectedUuid((cur) => cur ?? defaultUuid);
+    if (seededRef.current || !defaultUuid) return;
+    seededRef.current = true;
+    setSelectedUuid(defaultUuid);
     writeOnboardingAgentUuid(defaultUuid);
   }, [defaultUuid]);
 

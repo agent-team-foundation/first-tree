@@ -618,6 +618,7 @@ beforeEach(() => {
       visibility: "organization",
       runtimeProvider: "claude-code",
       clientId: "client-1",
+      status: "active",
       avatarImageUrl: null,
     },
   ]);

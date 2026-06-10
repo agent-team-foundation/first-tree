@@ -21,7 +21,7 @@ export function SettingsOnboardingPage() {
   const navigate = useNavigate();
   const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
     useAuth();
-  const { needsTreeSetup, isLoading: treeLoading } = useNeedsTreeSetup();
+  const { needsTreeSetup, isLoading: treeLoading, isError: treeError, refetch: refetchTree } = useNeedsTreeSetup();
   // Terminal state — the wizard finished. It's one-shot; subsequent config
   // edits go through Settings → Team and /agents/:uuid. The one exception is a
   // skip-the-code-step admin whose team never got a Context Tree: offer the
@@ -33,6 +33,29 @@ export function SettingsOnboardingPage() {
         <div className="text-label" style={{ padding: "var(--sp-5)", color: "var(--fg-4)" }}>
           Loading…
         </div>
+      );
+    }
+    if (treeError) {
+      // The probe is INDETERMINATE (per useNeedsTreeSetup's contract, a failed
+      // lookup must not read as "no recovery needed"). Don't redirect away —
+      // that would make the recovery entry vanish on a transient blip. Show a
+      // neutral retry instead.
+      return (
+        <>
+          <PageHeader title="Setup" subtitle="Finish or revisit your setup" />
+          <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+            <Section
+              title="Couldn't load your setup"
+              description="We couldn't check whether your team's Context Tree is set up. Try again."
+            >
+              <div style={{ paddingTop: "var(--sp-3)" }}>
+                <Button type="button" size="sm" variant="outline" onClick={() => refetchTree()}>
+                  Try again
+                </Button>
+              </div>
+            </Section>
+          </div>
+        </>
       );
     }
     if (needsTreeSetup) {

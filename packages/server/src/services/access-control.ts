@@ -52,6 +52,10 @@ export async function listAgentsManagedByUser(
     visibility: string;
     runtimeProvider: string;
     clientId: string | null;
+    /** Lifecycle status (`active` / `suspended`; `deleted` is filtered out
+     *  below). Surfaced so callers can exclude suspended agents — a suspended
+     *  agent does not bind/run, so it must not be picked as e.g. a seeding agent. */
+    status: string;
     avatarImageUpdatedAt: Date | null;
     /**
      * For human agents only: the backing user's external avatar URL
@@ -81,6 +85,7 @@ export async function listAgentsManagedByUser(
       visibility: agents.visibility,
       runtimeProvider: agents.runtimeProvider,
       clientId: agents.clientId,
+      status: agents.status,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       userAvatarUrl: users.avatarUrl,
     })

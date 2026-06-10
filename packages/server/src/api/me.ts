@@ -355,6 +355,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       visibility: r.visibility,
       runtimeProvider: r.runtimeProvider,
       clientId: r.clientId,
+      status: r.status,
       // Resolved avatar URL — uploaded image takes priority; for human
       // agents falls back to the backing user's external (GitHub) URL.
       // Lets the web client render cross-org human avatars in chat

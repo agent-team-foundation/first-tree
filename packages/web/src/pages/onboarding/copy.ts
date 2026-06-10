@@ -147,18 +147,29 @@ export const COPY = {
     // "your GitHub account" would be wrong — an empty list means the App was
     // connected but isn't granted any repos yet.
     noRepos: "No repos are shared with First Tree yet — add some on GitHub, or continue without one.",
+    // Recovery variant: there is no "continue without one" here — a tree can't
+    // be built without a repo, so point at the only way forward (grant repos).
+    noReposRecovery: "No repos are shared with First Tree yet. Grant access to one on GitHub, then it'll show up here.",
     // Shown when the org-scoped repo list fails to load (502 upstream / 503
     // suspended etc.). The new installation-backed endpoint can return these,
     // and without this branch the failure was misrendered as an empty
     // "no projects" list. The "Continue without a repo" button below keeps
     // it from being a dead end.
     loadFailed: "Couldn't load your team's repos — continue without one for now.",
+    // Recovery variant: no "continue without" — offer a retry instead.
+    loadFailedRecovery: "Couldn't load your team's repos. Try again in a moment.",
+    loadFailedRetry: "Try again",
     reconnect: "Reconnect GitHub with repo access",
     // Collapsed the two rare, not-user-fixable install errors (App not set up on
     // this server / caller lacks permission) into one recoverable message — the
     // action is the same either way (continue, set up later), so two separate
     // screens added surface without adding clarity.
     cantConnect: "Couldn't connect a repo here right now — continue now and add one later from Settings.",
+    // Recovery variant: building a tree needs the GitHub App connected, and the
+    // recovery surface has no skip — so name what's required (an org owner must
+    // install it). The shell's "Back to workspace" is the way out.
+    cantConnectRecovery:
+      "Couldn't connect a repo here. Building your team's Context Tree needs First Tree connected to GitHub — a GitHub org owner has to install it. Once it's connected, come back.",
     continueWithout: "Continue without a repo",
     continueNoProject: "Continue without a repo",
     // Shown when the picker has repos but none are selected. Connecting one is

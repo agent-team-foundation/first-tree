@@ -11,6 +11,10 @@ import { readOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
  *   2. The most recently created managed non-human agent (uuid v7 is
  *      time-ordered, so a descending string sort puts the newest first).
  *
+ * Only `active` agents are eligible — a suspended agent can't bind/run, so it
+ * must never be picked to seed a tree (the chat would be created against an
+ * agent that never wakes).
+ *
  * `organizationId` scopes BOTH the stash hit and the fallback to one org. The
  * agent that seeds a tree must belong to that tree's org; without scoping, a
  * multi-org user could seed one org's tree with another org's agent — and a
@@ -23,8 +27,8 @@ import { readOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
  */
 export async function resolveOnboardingAgent(organizationId?: string | null): Promise<ManagedAgent> {
   const agents = await listManagedAgents();
-  const managed = agents.filter((a) => a.type !== "human");
-  const pool = organizationId ? managed.filter((a) => a.organizationId === organizationId) : managed;
+  const usable = agents.filter((a) => a.type !== "human" && a.status === "active");
+  const pool = organizationId ? usable.filter((a) => a.organizationId === organizationId) : usable;
 
   const stashed = readOnboardingAgentUuid();
   if (stashed) {

@@ -115,10 +115,11 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
     const installTab = window.open("", "_blank");
     // The post-install landing differs by path: a real popup (has an opener)
     // lands on /onboarding/connected to auto-close; but if the popup was blocked
-    // we redirect THIS tab, so it must return to the wizard itself (/onboarding)
-    // — sending it to /onboarding/connected would strand the user on a "close
-    // this tab — setup continues in your other tab" screen with no other tab.
-    const postInstallNext = installTab ? "/onboarding/connected" : "/onboarding";
+    // we redirect THIS tab, so it must return to the surface it came from —
+    // `/build-tree` on the recovery surface, else the wizard itself
+    // (`/onboarding`). Returning a recovery admin to `/onboarding` would bounce
+    // them out (shouldLeaveOnboarding), so this must be path-aware.
+    const postInstallNext = installTab ? "/onboarding/connected" : recovery ? "/build-tree" : "/onboarding";
     try {
       const url = await getGithubAppInstallUrl(organizationId, postInstallNext);
       window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
@@ -174,7 +175,7 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
 
         {installError === "not_configured" || installError === "not_admin" ? (
           <>
-            <FlowHint>{COPY.connectCode.cantConnect}</FlowHint>
+            <FlowHint>{recovery ? COPY.connectCode.cantConnectRecovery : COPY.connectCode.cantConnect}</FlowHint>
             {/* Recovery has no skip — a repo is mandatory. A blocked admin
                 leaves via the shell's "Back to workspace". */}
             {!recovery && <ContinueWithout onClick={goNext} />}
@@ -268,11 +269,25 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
             {COPY.connectCode.loading}
           </p>
         ) : loadFailed ? (
-          <FlowHint tone="error" role="alert">
-            {COPY.connectCode.loadFailed}
-          </FlowHint>
+          // Recovery has no "continue without a repo", so the failure isn't a
+          // dead end via skip — offer a retry instead and reword the copy.
+          <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+            <FlowHint tone="error" role="alert">
+              {recovery ? COPY.connectCode.loadFailedRecovery : COPY.connectCode.loadFailed}
+            </FlowHint>
+            {recovery ? (
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto self-start p-0 text-label"
+                onClick={() => void reposQuery.refetch()}
+              >
+                {COPY.connectCode.loadFailedRetry}
+              </Button>
+            ) : null}
+          </div>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
-          <FlowHint>{COPY.connectCode.noRepos}</FlowHint>
+          <FlowHint>{recovery ? COPY.connectCode.noReposRecovery : COPY.connectCode.noRepos}</FlowHint>
         ) : (
           <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
         )}

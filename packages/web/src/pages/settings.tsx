@@ -60,7 +60,7 @@ const ITEMS: Item[] = [
 
 export function SettingsLayout() {
   const { role, onboardingCompletedAt, meLoaded } = useAuth();
-  const { needsTreeSetup } = useNeedsTreeSetup();
+  const { needsTreeSetup, isError: treeProbeError } = useNeedsTreeSetup();
   const viewport = useWorkspaceViewport();
   // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
   // direct hit on /settings/github would briefly paint the member-view nav
@@ -78,7 +78,9 @@ export function SettingsLayout() {
 
   const visible = ITEMS.filter((it) => {
     if (it.adminOnly && !isAdmin) return false;
-    if (it.to === "/settings/onboarding" && hasCompletedOnboarding && !needsTreeSetup) return false;
+    // Keep the entry on an INDETERMINATE probe (treeProbeError) — hiding it on a
+    // transient org-setting failure would make the recovery path vanish.
+    if (it.to === "/settings/onboarding" && hasCompletedOnboarding && !needsTreeSetup && !treeProbeError) return false;
     return true;
   });
 
