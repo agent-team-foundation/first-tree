@@ -5,6 +5,7 @@ import type {
   ChatGithubEntityListResponse,
   ChatTokenUsage,
   Message,
+  RequestResolution,
 } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
@@ -85,12 +86,23 @@ export function sendChatMessage(
   chatId: string,
   content: string,
   mentions: string[],
-  opts?: { inReplyTo?: string },
+  opts?: { inReplyTo?: string; resolves?: RequestResolution },
 ): Promise<Message> {
+  // `resolves` is the explicit lifecycle signal — present only when the human
+  // submits a clean answer from the request card (it drives the server's
+  // `open_request_count` −1 / red-dot clear). A plain "chat about this" reply
+  // omits it and threads under the question without resolving it.
+  const metadata =
+    mentions.length > 0 || opts?.resolves
+      ? {
+          ...(mentions.length > 0 ? { mentions } : {}),
+          ...(opts?.resolves ? { resolves: opts.resolves } : {}),
+        }
+      : undefined;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
     content,
-    ...(mentions.length > 0 ? { metadata: { mentions } } : {}),
+    ...(metadata ? { metadata } : {}),
     ...(opts?.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
   });
 }

@@ -40,9 +40,12 @@ export const chatUserState = pgTable(
     unreadMentionCount: integer("unread_mention_count").notNull().default(0),
     /**
      * Count of open questions (`messages.format = 'request'`) directed at
-     * this (chat, human) — incremented on RAISE, decremented when the human
-     * answers (replies with `inReplyTo` pointing at the question). Drives the
-     * re-introduced `needs_you` red-dot.
+     * this (chat, human) — incremented on RAISE, decremented by an EXPLICIT
+     * resolution (a message carrying `metadata.resolves` pointed at the
+     * question — the human's clean answer, or the asking agent's
+     * `chat send --answer`/`--close`). NOT decremented by plain threaded replies
+     * (`inReplyTo` is pure threading now), so a "chat about this" discussion
+     * keeps the question open. Drives the re-introduced `needs_you` red-dot.
      *
      * Mirrors `unread_mention_count`'s storage shape, but with the OPPOSITE
      * clear semantics: this is **answer-cleared, NOT read-cleared** — it is

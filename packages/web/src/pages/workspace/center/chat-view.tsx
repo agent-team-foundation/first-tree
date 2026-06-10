@@ -76,7 +76,7 @@ import {
 import { RequestCard } from "../../../components/chat/request-card.js";
 import {
   contentStartsWithMention,
-  findAnswerableRequestId,
+  findThreadableRequestId,
   readMentions,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
@@ -1394,14 +1394,17 @@ export function ChatView({
       return;
     }
 
-    // Auto-thread an answer: a plain reply that @-mentions the agent which
-    // asked an open question directed at me counts as the answer (proposal
-    // §D2) — attach `inReplyTo` so the server clears the red dot.
-    const answeredRequestId = findAnswerableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined;
+    // "Chat about this": a plain reply that @-mentions the agent which asked an
+    // open question directed at me threads under that question (`inReplyTo`) so
+    // the back-and-forth stays scoped to it. This does NOT resolve the question
+    // — `inReplyTo` is pure threading now; resolution needs an explicit
+    // `metadata.resolves`, written by the request card's answer block (a clean
+    // answer) or the asking agent's `chat send --answer`/`--close`.
+    const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined;
     sendMut.mutate({
       content: text,
       mentions: effectiveSendMentions,
-      inReplyTo: answeredRequestId,
+      inReplyTo: threadedRequestId,
     });
   };
 

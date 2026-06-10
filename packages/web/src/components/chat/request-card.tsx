@@ -4,12 +4,14 @@
  * markdown body + interactive answer block) plus its collapse/expand state,
  * because collapsing must hide body AND answer block together.
  *
- * Lifecycle (open / resolved / closed) is derived from the thread, not stored
- * (see request-state.ts). The answer block is interactive only for the target
- * while the request is `open`; everyone else sees it read-only, and unrelated
- * viewers get it collapsed by default. Answering sends a normal reply message
- * with `inReplyTo` pointing at the request (the server's −1 / red-dot clear
- * keys off exactly that) — no new endpoint. See proposals/group-chat-unified-send §D1.
+ * Lifecycle (open / discussing / resolved / closed) is derived from the
+ * thread, not stored (see request-state.ts). The answer block is interactive
+ * only for the target while the request is unresolved (`open` or `discussing`);
+ * everyone else sees it read-only, and unrelated viewers get it collapsed by
+ * default. A clean answer sends a reply that threads under the request
+ * (`inReplyTo`) AND carries the explicit `metadata.resolves` signal the
+ * server's −1 / red-dot clear keys off — a plain "chat about this" reply omits
+ * `resolves` and leaves the question open. See proposals/group-chat-unified-send §D1.
  *
  * Design (DESIGN.md): `open` keeps card chrome because it is *interactive*
  * (pillar 5). `resolved` / `closed` are read-only and render as plain labeled
@@ -29,9 +31,9 @@ import {
   defaultExpanded,
   deriveRequestState,
   isRelatedViewer,
-  isReplacedByNewRequest,
   parseAnswerSelections,
   type RequestState,
+  readCloseReason,
   readMentions,
   readRequestPayload,
 } from "./request-state.js";
@@ -46,9 +48,17 @@ const CHIP: Record<RequestState, ChipSpec> = {
     bg: "var(--state-needs-you-soft)",
     fg: "var(--fg-needs-you-strong)",
   },
+  // amber needs-you — a "chat about this" exchange is in flight but the
+  // question is not answered yet, so it still needs the human's action.
+  discussing: {
+    label: "DISCUSSING",
+    Icon: MessageCircleQuestion,
+    bg: "var(--state-needs-you-soft)",
+    fg: "var(--fg-needs-you-strong)",
+  },
   // success green — answered.
   resolved: { label: "RESOLVED", Icon: CircleCheck, bg: "var(--bg-success-soft)", fg: "var(--fg-success-strong)" },
-  // neutral sunken — withdrawn / superseded.
+  // neutral sunken — withdrawn by the asker.
   closed: { label: "CLOSED", Icon: Ban, bg: "var(--bg-sunken)", fg: "var(--fg-3)" },
 };
 
@@ -106,7 +116,10 @@ export function RequestCard({
   const targets = useMemo(() => readMentions(message.metadata), [message.metadata]);
   const related = isRelatedViewer(message, viewerAgentId);
   const isTarget = viewerAgentId != null && targets.includes(viewerAgentId);
-  const canAnswer = state === "open" && isTarget;
+  // The card stays interactive while the question is unresolved — `open` or
+  // `discussing` (a "chat about this" exchange doesn't lock the answer block).
+  const answerable = state === "open" || state === "discussing";
+  const canAnswer = answerable && isTarget;
 
   const targetLabel = targets[0] ? resolveAgentName(targets[0]) : undefined;
   const subject = payload?.subject ?? "Request";
@@ -117,22 +130,39 @@ export function RequestCard({
   const [free, setFree] = useState<Record<string, string>>({});
 
   // For a resolved request, recover the chosen answers from the resolving
-  // reply so the card can echo them (keyed by prompt). Empty when the answer
-  // was a free-form composer reply that doesn't match the format.
+  // message so the card can echo them (keyed by prompt). The resolving message
+  // is the one carrying `metadata.resolves` (kind="answered") for this request;
+  // its body holds the `"prompt → answer"` lines. Empty when the answer was a
+  // free-form reply that doesn't match the format.
   const selections = useMemo<Record<string, string>>(() => {
     if (state !== "resolved" || !payload) return {};
-    const reply = thread.find((m) => m.inReplyTo === message.id && targets.includes(m.senderId));
+    const reply = thread.find((m) => {
+      const raw = m.metadata?.resolves;
+      return (
+        raw != null &&
+        typeof raw === "object" &&
+        (raw as { request?: unknown }).request === message.id &&
+        (raw as { kind?: unknown }).kind === "answered"
+      );
+    });
     return reply
       ? parseAnswerSelections(
           reply.content,
           payload.questions.map((q) => q.prompt),
         )
       : {};
-  }, [state, payload, thread, message.id, targets]);
+  }, [state, payload, thread, message.id]);
 
   const mut = useMutation({
+    // A clean answer from the target resolves the question: it threads under
+    // the request (`inReplyTo`) AND carries the explicit `resolves` signal that
+    // drives the server's red-dot −1. (A plain "chat about this" reply, sent
+    // from the composer, omits `resolves` and only threads.)
     mutationFn: (content: string) =>
-      sendChatMessage(message.chatId, content, [message.senderId], { inReplyTo: message.id }),
+      sendChatMessage(message.chatId, content, [message.senderId], {
+        inReplyTo: message.id,
+        resolves: { request: message.id, kind: "answered" },
+      }),
     onSuccess: () => onSent?.(),
   });
 
@@ -153,18 +183,17 @@ export function RequestCard({
     }
   }
 
-  // A `closed` request is either superseded by a replacement question or
-  // actively withdrawn by the asker — copy differs so a plain close doesn't
-  // read as "superseded by an updated question" (QA).
-  const superseded = state === "closed" && isReplacedByNewRequest(message, thread);
+  // Closing is explicit now (the asker calls `chat send --close`; re-asking never
+  // auto-supersedes) — show the reason they gave, when any.
+  const closeReason = state === "closed" ? readCloseReason(message, thread) : null;
   const summary =
-    state === "open"
-      ? `${questionCount} question${questionCount === 1 ? "" : "s"}`
-      : state === "resolved"
-        ? "answered"
-        : superseded
-          ? "superseded"
-          : "withdrawn";
+    state === "resolved"
+      ? "answered"
+      : state === "closed"
+        ? "withdrawn"
+        : state === "discussing"
+          ? "discussing"
+          : `${questionCount} question${questionCount === 1 ? "" : "s"}`;
 
   // ── Collapsed: one row, body + answer block hidden. Click anywhere to expand.
   if (!expanded) {
@@ -242,7 +271,7 @@ export function RequestCard({
       {/* state-specific block: `open` keeps interactive card chrome; `resolved`
           / `closed` are read-only and render as plain labeled content — no
           filled/bordered card (DESIGN.md pillar 5). */}
-      {state === "open" && payload ? (
+      {answerable && payload ? (
         <div
           style={{
             marginTop: "var(--sp-3)",
@@ -384,7 +413,7 @@ export function RequestCard({
       {/* closed — read-only one-line status, no card chrome */}
       {state === "closed" ? (
         <div className="text-body" style={{ marginTop: "var(--sp-1_5)", color: "var(--fg-3)" }}>
-          {superseded ? "Superseded by an updated question." : "Withdrawn by the asker."}
+          {closeReason ? `Withdrawn — ${closeReason}` : "Withdrawn by the asker."}
           {questionCount > 0 ? (
             <span style={{ color: "var(--fg-4)" }}>
               {` · ${questionCount} question${questionCount === 1 ? "" : "s"} unanswered`}
