@@ -1,7 +1,9 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { createChat } from "../services/chat.js";
 import * as inboxService from "../services/inbox.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -51,8 +53,8 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     // the third as `pending`, and force-set one row to `acked` to confirm
     // the WHERE filter actually short-circuits on status. Filter to
     // notify=true so the silent fan-out row (from the @a3 message) doesn't
-    // skew the assertion — silent rows are bulk-acked by the trigger's
-    // bundling pass and are not part of the recovery contract.
+    // skew the assertion — silent rows are context-only and are not part of
+    // the bind-time notify recovery contract.
     const rows = await app.db
       .select({ id: inboxEntries.id, messageId: inboxEntries.messageId })
       .from(inboxEntries)
@@ -232,5 +234,94 @@ describe("inbox same-socket chat recovery", () => {
     expect(chat2Rows).toHaveLength(1);
     expect(chat2Rows[0]?.messageId).toBe(msg2Res.json().id);
     expect(chat2Rows[0]?.status).toBe("pending");
+  });
+
+  it("redelivers the same silent preceding context after chat-scoped recovery", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `recoverctx-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `recoverctx-a-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "first recovered context" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "second recovered context" },
+      { allowRecipientlessSend: true },
+    );
+    const trigger = await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "please recover this",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const triggerEntryRows = await app.db
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.agent.inboxId),
+          eq(inboxEntries.messageId, trigger.message.id),
+          eq(inboxEntries.notify, true),
+        ),
+      );
+    const triggerEntry = triggerEntryRows[0];
+    if (!triggerEntry) throw new Error("expected trigger inbox row");
+
+    const staleTriggerTime = new Date(Date.now() - (inboxService.PRECEDING_CONTEXT_WINDOW_SECONDS + 60) * 1000);
+    const staleContextTime = new Date(staleTriggerTime.getTime() - 60 * 1000);
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: staleContextTime })
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.agent.inboxId),
+          eq(inboxEntries.chatId, chat.id),
+          eq(inboxEntries.notify, false),
+        ),
+      );
+    await app.db.update(inboxEntries).set({ createdAt: staleTriggerTime }).where(eq(inboxEntries.id, triggerEntry.id));
+
+    const claimed = await inboxService.claimAndBuildForPush(app.db, observer.agent.inboxId, trigger.message.id);
+    const firstDelivery = claimed[0];
+    if (!firstDelivery) throw new Error("expected first delivery");
+    const firstPreceding = firstDelivery.message.precedingMessages.map((p) => p.content);
+    expect(firstPreceding).toEqual(["first recovered context", "second recovered context"]);
+
+    const silentAfterClaim = await app.db
+      .select({ status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.agent.inboxId),
+          eq(inboxEntries.chatId, chat.id),
+          eq(inboxEntries.notify, false),
+        ),
+      );
+    expect(silentAfterClaim.every((row) => row.status === "pending")).toBe(true);
+
+    const recovered = await inboxService.recoverUnackedForScope(app.db, {
+      inboxId: observer.agent.inboxId,
+      chatId: chat.id,
+    });
+    expect(recovered.resetEntryIds).toEqual([firstDelivery.id]);
+
+    const redelivered = await inboxService.claimBacklogForPushForChat(app.db, observer.agent.inboxId, chat.id, 10);
+    const secondDelivery = redelivered[0];
+    if (!secondDelivery) throw new Error("expected redelivery");
+    expect(secondDelivery.id).toBe(firstDelivery.id);
+    expect(secondDelivery.message.precedingMessages.map((p) => p.content)).toEqual(firstPreceding);
   });
 });
