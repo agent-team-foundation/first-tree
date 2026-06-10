@@ -1616,7 +1616,13 @@ describe("web DOM interaction coverage", () => {
     const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
     await waitForText("Your agent's ready to go", inviteeReady.container);
     await click(findButton(inviteeReady.container, "Start working"));
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-onboarding", expect.any(String), ["agent-1"]);
+    // Pin the invitee bootstrap (a swap back to buildBindBootstrap would still
+    // send a string — assert the joining-teammate voice).
+    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith(
+      "chat-onboarding",
+      expect.stringContaining("just joined the team"),
+      ["agent-1"],
+    );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
       "tree_chat_started",
       expect.objectContaining({ joinPath: "invite" }),
