@@ -327,8 +327,11 @@ export class FirstTreeHubSDK {
    * Pass either field as `null` to clear it (a cleared `topic` makes the title
    * fall back to first-message preview / participant names).
    *
-   * Auth: caller must be the chat's owner — its creator (server-side
-   * `assertOwner` gate). A non-owner participant is refused with 403.
+   * Auth: caller must count as the chat's owner (server-side `assertOwner`
+   * gate) — either the creator, or any worker agent when no agent owner is
+   * present in the chat (human-created chats — Web / GitHub-minted — and
+   * chats whose creating agent left). A non-owner agent in an agent-created
+   * chat whose creator still speaks is refused with 403.
    */
   async updateChat(chatId: string, body: { topic?: string | null; description?: string | null }): Promise<Chat> {
     return this.requestJson<Chat>(`/api/v1/agent/chats/${chatId}`, {

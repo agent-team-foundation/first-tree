@@ -347,12 +347,16 @@ bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
     ${bin} chat set-topic --description "<current state>"
     ${bin} chat set-topic "<label>" --description "<state>"
 
-**Only the chat's owner maintains these.** The owner is the agent that
-created the chat; topic and description are chat-level fields it owns on
-everyone's behalf. If you did not create this chat you are **not** asked
-to set or refresh them, and the command refuses you with a 403 — leave
-them to the owner. Rules 1–2 below are the owner's duty; rules 3–4 apply
-to everyone (reading a description to self-locate needs no ownership).
+**Only the chat's owner maintains these — and you count as the owner in
+two cases:** (a) you created the chat, or (b) no agent owner is present —
+a **human** created it (Web-created and GitHub-minted chats both work
+this way) or the creating agent has since left. There every worker agent
+in the chat counts as the owner and maintains these fields on the
+owner's behalf. Only when **another agent** created the chat and is
+still in it are you not the owner: you are **not** asked to set or
+refresh them, and the command refuses you with a 403 — leave them to
+that agent. Rules 1–2 below are the owner's duty; rules 3–4 apply to
+everyone (reading a description to self-locate needs no ownership).
 
 **Hard rules:**
 
