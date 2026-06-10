@@ -474,7 +474,7 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
   {
     id: "v1-legacy-workspace-gitignore",
     description:
-      "Remove the workspace-root `.gitignore` that the retired `first-tree tree bootstrap/init/upgrade` commands used to write via `upsertLocalTreeGitIgnore` (entries: `.first-tree/tmp/`, `.agents/skills/`, `.claude/skills/`; writer deleted with the `tree` namespace in PR #848). The workspace root is no longer a git repo, so the file is inert residue. Because the old writer UPSERTED into a possibly user-authored `.gitignore`, this migration strips only the known legacy entries and deletes the file only when nothing else remains; any other user content is preserved.",
+      "Remove the workspace-root `.gitignore` that the retired `first-tree tree bootstrap/init/upgrade` commands used to write via `upsertLocalTreeGitIgnore` (writer deleted with the `tree` namespace in PR #848). The workspace root is no longer a git repo, so the file is inert residue. The legacy allow-list covers EVERY entry the writer ever produced across its history: `.first-tree/local-tree.json` (#62 → #371 window, retired when `.first-tree/source.json` consolidated in #92), `.first-tree/tmp/` (the long-running tempdir entry), `.agents/skills/` and `.claude/skills/` (added in the #510 v1.0 line). Because the old writer UPSERTED into a possibly user-authored `.gitignore`, this migration strips only those known legacy entries and deletes the file only when nothing else remains; any other user content is preserved. PR #929 code-reviewer S1.",
     apply: (workspacePath, log) => {
       const target = join(workspacePath, ".gitignore");
       // Only act on a regular file — a symlink or directory at this path is
@@ -487,7 +487,12 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         return; // missing — nothing to do
       }
       if (!stat.isFile()) return;
-      const legacyEntries = new Set([".first-tree/tmp/", ".agents/skills/", ".claude/skills/"]);
+      const legacyEntries = new Set([
+        ".first-tree/local-tree.json",
+        ".first-tree/tmp/",
+        ".agents/skills/",
+        ".claude/skills/",
+      ]);
       const lines = readFileSync(target, "utf-8").replaceAll("\r\n", "\n").split("\n");
       const kept = lines.filter((line) => !legacyEntries.has(line.trim()));
       if (kept.length === lines.length) return; // no legacy entries present — user file, leave alone

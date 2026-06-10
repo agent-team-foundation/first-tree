@@ -481,6 +481,50 @@ describe("workspace-migrations registry", () => {
     expect(result.applied).toContain("v1-legacy-workspace-gitignore");
     expect(existsSync(join(workspace, ".gitignore"))).toBe(false);
   });
+
+  it("v1-legacy-workspace-gitignore also strips the older `.first-tree/local-tree.json` entry (PR #929 S1)", () => {
+    // The #62 → #371 window of the retired writer included this entry. After
+    // #92 consolidated config into `source.json` the line became an orphan
+    // that no longer points at anything on disk; the migration must clean it
+    // up alongside the later three entries.
+    const target = join(workspace, ".gitignore");
+    writeFileSync(target, ".first-tree/local-tree.json\n.first-tree/tmp/\n");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("v1-legacy-workspace-gitignore does NOT touch a `.gitignore` that is a symlink (PR #929 S2)", () => {
+    // Shape-check guard — mirrors `v1-whitepaper-symlink` posture but in the
+    // opposite direction: that migration unlinks ONLY symlinks; this one
+    // touches ONLY regular files. A symlink at the workspace-root `.gitignore`
+    // is not what the retired writer produced and must survive untouched
+    // (and the target must not be read or rewritten).
+    const realFile = join(workspace, "elsewhere.gitignore");
+    writeFileSync(realFile, ".first-tree/tmp/\n");
+    const target = join(workspace, ".gitignore");
+    symlinkSync(realFile, target);
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(lstatSync(target).isSymbolicLink()).toBe(true);
+    expect(readFileSync(realFile, "utf-8")).toBe(".first-tree/tmp/\n");
+  });
+
+  it("v1-legacy-workspace-gitignore does NOT touch a `.gitignore` that is a directory (PR #929 S2)", () => {
+    // Another shape-check pair: a user-created directory at the
+    // workspace-root `.gitignore` path (unusual but possible) is not the
+    // legacy writer's output and must not be removed.
+    const target = join(workspace, ".gitignore");
+    mkdirSync(target);
+    writeFileSync(join(target, "inside"), "user content\n");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(lstatSync(target).isDirectory()).toBe(true);
+    expect(readFileSync(join(target, "inside"), "utf-8")).toBe("user content\n");
+  });
 });
 
 describe("applyPendingMigrations applier", () => {
