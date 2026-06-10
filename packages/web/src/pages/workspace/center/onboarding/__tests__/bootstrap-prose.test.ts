@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildBindBootstrap, buildCreateBootstrap, FIRST_TREE_REFERENCE_URL } from "../bootstrap-prose.js";
+import {
+  buildBindBootstrap,
+  buildCreateBootstrap,
+  buildInviteeBootstrap,
+  FIRST_TREE_REFERENCE_URL,
+} from "../bootstrap-prose.js";
 
 describe("kickoff bootstrap prose", () => {
   it("builds singular existing-tree instructions", () => {
@@ -72,5 +77,20 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("record its URL");
     // Cloud names + creates the repo, so the agent is never asked which owner.
     expect(message).not.toContain("ask me which owner");
+  });
+
+  it("builds a joining-teammate invitee message (orient + introduce, not tree writes)", () => {
+    const message = buildInviteeBootstrap("https://github.com/acme/context");
+
+    expect(message).toContain("just joined the team");
+    expect(message).toContain("Team Context Tree: https://github.com/acme/context");
+    expect(message).toContain("Read the tree first to get oriented");
+    expect(message).toContain("introduce yourself");
+    expect(message).toContain(FIRST_TREE_REFERENCE_URL);
+    // A brand-new teammate is NOT asked to write to the tree or seed it, and the
+    // admin's "my repos are now connected" voice must not leak in.
+    expect(message).not.toContain("first-tree-seed");
+    expect(message).not.toContain("reflect them into the tree");
+    expect(message).not.toContain("are now connected");
   });
 });

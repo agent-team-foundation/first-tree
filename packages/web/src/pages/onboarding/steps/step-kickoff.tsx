@@ -7,7 +7,11 @@ import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
 import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
-import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
+import {
+  buildBindBootstrap,
+  buildCreateBootstrap,
+  buildInviteeBootstrap,
+} from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
@@ -364,9 +368,11 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
     setError(null);
     setPhase("starting");
     try {
-      const bootstrap = hasRepos ? buildBindBootstrap(teamRepoUrls, treeUrl) : NO_REPO_BOOTSTRAP;
+      // The agent already inherits the team's repos; a joining teammate's first
+      // message is "read the tree to get oriented, then introduce yourself" —
+      // not the admin's "reflect these repos into the tree".
       await runKickoff({
-        bootstrap,
+        bootstrap: buildInviteeBootstrap(treeUrl),
         gitRepoUrls: [],
         orgWrites: null,
         treeMode: "existing",

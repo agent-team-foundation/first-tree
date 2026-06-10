@@ -15,12 +15,13 @@
  * session resolves the binding. That precondition is what lets the prose name
  * skills directly instead of asking the agent to self-provision.
  *
- * Two paths:
+ * Three paths:
  *   - existing tree (buildBindBootstrap): the team's tree already exists and is
  *     populated, and the binding (workspace.json) is written automatically by
  *     the runtime — so the agent is NOT asked to bind or open a PR back to the
  *     source. `first-tree-seed` does not apply to a populated tree; the agent
- *     reads the tree and uses `first-tree-context` for any further writes.
+ *     reads the tree and uses `first-tree-context` for any further writes. Sent
+ *     for the admin who just connected repos to an already-existing team tree.
  *   - new tree (buildCreateBootstrap): Cloud has already created the empty tree
  *     repo, written `context_tree`, and (on this session) the runtime writes
  *     `workspace.json`, so the new-tree self-check preconditions for
@@ -28,6 +29,12 @@
  *     asks the agent to seed the already-bound, still-empty tree with real
  *     content drawn from the source repos — it no longer asks the agent to
  *     create the GitHub repo or record its URL (Cloud owns both).
+ *   - invitee joining a set-up team (buildInviteeBootstrap): the team's tree and
+ *     repos already exist and the agent inherits them automatically (recommended
+ *     team resources), so the invitee never connected anything. The prose is in a
+ *     joining-teammate voice — get oriented by reading the tree, then introduce
+ *     yourself — NOT the admin's "my repos are now connected, reflect them into
+ *     the tree" (a brand-new teammate shouldn't open with tree writes).
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
@@ -83,6 +90,26 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
     skillLine,
     "",
     walkthrough,
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
+/**
+ * Invitee joining a team that's already set up. The agent already inherits the
+ * team's repos + Context Tree (recommended team resources + the runtime's
+ * workspace.json), so the invitee never connected anything and is NOT asked to
+ * reflect decisions into the tree on its first message. Instead: read the tree
+ * to get oriented, then introduce yourself — the right tone for a brand-new
+ * teammate's first hello.
+ */
+export function buildInviteeBootstrap(treeUrl: string): string {
+  return [
+    "I've just joined the team and you're my agent. The team already has its repos connected and a shared Context Tree.",
+    "",
+    `Team Context Tree: ${treeUrl}`,
+    "",
+    "Read the tree first to get oriented — start at its root NODE.md — so you understand how the team works and what it's building. Then introduce yourself to me: what can you help with, and what's a good first thing for us to try?",
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");
