@@ -44,6 +44,8 @@ export type HandlerContext = {
   log: (msg: string) => void;
 };
 
+export type SessionTurnOutcome = { status: "success" | "error"; terminal?: boolean };
+
 /** Extended context for session-oriented handlers. */
 export type SessionContext = HandlerContext & {
   /** The server-side chat this session belongs to. */
@@ -76,17 +78,19 @@ export type SessionContext = HandlerContext & {
    * completed inbox prefix, clears local in-flight tracking on ACK success,
    * and recomputes effective runtime state.
    */
-  finishTurn: (
-    messages: SessionMessage | readonly SessionMessage[],
-    outcome: { status: "success" | "error"; terminal?: boolean },
-  ) => Promise<void>;
+  finishTurn: (messages: SessionMessage | readonly SessionMessage[], outcome: SessionTurnOutcome) => Promise<void>;
 
   /**
    * Mark a concrete message or batch as abandoned by a retryable path
-   * (abort, timeout, unknown failure). The runtime leaves the server-side
-   * entries unacked; a later chat recovery or bind reset redelivers them.
+   * (abort, timeout, unknown failure) while still reporting the provider turn
+   * boundary. The runtime leaves the server-side entries unacked; a later chat
+   * recovery or bind reset redelivers them.
    */
-  retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
+  retryTurn: (
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+    outcome?: SessionTurnOutcome,
+  ) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.

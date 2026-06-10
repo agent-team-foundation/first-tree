@@ -24,6 +24,7 @@ import type {
   HandlerFactory,
   SessionContext,
   SessionMessage,
+  SessionTurnOutcome,
 } from "./handler.js";
 import { isResumeUnavailableError } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
@@ -1556,14 +1557,9 @@ export class SessionManager {
   private async finishTurn(
     chatId: string,
     messages: SessionMessage | readonly SessionMessage[],
-    outcome: { status: "success" | "error"; terminal?: boolean },
+    outcome: SessionTurnOutcome,
   ): Promise<void> {
-    this.config.onSessionEvent?.(chatId, { kind: "turn_end", payload: { status: outcome.status } });
-    if (outcome.status === "success") {
-      this.sessionRuntimeMarkers.delete(chatId);
-    } else if (outcome.terminal) {
-      this.sessionRuntimeMarkers.set(chatId, "error");
-    }
+    this.reportTurnOutcome(chatId, outcome);
 
     const batch = Array.isArray(messages) ? messages : [messages];
     let throughEntryId: number | undefined;
@@ -1610,8 +1606,22 @@ export class SessionManager {
     if (queue.length === 0) this.inFlightEntries.delete(chatId);
   }
 
-  private retryTurn(chatId: string, messages: SessionMessage | readonly SessionMessage[], reason: string): void {
-    this.config.onSessionEvent?.(chatId, { kind: "turn_end", payload: { status: "error" } });
+  private reportTurnOutcome(chatId: string, outcome: SessionTurnOutcome): void {
+    this.config.onSessionEvent?.(chatId, { kind: "turn_end", payload: { status: outcome.status } });
+    if (outcome.status === "success") {
+      this.sessionRuntimeMarkers.delete(chatId);
+    } else if (outcome.terminal) {
+      this.sessionRuntimeMarkers.set(chatId, "error");
+    }
+  }
+
+  private retryTurn(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+    outcome: SessionTurnOutcome = { status: "error" },
+  ): void {
+    this.reportTurnOutcome(chatId, outcome);
     const batch = Array.isArray(messages) ? messages : [messages];
     const hasTrackedMessage = batch.some(
       (message) =>
@@ -1732,8 +1742,8 @@ export class SessionManager {
       finishTurn: (messages, outcome) => {
         return this.finishTurn(chatId, messages, outcome);
       },
-      retryTurn: (messages, reason) => {
-        this.retryTurn(chatId, messages, reason);
+      retryTurn: (messages, reason, outcome) => {
+        this.retryTurn(chatId, messages, reason, outcome);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),

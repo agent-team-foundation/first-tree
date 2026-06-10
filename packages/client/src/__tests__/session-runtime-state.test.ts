@@ -1,3 +1,4 @@
+import type { SessionEvent } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -49,6 +50,7 @@ function createSessionManager(opts: {
   log?: pino.Logger;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
   onSessionRuntimeChange?: (chatId: string, state: "idle" | "working" | "blocked" | "error") => void;
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -78,6 +80,7 @@ function createSessionManager(opts: {
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     onRuntimeStateChange: opts.onRuntimeStateChange,
     onSessionRuntimeChange: opts.onSessionRuntimeChange,
+    onSessionEvent: opts.onSessionEvent,
   });
 }
 
@@ -147,6 +150,73 @@ describe("SessionManager runtime state reducer", () => {
 
     expect(runtimeChanges[runtimeChanges.length - 1]).toBe("error");
     expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-a", runtimeState: "error" }]);
+
+    await sm.shutdown();
+  });
+
+  it("projects terminal no-ack retry turns as runtime error without acking", async () => {
+    const ackEntry = mockAckEntry();
+    const events: Array<{ chatId: string; event: SessionEvent }> = [];
+    let capturedCtx: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      async start(msg, ctx) {
+        capturedMessage = msg;
+        capturedCtx = ctx;
+        return "session-1";
+      },
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      onSessionEvent: (chatId, event) => events.push({ chatId, event }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-timeout" }));
+    defined(capturedCtx, "ctx").retryTurn(defined(capturedMessage, "message"), "turn_timeout", {
+      status: "error",
+      terminal: true,
+    });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      chatId: "chat-timeout",
+      event: { kind: "turn_end", payload: { status: "error" } },
+    });
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-timeout", runtimeState: "error" }]);
+
+    await sm.shutdown();
+  });
+
+  it("reports abandoned success turns as success while leaving recovery unacked", async () => {
+    const ackEntry = mockAckEntry();
+    const events: Array<{ chatId: string; event: SessionEvent }> = [];
+    let capturedCtx: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      async start(msg, ctx) {
+        capturedMessage = msg;
+        capturedCtx = ctx;
+        return "session-1";
+      },
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      onSessionEvent: (chatId, event) => events.push({ chatId, event }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-abort" }));
+    defined(capturedCtx, "ctx").retryTurn(defined(capturedMessage, "message"), "turn_aborted", {
+      status: "success",
+    });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      chatId: "chat-abort",
+      event: { kind: "turn_end", payload: { status: "success" } },
+    });
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-abort", runtimeState: "working" }]);
 
     await sm.shutdown();
   });

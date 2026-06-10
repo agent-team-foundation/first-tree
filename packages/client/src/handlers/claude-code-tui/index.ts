@@ -389,7 +389,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       });
     } else {
       const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
-      sessionCtx.retryTurn(messages, reason);
+      sessionCtx.retryTurn(messages, reason, {
+        status: disposition.status,
+        terminal: disposition.terminalRuntimeError,
+      });
     }
     resetProcessor();
   }
