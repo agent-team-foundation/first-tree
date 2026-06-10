@@ -8,7 +8,15 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("source repo");
     expect(message).toContain("Source repo: https://github.com/acme/app");
     expect(message).toContain("Existing tree: https://github.com/acme/context");
-    expect(message).toContain("bind the repo to that existing tree");
+    // Binding is now written automatically by the runtime (workspace.json), so
+    // the agent is told the repo is already connected and pointed at reading /
+    // reflecting — never at performing a manual bind + PR-back.
+    expect(message).toContain("connected");
+    expect(message).toContain("first-tree-context");
+    expect(message).not.toContain("bind the repo to that existing tree");
+    expect(message).not.toContain("PR back to the source");
+    // A populated team tree must never invoke the one-shot seed skill.
+    expect(message).not.toContain("first-tree-seed");
     expect(message).toContain(FIRST_TREE_REFERENCE_URL);
   });
 
@@ -22,41 +30,47 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("Source repos:");
     expect(message).toContain("- https://github.com/acme/web");
     expect(message).toContain("- https://github.com/acme/api");
-    expect(message).toContain("bind every repo to that existing tree");
+    expect(message).toContain("Existing tree: https://github.com/acme/context");
+    expect(message).toContain("connected");
+    expect(message).toContain("first-tree-context");
+    expect(message).not.toContain("bind every repo to that existing tree");
   });
 
   it("builds singular new-tree instructions", () => {
     const message = buildCreateBootstrap(["https://github.com/acme/app"]);
 
-    expect(message).toContain("create a brand-new Context Tree");
     expect(message).toContain("Source repo: https://github.com/acme/app");
-    expect(message).toContain("Host the new tree as its own GitHub repo under the same owner as the source");
-    expect(message).toContain("record its URL in First Tree");
+    // Cloud now provisions the tree repo + org binding and the runtime writes
+    // workspace.json before this message is sent, so the new-tree prose names
+    // `first-tree-seed` directly and tells the agent to seed an already-bound,
+    // already-empty tree from the source — it no longer asks the agent to
+    // create the GitHub repo or record its URL.
+    expect(message).toContain("first-tree-seed");
+    expect(message).toContain("not placeholders");
 
-    // Pin out the retired-skill name so the prose can never silently
-    // regress to advertising a skill that does not exist on disk.
+    // Retired skill name must never reappear.
     expect(message).not.toContain("first-tree onboarding flow");
+    // The agent no longer self-provisions the tree: Cloud already did.
+    expect(message).not.toContain("Host the new tree");
+    expect(message).not.toContain("record its URL");
+    expect(message).not.toContain("create a brand-new Context Tree");
 
-    // Pin out `$first-tree-seed` naming until the Cloud-side new-tree
-    // provisioning step lands. Naming the skill while Cloud still passes
-    // `contextTreeUrl: null` would send the kickoff agent to a self-check
-    // that hard-refuses on the missing workspace.json tree binding. See
-    // the JSDoc on `buildCreateBootstrap` for the full rationale.
-    expect(message).not.toContain("$first-tree-seed");
-    expect(message).not.toContain("first-tree-seed");
+    expect(message).toContain(FIRST_TREE_REFERENCE_URL);
   });
 
   it("builds plural new-tree instructions", () => {
     const message = buildCreateBootstrap(["https://github.com/acme/web", "https://github.com/acme/api"]);
 
-    expect(message).toContain("one shared Context Tree");
     expect(message).toContain("Source repos:");
-    expect(message).toContain("ask me which owner if they don't share one");
-    expect(message).toContain("each PR");
+    expect(message).toContain("- https://github.com/acme/web");
+    expect(message).toContain("- https://github.com/acme/api");
+    expect(message).toContain("first-tree-seed");
+    expect(message).toContain("not placeholders");
 
-    // Same retired / not-yet-wired skill-name pins as the singular case.
     expect(message).not.toContain("first-tree onboarding flow");
-    expect(message).not.toContain("$first-tree-seed");
-    expect(message).not.toContain("first-tree-seed");
+    expect(message).not.toContain("Host the new tree");
+    expect(message).not.toContain("record its URL");
+    // Cloud names + creates the repo, so the agent is never asked which owner.
+    expect(message).not.toContain("ask me which owner");
   });
 });

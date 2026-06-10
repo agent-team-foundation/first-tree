@@ -106,6 +106,46 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     expect(installFirstTreeIntegration).toHaveBeenCalledTimes(2);
   });
 
+  it("a tree-less session leaves the CLI pin unset so a later tree-bound session still installs skills", () => {
+    // Regression: a tree-less session used to pin the CLI version (because
+    // `integrationOk` defaults to true even when integration is skipped),
+    // which defeated `integrationNeverPinned` and made the eventual tree-bound
+    // upgrade (new-tree onboarding) take the fast path and never install
+    // `first-tree-seed`.
+    vi.mocked(installFirstTreeIntegration).mockReturnValue(true);
+    const sentinel = join(workspace, INIT_COMPLETE_SENTINEL_REL);
+    rmSync(sentinel, { force: true }); // start sentinel-absent → slow path
+
+    // Session 1: tree-less slow path. Integration is skipped (no tree) and —
+    // post-fix — the CLI version must NOT be pinned.
+    ensureAgentBootstrap({
+      workspace,
+      sessionCtx: fakeSessionCtx(),
+      contextTreePath: null,
+      briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
+    });
+    expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+    expect(state.cachedCli).toBeNull();
+
+    // Simulate the completed session having written the init-complete sentinel.
+    mkdirSync(dirname(sentinel), { recursive: true });
+    writeFileSync(sentinel, "1", "utf-8");
+
+    // Session 2: the org tree now exists → tree-bound. Sentinel is present, but
+    // because the tree-less session never pinned the CLI version,
+    // `integrationNeverPinned` fires and the slow path installs the skills.
+    ensureAgentBootstrap({
+      workspace,
+      sessionCtx: fakeSessionCtx(),
+      contextTreePath: "/tree",
+      briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
+    });
+    expect(installFirstTreeIntegration).toHaveBeenCalledTimes(1);
+    expect(state.cachedCli).toBe("1.0.0");
+  });
+
   it("non-tree agents take the fast path on the sentinel (no integration gate)", () => {
     const params = {
       workspace,

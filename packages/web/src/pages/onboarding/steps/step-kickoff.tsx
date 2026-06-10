@@ -14,18 +14,12 @@ import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
+import { ensureSourceReposRegistered, provisionNewTree, repoLabel } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
-
-function repoLabel(url: string): string {
-  return url
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^git@[^:]+:/, "")
-    .replace(/\.git$/, "");
-}
 
 function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
   return resources
@@ -48,21 +42,42 @@ async function runKickoff(args: {
 }): Promise<void> {
   const agent = await resolveOnboardingAgent();
 
-  // Org-level writes are a convenience cache for future teammates — never
-  // let them block the user's first chat.
+  // New-tree mode: provision the team's Context Tree repo + org binding BEFORE
+  // sending the kickoff message, so the agent's session resolves the binding
+  // (contextTreePath becomes non-null) and `first-tree-seed`'s preconditions
+  // hold. Only fires when there are repos to seed from — the no-project path
+  // has no `orgWrites` and nothing to seed. `provisionNewTree` treats an
+  // already-provisioned tree (a retry after a later step failed, or a
+  // detect→create race) as success and re-throws every real failure (e.g. the
+  // GitHub App installation isn't an org with repo-admin) so the user sees an
+  // actionable error and can retry — nothing is half-created (no chat yet).
+  if (args.treeMode === "new" && args.orgWrites?.organizationId) {
+    await provisionNewTree(args.orgWrites.organizationId);
+  }
+
+  // Org-level writes. The context-tree-URL cache is best-effort. Source-repo
+  // resources are best-effort for an EXISTING tree (a convenience cache for
+  // future teammates), but REQUIRED for a NEW tree — they're the only path by
+  // which the selected repos reach the agent's gitRepos / on-disk sources /
+  // workspace.json that `first-tree-seed` needs, so a dropped write must
+  // surface as a retryable error rather than an empty/incomplete seed.
   if (args.orgWrites) {
     const orgWrites = args.orgWrites;
     if (orgWrites.sourceRepos.length > 0) {
-      await Promise.allSettled(
-        orgWrites.sourceRepos.map((url) =>
-          createTeamResourceForOrg(orgWrites.organizationId, {
-            type: "repo",
-            name: repoLabel(url),
-            defaultEnabled: "recommended",
-            payload: { url },
-          }),
-        ),
-      );
+      if (args.treeMode === "new") {
+        await ensureSourceReposRegistered(orgWrites.organizationId, orgWrites.sourceRepos);
+      } else {
+        await Promise.allSettled(
+          orgWrites.sourceRepos.map((url) =>
+            createTeamResourceForOrg(orgWrites.organizationId, {
+              type: "repo",
+              name: repoLabel(url),
+              defaultEnabled: "recommended",
+              payload: { url },
+            }),
+          ),
+        );
+      }
     }
     if (orgWrites.contextTreeUrl) {
       await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});

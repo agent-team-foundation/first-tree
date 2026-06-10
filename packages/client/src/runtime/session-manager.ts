@@ -13,7 +13,9 @@ import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
+import { type ContextTreeBinding, syncAgentContextTree } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
+import { reresolveUnboundTree } from "./context-tree-rebind.js";
 import { Deduplicator } from "./deduplicator.js";
 import type { SelfFence } from "./doc-snapshots.js";
 import { type Classification, clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
@@ -207,6 +209,14 @@ type SessionManagerConfig = {
    * chat back to pending and redeliver them on this connection.
    */
   recoverChat?: (chatId: string) => Promise<void>;
+  /**
+   * Resolver for the agent's Context Tree binding, used to lazily upgrade a
+   * tree-LESS slot to tree-bound at session start (new-tree onboarding sets the
+   * org `context_tree` only after the slot starts). Defaults to a live
+   * `syncAgentContextTree(sdk)`; injected as a stub in tests to avoid spawning
+   * real git.
+   */
+  resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
@@ -237,6 +247,15 @@ type SessionManagerConfig = {
  */
 /** Maximum number of evicted session mappings to retain for resume recovery. */
 const MAX_EVICTED_MAPPINGS = 500;
+
+/**
+ * Minimum spacing between lazy Context-Tree re-resolutions for a slot that is
+ * currently tree-LESS. Caps the per-new-session git + HTTP probe for a
+ * permanently-tree-less agent at once per minute, while still picking up a tree
+ * configured later within this window. Tree-BOUND slots never reach this gate
+ * (they exit on the cheap already-bound check).
+ */
+const TREE_RERESOLVE_INTERVAL_MS = 60_000;
 
 /**
  * Base interval for re-affirming per-(agent,chat) runtime so the server-side
@@ -286,6 +305,8 @@ export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
   private readonly config: SessionManagerConfig;
+  /** Last lazy Context-Tree re-resolution attempt (epoch ms); see `TREE_RERESOLVE_INTERVAL_MS`. */
+  private lastTreeResolveAttemptAt = 0;
   private readonly deduplicator = new Deduplicator(1000);
   /**
    * Current trigger (messageId + senderId) per chat — the message that kicked
@@ -454,6 +475,19 @@ export class SessionManager {
       await this.ensureImagesLocal(message);
 
       if (!this.markTrackedEntryAccepted(chatId, entry.id)) return;
+
+      // 4c. Lazily resolve a tree-LESS Context Tree binding before routing this
+      // message to a (possibly new) session. The binding is frozen at
+      // `AgentSlot.start()`, but the new-tree onboarding flow sets the org
+      // `context_tree` only afterwards — without this the fresh agent would
+      // never pick up its tree until a daemon restart. Done INSIDE the
+      // admission barrier so the `handlerConfig` patch lands before routing and
+      // a same-chat follow-up can't race a half-resolved binding, and only when
+      // no live session exists for this chat (a start / resume, never an inject
+      // into an active turn). No-op + no network once bound.
+      if (!this.hasHealthyLiveHandler(chatId)) {
+        await this.ensureContextTreeBinding();
+      }
 
       // 5. Route by session state. ACK no longer happens inside route — the
       // entry sits in `inFlightEntries` until the handler completes the
@@ -799,6 +833,43 @@ export class SessionManager {
 
     // No existing session — create new
     await this.startNewSession(chatId, message);
+  }
+
+  /**
+   * Lazily resolve the agent's Context Tree binding when its slot came up
+   * tree-less. The binding is resolved once at `AgentSlot.start()` and frozen
+   * into `handlerConfig`; the new-tree onboarding flow sets the org
+   * `context_tree` only AFTER that, so a fresh agent would otherwise stay
+   * unbound until a daemon restart. Re-resolving at each new session is cheap
+   * once bound (`reresolveUnboundTree` short-circuits without a network call)
+   * and patches `handlerConfig` in place — so the handler built in
+   * `startNewSession`, and every later session on this slot, sees the tree,
+   * installs the First Tree skills, and writes the W1 workspace manifest.
+   */
+  private async ensureContextTreeBinding(): Promise<void> {
+    const cfg = this.config.handlerConfig;
+    // Already bound — cheapest exit (no clock read, no resolver, no network).
+    if (typeof cfg.contextTreePath === "string" && cfg.contextTreePath.length > 0) return;
+    // Tree-less: rate-limit re-resolution so a permanently-tree-less agent (the
+    // common case) doesn't spawn git + an HTTP GET on EVERY new session for the
+    // slot's whole life. A tree configured later is still picked up within
+    // TREE_RERESOLVE_INTERVAL_MS on the next new session.
+    const now = Date.now();
+    if (now - this.lastTreeResolveAttemptAt < TREE_RERESOLVE_INTERVAL_MS) return;
+    this.lastTreeResolveAttemptAt = now;
+
+    const resolve =
+      this.config.resolveContextTreeBinding ??
+      (() => syncAgentContextTree(this.config.sdk, (msg) => this.config.log.info(msg)));
+    const binding = await reresolveUnboundTree(cfg.contextTreePath, resolve);
+    if (!binding) return;
+    cfg.contextTreePath = binding.path;
+    cfg.contextTreeRepoUrl = binding.repoUrl;
+    cfg.contextTreeBranch = binding.branch;
+    this.config.log.info(
+      { path: binding.path, repoUrl: binding.repoUrl },
+      "context tree binding resolved lazily (agent was unbound at slot start)",
+    );
   }
 
   private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {

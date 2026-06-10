@@ -16,6 +16,7 @@ import {
 } from "./bootstrap.js";
 import type { SessionContext } from "./handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "./workspace.js";
+import { ensureWorkspaceManifest } from "./workspace-manifest.js";
 import { applyPendingMigrations } from "./workspace-migrations.js";
 
 export type AgentBootstrapParams = {
@@ -118,6 +119,17 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   // (PR #869 baixiaohang round-3 P0).
   applyPendingMigrations(workspace, sessionCtx.log, { currentSourceRepoNames });
 
+  // Make this a valid W1 workspace for the shipped First Tree skills: expose the
+  // (external, cross-agent-shared) Context Tree clone as a sibling symlink and
+  // write `<workspace>/.first-tree/workspace.json` naming the tree + bound
+  // sources. Runs every session (cheap + idempotent) so the manifest tracks
+  // source-repo changes. Gated on BOTH a resolved tree binding and a resolved
+  // source set — a null source set (cache miss) would write a manifest that
+  // falsely claims zero sources, which `first-tree-seed`'s self-check reads.
+  if (contextTreePath !== null && currentSourceRepoNames !== null) {
+    ensureWorkspaceManifest(workspace, contextTreePath, [...currentSourceRepoNames], sessionCtx.log);
+  }
+
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
   const currentTreeHead = readContextTreeHead(contextTreePath);
   const cachedTreeHead = readCachedContextTreeHead(workspace);
@@ -193,9 +205,15 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
 
   // Pin the current HEAD so the next start can detect drift.
   writeContextTreeHead(workspace, currentTreeHead);
-  // Only pin the CLI version when integrate actually succeeded — pinning on a
-  // failed run would mask the gap and skip the retry this trigger exists for.
-  if (integrationOk) {
+  // Only pin the CLI version when integration ACTUALLY RAN and succeeded —
+  // i.e. the agent is tree-bound. A tree-less session skips
+  // `installFirstTreeIntegration` (so no skills land) but `integrationOk` stays
+  // `true`; pinning here would set `cachedCliVersion` non-null, which then
+  // defeats the `integrationNeverPinned` trigger when the agent later becomes
+  // tree-bound (new-tree onboarding) — `ensureAgentBootstrap` would take the
+  // fast path and never install `first-tree-seed`. Gating on `contextTreePath`
+  // keeps the upgrade path's slow-bootstrap trigger intact.
+  if (contextTreePath !== null && integrationOk) {
     writeBundledCliVersion(workspace, currentCliVersion);
   }
 }
