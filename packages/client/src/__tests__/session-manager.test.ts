@@ -967,6 +967,34 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
+  it("suspend ACK failure leaves consumed entries behind a recovery gate", async () => {
+    const ackEntry = vi.fn().mockRejectedValue(new Error("ack unavailable"));
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 35, chatId: "chat-suspend-ack-fail", messageId: "msg-f1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+
+    await sm.handleCommand("chat-suspend-ack-fail", "session:suspend");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(ackEntry).toHaveBeenCalledWith(35);
+
+    await sm.dispatch(mockEntry({ id: 36, chatId: "chat-suspend-ack-fail", messageId: "msg-f2" }));
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
   it("suspend leaves injected but not consumed entries unacked for recovery", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);

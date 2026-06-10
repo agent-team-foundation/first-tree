@@ -1302,7 +1302,7 @@ export class SessionManager {
 
   private suspendSession(entry: SessionEntry): void {
     this.ackConsumedInFlightForSuspend(entry.chatId);
-    this.clearInFlightForRecovery(entry.chatId, "session_suspended_unconsumed_tail");
+    this.clearUnconsumedInFlightForSuspend(entry.chatId);
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
@@ -1515,10 +1515,21 @@ export class SessionManager {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
     this.inFlightEntries.delete(chatId);
-    this.deduplicator.dropByPrefix(`${chatId}:`);
+    this.markTrackedEntriesForRecovery(chatId, reason, queue);
+  }
+
+  private markTrackedEntriesForRecovery(
+    chatId: string,
+    reason: string,
+    entries: readonly { entryId: number; dedupKey: string }[],
+  ): void {
+    if (entries.length === 0) return;
+    for (const entry of entries) {
+      this.deduplicator.drop(entry.dedupKey);
+    }
     this.requiresInboxRecovery.add(chatId);
     this.config.log.warn(
-      { chatId, reason, entryIds: queue.map((entry) => entry.entryId) },
+      { chatId, reason, entryIds: entries.map((entry) => entry.entryId) },
       "cleared local in-flight inbox entries; waiting for recovery redelivery",
     );
     this.recomputeSessionRuntimeState(chatId);
@@ -1536,7 +1547,27 @@ export class SessionManager {
     if (consumedPrefixCount === 0) return;
 
     const lastConsumed = queue[consumedPrefixCount - 1];
-    if (lastConsumed) this.ackThroughTrackedEntry(chatId, lastConsumed.entryId);
+    if (lastConsumed) void this.ackThroughTrackedEntryAfterServerAck(chatId, lastConsumed.entryId);
+  }
+
+  private clearUnconsumedInFlightForSuspend(chatId: string): void {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+
+    let consumedPrefixCount = 0;
+    for (const tracked of queue) {
+      if (!tracked.consumed) break;
+      consumedPrefixCount++;
+    }
+
+    if (consumedPrefixCount === 0) {
+      this.clearInFlightForRecovery(chatId, "session_suspended_unconsumed_tail");
+      return;
+    }
+    if (consumedPrefixCount >= queue.length) return;
+
+    const unconsumedTail = queue.splice(consumedPrefixCount);
+    this.markTrackedEntriesForRecovery(chatId, "session_suspended_unconsumed_tail", unconsumedTail);
   }
 
   private markMessagesConsumed(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {

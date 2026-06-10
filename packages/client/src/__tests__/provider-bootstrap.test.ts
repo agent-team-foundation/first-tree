@@ -68,7 +68,9 @@ function makeContext(
     log?: ReturnType<typeof vi.fn>;
     buildAgentEnv?: SessionContext["buildAgentEnv"];
     emitEvent?: SessionContext["emitEvent"];
+    forwardResult?: SessionContext["forwardResult"];
     recordProviderActivity?: SessionContext["recordProviderActivity"];
+    markMessagesConsumed?: SessionContext["markMessagesConsumed"];
     finishTurn?: SessionContext["finishTurn"];
     retryTurn?: SessionContext["retryTurn"];
   } = {},
@@ -82,9 +84,9 @@ function makeContext(
     chatId: "chat-1",
     log: spies.log ?? vi.fn(),
     emitEvent: spies.emitEvent ?? vi.fn(),
-    forwardResult: vi.fn(async () => {}),
+    forwardResult: spies.forwardResult ?? vi.fn(async () => {}),
     recordProviderActivity: spies.recordProviderActivity ?? vi.fn(),
-    markMessagesConsumed: vi.fn(),
+    markMessagesConsumed: spies.markMessagesConsumed ?? vi.fn(),
     finishTurn: spies.finishTurn ?? vi.fn(async () => {}),
     retryTurn: spies.retryTurn ?? vi.fn(),
     buildAgentEnv:
@@ -114,7 +116,9 @@ describe("ProviderBootstrap", () => {
     const chatContext = { chatId: "chat-1", participants: [] } as unknown as ChatContext;
     const sideEffects = {
       emitEvent: vi.fn(),
+      forwardResult: vi.fn(async () => {}),
       recordProviderActivity: vi.fn(),
+      markMessagesConsumed: vi.fn(),
       finishTurn: vi.fn(async () => {}),
       retryTurn: vi.fn(),
     };
@@ -176,7 +180,9 @@ describe("ProviderBootstrap", () => {
     expect(deps.markWorkspaceInitComplete).toHaveBeenCalledWith("/tmp/agent-home");
 
     expect(sideEffects.emitEvent).not.toHaveBeenCalled();
+    expect(sideEffects.forwardResult).not.toHaveBeenCalled();
     expect(sideEffects.recordProviderActivity).not.toHaveBeenCalled();
+    expect(sideEffects.markMessagesConsumed).not.toHaveBeenCalled();
     expect(sideEffects.finishTurn).not.toHaveBeenCalled();
     expect(sideEffects.retryTurn).not.toHaveBeenCalled();
   });
