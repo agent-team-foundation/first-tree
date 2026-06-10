@@ -542,6 +542,16 @@ async function sendMessageInner(
         DO UPDATE SET open_request_count = chat_user_state.open_request_count + 1
       `);
     }
+    // ANY presence of the reserved `resolves` key must parse — a malformed
+    // shape (e.g. bogus `kind`) is rejected, not stored as inert metadata.
+    // Storing it would both mislead readers and poison the prior-resolution
+    // idempotency scan below (which matches on `resolves ->> 'request'`),
+    // permanently blocking the legitimate decrement.
+    if (data.metadata?.resolves !== undefined && !requestResolutionSchema.safeParse(data.metadata.resolves).success) {
+      throw new BadRequestError(
+        'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
+      );
+    }
     const resolution = requestResolutionSchema.safeParse(data.metadata?.resolves);
     if (resolution.success) {
       const requestId = resolution.data.request;
@@ -598,6 +608,10 @@ async function sendMessageInner(
             eq(messages.chatId, chatId),
             ne(messages.id, messageId),
             sql`${messages.metadata} -> 'resolves' ->> 'request' = ${requestId}`,
+            // Only schema-valid resolution rows count as a "prior" — a
+            // malformed legacy row (pre-validation `kind`) must not block
+            // the legitimate resolution from clearing the red dot.
+            sql`${messages.metadata} -> 'resolves' ->> 'kind' IN ('answered', 'closed')`,
             inArray(messages.senderId, resolvers),
           ),
         );

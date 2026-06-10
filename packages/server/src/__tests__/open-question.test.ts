@@ -428,6 +428,116 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
+  it("a MALFORMED metadata.resolves is REJECTED outright (never stored as inert metadata)", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Authorized sender, valid request id, but bogus `kind` — must fail loud,
+    // not land as ordinary metadata (which would poison the priors scan).
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "resolving with a typo'd kind",
+          metadata: { resolves: { request: question.id, kind: "anwsered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/malformed "metadata.resolves"/i);
+    // Missing `kind` entirely — same rejection.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "resolving with no kind",
+          metadata: { resolves: { request: question.id } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/malformed "metadata.resolves"/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Rollback: neither malformed send left a message row.
+    const stray = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), sql`${messages.metadata} ? 'resolves'`));
+    expect(stray).toHaveLength(0);
+
+    // The legitimate resolution still works and clears the count.
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "confirmed: 5%",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a malformed legacy resolves row (pre-validation) does NOT block a later legitimate resolution", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // A pre-validation row from an AUTHORIZED sender with a malformed kind:
+    // matches the priors scan on `resolves ->> 'request'` + sender, but is
+    // not a schema-valid resolution — it must not count as a "prior".
+    await app.db.insert(messages).values({
+      id: crypto.randomUUID(),
+      chatId: chat.id,
+      senderId: asker.agent.uuid,
+      format: "text",
+      content: "legacy malformed resolve",
+      metadata: { resolves: { request: question.id, kind: "anwsered" } },
+      source: "api",
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "confirmed: 5%",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
   it("a stray unauthorized resolves row (legacy, pre-gate) does NOT block a later legitimate resolution", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
