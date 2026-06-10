@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
@@ -37,10 +37,13 @@ async function runKickoff(args: {
   bootstrap: string;
   orgWrites: { organizationId: string; sourceRepos: string[]; contextTreeUrl: string | null } | null;
   treeMode: "new" | "existing";
+  /** The selected org — scopes agent resolution so the seed never lands on an
+   *  agent from a different org (notably the build-tree recovery surface). */
+  organizationId: string | null;
   joinPath?: "invite";
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
-  const agent = await resolveOnboardingAgent();
+  const agent = await resolveOnboardingAgent(args.organizationId);
 
   // New-tree mode: provision the team's Context Tree repo + org binding BEFORE
   // sending the kickoff message, so the agent's session resolves the binding
@@ -105,14 +108,43 @@ async function runKickoff(args: {
   await args.complete(chat.id);
 }
 
-export function StepKickoff() {
+/**
+ * `recovery` (set ONLY by the standalone /build-tree surface) suppresses the
+ * per-step heading — the recovery shell supplies the constant "Build your team's
+ * Context Tree" title. `agentPicker` is an optional slot rendered just above the
+ * CTA — the recovery surface passes its "which agent builds the tree?" control
+ * here, so the choice sits with the build action. Onboarding renders
+ * `<StepKickoff />` with neither prop — unchanged. (The existing-tree fork was
+ * already removed for everyone in PR 943, so there's no extra path to hide here.)
+ */
+export function StepKickoff({
+  recovery,
+  agentPicker,
+  buildDisabled,
+}: {
+  recovery?: boolean;
+  agentPicker?: ReactNode;
+  buildDisabled?: boolean;
+} = {}) {
   const { path } = useOnboardingFlow();
-  return path === "admin" ? <AdminKickoff /> : <InviteeKickoff />;
+  return path === "admin" ? (
+    <AdminKickoff recovery={recovery} agentPicker={agentPicker} buildDisabled={buildDisabled} />
+  ) : (
+    <InviteeKickoff />
+  );
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────
 
-function AdminKickoff() {
+function AdminKickoff({
+  recovery,
+  agentPicker,
+  buildDisabled,
+}: {
+  recovery?: boolean;
+  agentPicker?: ReactNode;
+  buildDisabled?: boolean;
+}) {
   const {
     organizationId,
     selectedRepoUrls,
@@ -126,6 +158,7 @@ function AdminKickoff() {
     goTo,
     sequence,
   } = useOnboardingFlow();
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
@@ -165,6 +198,7 @@ function AdminKickoff() {
           bootstrap: NO_REPO_BOOTSTRAP,
           orgWrites: null,
           treeMode: "new",
+          organizationId,
           complete: completeAndEnterChat,
         });
         return;
@@ -184,8 +218,18 @@ function AdminKickoff() {
             }
           : null,
         treeMode: useExisting ? "existing" : "new",
+        organizationId,
         complete: completeAndEnterChat,
       });
+      // The kickoff just provisioned/confirmed the team's tree binding
+      // server-side. Drop the cached org `context_tree` setting so the recovery
+      // gate (useNeedsTreeSetup) and the Settings/Context surfaces read the
+      // fresh binding on next mount instead of re-offering "build your tree" for
+      // a tree that now exists. (`removeQueries`, not `invalidate`, so a stale
+      // value can't flash before the refetch resolves.)
+      if (organizationId) {
+        queryClient.removeQueries({ queryKey: ["org-setting", organizationId, "context_tree"] });
+      }
     } catch (err) {
       setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
@@ -237,18 +281,23 @@ function AdminKickoff() {
   const isExisting = treeMode === "existing";
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      {/* Recovery suppresses the per-step heading — its shell supplies the
+          constant "Build your team's Context Tree" title. */}
       <StepHeading
-        title={isExisting ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
+        title={recovery ? "" : isExisting ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
         why={isExisting ? COPY.kickoff.existingWhy(repoCount) : COPY.kickoff.newWhy(repoCount)}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+        {/* Recovery's "which agent builds the tree?" control sits here, right
+            above the CTA. Undefined (renders nothing) in onboarding. */}
+        {agentPicker}
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
         <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
+          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart || buildDisabled}>
             <span>{isExisting ? COPY.kickoff.startExisting : COPY.kickoff.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
@@ -355,7 +404,7 @@ function InviteeKickoff() {
  * stays null — an invitee never mutates team config.
  */
 function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls: string[] }) {
-  const { completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -372,6 +421,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
         bootstrap: buildInviteeBootstrap(treeUrl),
         orgWrites: null,
         treeMode: "existing",
+        organizationId,
         joinPath: "invite",
         complete: completeAndEnterChat,
       });
@@ -421,7 +471,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
  * in copy, so they share this body; split them again if their actions diverge.
  */
 function InviteeBlocked({ title, why, status }: { title: string; why: string; status: string }) {
-  const { completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -433,6 +483,7 @@ function InviteeBlocked({ title, why, status }: { title: string; why: string; st
         bootstrap: NO_REPO_BOOTSTRAP,
         orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
+        organizationId,
         joinPath: "invite",
         complete: completeAndEnterChat,
       });

@@ -1,11 +1,13 @@
-import type { InitializeContextTreeResponse } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { getContextTreeSetting, putContextTreeSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
+import { Button } from "../components/ui/button.js";
 import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
-import { ContextTreeInitializer } from "./context-tree-initializer.js";
+import { COPY } from "./onboarding/copy.js";
 
 /**
  * Section for the per-org Context Tree binding (repo / branch). Replaces the
@@ -25,6 +27,7 @@ export function ContextTreeSettingsPanel() {
   const { organizationId, role } = useAuth();
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const settingQuery = useQuery({
     queryKey: ["org-setting", organizationId, "context_tree"],
@@ -67,15 +70,6 @@ export function ContextTreeSettingsPanel() {
     mutation.mutate();
   };
 
-  const handleInitialized = (result: InitializeContextTreeResponse) => {
-    const next = { repo: result.repo, branch: result.branch };
-    queryClient.setQueryData(["org-setting", organizationId, "context_tree"], next);
-    setRepo(result.repo);
-    setBranch(result.branch);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
   return (
     <Section
       title="Context tree"
@@ -92,7 +86,15 @@ export function ContextTreeSettingsPanel() {
       ) : (
         <form onSubmit={handleSubmit}>
           {isAdmin && !hasConfiguredRepo ? (
-            <ContextTreeInitializer organizationId={organizationId} onInitialized={handleInitialized} />
+            <div style={{ marginBottom: "var(--sp-4)" }}>
+              {/* No green "create repo" button — the team's tree is built via the
+                  /build-tree flow (connect code -> build -> seed). The form below
+                  stays for pointing at an EXISTING tree (paste a repo URL). */}
+              <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
+                <span>{COPY.buildTree.buildCta}</span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
           ) : null}
           {!isAdmin && !hasConfiguredRepo ? (
             <div className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>

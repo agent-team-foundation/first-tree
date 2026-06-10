@@ -3,19 +3,19 @@ import type {
   ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
-  InitializeContextTreeResponse,
 } from "@first-tree/shared";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, Network, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowRight, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
-import { ContextTreeInitializer } from "./context-tree-initializer.js";
+import { COPY } from "./onboarding/copy.js";
 
 const CONTEXT_WINDOW = "7d";
 // Live-feed refetch cadence. The usage feed inside the snapshot is what wants
@@ -26,7 +26,6 @@ const CONTEXT_REFETCH_MS = 20_000;
 
 export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
   const { organizationId, role } = useAuth();
-  const queryClient = useQueryClient();
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const preview = previewSnapshot !== undefined;
   const isAdmin = role === "admin";
@@ -56,17 +55,6 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
   }, [selectedUpdateId, snapshot]);
 
   const liveStatusReady = snapshot && (preview || !query.isLoading) && snapshot.snapshotStatus !== "unavailable";
-  const handleContextInitialized = async (result: InitializeContextTreeResponse) => {
-    if (!organizationId) return;
-    queryClient.setQueryData(["org-setting", organizationId, "context_tree"], {
-      repo: result.repo,
-      branch: result.branch,
-    });
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["context-tree-snapshot", organizationId] }),
-      queryClient.invalidateQueries({ queryKey: ["org-setting", organizationId, "context_tree"] }),
-    ]);
-  };
 
   return (
     <>
@@ -86,8 +74,6 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
               snapshot={snapshot}
               isAdmin={isAdmin}
               canInitialize={!preview && isAdmin && !snapshot.repo}
-              organizationId={organizationId}
-              onInitialized={handleContextInitialized}
             />
           ) : (
             <>
@@ -471,20 +457,21 @@ function UnavailableState({
   snapshot,
   isAdmin,
   canInitialize,
-  organizationId,
-  onInitialized,
 }: {
   snapshot: ContextTreeSnapshot;
   isAdmin: boolean;
   canInitialize: boolean;
-  organizationId: string | null;
-  onInitialized: (result: InitializeContextTreeResponse) => void | Promise<void>;
 }) {
-  const title = snapshot.repo ? "Context Tree sync unavailable" : "Connect Context Tree";
+  const navigate = useNavigate();
+  const title = snapshot.repo
+    ? "Context Tree sync unavailable"
+    : isAdmin
+      ? COPY.buildTree.bannerTitle
+      : "Connect Context Tree";
   const detail = snapshot.repo
     ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : isAdmin
-      ? "Create a private GitHub repo to initialize the team Context Tree."
+      ? COPY.buildTree.bannerBody
       : "Ask an admin to initialize this team's Context Tree.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
@@ -504,8 +491,16 @@ function UnavailableState({
               </div>
             ) : null}
             {canInitialize ? (
-              <div style={{ marginTop: "var(--sp-3)" }}>
-                <ContextTreeInitializer organizationId={organizationId} onInitialized={onInitialized} />
+              <div style={{ marginTop: "var(--sp-2)" }}>
+                {/* A quiet link, not a CTA button — routes into the build-tree
+                    flow (connect code -> build -> seed). /build-tree self-gates,
+                    so a non-eligible click just bounces back to the workspace.
+                    The low-level "create an empty private repo" config lives in
+                    Settings -> Context tree. */}
+                <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
+                  <span>{COPY.buildTree.buildCta}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
               </div>
             ) : null}
             {snapshot.repo || snapshot.branch ? (

@@ -16,6 +16,7 @@ import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
+import { BuildTreePage } from "./pages/onboarding/build-tree-page.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
@@ -197,6 +198,11 @@ export function App() {
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                {/* Standalone "build your Context Tree" recovery — same
+                    full-screen, outside-the-workspace treatment as onboarding.
+                    Self-gates on tree-absence; redirects to the workspace when
+                    there's nothing to recover. */}
+                <Route path="/build-tree" element={<BuildTreePage />} />
                 <Route
                   element={
                     <PulseProvider>

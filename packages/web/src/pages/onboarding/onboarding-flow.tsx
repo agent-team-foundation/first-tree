@@ -2,6 +2,7 @@ import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
+import { writeOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
 import {
   clampStepIndex,
   getStepSequence,
@@ -185,6 +186,11 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // already flip optimistic client state, so run them in parallel and
       // never let a transient failure strand the user — always navigate.
       clearPersistedStep(path);
+      // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
+      // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
+      // can't read a stale cross-org agent (the org filter in
+      // resolveOnboardingAgent only catches that when the org id is known).
+      writeOnboardingAgentUuid(null);
       await Promise.allSettled([dismissOnboarding(), markOnboardingCompleted()]);
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },

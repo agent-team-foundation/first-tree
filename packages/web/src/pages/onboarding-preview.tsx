@@ -4,10 +4,12 @@ import { type ReactNode, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import type { GithubRepo } from "../api/github.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
+import { BuildTreeShell } from "./onboarding/build-tree-shell.js";
 import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeMode } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
+import { BuildTreeAgentPanel } from "./onboarding/steps/build-tree-agent-panel.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
@@ -291,6 +293,36 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === `/orgs/${ORG_ID}/resources`) {
     return jsonResponse((activeNet.sourceRepos ?? []).map((url, i) => teamRepoResource(url, i)));
   }
+  // Build-tree recovery agent picker. uuid v7 is time-ordered, so the larger
+  // string is the "newest" the panel defaults to.
+  if (p === "/me/managed-agents") {
+    return jsonResponse([
+      {
+        uuid: "01920000-0000-7000-8000-00000000000b",
+        name: "gandy-assistant",
+        displayName: "Gandy's assistant",
+        type: "agent",
+        organizationId: ORG_ID,
+        inboxId: "inbox-1",
+        visibility: "organization",
+        runtimeProvider: "claude-code",
+        clientId: HOST.id,
+        avatarImageUrl: null,
+      },
+      {
+        uuid: "01920000-0000-7000-8000-00000000000a",
+        name: "codex-reviewer",
+        displayName: "Codex reviewer",
+        type: "agent",
+        organizationId: ORG_ID,
+        inboxId: "inbox-2",
+        visibility: "organization",
+        runtimeProvider: "codex",
+        clientId: HOST.id,
+        avatarImageUrl: null,
+      },
+    ]);
+  }
   return null;
 }
 
@@ -326,6 +358,12 @@ type WizardSpec = {
   step: StepId;
   flow?: Partial<OnboardingFlowValue>;
   net?: NetProfile;
+  /**
+   * Render under the standalone build-tree recovery chrome (`BuildTreeShell`)
+   * instead of the onboarding shell — the recovery surface reuses the same step
+   * components, only the chrome differs.
+   */
+  shell?: "build-tree";
   /** Override the rendered body (used for transient working states). */
   body?: ReactNode;
   /**
@@ -560,6 +598,40 @@ const SCENARIOS: Scenario[] = [
       step: "kickoff",
       flow: { selectedRepoUrls: [REPO_WEB] },
       body: <WorkingState label={COPY.kickoff.starting} />,
+    },
+  },
+
+  // ── BUILD TREE (recovery) ───────────────────────────────────────────────
+  // The standalone "build your Context Tree" surface for an admin who completed
+  // onboarding without connecting code. Reuses connect-code + kickoff under
+  // BuildTreeShell; step 1 requires a repo, the agent picker lives on step 2.
+  {
+    id: "admin-bt-connect",
+    label: "Connect code (repo required)",
+    group: "6 · Build tree (recovery)",
+    role: "admin",
+    wizard: {
+      step: "connect-code",
+      shell: "build-tree",
+      net: { installed: true, repos: REPOS },
+      // `recovery` → no skip / continue-without-a-repo; Continue is disabled
+      // until a repo is selected.
+      body: <StepConnectCode recovery />,
+    },
+  },
+  {
+    id: "admin-bt-build",
+    label: "Build + pick agent (kickoff)",
+    group: "6 · Build tree (recovery)",
+    role: "admin",
+    wizard: {
+      step: "kickoff",
+      shell: "build-tree",
+      flow: { selectedRepoUrls: [REPO_WEB, REPO_API], treeMode: "new" },
+      net: { contextTree: null },
+      // `recovery` → no per-step heading (the shell's constant title carries it).
+      // The agent picker lives on THIS step, above the CTA.
+      body: <StepKickoff recovery agentPicker={<BuildTreeAgentPanel />} />,
     },
   },
 
@@ -902,10 +974,12 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
     computer: init.computer ? { ...init.computer, selectedRuntime, setSelectedRuntime } : base.computer,
   };
 
+  const Shell = spec.shell === "build-tree" ? BuildTreeShell : OnboardingShell;
+
   return (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={flow}>
-        <OnboardingShell>{spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />}</OnboardingShell>
+        <Shell>{spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />}</Shell>
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );

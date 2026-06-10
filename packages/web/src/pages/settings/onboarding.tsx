@@ -1,9 +1,11 @@
-import { Check } from "lucide-react";
+import { ArrowRight, Check } from "lucide-react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { Section } from "../../components/ui/section.js";
+import { COPY } from "../onboarding/copy.js";
+import { useNeedsTreeSetup } from "../onboarding/use-needs-tree-setup.js";
 
 /**
  * Settings → Onboarding. Surfaces the onboarding stepper's enable/disable
@@ -19,11 +21,37 @@ export function SettingsOnboardingPage() {
   const navigate = useNavigate();
   const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
     useAuth();
-  // Terminal state — Step 3 was completed. The wizard is one-shot;
-  // subsequent config edits go through Settings → Team and /agents/:uuid.
-  // Sidebar entry is also hidden, but a direct URL would still reach this
-  // page without the guard.
+  const { needsTreeSetup, isLoading: treeLoading } = useNeedsTreeSetup();
+  // Terminal state — the wizard finished. It's one-shot; subsequent config
+  // edits go through Settings → Team and /agents/:uuid. The one exception is a
+  // skip-the-code-step admin whose team never got a Context Tree: offer the
+  // standalone build-tree recovery here instead of redirecting away.
   if (onboardingCompletedAt) {
+    if (treeLoading) {
+      // Don't flash the redirect before the tree probe resolves.
+      return (
+        <div className="text-label" style={{ padding: "var(--sp-5)", color: "var(--fg-4)" }}>
+          Loading…
+        </div>
+      );
+    }
+    if (needsTreeSetup) {
+      return (
+        <>
+          <PageHeader title="Setup" subtitle="Finish or revisit your setup" />
+          <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+            <Section title={COPY.buildTree.cardTitle} description={COPY.buildTree.cardBody}>
+              <div style={{ paddingTop: "var(--sp-3)" }}>
+                <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
+                  <span>{COPY.buildTree.buildCta}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </Section>
+          </div>
+        </>
+      );
+    }
     return <Navigate to="/settings/team" replace />;
   }
   const isDismissed = !!onboardingDismissedAt;

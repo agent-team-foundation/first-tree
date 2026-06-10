@@ -373,4 +373,35 @@ export const COPY = {
       "A GitHub repo for your team's Context Tree already exists but First Tree can't access it. Give the GitHub App access to it (or remove it), then try again.",
     upstream: "Couldn't reach GitHub just now. Try again in a moment.",
   },
+  /**
+   * Build-Tree recovery — the standalone /build-tree surface + its two entry
+   * points, for an admin who finished onboarding without connecting code (so
+   * their team has no Context Tree yet). Framed as building the missing tree,
+   * never as a failed setup.
+   */
+  buildTree: {
+    /** Constant title for the recovery surface — names the thing being created
+     *  (the team's shared Context Tree). The per-step kickoff heading is
+     *  suppressed (StepKickoff `recovery`) so this carries both steps. */
+    title: "Build your team's Context Tree",
+    /** connect-code hint when no repo is selected — recovery REQUIRES one (a
+     *  tree can't be built without source repos), so unlike onboarding there's
+     *  no "continue without a repo" out. */
+    connectRepoHint: "Pick at least one repo — your agent builds the tree from it.",
+    /**
+     * The ONE action label, used identically on all three tree-creation
+     * surfaces (Context page, Settings → Setup card, Settings → Context tree).
+     * Always a link, never a green CTA button. Routes into the `/build-tree`
+     * flow, which connects code then builds — so the label says both. Uses
+     * "your code" (number-agnostic) because the flow connects one OR more repos.
+     */
+    buildCta: "Connect your code & build your Context Tree",
+    /** Settings → Setup recovery card (entry A) — title + body above the link. */
+    cardTitle: "Build your Context Tree",
+    cardBody:
+      "You finished setting up without connecting a repo, so your team has no Context Tree yet — your agent drafts the first pieces with you once you do.",
+    /** Context page empty-state (entry B) — title + body above the link. */
+    bannerTitle: "Your team has no Context Tree yet",
+    bannerBody: "Connect your code and your agent will build your team's shared memory with you in the chat.",
+  },
 } as const;

@@ -30,7 +30,14 @@ const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
  * dialog without anything installed. Each case gets a plain message and
  * a way forward (never a dead end).
  */
-export function StepConnectCode() {
+/**
+ * `recovery` (set ONLY by the standalone /build-tree surface) makes a repo
+ * MANDATORY: no "Skip" / "continue without a repo" outs, and Continue is
+ * disabled until at least one repo is selected — a Context Tree can't be built
+ * without source repos to seed from. Onboarding renders `<StepConnectCode />`
+ * with no prop (friction, not a block) — unchanged.
+ */
+export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
   const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
@@ -168,7 +175,9 @@ export function StepConnectCode() {
         {installError === "not_configured" || installError === "not_admin" ? (
           <>
             <FlowHint>{COPY.connectCode.cantConnect}</FlowHint>
-            <ContinueWithout onClick={goNext} />
+            {/* Recovery has no skip — a repo is mandatory. A blocked admin
+                leaves via the shell's "Back to workspace". */}
+            {!recovery && <ContinueWithout onClick={goNext} />}
           </>
         ) : (
           <>
@@ -191,9 +200,12 @@ export function StepConnectCode() {
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
               </Button>
-              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkip}>
-                {COPY.skipForNow}
-              </Button>
+              {/* No skip on the recovery surface — a repo is required to build. */}
+              {!recovery && (
+                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkip}>
+                  {COPY.skipForNow}
+                </Button>
+              )}
             </div>
             {/* Merged caveat + skip reassurance; the gating fact is bolded. */}
             <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
@@ -273,6 +285,20 @@ export function StepConnectCode() {
             <span>{COPY.continue}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
+        ) : recovery ? (
+          // Recovery: a repo is MANDATORY (the tree is built from it) — show the
+          // consequence and a DISABLED Continue, never a skip.
+          <>
+            {hasPickableRepos && (
+              <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+                {COPY.buildTree.connectRepoHint}
+              </p>
+            )}
+            <Button type="button" className="self-start" disabled>
+              <span>{COPY.continue}</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </>
         ) : (
           // No repo (didn't pick / couldn't load / none exist): continuing
           // without one is never the desired path, so it's always a very weak
