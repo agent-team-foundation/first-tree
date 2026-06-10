@@ -130,6 +130,43 @@ describe("OnboardingPage", () => {
     expect(container.textContent).toContain("Workspace Home");
   });
 
+  it("does NOT eject a user whose org gains a usable agent mid-flow (created at create-agent)", async () => {
+    // Entry: actively onboarding, no usable agent yet → on the create-agent step.
+    authMock.value = { ...authMock.value, onboardingStep: "create_agent", currentOrgHasUsableAgent: false };
+    flowMock.activeStep = "create-agent";
+
+    // Fresh element each render so React actually reconciles on the flip
+    // (re-rendering the same element object bails out). OnboardingPage stays
+    // the same instance across renders, so its entry-time decision persists.
+    const renderTree = () => (
+      <MemoryRouter initialEntries={["/onboarding"]}>
+        <Routes>
+          <Route path="/" element={<div>Workspace Home</div>} />
+          <Route path="/onboarding" element={<OnboardingPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root?.render(renderTree()));
+    await flush();
+    expect(container.textContent).toContain("Create Agent Step");
+
+    // Mid-flow: the just-created agent comes online → currentOrgHasUsableAgent
+    // flips true and the flow advances to connect-code. The route must NOT
+    // bounce to the workspace — connect-code + kickoff are still ahead of
+    // create-agent in the admin sequence. (Regression: the leave-gate used to
+    // re-evaluate every render and eject here.)
+    authMock.value = { ...authMock.value, onboardingStep: "completed", currentOrgHasUsableAgent: true };
+    flowMock.activeStep = "connect-code";
+    await act(async () => root?.render(renderTree()));
+    await flush();
+
+    expect(container.textContent).not.toContain("Workspace Home");
+    expect(container.textContent).toContain("Connect Code Step");
+  });
+
   it("renders every step from the active onboarding flow", async () => {
     const cases: Array<[step: string, label: string, role: string, path: string]> = [
       ["team", "Team Step", "admin", "admin"],
