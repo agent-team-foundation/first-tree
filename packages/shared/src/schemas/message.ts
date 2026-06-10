@@ -41,9 +41,15 @@ export const MESSAGE_FORMATS = {
    * Open question — an "ask" directed at a single human (the sole entry in
    * `metadata.mentions`). The narrative/context lives in the message body
    * (`content`); the specific question + optional subject live in
-   * `metadata.request`. No lifecycle state is stored on the message: it is
-   * "answered" when the target replies with `inReplyTo` pointing back at it
-   * (which drives `chat_user_state.open_request_count` down). See
+   * `metadata.request`. No lifecycle state is stored on the message.
+   *
+   * Lifecycle is driven by an EXPLICIT resolution signal, not by threading:
+   * a question is answered/closed only by a later message carrying
+   * `metadata.resolves` (see `requestResolutionSchema`) — which drives
+   * `chat_user_state.open_request_count` down. `inReplyTo` is pure
+   * conversation threading and never changes a question's lifecycle, so a
+   * human ↔ asking-agent back-and-forth ("chat about this") can thread under
+   * the question without prematurely resolving it. See
    * proposals/group-chat-unified-send §D1.
    */
   REQUEST: "request",
@@ -82,6 +88,34 @@ export const openQuestionRequestSchema = z.object({
   allowExtra: z.boolean().default(false),
 });
 export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
+
+/**
+ * Explicit lifecycle signal carried in `metadata.resolves` on a reply to a
+ * `format="request"` message. This is the ONLY thing that answers or closes
+ * an open question — `inReplyTo` no longer does (it is pure threading now).
+ *
+ * Written by:
+ *   - the human's web UI when they pick an option cleanly and send it as-is
+ *     (a direct answer), or
+ *   - the asking agent via `chat send --answer`/`--close` after judging an
+ *     incoming human reply.
+ * A plain reply with no `resolves` is a discussion turn and leaves the
+ * question open.
+ *
+ *   - kind="answered" — the question is answered. The readable
+ *     `"<prompt> → <answer>"` lines stay in the message `content`.
+ *   - kind="closed"   — the question is withdrawn / superseded; `reason`
+ *     optionally explains why.
+ *
+ * Server-opaque except for the `open_request_count` counter, whose −1 keys
+ * off `resolves.request`. The web parses it with `safeParse`.
+ */
+export const requestResolutionSchema = z.object({
+  request: z.string().min(1),
+  kind: z.enum(["answered", "closed"]),
+  reason: z.string().optional(),
+});
+export type RequestResolution = z.infer<typeof requestResolutionSchema>;
 
 /**
  * Optional intent tag set by the client when posting through

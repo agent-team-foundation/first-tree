@@ -1,21 +1,26 @@
-import type { Message, OpenQuestionRequest } from "@first-tree/shared";
-import { MENTION_REGEX, openQuestionRequestSchema } from "@first-tree/shared";
+import type { Message, OpenQuestionRequest, RequestResolution } from "@first-tree/shared";
+import { MENTION_REGEX, openQuestionRequestSchema, requestResolutionSchema } from "@first-tree/shared";
 
 /**
  * Lifecycle of a `format="request"` message. Derived from the message thread —
- * NOT stored on the message (the server keeps no lifecycle state). See
- * proposals/group-chat-unified-send §D1.
- *   - `open`     — no qualifying follow-up. Counts toward the needs_you dot.
- *   - `resolved` — the target (a member in `metadata.mentions`) replied with
- *                  `inReplyTo` pointing at this request.
- *   - `closed`   — the asking agent (the request's own sender) replied to its
- *                  own request: a non-request reply actively closes/withdraws
- *                  it; a request-shaped reply replaces it (this card closes,
- *                  the new request stands separately). Either way the count
- *                  for the open question is released (replacement re-opens via
- *                  the new request).
+ * NOT stored on the message (the server keeps no lifecycle state). Resolution
+ * is driven by an EXPLICIT `metadata.resolves` signal (see
+ * `requestResolutionSchema`), never by `inReplyTo` — which is now pure
+ * threading, so a "chat about this" back-and-forth can thread under the
+ * question without resolving it. See proposals/group-chat-unified-send §D1.
+ *   - `open`       — no reply yet. Counts toward the needs_you dot.
+ *   - `discussing` — threaded replies exist (a "chat about this" exchange) but
+ *                    no explicit resolution yet. Still counts toward the dot —
+ *                    the question is being clarified, not answered.
+ *   - `resolved`   — a message carries `metadata.resolves` with
+ *                    `kind="answered"` pointing at this request (the target's
+ *                    clean answer, or the asking agent's `chat send --answer`).
+ *   - `closed`     — same, with `kind="closed"` (the asking agent withdrew it
+ *                    via `chat send --close`). Closing is explicit; re-asking opens a
+ *                    new independent question and never auto-supersedes.
+ * Only the target or the asking agent can resolve (mirrors the server's authz).
  */
-export type RequestState = "open" | "resolved" | "closed";
+export type RequestState = "open" | "discussing" | "resolved" | "closed";
 
 /** Read the resolved `@`-mention uuids from a message's metadata. */
 export function readMentions(metadata: Record<string, unknown> | null | undefined): string[] {
@@ -54,33 +59,55 @@ export function readRequestPayload(metadata: Record<string, unknown> | null | un
   return parsed.success ? parsed.data : null;
 }
 
-/**
- * Derive the request's lifecycle from the surrounding messages. `resolved`
- * outranks `closed` (an answer is more meaningful than a supersede if both
- * somehow exist).
- */
-export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
-  const targets = readMentions(request.metadata);
-  let closed = false;
-  for (const m of thread) {
-    if (m.inReplyTo !== request.id) continue;
-    if (targets.includes(m.senderId)) return "resolved";
-    // Any reply BY THE ASKER to its own request closes it: a non-request reply
-    // is an active close/withdraw; a request-shaped reply is a replacement
-    // (this old card closes, the new request stands on its own).
-    if (m.senderId === request.senderId) closed = true;
-  }
-  return closed ? "closed" : "open";
+/** Parse `metadata.resolves` into the explicit resolution signal; `null` when absent/malformed. */
+export function readResolution(metadata: Record<string, unknown> | null | undefined): RequestResolution | null {
+  const parsed = requestResolutionSchema.safeParse(metadata?.resolves);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
- * Distinguishes the two `closed` sub-cases for copy: `true` when the asker
- * closed by posting a NEW request replying to this one (supersede/replacement),
- * `false` when it was an active close/withdraw (a non-request reply). Only
- * meaningful when the request already derives `closed`.
+ * Derive the request's lifecycle from the surrounding messages. An explicit
+ * `metadata.resolves` wins; absent that, threaded replies mean `discussing`,
+ * and a bare request means `open`. Resolution counts only from the target (a
+ * direct answer) or the asking agent (answer/close after the discussion) —
+ * mirrors the server's authz, so a stray `resolves` from anyone else can't flip
+ * the card.
  */
-export function isReplacedByNewRequest(request: Message, thread: readonly Message[]): boolean {
-  return thread.some((m) => m.inReplyTo === request.id && m.senderId === request.senderId && m.format === "request");
+export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
+  const targets = readMentions(request.metadata);
+  const canResolve = (senderId: string): boolean => senderId === request.senderId || targets.includes(senderId);
+  let discussing = false;
+  for (const m of thread) {
+    const res = readResolution(m.metadata);
+    if (res && res.request === request.id && canResolve(m.senderId)) {
+      return res.kind === "answered" ? "resolved" : "closed";
+    }
+    // A threaded reply that is NOT a resolution is a "chat about this"
+    // discussion turn — the question is being clarified, not answered.
+    if (m.id !== request.id && m.inReplyTo === request.id) discussing = true;
+  }
+  return discussing ? "discussing" : "open";
+}
+
+/**
+ * The optional human-readable reason from the message that CLOSED this request
+ * (`metadata.resolves.kind="closed"`). `null` when the request isn't closed or
+ * the close carried no reason. Used for the closed card's copy.
+ */
+export function readCloseReason(request: Message, thread: readonly Message[]): string | null {
+  const targets = readMentions(request.metadata);
+  for (const m of thread) {
+    const res = readResolution(m.metadata);
+    if (
+      res &&
+      res.request === request.id &&
+      res.kind === "closed" &&
+      (m.senderId === request.senderId || targets.includes(m.senderId))
+    ) {
+      return res.reason ?? null;
+    }
+  }
+  return null;
 }
 
 /** Viewer is "related" to a request iff they are the asker or the single target. */
@@ -101,24 +128,28 @@ export function defaultExpanded(state: RequestState, related: boolean): boolean 
 
 /**
  * When `viewer` is about to send a message mentioning `mentionedIds`, find the
- * most recent OPEN request directed at them and raised by one of the mentioned
- * agents — so a plain composer reply that @-mentions the asking agent threads
- * onto the question (sets `inReplyTo`) and counts as the answer. Returns the
- * request's message id, or `null` when there's no such open question.
+ * most recent OPEN or DISCUSSING request directed at them and raised by one of
+ * the mentioned agents — so a plain composer reply that @-mentions the asking
+ * agent threads onto the question (sets `inReplyTo`). This is the "chat about
+ * this" path: the reply threads under the question for context but does NOT
+ * resolve it — resolution needs an explicit `metadata.resolves` (written by the
+ * card's answer block, or the agent's `chat send --answer`/`--close`). Returns
+ * the request's message id, or `null` when there's no such live question.
  */
-export function findAnswerableRequestId(
+export function findThreadableRequestId(
   thread: readonly Message[],
   viewerAgentId: string | null,
   mentionedIds: readonly string[],
 ): string | null {
   if (!viewerAgentId || mentionedIds.length === 0) return null;
   const mentioned = new Set(mentionedIds);
-  // `thread` is oldest-first; walk from the newest so the latest open question wins.
+  // `thread` is oldest-first; walk from the newest so the latest live question wins.
   for (let i = thread.length - 1; i >= 0; i--) {
     const m = thread[i];
     if (!m || m.format !== "request" || !mentioned.has(m.senderId)) continue;
     if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
-    if (deriveRequestState(m, thread) === "open") return m.id;
+    const st = deriveRequestState(m, thread);
+    if (st === "open" || st === "discussing") return m.id;
   }
   return null;
 }

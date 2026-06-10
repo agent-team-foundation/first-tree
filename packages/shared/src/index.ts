@@ -478,6 +478,8 @@ export {
   type PrecedingMessage,
   participantModeSchema,
   precedingMessageSchema,
+  type RequestResolution,
+  requestResolutionSchema,
   type SendMessage,
   sendMessageSchema,
 } from "./schemas/message.js";

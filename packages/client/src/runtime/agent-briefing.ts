@@ -320,10 +320,32 @@ The body carries the context; \`--question\` is **only** the ask; \`--option\`
 (repeatable) offers explicit choices. A request is **human-directed only** — the
 server rejects \`--request\` unless the recipient is a human member, so you cannot
 open a tracked question against another agent (reach agents with a plain \`chat
-send <name>\`). The human's answer comes back to you as an ordinary message; you
-do not clear their red-dot yourself.
+send <name>\`).
 
-Reach for this on any real fork: needs approval, ambiguous requirements, a
+### When the human replies — discuss, then resolve
+
+The human's reply comes back as an ordinary message. It does **not** clear the
+red dot on its own, and neither does any plain reply you send back: replying
+threads onto the question (a focused "chat about this" exchange) but leaves it
+**open** so you can clarify back-and-forth without prematurely marking it
+answered. The open question stays tracked until you **explicitly resolve** it.
+
+Once you've got what you need, judge the reply and close the loop with one of:
+
+\`\`\`bash
+# You have the answer — resolve it and clear their red dot (body = the answer):
+${bin} chat send <human> "<the confirmed answer>" --answer <requestId>
+
+# The question no longer applies — withdraw it (body = the reason). Re-asking
+# opens a NEW question; it never auto-supersedes the old one:
+${bin} chat send <human> "<reason>" --close <requestId>
+\`\`\`
+
+\`<requestId>\` is the id of your original \`--request\` message. Only you (the
+asker) or the human you asked may resolve it; if they answer cleanly in the web
+UI, it's already cleared — no action needed.
+
+Reach for a request on any real fork: needs approval, ambiguous requirements, a
 safety-sensitive action, or any change to core data structures or the database.`;
 }
 

@@ -248,7 +248,9 @@ Day-to-day messaging.
 first-tree chat
 ├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
-│     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
+│     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
+│     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
+│     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>
@@ -269,8 +271,14 @@ first-tree chat send alice --request \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
 
-# Answer / thread a question (clears the asker's red-dot)
+# Thread a reply under a message (pure threading; does NOT resolve a question)
 first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
+
+# Resolve an open question you asked the human (marks answered, clears their red-dot; body = the answer)
+first-tree chat send alice "Ship it — go ahead with migration 0021." --answer <requestId>
+
+# Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
+first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
 
 # Pull a non-member into the current chat first, then send normally.
 first-tree chat invite code-agent

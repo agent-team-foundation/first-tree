@@ -4,11 +4,12 @@ import {
   contentStartsWithMention,
   defaultExpanded,
   deriveRequestState,
-  findAnswerableRequestId,
+  findThreadableRequestId,
   isRelatedViewer,
-  isReplacedByNewRequest,
   parseAnswerSelections,
+  readCloseReason,
   readRequestPayload,
+  readResolution,
 } from "../request-state.js";
 
 const ASKER = "agent-asker";
@@ -38,42 +39,54 @@ const request = msg({
   },
 });
 
+/** A reply carrying the explicit `metadata.resolves` lifecycle signal. */
+function resolveMsg(id: string, senderId: string, kind: "answered" | "closed", reason?: string): Message {
+  return msg({
+    id,
+    senderId,
+    inReplyTo: "req",
+    content: kind === "answered" ? "Ship? → yes" : "withdrawing",
+    metadata: { resolves: { request: "req", kind, ...(reason ? { reason } : {}) } },
+  });
+}
+
 describe("deriveRequestState", () => {
   it("is open with no follow-ups", () => {
     expect(deriveRequestState(request, [request])).toBe("open");
   });
 
-  it("is resolved when the target replies with inReplyTo", () => {
-    const reply = msg({ id: "r1", senderId: TARGET, inReplyTo: "req", content: "yes" });
-    expect(deriveRequestState(request, [request, reply])).toBe("resolved");
+  it("is discussing when a plain threaded reply exists but nothing resolves it", () => {
+    // The core "chat about this" guarantee: a discussion turn threaded under the
+    // question does NOT prematurely resolve it (inReplyTo is pure threading now).
+    const discuss = msg({ id: "d1", senderId: TARGET, inReplyTo: "req", content: "why are you asking?" });
+    expect(deriveRequestState(request, [request, discuss])).toBe("discussing");
+    const reply = msg({ id: "d2", senderId: ASKER, inReplyTo: "req", content: "because X" });
+    expect(deriveRequestState(request, [request, discuss, reply])).toBe("discussing");
   });
 
-  it("is closed when the asker sends a plain text reply (active close / withdraw)", () => {
-    const close = msg({ id: "c1", senderId: ASKER, inReplyTo: "req", content: "Closing this — resolved offline." });
-    expect(deriveRequestState(request, [request, close])).toBe("closed");
+  it("is resolved on an explicit answered resolution (from the target)", () => {
+    expect(deriveRequestState(request, [request, resolveMsg("r1", TARGET, "answered")])).toBe("resolved");
   });
 
-  it("is closed when the asker supersedes with a new request reply", () => {
-    const newQ = msg({
-      id: "r2",
-      senderId: ASKER,
-      format: "request",
-      inReplyTo: "req",
-      metadata: { mentions: [TARGET] },
-    });
-    expect(deriveRequestState(request, [request, newQ])).toBe("closed");
+  it("is resolved when the asking agent answers (chat send --answer)", () => {
+    expect(deriveRequestState(request, [request, resolveMsg("r1", ASKER, "answered")])).toBe("resolved");
   });
 
-  it("resolved outranks closed", () => {
-    const newQ = msg({
-      id: "r2",
-      senderId: ASKER,
-      format: "request",
-      inReplyTo: "req",
-      metadata: { mentions: [TARGET] },
-    });
-    const reply = msg({ id: "r1", senderId: TARGET, inReplyTo: "req" });
-    expect(deriveRequestState(request, [request, newQ, reply])).toBe("resolved");
+  it("is closed on an explicit closed resolution (from the asking agent)", () => {
+    expect(deriveRequestState(request, [request, resolveMsg("c1", ASKER, "closed", "no longer needed")])).toBe(
+      "closed",
+    );
+  });
+
+  it("resolution survives a prior discussion turn", () => {
+    const discuss = msg({ id: "d1", senderId: TARGET, inReplyTo: "req", content: "let me think" });
+    expect(deriveRequestState(request, [request, discuss, resolveMsg("r1", TARGET, "answered")])).toBe("resolved");
+  });
+
+  it("ignores a `resolves` written by an unauthorized sender (not target/asker)", () => {
+    const stray = resolveMsg("s1", OTHER, "answered");
+    // The stray still threads under the request → discussing, never resolved.
+    expect(deriveRequestState(request, [request, stray])).toBe("discussing");
   });
 
   it("an unrelated reply (wrong inReplyTo) leaves it open", () => {
@@ -82,20 +95,23 @@ describe("deriveRequestState", () => {
   });
 });
 
-describe("isReplacedByNewRequest", () => {
-  it("true when the asker superseded with a new request reply", () => {
-    const newQ = msg({
-      id: "r2",
-      senderId: ASKER,
-      format: "request",
-      inReplyTo: "req",
-      metadata: { mentions: [TARGET] },
+describe("readResolution / readCloseReason", () => {
+  it("readResolution parses a valid resolves signal", () => {
+    expect(readResolution({ resolves: { request: "req", kind: "answered" } })).toEqual({
+      request: "req",
+      kind: "answered",
     });
-    expect(isReplacedByNewRequest(request, [request, newQ])).toBe(true);
+    expect(readResolution({ mentions: [TARGET] })).toBeNull();
   });
-  it("false for a plain-text active close (withdraw)", () => {
-    const close = msg({ id: "c1", senderId: ASKER, inReplyTo: "req", content: "closing" });
-    expect(isReplacedByNewRequest(request, [request, close])).toBe(false);
+  it("readCloseReason returns the asker's reason from the closing message", () => {
+    const close = resolveMsg("c1", ASKER, "closed", "decided offline");
+    expect(readCloseReason(request, [request, close])).toBe("decided offline");
+  });
+  it("readCloseReason is null when the close carried no reason", () => {
+    expect(readCloseReason(request, [request, resolveMsg("c1", ASKER, "closed")])).toBeNull();
+  });
+  it("readCloseReason is null when the request is not closed", () => {
+    expect(readCloseReason(request, [request, resolveMsg("r1", TARGET, "answered")])).toBeNull();
   });
 });
 
@@ -109,8 +125,9 @@ describe("isRelatedViewer", () => {
 });
 
 describe("defaultExpanded", () => {
-  it("related: open/resolved expanded, closed collapsed", () => {
+  it("related: open/discussing/resolved expanded, closed collapsed", () => {
     expect(defaultExpanded("open", true)).toBe(true);
+    expect(defaultExpanded("discussing", true)).toBe(true);
     expect(defaultExpanded("resolved", true)).toBe(true);
     expect(defaultExpanded("closed", true)).toBe(false);
   });
@@ -132,23 +149,25 @@ describe("readRequestPayload", () => {
   });
 });
 
-describe("findAnswerableRequestId", () => {
+describe("findThreadableRequestId", () => {
   it("returns the open request id when the reply mentions the asking agent", () => {
-    expect(findAnswerableRequestId([request], TARGET, [ASKER])).toBe("req");
+    expect(findThreadableRequestId([request], TARGET, [ASKER])).toBe("req");
+  });
+  it("still threads onto a DISCUSSING request (the chat-about-this back-and-forth)", () => {
+    const discuss = msg({ id: "d1", senderId: TARGET, inReplyTo: "req", content: "why?" });
+    expect(findThreadableRequestId([request, discuss], TARGET, [ASKER])).toBe("req");
   });
   it("returns null when the asking agent is not mentioned", () => {
-    expect(findAnswerableRequestId([request], TARGET, [OTHER])).toBeNull();
+    expect(findThreadableRequestId([request], TARGET, [OTHER])).toBeNull();
   });
   it("returns null when the viewer is not the target", () => {
-    expect(findAnswerableRequestId([request], OTHER, [ASKER])).toBeNull();
+    expect(findThreadableRequestId([request], OTHER, [ASKER])).toBeNull();
   });
-  it("returns null once the request is already resolved", () => {
-    const reply = msg({ id: "r1", senderId: TARGET, inReplyTo: "req" });
-    expect(findAnswerableRequestId([request, reply], TARGET, [ASKER])).toBeNull();
+  it("returns null once the request is explicitly resolved", () => {
+    expect(findThreadableRequestId([request, resolveMsg("r1", TARGET, "answered")], TARGET, [ASKER])).toBeNull();
   });
-  it("returns null once the asker has actively closed the request", () => {
-    const close = msg({ id: "c1", senderId: ASKER, inReplyTo: "req", content: "closing" });
-    expect(findAnswerableRequestId([request, close], TARGET, [ASKER])).toBeNull();
+  it("returns null once the asker has closed the request", () => {
+    expect(findThreadableRequestId([request, resolveMsg("c1", ASKER, "closed")], TARGET, [ASKER])).toBeNull();
   });
 });
 

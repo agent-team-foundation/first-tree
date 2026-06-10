@@ -74,7 +74,7 @@ auto-delivered fallback for plain replies.
 | Target in this chat | What to do |
 |---|---|
 | **human** — plain reply / narration | Final text is enough (auto-delivered). Do *not* also fire a plain `chat send` to the same human — it double-posts. |
-| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot), never buried in final text. See `references/agent-communication.md`. |
+| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot), never buried in final text. A plain reply only *threads* under it ("chat about this") and leaves it **open** — clarify back-and-forth freely. Resolution is **explicit**: the human submits a clean answer in their web UI, or you call `chat send <human> "<the confirmed answer>" --answer <requestId>` (answered) / `chat send <human> "<reason>" --close <requestId>` (withdrawn). Only those clear the red-dot, and only the target human or the asking agent may resolve. Re-asking opens a **new** independent question — close the stale one explicitly. See `references/agent-communication.md`. |
 | **agent** | They will NOT see your final text. You MUST `chat send <name>` if you need them to act. |
 | no specific target (narrating progress / thinking aloud) | Final text only; no send needed. |
 
