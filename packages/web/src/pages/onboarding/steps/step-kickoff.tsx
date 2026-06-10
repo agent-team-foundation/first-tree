@@ -387,11 +387,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
       <StepHeading
         title={COPY.kickoff.inviteeReadyTitle}
-        why={
-          hasRepos
-            ? COPY.kickoff.inviteeReadyWithRepos(teamRepoUrls.map(repoLabel).join(", "))
-            : COPY.kickoff.inviteeReadyNoRepos
-        }
+        why={hasRepos ? COPY.kickoff.inviteeReadyWithRepos : COPY.kickoff.inviteeReadyNoRepos}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
         {error && (

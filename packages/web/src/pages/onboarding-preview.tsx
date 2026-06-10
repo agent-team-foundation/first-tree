@@ -203,8 +203,8 @@ type NetProfile = {
    * Team-recommended repos the invitee inherits. Served as ResourceRow[] from
    * GET /orgs/:id/resources (what listTeamResourcesForOrg actually calls since
    * the Resources Phase 1 refactor); InviteeKickoff filters to
-   * type==="repo" && defaultEnabled==="recommended" — non-empty names them in
-   * the ready launch body, empty falls back to the intro copy.
+   * type==="repo" && defaultEnabled==="recommended" — non-empty picks the
+   * "works with your team's repos" ready copy, empty the intro copy.
    */
   sourceRepos?: string[];
   /**

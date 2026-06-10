@@ -317,8 +317,11 @@ export const COPY = {
     // automatically (recommended team resources are enabled for every org
     // agent), so there is nothing to select.
     inviteeReadyTitle: "Your agent's ready to go",
-    inviteeReadyWithRepos: (repos: string): string =>
-      `Your team's all set up — your agent can already work on ${repos} and your shared Context Tree.`,
+    // Deliberately does NOT name specific repos or claim guaranteed access: an
+    // agent clones a team repo with the host machine's git credentials (no org
+    // token is injected), so a joining member without access to a private team
+    // repo can't reach it. "works with your team's repos" stays true regardless.
+    inviteeReadyWithRepos: "Your team's all set up — your agent works with your team's repos and shared Context Tree.",
     inviteeReadyNoRepos:
       "Your team's all set up — your agent will start with a quick intro. Repos can be added anytime from Settings.",
     startWorking: "Start working",
