@@ -1,9 +1,11 @@
+import { canonicalizeResourceRepoUrl } from "@first-tree/shared";
 import { ApiError } from "../../api/client.js";
 import { initializeContextTree } from "../../api/context-tree.js";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../api/resources.js";
 
-/** Reduce a repo URL to its `owner/name` path (protocol/host/.git stripped). */
+/** Reduce a repo URL to its `owner/name` path (protocol/host/.git stripped) —
+ *  for the human-readable resource name and error text. */
 export function repoLabel(url: string): string {
   return url
     .replace(/^https?:\/\/[^/]+\//, "")
@@ -11,10 +13,21 @@ export function repoLabel(url: string): string {
     .replace(/\.git$/, "");
 }
 
-/** Canonical form for matching a selected repo against a registered resource
- *  (case-insensitive, protocol/host/.git-insensitive). */
-function repoCanonical(url: string): string {
-  return repoLabel(url).toLowerCase();
+/**
+ * Canonical key for matching a selected repo against a registered resource.
+ * Uses the SAME `canonicalizeResourceRepoUrl` the server keys `repoCanonicalKey`
+ * off, so an existing resource registered under an https / ssh / scp form of the
+ * same repo matches a selected clone URL — a weaker label-based match would
+ * wrongly report it missing and block the user on the duplicate/retry path.
+ * Falls back to the raw string when a stored URL can't be parsed, so a malformed
+ * entry simply fails to match rather than throwing out of the verify.
+ */
+function repoKey(url: string): string {
+  try {
+    return canonicalizeResourceRepoUrl(url);
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -81,11 +94,11 @@ export async function ensureSourceReposRegistered(organizationId: string, repoUr
       .filter((resource) => resource.type === "repo" && resource.defaultEnabled === "recommended")
       .map((resource) => {
         const url = (resource.payload as { url?: unknown }).url;
-        return typeof url === "string" ? repoCanonical(url) : "";
+        return typeof url === "string" ? repoKey(url) : "";
       }),
   );
 
-  const missing = repoUrls.filter((url) => !registered.has(repoCanonical(url)));
+  const missing = repoUrls.filter((url) => !registered.has(repoKey(url)));
   if (missing.length > 0) {
     throw new Error(
       `Couldn't register ${missing.length} source repo${missing.length > 1 ? "s" : ""} for the new Context Tree (${missing

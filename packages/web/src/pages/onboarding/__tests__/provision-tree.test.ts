@@ -101,6 +101,20 @@ describe("ensureSourceReposRegistered", () => {
     await expect(ensureSourceReposRegistered("org-1", ["https://github.com/acme/app"])).resolves.toBeUndefined();
   });
 
+  it("matches an existing ssh:// resource against a selected HTTPS clone URL", async () => {
+    // The duplicate create 409s (server canonicalizes ssh/https to the same
+    // key); the verify must use that same canonicalization, not a weaker label.
+    mocks.createTeamResourceForOrg.mockRejectedValue(new ApiError(409, "A matching resource already exists"));
+    mocks.listTeamResourcesForOrg.mockResolvedValue([recommendedRepo("ssh://git@github.com/acme/app.git")]);
+    await expect(ensureSourceReposRegistered("org-1", ["https://github.com/acme/app"])).resolves.toBeUndefined();
+  });
+
+  it("matches an existing scp-form resource against a selected HTTPS clone URL", async () => {
+    mocks.createTeamResourceForOrg.mockRejectedValue(new ApiError(409, "A matching resource already exists"));
+    mocks.listTeamResourcesForOrg.mockResolvedValue([recommendedRepo("git@github.com:acme/app.git")]);
+    await expect(ensureSourceReposRegistered("org-1", ["https://github.com/acme/app"])).resolves.toBeUndefined();
+  });
+
   it("throws listing all repos still missing", async () => {
     mocks.createTeamResourceForOrg.mockResolvedValue({});
     mocks.listTeamResourcesForOrg.mockResolvedValue([recommendedRepo("https://github.com/acme/app")]);
