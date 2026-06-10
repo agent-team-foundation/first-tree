@@ -13,6 +13,10 @@ import { ConfigRow } from "./flat-section.js";
 export type ModelOption = SelectOption;
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
+  // Full id rather than the `fable` alias: older Claude Code builds don't know
+  // the alias, but pass unknown full ids through to the API, where
+  // `claude-fable-5` resolves natively.
+  { value: "claude-fable-5", label: "fable", hint: "most powerful" },
   { value: "opus", label: "opus", hint: "most capable" },
   { value: "sonnet", label: "sonnet", hint: "balanced" },
   { value: "haiku", label: "haiku", hint: "fastest" },
