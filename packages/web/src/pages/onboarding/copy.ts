@@ -161,7 +161,12 @@ export const COPY = {
     cantConnect: "Couldn't connect a repo here right now — continue now and add one later from Settings.",
     continueWithout: "Continue without a repo",
     continueNoProject: "Continue without a repo",
-    pickHint: "Pick one or more repos for your agent — or continue without any for now.",
+    // Shown when the picker has repos but none are selected. Connecting one is
+    // the whole point of this step — it's what gives the team a Context Tree —
+    // so we add friction (state the consequence + a quieter skip button), but
+    // never block: a beginner should still be able to move on.
+    noRepoConsequence:
+      "Pick a repo so your agent can build your team's Context Tree. Without one, teammates who join will be left waiting until you connect one.",
     /**
      * Shown under the CTA/Skip row: the install caveat (who can install) merged
      * with the skip reassurance into one muted line. `emphasis` renders bold so
@@ -178,7 +183,7 @@ export const COPY = {
         auto-unlocked button) because a fresh install URL overwrites the
         `oauth_state_nonce` cookie — re-minting while the first install tab is
         mid-flow would fail its callback. */
-    restartInstall: "Start over",
+    restartInstall: "Didn't work? Start over",
     /**
      * Troubleshooting shown inside the "Need help?" disclosure (alongside the
      * InstallGuide how-to), mirroring connect-computer. The disclosure
@@ -288,7 +293,7 @@ export const COPY = {
     newTitle: "Your agent's ready to get to work",
     newWhy: (repoCount: number): string =>
       `It'll start by reading your ${repoCount === 1 ? "repo" : `${repoCount} repos`} and drafting your team's Context Tree — the shared memory that lets every agent work like it already knows your project.`,
-    startBuilding: "Create tree & start",
+    startBuilding: "Build tree & start",
 
     // admin · the team already has a Context Tree (re-run / second admin /
     // CLI-bound). Detected silently — no fork, no paste — the agent reads it
@@ -343,5 +348,24 @@ export const COPY = {
     chatFailed: "Couldn't start the first task. Try again.",
     agentFailed: "Couldn't create your agent — please try again.",
     noAgent: "We couldn't find your agent. Go back a step and create one.",
+  },
+  /**
+   * Human-readable messages for Context Tree provisioning failures at kickoff.
+   * The server returns a machine `code` from POST /context-tree/initialize; we
+   * map it to plain language + a way forward, rather than leaking the raw
+   * server string (e.g. "administration: write and contents: write"). Keyed by
+   * that code; an unmapped code falls back to the generic chat-failed message.
+   */
+  provisionErrors: {
+    organization_installation_required:
+      "First Tree is connected to a personal GitHub account, but a team Context Tree needs a GitHub organization. Connect First Tree to an org, then try again.",
+    selected_repositories_unsupported:
+      "First Tree's GitHub App can only see selected repositories. Give it access to all repositories on GitHub, then try again.",
+    installation_permissions_insufficient:
+      "First Tree's GitHub App is missing permissions it needs to create your team's tree. Update its access on GitHub, then try again.",
+    no_installation: "GitHub isn't connected for your team yet. Connect it first, then try again.",
+    suspended: "Your team's GitHub App installation is suspended. Re-enable it on GitHub, then try again.",
+    not_configured: "GitHub isn't set up on this First Tree server yet. Ask your First Tree admin to finish the setup.",
+    upstream: "Couldn't reach GitHub just now. Try again in a moment.",
   },
 } as const;

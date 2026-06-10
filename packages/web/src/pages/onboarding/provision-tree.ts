@@ -3,6 +3,25 @@ import { ApiError } from "../../api/client.js";
 import { initializeContextTree } from "../../api/context-tree.js";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../api/resources.js";
+import { COPY } from "./copy.js";
+
+/**
+ * Turn a kickoff failure into a message worth showing the user. Context Tree
+ * provisioning errors arrive as an `ApiError` carrying the server's machine
+ * `code` (organization_installation_required, installation_permissions_insufficient,
+ * …); map those to plain language with a way forward rather than leaking the raw
+ * server string. Our own thrown Errors (e.g. `ensureSourceReposRegistered`)
+ * already carry a friendly message, so surface those as-is; an unmapped ApiError
+ * falls back to `fallback` rather than exposing a technical string.
+ */
+export function kickoffErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const messages: Record<string, string> = COPY.provisionErrors;
+    const mapped = err.code ? messages[err.code] : undefined;
+    return mapped ?? fallback;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
 
 /** Reduce a repo URL to its `owner/name` path (protocol/host/.git stripped) —
  *  for the human-readable resource name and error text. */

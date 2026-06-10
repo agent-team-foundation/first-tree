@@ -11,7 +11,7 @@ import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
-import { ensureSourceReposRegistered, provisionNewTree, repoLabel } from "../provision-tree.js";
+import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree, repoLabel } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
@@ -186,7 +186,7 @@ function AdminKickoff() {
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
     }
   };
@@ -212,10 +212,13 @@ function AdminKickoff() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
+          {/* Standalone affordance back to connect-code (where they can pick a
+              repo, then Continue returns here with one). A persistent underline
+              makes it read as a clickable link, not a heading. */}
           <Button
             type="button"
             variant="link"
-            className="h-auto p-0 text-label self-start"
+            className="h-auto self-start p-0 text-label underline underline-offset-2"
             onClick={() => goTo(sequence.indexOf("connect-code"))}
           >
             {COPY.kickoff.connectRepoAffordance}
@@ -371,7 +374,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
     }
   };
@@ -438,7 +441,7 @@ function InviteeBlocked({ title, why, status }: { title: string; why: string; st
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
     }
   };

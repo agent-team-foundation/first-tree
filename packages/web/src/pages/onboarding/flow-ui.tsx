@@ -77,15 +77,23 @@ export function FlowHint({
       role={role}
       style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
     >
-      <Icon
-        className="h-3.5 w-3.5"
+      {/* Box the icon to the text's line-height and center it, so the glyph
+          lines up with the FIRST line of the hint — keeps single- AND
+          multi-line hints aligned (a fixed marginTop only worked for one). */}
+      <span
         style={{
+          display: "inline-flex",
+          alignItems: "center",
+          height: "calc(var(--text-label) * var(--text-label--line-height))",
           flexShrink: 0,
-          marginTop: "var(--sp-0_5)",
-          color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)",
         }}
-        aria-hidden="true"
-      />
+      >
+        <Icon
+          className="h-3.5 w-3.5"
+          style={{ color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)" }}
+          aria-hidden="true"
+        />
+      </span>
       <span style={{ minWidth: 0 }}>{children}</span>
     </p>
   );

@@ -14,7 +14,7 @@ vi.mock("../../../api/resources.js", () => ({
 }));
 
 import { ApiError } from "../../../api/client.js";
-import { ensureSourceReposRegistered, provisionNewTree, repoLabel } from "../provision-tree.js";
+import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree, repoLabel } from "../provision-tree.js";
 
 const CREATED = {
   repo: "https://github.com/acme/acme-context-tree",
@@ -128,5 +128,28 @@ describe("repoLabel", () => {
   it("reduces a repo URL to its owner/name path", () => {
     expect(repoLabel("https://github.com/acme/app.git")).toBe("acme/app");
     expect(repoLabel("git@github.com:acme/api.git")).toBe("acme/api");
+  });
+});
+
+describe("kickoffErrorMessage", () => {
+  it("maps a known provisioning code to a plain message (not the raw server string)", () => {
+    const msg = kickoffErrorMessage(
+      new ApiError(409, "administration: write and contents: write", undefined, "organization_installation_required"),
+      "fallback",
+    );
+    expect(msg).toMatch(/GitHub organization/);
+    expect(msg).not.toMatch(/administration: write/);
+  });
+  it("falls back for an ApiError with an unknown / missing code (never leaks the server string)", () => {
+    expect(kickoffErrorMessage(new ApiError(500, "internal detail"), "fallback")).toBe("fallback");
+    expect(kickoffErrorMessage(new ApiError(409, "weird", undefined, "totally_unknown"), "fallback")).toBe("fallback");
+  });
+  it("surfaces a plain Error's message (our own friendly errors carry good copy)", () => {
+    expect(kickoffErrorMessage(new Error("Couldn't register 2 source repos"), "fallback")).toBe(
+      "Couldn't register 2 source repos",
+    );
+  });
+  it("uses the fallback for a non-Error throw", () => {
+    expect(kickoffErrorMessage("nope", "fallback")).toBe("fallback");
   });
 });
