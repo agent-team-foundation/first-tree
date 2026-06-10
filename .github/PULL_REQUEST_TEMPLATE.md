@@ -3,6 +3,10 @@
 - what changed?
 - why does it matter?
 
+## Linked Issues
+
+- closes/fixes/relates to:
+
 ## Validation
 
 - [ ] `pnpm check`
@@ -17,8 +21,22 @@
 - [ ] docs or contributor-facing repository metadata
 - [ ] CI / packaging / release plumbing
 
-## Notes
+## Docs Impact
+
+- [ ] no docs update needed
+- [ ] docs updated in this PR
+- If CLI output or command behavior changed, update `docs/cli-reference.md`.
+
+## Migration / Compatibility
+
+- user-facing behavior changes:
+- migration steps or compatibility notes:
+
+## Screenshots / Recordings
+
+- web UI screenshots or recordings:
+
+## Follow-up Notes
 
 - package or install behavior changes:
-- docs or tests updated to match:
 - follow-up work:
