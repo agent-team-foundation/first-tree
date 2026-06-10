@@ -1249,7 +1249,7 @@ describe("page SSR smoke coverage", () => {
     ).toContain("online yet");
     expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Pick repos");
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
-      "Use your team&#x27;s Context Tree",
+      "Your agent&#x27;s ready to get to work",
     );
     expect(
       await renderOnboardingStep(<StepKickoff />, {
@@ -1258,14 +1258,14 @@ describe("page SSR smoke coverage", () => {
         treeMode: "new",
         treeUrl: "",
       }),
-    ).toContain("Start your agent");
+    ).toContain("No repo connected");
     expect(
       await renderOnboardingStep(<StepKickoff />, {
         path: "invitee",
         activeStep: "kickoff",
         selectedRepoUrls: [],
       }),
-    ).toContain("Your team is ready");
+    ).toContain("Your agent&#x27;s ready to go");
   });
 
   it("renders invite, GitHub App, settings, and layout surfaces", async () => {

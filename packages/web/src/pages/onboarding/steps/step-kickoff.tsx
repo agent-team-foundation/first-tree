@@ -261,10 +261,10 @@ function AdminKickoff() {
 
 function InviteeKickoff() {
   const { organizationId } = useOnboardingFlow();
-  // Fetch tree config, source repos, and installation existence together.
-  // The installation bit drives the new "no-installation" sub-state, which
-  // catches "admin set up the tree but never connected GitHub" before the
-  // invitee sails into the picker and hits a 403 on the first git op.
+  // Fetch tree config, team repos, and installation existence together.
+  // The installation bit drives the "no-installation" sub-state, which catches
+  // "admin set up the tree but never connected GitHub" before the invitee
+  // launches and the agent hits a 403 on its first git op.
   //
   // We use the dedicated /github-app-installation/exists endpoint here
   // (returns `{ exists: boolean }`, member-readable) rather than the full
@@ -415,13 +415,12 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
  * advance on their own the moment the admin finishes — so the only thing the
  * invitee can DO here is not wait: meet their agent now.
  *
- * "Meet your agent" runs the same intro-only kickoff as the confirm/picker
- * "Continue without a repo" bailout (`runKickoff` with no repo → an agent that
- * introduces itself, repos connectable later from Settings). Routing it through
- * `completeAndEnterChat` — not `finishLater` — means the button lands the user
- * in a real chat WITH the agent everywhere it appears, instead of dropping them
- * into an empty workspace. The two states differ only in copy, so they share
- * this body; split them again if their actions ever diverge.
+ * "Meet your agent" runs an intro-only kickoff (`runKickoff` with no repo → an
+ * agent that introduces itself, repos connectable later from Settings), the same
+ * launch the `ready` state uses. Routing it through `completeAndEnterChat` — not
+ * `finishLater` — means the button lands the user in a real chat WITH the agent,
+ * instead of dropping them into an empty workspace. The two states differ only
+ * in copy, so they share this body; split them again if their actions diverge.
  */
 function InviteeBlocked({ title, why, status }: { title: string; why: string; status: string }) {
   const { completeAndEnterChat } = useOnboardingFlow();
