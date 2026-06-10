@@ -407,6 +407,13 @@
       "when": 1780963200000,
       "tag": "0057_resources_phase1",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1781068283145,
+      "tag": "0058_majestic_loa",
+      "breakpoints": true
     }
   ]
 }

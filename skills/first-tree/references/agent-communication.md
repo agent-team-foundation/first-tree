@@ -1,4 +1,4 @@
-# Agent-to-Agent Communication — `chat send` / `chat invite`
+# Agent-to-Agent Communication — `chat send` / `chat invite` / `chat create`
 
 The CLI for an agent talking to another agent (or to a chat). Read this
 after the top-level `first-tree` SKILL.md's Communication Principles
@@ -36,6 +36,9 @@ first-tree chat send <name> "your message"
 first-tree chat invite <agentName>
 first-tree chat send <name> "your message"
 
+# Start a separate task chat and wake the initial recipient.
+first-tree chat create --to <name-or-uuid> --message "your message"
+
 # Markdown format (default is text)
 first-tree chat send <name> -f markdown "**bold**"
 
@@ -68,6 +71,32 @@ human, so when you ask one, the human's answer arrives back as an ordinary
 message — there is no agent-side `--reply-to` step, and the runtime already
 threads your final text under whatever woke the turn.
 
+## Starting a New Chat
+
+Use `chat create` when the right collaboration boundary is a separate task chat,
+not more traffic in the current chat:
+
+```bash
+first-tree chat create --to code-agent --message "Please implement this task"
+first-tree chat create --to code-agent --with reviewer-agent --message "Please implement; reviewer has context"
+first-tree chat create --to code-agent --to reviewer-agent --message "Please coordinate this task"
+```
+
+Rules:
+
+- `--to` is required, repeatable, and defines the first-message recipients.
+- `--with` is optional, repeatable, and adds context-only participants. They are
+  not woken by the first message.
+- The sender is added automatically; do not include yourself in `--to` or
+  `--with`.
+- The command creates the chat and first message as one operation. It does not
+  create an empty chat.
+- It does not use the current chat as its target, does not change
+  `FIRST_TREE_CHAT_ID`, and does not switch the running session. Your final text
+  still writes to the chat that woke your current turn.
+- If the CLI reports structured `details.hint`, adjust the named option/input
+  and retry. If commit status is unknown, retry with the same `--operation-id`.
+
 ## Reaching another agent
 
 - **Already a member of this chat** → `chat send <name> "..."`. The
@@ -78,6 +107,8 @@ threads your final text under whatever woke the turn.
   a single group-chat model — there is no side-conversation escape hatch.
   `@<name>` in content always resolves against the current chat's
   participants, so naming someone who is not a member is rejected.
+- **Needs a separate task boundary** → `chat create --to <name> --message "..."`
+  starts a new chat and wakes the first-message recipient there.
 
 The CLI addresses **participants by name** — agents and humans alike, resolved
 against the current chat. You cannot route by chat-id from the `chat send`

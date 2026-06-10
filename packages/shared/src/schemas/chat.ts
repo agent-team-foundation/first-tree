@@ -49,6 +49,37 @@ export const createChatSchema = z.object({
 });
 export type CreateChat = z.infer<typeof createChatSchema>;
 
+const createChatInitialMessageSchema = z
+  .object({
+    format: z.enum(["text", "markdown"]).default("text"),
+    content: z.string().optional().default(""),
+    source: z.enum(["cli", "api"]).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .optional()
+  .default({ format: "text", content: "" });
+
+export const createChatWithInitialMessageSchema = z.object({
+  operationId: z.string().min(1),
+  to: z.array(z.string().min(1)).optional().default([]),
+  with: z.array(z.string().min(1)).optional().default([]),
+  message: createChatInitialMessageSchema,
+  topic: z.string().max(500).optional(),
+  metadata: optionalChatMetadataSchema.optional(),
+});
+export type CreateChatWithInitialMessage = z.infer<typeof createChatWithInitialMessageSchema>;
+
+export const createChatWithInitialMessageResultSchema = z.object({
+  chat: z.object({ id: z.string() }),
+  message: z.object({ id: z.string() }),
+  operationId: z.string(),
+  replayed: z.boolean(),
+  senderAgentId: z.string(),
+  recipientAgentIds: z.array(z.string()),
+  participantAgentIds: z.array(z.string()),
+});
+export type CreateChatWithInitialMessageResult = z.infer<typeof createChatWithInitialMessageResultSchema>;
+
 export const chatParticipantSchema = z.object({
   agentId: z.string(),
   role: z.string(),

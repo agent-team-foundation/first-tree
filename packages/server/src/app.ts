@@ -65,7 +65,7 @@ import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
-import { AppError } from "./errors.js";
+import { AppError, StructuredAppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { userAuthHook } from "./middleware/user-auth.js";
 import {
@@ -436,6 +436,14 @@ export async function buildApp(config: Config) {
         [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
+      if (error instanceof StructuredAppError) {
+        return reply.status(error.statusCode).send({
+          code: error.publicCode,
+          error: error.message,
+          ...(error.details ? { details: error.details } : {}),
+          ...traceField,
+        });
+      }
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
     }
 

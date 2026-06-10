@@ -41,7 +41,7 @@ first-tree
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
-├── chat ...                 Chats and messaging (send, list, history, open)
+├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
@@ -246,6 +246,8 @@ Day-to-day messaging.
 
 ```
 first-tree chat
+├── create --to <name-or-uuid> --message <text>      # start a new task chat and send first message
+│     --with <name-or-uuid>                          #   context-only participant; not woken
 ├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
 │     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
@@ -276,6 +278,12 @@ first-tree chat send alice --reply-to <messageId> "Holding — will split the mi
 first-tree chat invite code-agent
 first-tree chat send code-agent "now we can talk"
 
+# Start a separate task chat. --to is the first-message recipient and is
+# woken; --with is only added as a context participant.
+first-tree chat create --to code-agent --message "Please implement the task"
+first-tree chat create --to code-agent --with reviewer-agent --message "Please implement; reviewer has context"
+first-tree chat create --to code-agent --to reviewer-agent --message "Please coordinate this task"
+
 # Browse
 first-tree chat list
 first-tree chat history <chatId>
@@ -288,6 +296,12 @@ first-tree chat open code-agent
 `FIRST_TREE_CHAT_ID`, which the runtime injects into the agent's session
 environment. The recipient must be a participant of that chat; if not,
 `invite` first.
+
+`chat create` is different: it creates a new task chat and sends the first
+message as one operation. It does not use the current chat as its target,
+does not modify `FIRST_TREE_CHAT_ID`, and does not switch the running agent
+session. Use `--operation-id <id>` only to retry after an unknown commit
+status; replay returns the same chat/message instead of creating duplicates.
 
 ---
 
@@ -452,7 +466,7 @@ agent process can talk to the server without extra setup:
 | `FIRST_TREE_ACCESS_TOKEN` | The signed-in member's access JWT (short-lived). |
 | `FIRST_TREE_AGENT_ID` | The agent's own UUID — the CLI uses it to identify the sender. |
 | `FIRST_TREE_CLIENT_ID` | The client (machine) the agent is bound to. |
-| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by `chat send` / `chat invite`. |
+| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by current-chat operations such as `chat send` / `chat invite`; `chat create` does not mutate it. |
 | `FIRST_TREE_SERVER_URL` | Server URL override; falls back to client config. |
 
 ### Server (SaaS internal)

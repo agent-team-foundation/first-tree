@@ -25,8 +25,23 @@ function result(data: unknown): void {
   process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
 }
 
-function fail(code: string, message: string, exitCode = 1): never {
-  process.stderr.write(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
+export type FailureOutputOptions = {
+  details?: unknown;
+  traceId?: string;
+};
+
+function fail(code: string, message: string, exitCode = 1, options: FailureOutputOptions = {}): never {
+  process.stderr.write(
+    `${JSON.stringify({
+      ok: false,
+      error: {
+        code,
+        message,
+        ...(options.details !== undefined ? { details: options.details } : {}),
+        ...(options.traceId ? { traceId: options.traceId } : {}),
+      },
+    })}\n`,
+  );
   process.exit(exitCode);
 }
 

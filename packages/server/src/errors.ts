@@ -5,6 +5,7 @@
  * being collapsed into the generic message.
  */
 export type AppErrorAttrs = Record<string, string | number | boolean>;
+export type PublicErrorDetails = Record<string, unknown>;
 
 export class AppError extends Error {
   constructor(
@@ -14,6 +15,19 @@ export class AppError extends Error {
   ) {
     super(message);
     this.name = "AppError";
+  }
+}
+
+export class StructuredAppError extends AppError {
+  constructor(
+    statusCode: number,
+    public readonly publicCode: string,
+    message: string,
+    public readonly details?: PublicErrorDetails,
+    attrs?: AppErrorAttrs,
+  ) {
+    super(statusCode, message, attrs);
+    this.name = "StructuredAppError";
   }
 }
 

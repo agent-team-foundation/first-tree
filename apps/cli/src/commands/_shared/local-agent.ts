@@ -100,7 +100,12 @@ export function createSdk(agentName?: string): FirstTreeHubSDK {
 export function handleSdkError(error: unknown): never {
   if (error instanceof SdkError) {
     const exitCode = error.statusCode === 401 ? 3 : 1;
-    fail(`HTTP_${error.statusCode}`, error.message, exitCode);
+    const outputOptions =
+      error.details !== undefined || error.traceId ? { details: error.details, traceId: error.traceId } : undefined;
+    if (outputOptions) {
+      fail(error.serverCode ?? `HTTP_${error.statusCode}`, error.message, exitCode, outputOptions);
+    }
+    fail(error.serverCode ?? `HTTP_${error.statusCode}`, error.message, exitCode);
   }
   if (error instanceof TypeError && "cause" in error) {
     fail("CONNECTION_ERROR", `Cannot connect to server: ${error.message}`, 6);

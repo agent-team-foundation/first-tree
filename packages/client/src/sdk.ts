@@ -9,6 +9,8 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type CreateChatWithInitialMessage,
+  type CreateChatWithInitialMessageResult,
   type Message,
   type RuntimeProvider,
   type SendMessage,
@@ -290,6 +292,13 @@ export class FirstTreeHubSDK {
     });
   }
 
+  async createChatWithInitialMessage(body: CreateChatWithInitialMessage): Promise<CreateChatWithInitialMessageResult> {
+    return this.requestJson<CreateChatWithInitialMessageResult>("/api/v1/agent/chats/create-and-send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
@@ -507,13 +516,19 @@ export class FirstTreeHubSDK {
   private async toSdkError(response: Response): Promise<SdkError> {
     const body = await response.text();
     let message: string;
+    let serverCode: string | undefined;
+    let details: unknown;
+    let traceId: string | undefined;
     try {
-      const json = JSON.parse(body) as { error?: string };
-      message = json.error ?? body;
+      const json = JSON.parse(body) as { code?: unknown; error?: unknown; details?: unknown; traceId?: unknown };
+      message = typeof json.error === "string" ? json.error : body;
+      if (typeof json.code === "string") serverCode = json.code;
+      if (json.details !== undefined) details = json.details;
+      if (typeof json.traceId === "string") traceId = json.traceId;
     } catch {
       message = body;
     }
-    return new SdkError(response.status, message);
+    return new SdkError(response.status, message, { serverCode, details, traceId });
   }
 }
 
@@ -521,10 +536,18 @@ export class SdkError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    opts: { serverCode?: string; details?: unknown; traceId?: string } = {},
   ) {
     super(message);
     this.name = "SdkError";
+    this.serverCode = opts.serverCode;
+    this.details = opts.details;
+    this.traceId = opts.traceId;
   }
+
+  public readonly serverCode: string | undefined;
+  public readonly details: unknown;
+  public readonly traceId: string | undefined;
 }
 
 /**

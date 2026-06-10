@@ -274,6 +274,13 @@ Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
 recipient.
 
+\`chat send\` and \`chat invite\` are current-chat operations: they use the
+\`FIRST_TREE_CHAT_ID\` session you are already running in. To split out a new
+task chat, use \`${bin} chat create --to <name> --message "..."\`. \`--to\`
+is the first-message recipient and wakes that participant; \`--with\` adds a
+context-only participant. Creating a new chat does not switch the current
+session, and final text still writes back to the original chat.
+
 **Fallback** (if the Current Chat Context block is missing — context
 injection may have failed): use conservative mode — all cross-agent
 collaboration goes through explicit \`chat send\`; do not rely on final
@@ -283,7 +290,7 @@ text to wake anyone.`;
 function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
-For the full \`chat send\` / \`chat invite\` CLI usage — every mode
+For the full \`chat send\` / \`chat invite\` / \`chat create\` CLI usage — every mode
 (\`--request\` / \`--question\`), syntax,
 markdown / stdin, reaching non-members, mention resolution — load the top-level
 **\`first-tree\` skill** (and its \`references/agent-communication.md\`).

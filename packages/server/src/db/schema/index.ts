@@ -8,6 +8,7 @@ export { attachments } from "./attachments.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
 export { attentions } from "./attentions.js";
 export { authIdentities } from "./auth-identities.js";
+export { chatCreateOperations } from "./chat-create-operations.js";
 export { chatMembership } from "./chat-membership.js";
 export { chatUserState } from "./chat-user-state.js";
 export { chats } from "./chats.js";

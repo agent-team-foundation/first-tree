@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 
+import { SdkError } from "@first-tree/client";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,6 +36,7 @@ const outputMocks = vi.hoisted(() => ({
 }));
 
 const printLineMock = vi.hoisted(() => vi.fn());
+const isJsonModeMock = vi.hoisted(() => vi.fn(() => false));
 
 const readlineMocks = vi.hoisted(() => ({
   createInterface: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("../core/doc-capture.js", () => docCaptureMock);
 vi.mock("../commands/chat/_shared/io.js", () => ioMocks);
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
+  isJsonMode: isJsonModeMock,
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
 }));
 vi.mock("node:readline", () => readlineMocks);
@@ -86,6 +89,15 @@ beforeEach(() => {
   localAgentMocks.createSdk.mockReturnValue({
     agentId: "agent-self",
     attention: { raise: vi.fn() },
+    createChatWithInitialMessage: vi.fn(async () => ({
+      chat: { id: "new-chat" },
+      message: { id: "new-message" },
+      operationId: "op-1",
+      replayed: false,
+      senderAgentId: "agent-self",
+      recipientAgentIds: ["agent-target"],
+      participantAgentIds: ["agent-self", "agent-target", "agent-context"],
+    })),
     sendMessage: vi.fn(async () => ({ id: "msg-1" })),
     updateChat: vi.fn(async (_chatId: string, patch: unknown) => {
       const patchObject = patch && typeof patch === "object" ? patch : {};
@@ -109,6 +121,129 @@ afterEach(() => {
 });
 
 describe("chat command behavior", () => {
+  it("creates a new task chat with raw selectors, explicit operation id, and human output", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat([
+      "create",
+      "--to",
+      "name:code-agent",
+      "--with",
+      "id:reviewer-id",
+      "--message",
+      "Please implement",
+      "--format",
+      "markdown",
+      "--topic",
+      "Implementation",
+      "--operation-id",
+      "op-1",
+      "--agent",
+      "sender",
+    ]);
+
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("sender");
+    expect(sdk.createChatWithInitialMessage).toHaveBeenCalledWith({
+      operationId: "op-1",
+      to: ["name:code-agent"],
+      with: ["id:reviewer-id"],
+      topic: "Implementation",
+      message: {
+        format: "markdown",
+        content: "Please implement",
+        source: "cli",
+      },
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Current session unchanged");
+    expect(outputMocks.success).not.toHaveBeenCalled();
+  });
+
+  it("creates a new task chat from stdin and emits JSON mode result", async () => {
+    isJsonModeMock.mockReturnValueOnce(true);
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "see docs/plan.md",
+      documentContext: [{ path: "docs/plan.md", content: "Plan" }],
+    });
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["create", "--to", "code-agent", "--operation-id", "op-stdin"]);
+
+    expect(sdk.createChatWithInitialMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: "op-stdin",
+        to: ["code-agent"],
+        with: [],
+        message: {
+          format: "text",
+          content: "see docs/plan.md",
+          source: "cli",
+          metadata: { documentContext: [{ path: "docs/plan.md", content: "Plan" }] },
+        },
+      }),
+    );
+    expect(outputMocks.success).toHaveBeenCalledWith(expect.objectContaining({ chat: { id: "new-chat" } }));
+  });
+
+  it("validates chat create local syntax before calling the SDK", async () => {
+    await expect(runChat(["create", "--message", "hi"])).rejects.toMatchObject({
+      code: "CHAT_CREATE_MISSING_TO",
+      exitCode: 2,
+    });
+    await expect(runChat(["create", "--to", "a", "--to", "a", "--message", "hi"])).rejects.toMatchObject({
+      code: "CHAT_CREATE_DUPLICATE_TARGET",
+      exitCode: 2,
+    });
+    await expect(runChat(["create", "--to", "a", "--message", "hi", "--format", "card"])).rejects.toMatchObject({
+      code: "CHAT_CREATE_INVALID_FORMAT",
+      exitCode: 2,
+    });
+    ioMocks.readStdin.mockResolvedValueOnce("   ");
+    await expect(runChat(["create", "--to", "a"])).rejects.toMatchObject({
+      code: "CHAT_CREATE_EMPTY_MESSAGE",
+      exitCode: 2,
+    });
+    const sdk = localAgentMocks.createSdk();
+    expect(sdk.createChatWithInitialMessage).not.toHaveBeenCalled();
+  });
+
+  it("maps unknown chat create commit status to a retryable operation-id envelope", async () => {
+    const sdk = localAgentMocks.createSdk();
+    sdk.createChatWithInitialMessage.mockRejectedValueOnce(new SdkError(502, "bad gateway"));
+
+    await expect(
+      runChat(["create", "--to", "code-agent", "--message", "go", "--operation-id", "op-retry"]),
+    ).rejects.toMatchObject({ code: "CHAT_CREATE_UNKNOWN_COMMIT_STATUS", exitCode: 1 });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
+      "Unable to confirm whether chat create committed.",
+      1,
+      expect.objectContaining({ details: expect.objectContaining({ operationId: "op-retry" }) }),
+    );
+  });
+
+  it("maps terminal SDK network errors to chat create unknown commit status", async () => {
+    const sdk = localAgentMocks.createSdk();
+    const cases = [
+      [Object.assign(new Error("timeout"), { name: "TimeoutError" }), "op-timeout"],
+      [Object.assign(new Error("aborted"), { name: "AbortError" }), "op-abort"],
+      [new TypeError("fetch failed"), "op-fetch"],
+      [Object.assign(new Error("request failed"), { cause: { code: "ETIMEDOUT" } }), "op-cause"],
+    ] as const;
+
+    for (const [error, operationId] of cases) {
+      sdk.createChatWithInitialMessage.mockRejectedValueOnce(error);
+      await expect(
+        runChat(["create", "--to", "code-agent", "--message", "go", "--operation-id", operationId]),
+      ).rejects.toMatchObject({ code: "CHAT_CREATE_UNKNOWN_COMMIT_STATUS", exitCode: 1 });
+      expect(outputMocks.fail).toHaveBeenLastCalledWith(
+        "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
+        "Unable to confirm whether chat create committed.",
+        1,
+        expect.objectContaining({ details: expect.objectContaining({ operationId }) }),
+      );
+    }
+  });
+
   it("sends messages with metadata, stdin fallback, document context, and validation errors", async () => {
     docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
       content: "see docs/plan.md",
