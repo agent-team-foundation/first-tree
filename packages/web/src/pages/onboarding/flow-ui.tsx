@@ -14,9 +14,13 @@ import { cn } from "../../lib/utils.js";
 export function StepHeading({ title, why }: { title: string; why?: string | null }) {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
-      <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        {title}
-      </h1>
+      {/* Skip the h1 on an empty title — the build-tree recovery surface
+          supplies its own constant title and suppresses the per-step one. */}
+      {title ? (
+        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          {title}
+        </h1>
+      ) : null}
       {why ? (
         <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {why}

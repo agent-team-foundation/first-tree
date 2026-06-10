@@ -57,16 +57,11 @@ async function renderDom(
     root.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
+          {/* Outside Routes so it keeps tracking the location after a navigate
+              away from "/" (e.g. the "Build Context Tree" link → /build-tree). */}
+          <LocationProbe />
           <Routes>
-            <Route
-              path="/"
-              element={
-                <>
-                  <LocationProbe />
-                  {element}
-                </>
-              }
-            />
+            <Route path="/" element={element} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -81,16 +76,9 @@ async function rerender(root: Root, queryClient: QueryClient, element: ReactElem
     root.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
+          <LocationProbe />
           <Routes>
-            <Route
-              path="/"
-              element={
-                <>
-                  <LocationProbe />
-                  {element}
-                </>
-              }
-            />
+            <Route path="/" element={element} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -114,15 +102,6 @@ async function waitForText(container: ParentNode, text: string, timeoutMs = 3000
     await flush();
   }
   throw new Error(`Missing text: ${text}\n${container.textContent ?? ""}`);
-}
-
-async function waitForCondition(predicate: () => boolean, message: string, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await flush();
-  }
-  throw new Error(message);
 }
 
 function snapshot(overrides: Partial<ContextTreeSnapshot> = {}): ContextTreeSnapshot {
@@ -300,7 +279,7 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => disconnected.root.unmount());
   });
 
-  it("initializes the context tree from the live unavailable admin state", async () => {
+  it("offers a Build Context Tree link (not the raw initializer) to a no-tree admin", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     const { ContextPage } = await import("../context.js");
     const unavailable = snapshot({
@@ -310,39 +289,19 @@ describe("ContextPage DOM behavior", () => {
       contextStatus: { label: "Not configured", detail: null, severity: "warning" },
     });
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailable);
-    let resolveInitialize: (value: { repo: string; htmlUrl: string; branch: "main"; nodePath: "NODE.md" }) => void =
-      () => undefined;
-    contextApiMocks.initializeContextTree.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveInitialize = resolve;
-      }),
-    );
 
-    const { container, root, queryClient } = await renderDom(<ContextPage />);
-    await waitForText(container, "Create private GitHub repo");
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Connect your code & build your Context Tree");
+    // The low-level "create an empty private repo" button is gone (it lived in
+    // Settings → Context tree, now also a link); the Context page no longer
+    // initializes the tree in place.
+    expect(container.textContent).not.toContain("Create private GitHub repo");
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
-    await click(buttonByText(container, "Create private GitHub repo"));
-    expect(contextApiMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
-    expect(container.textContent).toContain("Creating private GitHub repo");
-    expect(container.textContent).toContain("Initializing root NODE.md");
-    expect(container.textContent).toContain("Saving team setting");
-
-    await act(async () => {
-      resolveInitialize({
-        repo: "https://github.com/acme/acme-context-tree.git",
-        htmlUrl: "https://github.com/acme/acme-context-tree",
-        branch: "main",
-        nodePath: "NODE.md",
-      });
-    });
-    await waitForCondition(
-      () => contextApiMocks.getContextTreeSnapshot.mock.calls.length > 1,
-      "Expected snapshot query to refetch after initialization",
-    );
-    expect(queryClient.getQueryData(["org-setting", "org-1", "context_tree"])).toEqual({
-      repo: "https://github.com/acme/acme-context-tree.git",
-      branch: "main",
-    });
+    // Clicking the link routes into the build-tree flow.
+    await click(buttonByText(container, "Connect your code & build your Context Tree"));
+    const location = container.querySelector('[data-testid="location"]');
+    expect(location?.textContent).toBe("/build-tree");
 
     await act(async () => root.unmount());
   });

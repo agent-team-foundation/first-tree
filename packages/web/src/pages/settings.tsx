@@ -2,6 +2,7 @@ import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
+import { useNeedsTreeSetup } from "./onboarding/use-needs-tree-setup.js";
 
 /**
  * Settings layout — sidebar + main content. Replaces the earlier double-tab
@@ -59,6 +60,7 @@ const ITEMS: Item[] = [
 
 export function SettingsLayout() {
   const { role, onboardingCompletedAt, meLoaded } = useAuth();
+  const { needsTreeSetup, isError: treeProbeError } = useNeedsTreeSetup();
   const viewport = useWorkspaceViewport();
   // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
   // direct hit on /settings/github would briefly paint the member-view nav
@@ -69,12 +71,16 @@ export function SettingsLayout() {
   const isAdmin = role === "admin";
   // Once onboarding completes, the wizard is terminal and the entry is
   // hidden. Direct URL access to /settings/onboarding still redirects out
-  // via the page's own guard.
+  // via the page's own guard. Exception: a completed admin who never built a
+  // Context Tree (skip-the-code-step) keeps the entry — it hosts the
+  // build-tree recovery card.
   const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
   const visible = ITEMS.filter((it) => {
     if (it.adminOnly && !isAdmin) return false;
-    if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
+    // Keep the entry on an INDETERMINATE probe (treeProbeError) — hiding it on a
+    // transient org-setting failure would make the recovery path vanish.
+    if (it.to === "/settings/onboarding" && hasCompletedOnboarding && !needsTreeSetup && !treeProbeError) return false;
     return true;
   });
 

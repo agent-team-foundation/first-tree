@@ -232,3 +232,43 @@ export function resolveInviteeKickoffState(args: { treeUrl: string; hasInstallat
   if (!args.hasInstallation) return "no-installation";
   return "ready";
 }
+
+export type TreeRecoveryFacts = {
+  /** `false` until `/me` has resolved at least once. */
+  meLoaded: boolean;
+  /**
+   * Account-level terminal flag from `/me` — set once the wizard finished.
+   * Gating on this (not the org-level agent readiness) keeps recovery scoped
+   * to users who are *past* setup: a still-in-progress user is handled by the
+   * onboarding gate, not offered a second "build your tree" entry.
+   */
+  onboardingCompletedAt: string | null;
+  /** The caller's role in the selected org. Only admins own the team tree. */
+  role: string | null;
+  /**
+   * Whether the selected org has a Context Tree binding
+   * (`context_tree.repo` is set). The skip-the-code-step path leaves this
+   * `false` — onboarding completes without ever provisioning a tree.
+   */
+  hasTreeBinding: boolean;
+};
+
+/**
+ * Should the workspace offer the standalone "build your Context Tree" recovery?
+ *
+ * True only for an admin who finished onboarding yet whose org never got a tree
+ * — the exact state the skip-the-code-step path leaves behind. The onboarding
+ * model has no notion of "tree" (completion = "has a usable agent"), so this is
+ * the first-class signal for "finished setup but never built a tree".
+ *
+ * Deliberately NOT wired into `shouldEnterOnboarding`: recovery is opt-in (the
+ * user chose to skip), surfaced via an explicit card / banner — never an
+ * auto-bounce back into a flow they walked out of. Members never own the team
+ * tree, so they're excluded; they read the binding via Settings → Context tree.
+ */
+export function needsTreeSetup(facts: TreeRecoveryFacts): boolean {
+  if (!facts.meLoaded) return false;
+  if (facts.onboardingCompletedAt === null) return false;
+  if (facts.role !== "admin") return false;
+  return !facts.hasTreeBinding;
+}
