@@ -464,7 +464,11 @@ describe("agent config command behavior", () => {
     expect(fetcherMocks.patchAgentResources).toHaveBeenCalledTimes(1);
   });
 
-  it("`prompt show --raw` prints the stored fragment verbatim for edit round-trips", async () => {
+  it("`prompt show --raw` prints the stored fragment verbatim (byte-for-byte) for edit round-trips", async () => {
+    // Intentional leading indentation and trailing blank line: whitespace is
+    // content (e.g. an indented code block) and must survive the round-trip
+    // untouched — no trim, no appended newline.
+    const storedBody = "  indented code block\nPrefer small diffs.\n\n";
     fetcherMocks.getAgentResources.mockResolvedValueOnce({
       version: 3,
       bindings: [
@@ -474,7 +478,7 @@ describe("agent config command behavior", () => {
           mode: "include",
           resourceId: null,
           replacesResourceId: null,
-          inlinePromptBody: "Prefer small diffs.",
+          inlinePromptBody: storedBody,
           order: 1,
         },
       ],
@@ -483,7 +487,7 @@ describe("agent config command behavior", () => {
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     await runConfig(["prompt", "show", "kael", "--raw"]);
-    expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe("Prefer small diffs.\n");
+    expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe(storedBody);
     stdout.mockRestore();
   });
 

@@ -40,9 +40,10 @@ export function registerAgentConfigPromptCommands(config: Command): void {
       const fragment = inlineFragmentText(resources.bindings);
 
       if (opts.raw) {
-        if (fragment.length > 0) {
-          process.stdout.write(fragment.endsWith("\n") ? fragment : `${fragment}\n`);
-        }
+        // Verbatim, byte-for-byte: no trimming and no appended newline, so
+        // `show --raw > f.md` → `set -f f.md` round-trips without mutating
+        // intentional leading/trailing whitespace in the stored fragment.
+        if (fragment.length > 0) process.stdout.write(fragment);
         return;
       }
 
@@ -53,8 +54,10 @@ export function registerAgentConfigPromptCommands(config: Command): void {
       for (const row of rows) {
         process.stdout.write(`  - ${describePromptRow(row)}\n`);
       }
-      process.stdout.write(`\nPer-agent fragment: ${fragment ? `(${fragment.length} chars)` : "(empty)"}\n`);
-      if (fragment) process.stdout.write(`  > ${fragment.replace(/\n/g, "\n  > ")}\n`);
+      // Display-only tidy-up; the stored fragment itself is never trimmed.
+      const display = fragment.trim();
+      process.stdout.write(`\nPer-agent fragment: ${display ? `(${fragment.length} chars)` : "(empty)"}\n`);
+      if (display) process.stdout.write(`  > ${display.replace(/\n/g, "\n  > ")}\n`);
       process.stdout.write(
         "\nOnly the per-agent fragment is editable here — team prompts are managed in Cloud → Org Settings → Resources.\n" +
           "Edit round-trip: prompt show <agent> --raw > f.md  →  edit f.md  →  prompt set <agent> -f f.md\n",
@@ -103,12 +106,13 @@ function isInlineFragmentBinding(binding: AgentResourceBindingInput): boolean {
   );
 }
 
+// No trimming: leading/trailing whitespace in a stored fragment is content
+// (e.g. an indented code block), and `show --raw` promises a verbatim export.
 function inlineFragmentText(bindings: ReadonlyArray<AgentResourceBindingInput>): string {
   return bindings
     .filter(isInlineFragmentBinding)
     .map((binding) => binding.inlinePromptBody ?? "")
-    .join("\n\n")
-    .trim();
+    .join("\n\n");
 }
 
 function describePromptRow(row: EffectiveResourceRow): string {
