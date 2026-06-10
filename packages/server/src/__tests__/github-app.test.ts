@@ -4,9 +4,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildAppAuthorizeUrl,
   createAppJwt,
+  createOrganizationRepo,
+  createRepoFileWithToken,
   exchangeCodeForAppUserProfile,
   fetchInstallation,
   GithubAppApiError,
+  getRepoFileWithToken,
+  getRepository,
   listInstallationRepos,
   mintInstallationToken,
   refreshAppUserToken,
@@ -663,5 +667,133 @@ describe("services/github-app › listInstallationRepos", () => {
       );
     const repos = await listInstallationRepos("ghs_token", { fetcher });
     expect(repos.map((r) => r.fullName)).toEqual(["acme/new", "acme/old", "acme/null"]);
+  });
+});
+
+describe("services/github-app › installation repository helpers", () => {
+  type FetchInput = Parameters<typeof fetch>[0];
+  const urlOf = (input: FetchInput): string =>
+    typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+  function repoBody(owner = "acme", name = "tree") {
+    return {
+      name,
+      full_name: `${owner}/${name}`,
+      owner: { login: owner },
+      clone_url: `https://github.com/${owner}/${name}.git`,
+      html_url: `https://github.com/${owner}/${name}`,
+      private: true,
+      default_branch: "main",
+    };
+  }
+
+  it("creates an organization repo with an installation token and parses the repo shape", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      calls.push({ url: urlOf(input), init });
+      return new Response(JSON.stringify(repoBody("acme", "team-context-tree")), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const repo = await createOrganizationRepo(
+      "ghs_token",
+      { org: "acme", name: "team-context-tree", private: true, description: "Team Context Tree" },
+      { fetcher },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.github.com/orgs/acme/repos");
+    expect(calls[0]?.init?.method).toBe("POST");
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer ghs_token");
+    expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      name: "team-context-tree",
+      private: true,
+      auto_init: false,
+      description: "Team Context Tree",
+    });
+    expect(repo).toMatchObject({
+      name: "team-context-tree",
+      fullName: "acme/team-context-tree",
+      ownerLogin: "acme",
+      cloneUrl: "https://github.com/acme/team-context-tree.git",
+      htmlUrl: "https://github.com/acme/team-context-tree",
+      private: true,
+      defaultBranch: "main",
+    });
+  });
+
+  it("reads a repository with an installation token", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      calls.push({ url: urlOf(input), init });
+      return new Response(JSON.stringify(repoBody("acme", "tree")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const repo = await getRepository("ghs_token", "acme", "tree", { fetcher });
+
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/acme/tree");
+    expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer ghs_token");
+    expect(repo.fullName).toBe("acme/tree");
+  });
+
+  it("creates and verifies a repo file with an installation token", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      calls.push({ url: urlOf(input), init });
+      return new Response(JSON.stringify({ path: "NODE.md" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await getRepoFileWithToken(
+      "ghs_token",
+      { owner: "acme", repo: "tree", path: "NODE.md", branch: "main" },
+      { fetcher },
+    );
+    await createRepoFileWithToken(
+      "ghs_token",
+      {
+        owner: "acme",
+        repo: "tree",
+        path: "NODE.md",
+        branch: "main",
+        message: "Initialize Context Tree root node",
+        contentBase64: "IyBUcmVlCg==",
+      },
+      { fetcher },
+    );
+
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/acme/tree/contents/NODE.md?ref=main");
+    expect(calls[1]?.url).toBe("https://api.github.com/repos/acme/tree/contents/NODE.md");
+    expect(calls[1]?.init?.method).toBe("PUT");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      message: "Initialize Context Tree root node",
+      content: "IyBUcmVlCg==",
+      branch: "main",
+    });
+  });
+
+  it("throws GithubAppApiError with status and upstream message on helper failures", async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response(JSON.stringify({ message: "Repository creation failed." }), {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      });
+
+    await expect(
+      createOrganizationRepo("ghs_token", { org: "acme", name: "tree", private: true }, { fetcher }),
+    ).rejects.toMatchObject({
+      name: "GithubAppApiError",
+      status: 422,
+      message: expect.stringContaining("Repository creation failed."),
+    });
   });
 });

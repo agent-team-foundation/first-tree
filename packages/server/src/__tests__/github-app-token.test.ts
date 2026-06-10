@@ -74,7 +74,12 @@ describe("services/github-app-token", () => {
         );
       };
       const result = await mintContextTreeInstallationToken(installation, { appId, privateKeyPem }, { fetcher });
-      expect(result).toEqual({ ok: true, token: "ghs_installation_token" });
+      expect(result).toEqual({
+        ok: true,
+        token: "ghs_installation_token",
+        permissions: { contents: "read" },
+        repositorySelection: "selected",
+      });
       expect(calls).toEqual(["https://api.github.com/app/installations/7777/access_tokens"]);
     });
   });
@@ -84,7 +89,12 @@ describe("services/github-app-token", () => {
 
     it("returns the snapshot unchanged when the mint succeeded", () => {
       const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
-      const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, { ok: true, token: "ghs_t" });
+      const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, {
+        ok: true,
+        token: "ghs_t",
+        permissions: {},
+        repositorySelection: "all",
+      });
       expect(decorated).toBe(snapshot);
     });
 

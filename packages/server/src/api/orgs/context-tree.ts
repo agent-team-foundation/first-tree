@@ -1,9 +1,17 @@
 import { initializeContextTreeRequestSchema, initializeContextTreeResponseSchema } from "@first-tree/shared";
-import type { FastifyInstance } from "fastify";
-import { AppError, ConflictError, ForbiddenError } from "../../errors.js";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin } from "../../scope/require-org.js";
-import { createRepoFile, createUserRepo, GithubApiError } from "../../services/github-oauth.js";
-import { GithubUserTokenError, getFreshGithubUserToken } from "../../services/github-user-token.js";
+import {
+  createOrganizationRepo,
+  createRepoFileWithToken,
+  GithubAppApiError,
+  getRepoFileWithToken,
+  getRepository,
+} from "../../services/github-app.js";
+import { findInstallationByOrg, type InstallationRow } from "../../services/github-app-installations.js";
+import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
+import type { GithubCreatedRepo } from "../../services/github-oauth.js";
 import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
@@ -22,25 +30,36 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw new ConflictError("Context Tree repo is already configured for this team");
     }
 
-    let github: { accessToken: string; login: string };
-    try {
-      github = await getFreshGithubUserToken(
-        app.db,
-        scope.userId,
-        app.config.secrets.encryptionKey,
-        app.config.oauth?.githubApp,
-      );
-    } catch (err) {
-      if (err instanceof GithubUserTokenError) {
-        if (err.cause) {
-          app.log.warn({ err: err.cause, userId: scope.userId }, "context tree initialize: github token unavailable");
-        }
-        return reply.status(err.statusCode).send({
-          error: err.message,
-          ...(err.code ? { code: err.code } : {}),
-        });
-      }
-      throw err;
+    const installation = await findInstallationByOrg(app.db, scope.organizationId);
+    const mint = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+    if (!mint.ok) {
+      return sendMintFailure(reply, mint, scope.organizationId, app);
+    }
+    if (!installation) {
+      return reply.status(503).send({
+        error: "No GitHub App installation is connected for this team yet.",
+        code: "no_installation",
+      });
+    }
+    if (installation.accountType !== "Organization") {
+      return reply.status(409).send({
+        error: "One-click Context Tree initialization requires a GitHub organization installation.",
+        code: "organization_installation_required",
+      });
+    }
+    if (mint.repositorySelection !== "all") {
+      return reply.status(409).send({
+        error:
+          "One-click Context Tree initialization requires the GitHub App installation to have access to all repositories.",
+        code: "selected_repositories_unsupported",
+      });
+    }
+    if (!hasInitializationPermissions(mint.permissions)) {
+      return reply.status(403).send({
+        error:
+          "The GitHub App installation needs administration: write and contents: write permissions to initialize a Context Tree repo.",
+        code: "installation_permissions_insufficient",
+      });
     }
 
     const org = await getOrganization(app.db, scope.organizationId);
@@ -51,38 +70,67 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         event: "context_tree.initialize.start",
         organizationId: scope.organizationId,
         userId: scope.userId,
-        githubLogin: github.login,
+        installationId: installation.installationId,
+        githubAccount: installation.accountLogin,
         repoName,
       },
-      "context tree initialize: creating github repo",
+      "context tree initialize: creating or adopting github repo",
     );
 
-    let repo: Awaited<ReturnType<typeof createUserRepo>>;
+    let repo: GithubCreatedRepo;
     try {
-      repo = await createUserRepo(github.accessToken, {
-        name: repoName,
-        private: true,
-        description: `${teamName} Context Tree`,
+      repo = await createOrAdoptContextTreeRepo({
+        installationToken: mint.token,
+        installation,
+        repoName,
+        teamName,
       });
     } catch (err) {
+      if (err instanceof ContextTreeInitializeError) {
+        app.log.warn(
+          {
+            err,
+            organizationId: scope.organizationId,
+            installationId: installation.installationId,
+            githubAccount: installation.accountLogin,
+            repoName,
+            code: err.code,
+          },
+          "context tree initialize: create or adopt github repo failed",
+        );
+        return reply.status(err.statusCode).send({ error: err.message, code: err.code });
+      }
       app.log.warn(
-        { err, organizationId: scope.organizationId, userId: scope.userId, githubLogin: github.login, repoName },
-        "context tree initialize: create github repo failed",
+        {
+          err,
+          organizationId: scope.organizationId,
+          installationId: installation.installationId,
+          githubAccount: installation.accountLogin,
+          repoName,
+        },
+        "context tree initialize: create or adopt github repo failed",
       );
-      throw mapCreateRepoError(err, github.login, repoName);
+      throw err;
     }
 
-    const nodeContent = initialRootNode(teamName, github.login);
+    const nodeContent = initialRootNode(teamName, installation.accountLogin);
     try {
-      await createRepoFile(github.accessToken, {
-        owner: repo.ownerLogin,
-        repo: repo.name,
-        path: ROOT_NODE_PATH,
-        branch: BRANCH,
-        message: "Initialize Context Tree root node",
-        contentBase64: Buffer.from(nodeContent, "utf8").toString("base64"),
-      });
+      await ensureRootNode(mint.token, repo, nodeContent);
     } catch (err) {
+      if (err instanceof ContextTreeInitializeError) {
+        app.log.warn(
+          {
+            err,
+            organizationId: scope.organizationId,
+            userId: scope.userId,
+            repo: repo.fullName,
+            nodePath: ROOT_NODE_PATH,
+            code: err.code,
+          },
+          "context tree initialize: create root node failed",
+        );
+        return reply.status(err.statusCode).send({ error: err.message, code: err.code });
+      }
       app.log.warn(
         {
           err,
@@ -93,7 +141,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         },
         "context tree initialize: create root node failed",
       );
-      throw mapCreateNodeError(err);
+      throw err;
     }
 
     const setting = await putOrgSetting(
@@ -126,27 +174,146 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
   });
 }
 
-function mapCreateRepoError(err: unknown, login: string, repoName: string): AppError {
-  if (err instanceof GithubApiError) {
-    if (err.status === 422) {
-      return new ConflictError(`GitHub repo ${login}/${repoName} already exists or the name is unavailable`);
-    }
-    if (err.status === 401 || err.status === 403) {
-      return new ForbiddenError(
-        "GitHub refused repo creation. Please reconnect your GitHub account and grant private repo access.",
-      );
-    }
+class ContextTreeInitializeError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ContextTreeInitializeError";
   }
-  return new AppError(502, "Couldn't create the GitHub repo. Try again in a moment.");
 }
 
-function mapCreateNodeError(err: unknown): AppError {
-  if (err instanceof GithubApiError && (err.status === 401 || err.status === 403)) {
-    return new ForbiddenError(
-      "GitHub refused Context Tree root-node creation. Please reconnect your GitHub account and grant repo access.",
-    );
+function sendMintFailure(
+  reply: FastifyReply,
+  mint: Exclude<Awaited<ReturnType<typeof mintContextTreeInstallationToken>>, { ok: true }>,
+  organizationId: string,
+  app: FastifyInstance,
+) {
+  if (mint.reason === "no-installation") {
+    return reply
+      .status(503)
+      .send({ error: "No GitHub App installation is connected for this team yet.", code: "no_installation" });
   }
-  return new AppError(502, "Couldn't initialize the Context Tree root node. Try again in a moment.");
+  if (mint.reason === "suspended") {
+    return reply.status(503).send({ error: "This team's GitHub App installation is suspended.", code: "suspended" });
+  }
+  if (mint.reason === "no-app-config") {
+    return reply.status(503).send({ error: "GitHub App is not configured on this server.", code: "not_configured" });
+  }
+  app.log.warn({ organizationId, detail: mint.detail }, "context tree initialize: installation token mint failed");
+  return reply.status(502).send({ error: "Couldn't reach GitHub. Try again in a moment.", code: "upstream" });
+}
+
+function hasInitializationPermissions(permissions: Record<string, "read" | "write" | "admin">): boolean {
+  return permissions.administration === "write" && permissions.contents === "write";
+}
+
+async function createOrAdoptContextTreeRepo(input: {
+  installationToken: string;
+  installation: InstallationRow;
+  repoName: string;
+  teamName: string;
+}): Promise<GithubCreatedRepo> {
+  try {
+    const created = await createOrganizationRepo(input.installationToken, {
+      org: input.installation.accountLogin,
+      name: input.repoName,
+      private: true,
+      description: `${input.teamName} Context Tree`,
+    });
+    return await verifyCreatedRepository(input.installationToken, created.ownerLogin, created.name);
+  } catch (err) {
+    if (err instanceof GithubAppApiError && err.status === 422) {
+      return await adoptExistingRepository(input.installationToken, input.installation.accountLogin, input.repoName);
+    }
+    throw mapUpstreamError(err, "Couldn't create the GitHub repo. Try again in a moment.");
+  }
+}
+
+async function verifyCreatedRepository(
+  installationToken: string,
+  owner: string,
+  repoName: string,
+): Promise<GithubCreatedRepo> {
+  try {
+    return await getRepository(installationToken, owner, repoName);
+  } catch (err) {
+    throw mapUpstreamError(err, "Couldn't verify the created GitHub repo. Try again in a moment.");
+  }
+}
+
+async function adoptExistingRepository(
+  installationToken: string,
+  owner: string,
+  repoName: string,
+): Promise<GithubCreatedRepo> {
+  try {
+    return await getRepository(installationToken, owner, repoName);
+  } catch (err) {
+    if (err instanceof GithubAppApiError && (err.status === 403 || err.status === 404)) {
+      throw new ContextTreeInitializeError(
+        409,
+        "repo_unavailable",
+        `GitHub repo ${owner}/${repoName} already exists but is not accessible to this team's GitHub App installation.`,
+      );
+    }
+    throw mapUpstreamError(err, "Couldn't verify the existing GitHub repo. Try again in a moment.");
+  }
+}
+
+async function ensureRootNode(installationToken: string, repo: GithubCreatedRepo, nodeContent: string): Promise<void> {
+  try {
+    await getRepoFileWithToken(installationToken, {
+      owner: repo.ownerLogin,
+      repo: repo.name,
+      path: ROOT_NODE_PATH,
+      branch: BRANCH,
+    });
+    return;
+  } catch (err) {
+    if (!(err instanceof GithubAppApiError) || err.status !== 404) {
+      throw mapUpstreamError(err, "Couldn't verify the Context Tree root node. Try again in a moment.");
+    }
+  }
+
+  try {
+    await createRepoFileWithToken(installationToken, {
+      owner: repo.ownerLogin,
+      repo: repo.name,
+      path: ROOT_NODE_PATH,
+      branch: BRANCH,
+      message: "Initialize Context Tree root node",
+      contentBase64: Buffer.from(nodeContent, "utf8").toString("base64"),
+    });
+  } catch (err) {
+    if (err instanceof GithubAppApiError && (err.status === 409 || err.status === 422)) {
+      await verifyExistingRootNode(installationToken, repo);
+      return;
+    }
+    throw mapUpstreamError(err, "Couldn't initialize the Context Tree root node. Try again in a moment.");
+  }
+}
+
+async function verifyExistingRootNode(installationToken: string, repo: GithubCreatedRepo): Promise<void> {
+  try {
+    await getRepoFileWithToken(installationToken, {
+      owner: repo.ownerLogin,
+      repo: repo.name,
+      path: ROOT_NODE_PATH,
+      branch: BRANCH,
+    });
+  } catch (err) {
+    throw mapUpstreamError(err, "Couldn't verify the existing Context Tree root node. Try again in a moment.");
+  }
+}
+
+function mapUpstreamError(err: unknown, message: string): ContextTreeInitializeError {
+  if (err instanceof ContextTreeInitializeError) {
+    return err;
+  }
+  return new ContextTreeInitializeError(502, "upstream", message);
 }
 
 function contextTreeRepoName(teamName: string): string {
