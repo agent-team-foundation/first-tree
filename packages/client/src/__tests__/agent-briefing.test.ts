@@ -429,39 +429,49 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block with reasoning-trace / chat-send split, courtesy-send guard, runtime-bridge honesty, Issue #389", () => {
+  it("emits the runtime intro block with output-stream / chat-send full decoupling, transitional mirror fact, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // Reasoning-trace / chat-send decoupling — output stream is free,
-    // chat send is the only delivery path. The agent must never be
-    // directed to suppress its output for chat-related reasons.
+    // Output stream and chat send are two fully decoupled channels —
+    // the briefing must never tie agent behavior on one to activity on
+    // the other. yuezengwu 2026-06-10: "chat send 和 output streaming
+    // 完全解耦，不应当有任何互相影响。在系统 message 里记录是过渡状态，
+    // 未来 output streaming 不进入 message"
     expect(briefing).toContain("Your output stream is your reasoning trace");
+    expect(briefing).toMatch(/separate channel from[\s\n]+`?chat send`?/);
+    expect(briefing).toMatch(/the two never[\s\n]+interact/);
     expect(briefing).toContain("To reach a teammate");
     expect(briefing).toContain("first-tree chat send <name>");
     expect(briefing).toContain("only delivery path you should rely on");
 
-    // Runtime-bridge honesty (added in response to PR #938 review):
-    // non-empty final output is still auto-bridged as a silent
-    // `agent-final-text` row, so the briefing acknowledges that fact and
-    // tells the agent not to restate what it already chat send-ed —
-    // without re-introducing the "output nothing" prescription.
-    // The note wraps across template-literal lines, so use regex matches
-    // that tolerate intra-bullet whitespace / newlines.
-    expect(briefing).toMatch(/non-empty final output still lands in chat history/);
+    // Transitional system behavior — the runtime currently mirrors
+    // non-empty final output into chat history as a silent
+    // `agent-final-text` row that does NOT wake other agents. The
+    // briefing acknowledges the fact and names the runtime-retirement
+    // track, but issues NO instruction conditioning the agent's output
+    // on chat-send activity (that would re-couple the channels).
+    // The note wraps across template-literal lines, so use regex
+    // matches that tolerate intra-bullet whitespace / newlines.
+    expect(briefing).toMatch(/non-empty[\s\n]+final[\s\n]+output is currently[\s\n]+mirrored/);
     expect(briefing).toContain("agent-final-text");
-    expect(briefing).toContain("don't rely on it for delivery");
-    expect(briefing).toMatch(/don't[\s\n]+restate in final output what you already/);
+    expect(briefing).toContain("does NOT wake other agents");
+    expect(briefing).toMatch(/runtime-retirement[\s\n]+track/);
+    expect(briefing).toMatch(/not a reach path/);
 
-    // Courtesy-send guard (replaces the old "Stay silent / output
-    // nothing" directive) — the brake is on the send side, not the
-    // output side; result-sink's empty-output guard is a runtime
-    // safety belt, not the contract.
+    // Coupling guard — these phrasings would condition agent output on
+    // chat-send activity. They MUST NOT appear in the briefing under the
+    // full-decoupling principle.
+    expect(briefing).not.toMatch(/don't restate/i);
+    expect(briefing).not.toMatch(/don't rely on it for delivery/i);
+
+    // Courtesy-send guard (the brake stays on the *send* side, not the
+    // output side; result-sink's empty-output guard is a runtime safety
+    // belt, not the contract).
     expect(briefing).toContain("Don't fire a courtesy");
     expect(briefing).toContain("end the turn without sending");
-    // No bare "output nothing" prescription survives. The runtime-bridge
-    // honesty note uses "non-empty final output" / "don't restate in
-    // final output" — the bare phrase that prescribes suppression is
-    // exactly what this guard rejects.
+    // No bare "output nothing" prescription survives. The transitional
+    // mirror is named in the descriptive sentence, not in an instruction
+    // that suppresses agent output.
     expect(briefing).not.toMatch(/\boutput nothing\b/);
 
     // Issue #389: pin the anti-double-encode rule.

@@ -70,10 +70,15 @@ After an agent handoff, continue only independent work. If their reply is
 the only remaining input, end the turn and wait to be woken; do not poll
 status or escalate on delayed replies alone.
 
-Your output stream outside `chat send` is your reasoning trace — think,
-plan, and narrate there freely as you work. It is not a chat reply path,
-and the table above is silent on it on purpose: only the actions in the
-table reach a teammate.
+Your output stream is your reasoning trace — think, plan, and narrate
+there freely as you work. It runs on a separate channel from `chat send`;
+the two never interact. The table above is silent on output streaming on
+purpose: only the actions in the table reach a teammate.
+
+(Transitional system behavior: a non-empty final output is currently
+mirrored into chat history as a silent `agent-final-text` row that does
+NOT wake other agents. The mirror is on the runtime-retirement track and
+is not a reach path — `chat send` is.)
 
 ### Don't fire a courtesy chat send
 
@@ -83,14 +88,11 @@ send` back. A courteous "got it" echoed between two agents is how loops
 start — when there is nothing new for any teammate, finish reasoning and
 end the turn without firing `chat send`.
 
-Note: until the runtime bridge is retired, a non-empty final output still
-lands in chat history as a silent `agent-final-text` row — don't rely on
-it for delivery, and don't restate in final output what you already
-`chat send`-ed.
-
 (The runtime's empty-output guard at `result-sink.ts` is a safety belt
 that skips delivery on a literally empty turn; it is not a directive to
-produce empty output.)
+produce empty output. The transitional output-stream mirror is described
+above under §Decision guide — it does not change what this section
+prescribes about the *send* side.)
 
 ### Channel-binary substitution
 
