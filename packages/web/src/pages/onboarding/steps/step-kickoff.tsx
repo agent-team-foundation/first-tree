@@ -14,6 +14,7 @@ import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
+import { provisionNewTree } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
@@ -47,6 +48,19 @@ async function runKickoff(args: {
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
   const agent = await resolveOnboardingAgent();
+
+  // New-tree mode: provision the team's Context Tree repo + org binding BEFORE
+  // sending the kickoff message, so the agent's session resolves the binding
+  // (contextTreePath becomes non-null) and `first-tree-seed`'s preconditions
+  // hold. Only fires when there are repos to seed from — the no-project path
+  // has no `orgWrites` and nothing to seed. `provisionNewTree` treats an
+  // already-provisioned tree (a retry after a later step failed, or a
+  // detect→create race) as success and re-throws every real failure (e.g. the
+  // GitHub App installation isn't an org with repo-admin) so the user sees an
+  // actionable error and can retry — nothing is half-created (no chat yet).
+  if (args.treeMode === "new" && args.orgWrites?.organizationId) {
+    await provisionNewTree(args.orgWrites.organizationId);
+  }
 
   // Org-level writes are a convenience cache for future teammates — never
   // let them block the user's first chat.

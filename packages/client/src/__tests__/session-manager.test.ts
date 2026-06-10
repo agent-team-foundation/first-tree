@@ -2,7 +2,8 @@ import type { AgentRuntimeConfig } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
+import type { ContextTreeBinding } from "../runtime/bootstrap.js";
+import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -45,6 +46,9 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
 function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
+  handlerConfig?: HandlerConfig;
+  handlerFactory?: HandlerFactory;
+  resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
   ackEntry?: (entryId: number) => Promise<void>;
   session?: {
     idle_timeout: number;
@@ -58,7 +62,7 @@ function createSessionManager(opts: {
   recoverChat?: (chatId: string) => Promise<void>;
 }) {
   const handler = opts.handler ?? createMockHandler();
-  const factory: HandlerFactory = () => handler;
+  const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
@@ -70,7 +74,10 @@ function createSessionManager(opts: {
     },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test" },
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    // Tests never want the live git-backed resolver — default to a no-op so a
+    // tree-less handlerConfig stays tree-less unless a test opts in.
+    resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -1191,6 +1198,64 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.handleCommand("chat-term", "session:terminate");
     await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledWith(11);
+
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager lazy Context Tree binding", () => {
+  const BINDING: ContextTreeBinding = {
+    path: "/clones/abc",
+    repoUrl: "https://github.com/acme/context-tree",
+    branch: "main",
+  };
+
+  it("upgrades a tree-less handler config to tree-bound on a new session", async () => {
+    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
+    let builtWith: HandlerConfig | undefined;
+    const sm = createSessionManager({
+      handlerConfig,
+      handlerFactory: (cfg) => {
+        builtWith = cfg;
+        return createMockHandler();
+      },
+      resolveContextTreeBinding: async () => BINDING,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "c-bind", messageId: "m1" }));
+
+    // Patched in place...
+    expect(handlerConfig.contextTreePath).toBe("/clones/abc");
+    expect(handlerConfig.contextTreeRepoUrl).toBe("https://github.com/acme/context-tree");
+    expect(handlerConfig.contextTreeBranch).toBe("main");
+    // ...so the handler for the new session is built tree-bound.
+    expect(builtWith?.contextTreePath).toBe("/clones/abc");
+
+    await sm.shutdown();
+  });
+
+  it("does not re-resolve when already bound (steady state pays nothing)", async () => {
+    const resolve = vi.fn(async () => BINDING);
+    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test", contextTreePath: "/already/bound" };
+    const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "c-bound", messageId: "m1" }));
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(handlerConfig.contextTreePath).toBe("/already/bound");
+
+    await sm.shutdown();
+  });
+
+  it("re-resolves once for the new session, not again for a same-chat inject", async () => {
+    const resolve = vi.fn(async () => null);
+    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
+    const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "c-once", messageId: "m1" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "c-once", messageId: "m2" }));
+
+    expect(resolve).toHaveBeenCalledTimes(1);
 
     await sm.shutdown();
   });
