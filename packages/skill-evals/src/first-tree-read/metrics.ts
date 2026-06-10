@@ -12,6 +12,18 @@ function argvEquals(left: readonly string[], right: readonly string[]): boolean 
   return true;
 }
 
+function isHelpArgv(argv: readonly string[]): boolean {
+  return argvEquals(argv, HELP_ARGV);
+}
+
+function isTreeTreeArgv(argv: readonly string[]): boolean {
+  return argv[0] === "tree" && argv[1] === "tree";
+}
+
+function isTreeSelectorArgv(argv: readonly string[]): boolean {
+  return isTreeTreeArgv(argv) && !isHelpArgv(argv);
+}
+
 function isModelPhase(event: Record<string, unknown>): boolean {
   return event.phase === "model";
 }
@@ -172,14 +184,14 @@ export function deriveMetrics(
       if (type === "first_tree_call") {
         firstTreeCalls += 1;
         firstTreeArgv.push([...argv]);
-        if (argvEquals(argv, HELP_ARGV)) {
+        if (isHelpArgv(argv)) {
           helpCalls += 1;
         }
       }
 
       if (type === "first_tree_result" && typeof event.exitCode === "number") {
         firstTreeCommandResults.push({ argv: [...argv], exitCode: event.exitCode });
-        if (argvEquals(argv, HELP_ARGV)) {
+        if (isHelpArgv(argv)) {
           helpExitCodes.push(event.exitCode);
         }
       }
@@ -188,6 +200,11 @@ export function deriveMetrics(
 
   const facts = uniqueStrings(expectedFacts);
   const factHits = expectedFactHits(modelOutputTexts.join("\n"), facts);
+  const helpSucceeded = firstTreeCommandResults.some((result) => isHelpArgv(result.argv) && result.exitCode === 0);
+  const selectionSucceeded = firstTreeCommandResults.some(
+    (result) => isTreeSelectorArgv(result.argv) && result.exitCode === 0,
+  );
+  const modelFirstTreeCommandsOk = firstTreeCommandResults.every((result) => result.exitCode === 0);
 
   return {
     expectedFactHits: factHits,
@@ -199,9 +216,12 @@ export function deriveMetrics(
     helpAttempted: helpCalls > 0,
     helpCalls,
     helpExitCodes,
+    helpSucceeded,
+    modelFirstTreeCommandsOk,
     runnerExitCode,
+    selectionSucceeded,
     skillFileReadObserved,
-    skillHit: skillFileReadObserved || firstTreeCalls > 0,
+    skillHit: skillFileReadObserved || firstTreeCalls > 0 || firstTreeCommandResults.length > 0,
   };
 }
 
@@ -210,10 +230,22 @@ export function casePassed(expectedTrigger: boolean, metrics: EvalMetrics): bool
   if (metrics.runnerExitCode !== 0) return false;
 
   if (expectedTrigger) {
-    return metrics.skillFileReadObserved && metrics.expectedFactsObserved;
+    return (
+      metrics.skillFileReadObserved &&
+      metrics.expectedFactsObserved &&
+      metrics.helpSucceeded &&
+      metrics.selectionSucceeded &&
+      metrics.modelFirstTreeCommandsOk
+    );
   }
 
-  return !metrics.skillHit && metrics.expectedFactHits.length === 0 && metrics.firstTreeCalls === 0;
+  return (
+    !metrics.skillHit &&
+    metrics.expectedFactHits.length === 0 &&
+    metrics.firstTreeCalls === 0 &&
+    metrics.firstTreeCommandResults.length === 0 &&
+    metrics.modelFirstTreeCommandsOk
+  );
 }
 
 export function fixtureOnlyPassed(fixtureValidation: FixtureValidation): boolean {

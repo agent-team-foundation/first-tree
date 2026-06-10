@@ -2,8 +2,30 @@ import { writeFileSync } from "node:fs";
 
 import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
 
+const HELP_ARGV = ["tree", "tree", "--help"];
+
 function markdownBool(value: boolean): string {
   return value ? "true" : "false";
+}
+
+function argvEquals(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function isHelpArgv(argv: readonly string[]): boolean {
+  return argvEquals(argv, HELP_ARGV);
+}
+
+function isTreeTreeArgv(argv: readonly string[]): boolean {
+  return argv[0] === "tree" && argv[1] === "tree";
+}
+
+function isTreeSelectorArgv(argv: readonly string[]): boolean {
+  return isTreeTreeArgv(argv) && !isHelpArgv(argv);
 }
 
 function formatArg(arg: string): string {
@@ -18,12 +40,36 @@ function formatCommand(argv: readonly string[]): string {
 export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): string | null {
   const notes: string[] = [];
   const nonZeroResults = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
+  const selectorCallCount = metrics.firstTreeArgv.filter(isTreeSelectorArgv).length;
+  const selectorExitCodes = metrics.firstTreeCommandResults
+    .filter((result) => isTreeSelectorArgv(result.argv))
+    .map((result) => result.exitCode);
 
   if (nonZeroResults.length > 0) {
     const detail = nonZeroResults
       .map((result) => `first-tree ${formatCommand(result.argv)} => ${result.exitCode}`)
       .join("; ");
     notes.push(`first-tree command(s) returned non-zero exit code(s): ${detail}.`);
+  }
+
+  if (expectedTrigger && !metrics.helpSucceeded) {
+    if (!metrics.helpAttempted && metrics.helpExitCodes.length === 0) {
+      notes.push("Required first-tree tree tree --help command did not run during model phase.");
+    } else {
+      const exitCodes = metrics.helpExitCodes.length > 0 ? metrics.helpExitCodes.join(", ") : "none";
+      notes.push(`Required first-tree tree tree --help command did not succeed; observed exit code(s): ${exitCodes}.`);
+    }
+  }
+
+  if (expectedTrigger && !metrics.selectionSucceeded) {
+    if (selectorCallCount === 0 && selectorExitCodes.length === 0) {
+      notes.push("Required first-tree tree tree selector command did not run during model phase.");
+    } else {
+      const exitCodes = selectorExitCodes.length > 0 ? selectorExitCodes.join(", ") : "none";
+      notes.push(
+        `Required first-tree tree tree selector command did not succeed; observed exit code(s): ${exitCodes}.`,
+      );
+    }
   }
 
   if (expectedTrigger && !metrics.expectedFactsObserved) {
@@ -75,6 +121,9 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - skillHit: ${markdownBool(summary.metrics.skillHit)}
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
 - expectedFactsObserved: ${markdownBool(summary.metrics.expectedFactsObserved)}
+- helpSucceeded: ${markdownBool(summary.metrics.helpSucceeded)}
+- selectionSucceeded: ${markdownBool(summary.metrics.selectionSucceeded)}
+- modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
 
@@ -117,6 +166,9 @@ export function formatSummaryTable(batch: BatchSummary): string {
     String(summary.metrics.firstTreeCalls),
     String(summary.metrics.skillFileReadObserved),
     String(summary.metrics.expectedFactsObserved),
+    String(summary.metrics.helpSucceeded),
+    String(summary.metrics.selectionSucceeded),
+    String(summary.metrics.modelFirstTreeCommandsOk),
     String(summary.passed),
   ]);
   const header = [
@@ -126,6 +178,9 @@ export function formatSummaryTable(batch: BatchSummary): string {
     "first_tree_calls",
     "skill_file_read",
     "expected_facts_observed",
+    "helpSucceeded",
+    "selectionSucceeded",
+    "modelFirstTreeCommandsOk",
     "passed",
   ];
   const widths = header.map((label, index) => {

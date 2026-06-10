@@ -62,7 +62,10 @@ export type EvalMetrics = {
   helpAttempted: boolean;
   helpCalls: number;
   helpExitCodes: readonly number[];
+  helpSucceeded: boolean;
+  modelFirstTreeCommandsOk: boolean;
   runnerExitCode: number | null;
+  selectionSucceeded: boolean;
   skillFileReadObserved: boolean;
   skillHit: boolean;
 };
