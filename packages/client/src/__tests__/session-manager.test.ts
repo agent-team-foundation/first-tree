@@ -24,10 +24,12 @@ function mockAckEntry() {
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>((res) => {
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 /** Create a mock handler conforming to the new session-oriented interface. */
@@ -990,6 +992,39 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(ackEntry).toHaveBeenCalledWith(35);
 
     await sm.dispatch(mockEntry({ id: 36, chatId: "chat-suspend-ack-fail", messageId: "msg-f2" }));
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("holds resume behind pending suspend ACK and gates recovery if that ACK rejects", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn(() => ack.promise);
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 37, chatId: "chat-suspend-ack-pending", messageId: "msg-p1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+
+    await sm.handleCommand("chat-suspend-ack-pending", "session:suspend");
+    expect(ackEntry).toHaveBeenCalledWith(37);
+
+    const resumedInput = sm.dispatch(mockEntry({ id: 38, chatId: "chat-suspend-ack-pending", messageId: "msg-p2" }));
+    await Promise.resolve();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    ack.reject(new Error("ack unavailable"));
+    await resumedInput;
     expect(resumeSpy).not.toHaveBeenCalled();
 
     await sm.shutdown();

@@ -895,6 +895,10 @@ export class SessionManager {
     if (entry.suspending) {
       await entry.suspending;
     }
+    if (this.requiresInboxRecovery.has(entry.chatId)) {
+      this.recomputeSessionRuntimeState(entry.chatId);
+      return;
+    }
 
     // For admin-triggered resume (no message), synthesize a minimal stub for slot acquisition only
     const slotMessage: SessionMessage = message ?? {
@@ -1301,7 +1305,7 @@ export class SessionManager {
   }
 
   private suspendSession(entry: SessionEntry): void {
-    this.ackConsumedInFlightForSuspend(entry.chatId);
+    const consumedAck = this.ackConsumedInFlightForSuspend(entry.chatId);
     this.clearUnconsumedInFlightForSuspend(entry.chatId);
     entry.status = "suspended";
     this._activeCount--;
@@ -1309,11 +1313,11 @@ export class SessionManager {
     this.sessionRuntimeStates.delete(entry.chatId);
     this.sessionRuntimeMarkers.delete(entry.chatId);
     this.recomputeRuntimeState();
-    entry.suspending = entry.handler
-      .suspend()
-      .catch((err) => {
-        this.config.log.warn({ chatId: entry.chatId, err }, "suspend error");
-      })
+    const handlerSuspend = entry.handler.suspend().catch((err) => {
+      this.config.log.warn({ chatId: entry.chatId, err }, "suspend error");
+    });
+    entry.suspending = Promise.all([handlerSuspend, consumedAck ?? Promise.resolve()])
+      .then(() => undefined)
       .finally(() => {
         entry.suspending = null;
       });
@@ -1535,19 +1539,19 @@ export class SessionManager {
     this.recomputeSessionRuntimeState(chatId);
   }
 
-  private ackConsumedInFlightForSuspend(chatId: string): void {
+  private ackConsumedInFlightForSuspend(chatId: string): Promise<void> | null {
     const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
+    if (!queue || queue.length === 0) return null;
 
     let consumedPrefixCount = 0;
     for (const tracked of queue) {
       if (!tracked.consumed) break;
       consumedPrefixCount++;
     }
-    if (consumedPrefixCount === 0) return;
+    if (consumedPrefixCount === 0) return null;
 
     const lastConsumed = queue[consumedPrefixCount - 1];
-    if (lastConsumed) void this.ackThroughTrackedEntryAfterServerAck(chatId, lastConsumed.entryId);
+    return lastConsumed ? this.ackThroughTrackedEntryAfterServerAck(chatId, lastConsumed.entryId) : null;
   }
 
   private clearUnconsumedInFlightForSuspend(chatId: string): void {
