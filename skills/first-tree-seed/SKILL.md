@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.1.0
+version: 0.2.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-context`. Do not use to audit drift on an existing tree — that is `first-tree-sync`.
@@ -21,7 +21,7 @@ time — belongs to `first-tree-context`, not here.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-context` (incremental write)                   |
 | First content pass on the bound sources                               | Audit drift between merged code and an existing tree → `first-tree-sync`                             |
-| Triggered by the Web kickoff prompt at the end of onboarding          | Workspace is unbound → surface to a human (binding is a web-console operator action, not an agent's) |
+| Invoked by name — by a human, or by a future kickoff prompt once Cloud provisions before sending (see Trigger) | Workspace is unbound → surface to a human (binding is a web-console operator action, not an agent's) |
 
 The skill is **single-shot per tree**. If a previous seed already
 landed (PR1 merged), do not re-run; route any further work through
@@ -125,8 +125,8 @@ tier left a specific question unanswered.
 
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Filesystem walk over every bound source. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
-| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on 4xx — private repo or missing token; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
+| 0    | Filesystem walk over every bound source: **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
+| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on **any** failure — 4xx, missing token, no network, no `gh` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 
 **Tier 2 is targeted, not exhaustive.** If you cannot articulate the
@@ -143,7 +143,12 @@ Aggregate observations across all sources, then abstract:
   reasons about: e.g. `system/` for technical reality, `product/` for
   product intent, `customer/` for who is served, `marketing/` for how
   they are reached, `team-practice/` for working agreements, `goal/`
-  for organisation-level direction.
+  for organisation-level direction. On a well-factored monorepo the
+  concern axes and the package layout may largely coincide — that is
+  fine. The rule guards against blindly mirroring directories, not
+  against agreeing with a good layout; what matters is that each
+  candidate is justified as a concern the team reasons about, even
+  when the directory of the same name happens to exist.
 - **No archetype templates.** Do not load a pre-baked "SaaS default"
   or "OSS default" set. Every candidate must be justified by a
   signal observed in the bound sources. A domain that the sources do
@@ -158,7 +163,19 @@ Aggregate observations across all sources, then abstract:
   contributor of the largest source) and `raw-context/NODE.md` (the
   intake bucket for meeting notes and explorations). These are
   scaffolding, not concern axes; do not put them in the user
-  checklist.
+  checklist as toggles — but **do compute the primary owner now**
+  (one `git log` per source, seconds) and show the derived name in
+  the confirmation message, so the user confirms structure and owner
+  in one round-trip instead of being asked twice.
+- **ON / OFF marking rule.** Mark a candidate **ON** when ≥ 2
+  independent signals support it, or one strong structural signal
+  (a dedicated package, repo, or docs section). Mark it
+  **ON, weak signal** when exactly one soft signal supports it (a
+  README phrase, a single doc) — recommended but flagged so the user
+  knows the evidence is thin. Mark it **OFF** when you considered it
+  (because it is a common concern axis) but found no signal in the
+  sources; listing OFF candidates shows the user what was looked at
+  and rejected, which is itself information.
 
 The `first-tree-context` hard rule "add a directory only when ≥3
 leaves are present or expected" applies as written. Phase 1 may open
@@ -183,13 +200,17 @@ system/                       [recommended ON]
  └─ cloud/                    ← evidence: packages/server/ + packages/web/
 
 product/                      [recommended ON, weak signal]
- └─ evidence: README L1-3 frames a product positioning
+ └─ evidence: README L1-3 frames a product positioning (single soft
+              signal — flagged so you know the evidence is thin)
 
 team-practice/                [recommended ON]
  └─ evidence: CONTRIBUTING.md + AGENTS.md describe team workflow
 
 customer/                     [recommended OFF]
  └─ evidence: no marketing site repo, no user-facing positioning
+
+Proposed primary owner: gandy (412 commits in the last 6 months) —
+say so if someone else should own the seed.
 
 Reply with the domains you want to open (default: all "ON"). You can
 add custom domains the signals did not surface.
@@ -198,7 +219,11 @@ add custom domains the signals did not surface.
 Wait for the user's reply. Default behavior on plain "ok" / "yes" is
 "create everything marked ON, skip everything marked OFF". The user
 may toggle individual items, drop the OFF defaults entirely, or add
-their own top-level domains.
+their own top-level domains. **Accept free-form replies** — the
+box-drawing layout above is for reading, not a form the user must
+echo back. "open system and ops, skip customer, also add compliance"
+is a complete answer; interpret it and restate the final set in one
+line before writing.
 
 **This user-checklist step is what satisfies `first-tree-context`'s
 "top-level domains require explicit human-owner approval" rule.**
@@ -263,9 +288,11 @@ Notes on defaults:
   bound sources, computed from `git log --since='6 months ago'
   --format='%aN <%aE>' | sort | uniq -c | sort -rn | head -1`. Use
   the GitHub handle when `gh repo view` resolves the email; fall
-  back to the `%aN` author name otherwise. The user is the
-  authoritative source — confirm in chat before writing if the
-  derived owner is ambiguous.
+  back to the `%aN` author name otherwise. Compute this **during
+  Phase 1 exploration** and surface it in the confirmation checklist
+  (see above) — the user's reply to that checklist is the owner
+  confirmation; do not ask a second time unless the derivation was
+  ambiguous (e.g. two contributors within ~10% of each other).
 - **Member-node `role`** defaults to `"Owner"` because seed does
   not know the real role. Validator only requires non-empty; the
   user adjusts later.
@@ -329,6 +356,22 @@ burden. The allocation policy below caps each batch at 6 concurrent
 sub-agents and uses queue-batched dispatch so no approved domain is
 deferred.
 
+**No sub-agent dispatch available?** Some runtimes give the seeding
+agent no sub-agent / task-dispatch tool (and sub-agents themselves
+never get one — do not design nested fan-out). Fall back to
+**sequential self-dispatch**: the main agent works through the same
+queue one unit at a time, under the same per-unit contract — subtree
+scope, time budget, stopping discipline, and a coverage report per
+unit. Wall-clock is slower; the outputs and the PR2 shape are
+identical. Everything below that says "sub-agent" applies to a
+self-dispatched unit unchanged, except the parallel-write-safety
+rules, which become trivial. **In sequential mode, still defer all
+git commits until after the consolidation pass** — name normalisation
+and the soft_links resolution check happen across every unit's
+output and may rewrite earlier drafts; committing per-unit inline
+would force consolidation fixes into extra commits and blur the
+per-unit `git log` boundaries that PR2 review depends on.
+
 **Concurrency cap: 6 sub-agents per batch.** Empirical limit.
 Beyond this, wall-clock savings flatten while token cost and
 consolidation overhead grow. Adjust in a future skill version if
@@ -341,18 +384,29 @@ sub-agent's scope is the whole top-level subtree; second-level
 entries are its working surface, not separate units.
 
 **Split a top-level into multiple sub-agents** (one per second-level
-under it) when **both** hold:
+under it). Splitting is a **cost decision**: split when the projected
+work for one sub-agent exceeds what its budget can absorb. The
+structural test is only the **eligibility filter** — a split needs
+natural seams to split along. Both must hold:
 
-1. The top-level has **≥ 3 second-level entries** opened in Phase 1.
-2. **AND** any of:
+1. *Eligibility:* the top-level has **≥ 3 second-level entries**
+   opened in Phase 1 (fewer means no clean seams; an over-budget
+   2-entry domain gets a bigger budget, not a split).
+2. *Cost:* any of these indicators says one sub-agent's budget is
+   not enough:
    - Source aggregate signal weight for this top-level ≥ 30 files
-     of Tier-1 meta material to read.
+     of Tier-1 meta material to read (like the 6-cap, an empirical
+     threshold — adjust in a future skill version if real usage
+     proves it wrong).
    - A source repo / package is **dedicated to one specific
      second-level** (e.g. `apps/cli/` maps naturally to
      `system/cli/`). The mapping is then 1 source package →
      1 sub-agent.
-   - The main agent's estimate of total Tier-2 work would push a
-     single sub-agent's budget past 20 minutes.
+   - The main agent's estimate of total work would push a single
+     sub-agent past the 20-minute budget. Estimate it mechanically:
+     ~1 min per Tier-1 meta file in scope, plus ~2–3 min per open
+     Tier-2 question carried over from Phase 1, plus ~2 min per
+     expected leaf for drafting.
 
 Each split sub-agent's authority shrinks to its assigned
 second-level path. It cannot touch sibling second-levels under the
@@ -362,10 +416,19 @@ applies between split siblings, not just between top-level
 siblings.
 
 **Merge multiple thin top-levels into one sub-agent** when each
-top-level has ≤ 2 source signals AND ≤ 1 expected leaf. The pairing
-sub-agent's authority covers both top-level paths; surface the
-pairing in the PR2 body so the user sees why one commit spans two
-domains.
+top-level has ≤ 2 source signals (counted as distinct Tier-1 meta
+hits — the files / `gh` fields that motivated the domain in Phase 1)
+AND ≤ 1 leaf expected **to be drafted by Phase 2 in this seed run**
+(not "ever"). Weigh the **commit-boundary cost** before merging: a
+merged pair lands as one commit spanning two domains, which blurs
+the per-domain review boundary PR2 otherwise preserves. Merge only
+when both domains are thin enough that the combined commit is still
+trivially reviewable; when in doubt, run the thin domain as its own
+quick work unit instead. A merged sub-agent's authority covers
+**both assigned top-level paths in full** — the
+"sibling = forbidden" rule applies between work units, not inside a
+merged unit's pair. Surface the pairing in the PR2 body so the user
+sees why one commit spans two domains.
 
 **Batched dispatch when total work units > 6.** Maintain a queue of
 work units (one per top-level, plus split children, minus merged
@@ -412,6 +475,14 @@ Each sub-agent receives:
 - The time budget (default 15 minutes wall-clock; the main agent
   may set a lower budget for thin domains).
 - The hard rules from `first-tree-context` (loaded by reference).
+- The **leaf shape target**: **up to ~60 lines** per leaf, structured
+  as `## Decision` / `## Rationale` / `## Constraints` (matching
+  `first-tree-context`'s node shape; omit a section you don't need).
+  Shorter is better when the signal is thin — a six-line node that
+  captures the decision cleanly beats a sixty-line node that buries
+  it; do not pad to hit a length. Consistently longer is a smell
+  that implementation detail is leaking in; push it back to the
+  source repo and keep the durable claim.
 
 The sub-agent's authority within its assigned subtree:
 
@@ -476,6 +547,14 @@ Escalations (forbidden actions surfaced for main agent):
 - <one-line description>
 ```
 
+Use exactly three read-depth tags, so reports aggregate cleanly
+across sub-agents:
+
+- `(full)` — the entire file was read.
+- `(sampled)` — representative sections / head reads, not the whole
+  file.
+- `(first paragraph)` — only the first paragraph or first H1 block.
+
 The main agent stitches every sub-agent's coverage report into the
 PR2 description so the user can see, at merge time, exactly what was
 and was not covered — and decide whether to accept, manually fill, or
@@ -488,9 +567,24 @@ After all sub-agents return:
 1. Resolve naming inconsistencies across subtrees (different
    sub-agents may have named the same cross-cutting concept
    differently — normalise to one name).
-2. Verify `soft_links` references resolve. Where a sub-agent linked
-   to a sibling subtree's leaf that does not exist, drop the link
-   and surface as a known gap.
+2. Verify `soft_links` references resolve — mechanically, not by
+   eyeball, and with the **same criteria `tree verify` enforces**: a
+   valid target is either an existing `.md` file, or an existing
+   directory that contains a `NODE.md`. A bare `test -e` is not
+   enough — a directory without `NODE.md` (or a non-markdown file)
+   exists on disk but still fails verify. Extract every
+   `soft_links:` entry from every drafted node and check:
+
+   ```bash
+   # entries are tree-root-relative, e.g. /system/cli.md
+   t="<tree>${entry}"
+   { [ -f "$t" ] && case "$t" in *.md) true;; *) false;; esac; } \
+     || [ -f "$t/NODE.md" ] \
+     || echo "DANGLING: ${src} -> ${entry}"
+   ```
+
+   Where a sub-agent linked to a target that fails this check, drop
+   the link and surface it as a known gap.
 3. Aggregate escalations into a single section in the PR2 body
    ("Sub-agents flagged the following as out of their scope; user to
    decide whether to act now or later").
