@@ -6,11 +6,10 @@ import {
   type ToolFileRef,
 } from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import type { ChatContext } from "../runtime/chat-context.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
@@ -22,14 +21,9 @@ import type {
   SessionMessage,
 } from "../runtime/handler.js";
 import { ResumeUnavailableError } from "../runtime/handler.js";
-import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import { releaseSourceReposForSession } from "../runtime/source-repos.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
+import { prepareProviderBootstrap } from "./provider-bootstrap.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -329,9 +323,8 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
 }
 
 /**
- * Thin wrapper over the unified {@link buildAgentBriefing} kept for the
- * codex-bootstrap test suite. Production paths call `buildAgentBriefing`
- * directly via the inner `buildBriefing` helper inside the handler closure.
+ * Thin wrapper over the unified {@link buildAgentBriefing} kept for tests.
+ * Production start/resume paths call the shared ProviderBootstrap helper.
  */
 export function buildCodexAgentBriefing(
   identity: AgentIdentity,
@@ -471,33 +464,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let drainInProgress = false;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
-  /**
-   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced
-   * in the per-session AGENTS.md so the LLM knows the absolute paths.
-   */
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
-
-  function buildEnv(sessionCtx: SessionContext): Record<string, string> {
-    // Footgun F1: when `CodexOptions.env` is provided the SDK does NOT
-    // inherit `process.env`, so HOME/PATH/etc. would be missing. Start by
-    // explicitly cloning every defined parent var.
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === "string") env[k] = v;
-    }
-    const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-    if (payload) {
-      for (const e of payload.env) env[e.key] = e.value;
-    }
-    const merged = sessionCtx.buildAgentEnv(env);
-    // The First Tree envelope returns `Record<string, string | undefined>`; trim out
-    // undefined values so the SDK doesn't see them.
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(merged)) {
-      if (typeof v === "string") out[k] = v;
-    }
-    return out;
-  }
 
   function buildCodexConfig(payload: AgentRuntimeConfigPayload): CodexConfigObject {
     const cfg: CodexConfigObject = {
@@ -523,62 +489,21 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return cfg;
   }
 
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    chatContext: ChatContext | undefined,
-    workspaceCwd: string,
-  ): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      chatContext,
-      workspacePath: workspaceCwd,
-      sourceRepos: sourceReposForPrompt,
-      contextTreePath,
-    });
-  }
-
-  /**
-   * Best-effort chat-context fetch for the identity-injection path. Failures
-   * are logged but never bubble — bootstrap continues with `undefined`.
-   */
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
+  function defaultCodexPayload(): AgentRuntimeConfigPayload {
+    return {
+      kind: "codex",
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "high",
+    };
   }
 
   function toCodexInput(message: SessionMessage, sessionCtx: SessionContext): Promise<Input> {
     return sessionCtx.formatInboundContent(message).then((text) => text);
-  }
-
-  async function prepareSourceRepos(
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    sessionCtx: SessionContext,
-    payloadResolved: boolean,
-  ): Promise<void> {
-    // Delegate to the shared helper (runtime/source-repos.ts) so the
-    // standalone-clone materialisation + per-clone lock + decision-B in-use
-    // refcount stay in one place across the SDK, TUI, and codex handlers. The
-    // returned list feeds the per-session AGENTS.md "Source Repositories" block
-    // on the next `buildAgentBriefing` call.
-    //
-    // `payloadResolved` is forwarded so the shared helper can decide whether
-    // its empty `gitRepos: []` is authoritative — see
-    // `PrepareSourceReposParams.payloadResolved` and PR #869 P0-2.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace: workspaceCwd,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved,
-    });
   }
 
   function emitToolCall(
@@ -1049,79 +974,27 @@ export const createCodexHandler: HandlerFactory = (config) => {
     await runTurn(inputs.join("\n\n"), sessionCtx, drained);
   }
 
-  /**
-   * Bootstrap wrapper around the shared {@link ensureAgentBootstrapShared}
-   * helper that adds codex's AGENTS.md concurrent-write detector.
-   *
-   * 🔥 RACE WINDOW (proposal §⓪.3 accepted): the codex CLI reads AGENTS.md
-   * once at thread startup, so two writers landing inside the race window
-   * mean the second writer likely clobbered the first briefing before codex
-   * read it. Claude Code has the same property now that the briefing is the
-   * single channel, but Codex still hits this most visibly because there is
-   * no per-turn prompt API to update mid-thread — debug "wrong chat context
-   * surfaces in codex" symptoms by looking here first.
-   */
-  function ensureCodexBootstrap(
-    workspace: string,
-    sessionCtx: SessionContext,
-    briefing: string,
-    payload: AgentRuntimeConfigPayload,
-    payloadResolved: boolean,
-  ): void {
-    detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
-    ensureAgentBootstrapShared({
-      workspace,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      // PR #869 baixiaohang round-3 P0: thread the authoritative current
-      // source-repo set into migrations so `v1-orphan-ft-clones` can defer
-      // when the live config is unresolved.
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
-    });
-  }
-
   return {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
-      // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
-      // by every chat session for this agent.
-      cwd = acquireAgentHome(workspaceRoot);
+      const bootstrap = await prepareProviderBootstrap({
+        workspaceRoot,
+        sessionCtx,
+        contextTreePath,
+        agentConfigCache,
+        gitMirrorManager,
+        agentName,
+        payloadStrategy: "refresh",
+        defaultPayload: defaultCodexPayload,
+        envOptions: { trimUndefined: true },
+        beforeBootstrap: ({ cwd: workspace, sessionCtx }) =>
+          detectAgentsMdConcurrentWrite(workspace, Date.now(), (message) => sessionCtx.log(message)),
+      });
+      cwd = bootstrap.cwd;
+      const payload = bootstrap.payload;
+      const env = bootstrap.env as Record<string, string>;
 
-      let payload: AgentRuntimeConfigPayload | null = null;
-      if (agentConfigCache) {
-        payload = (await agentConfigCache.refresh(sessionCtx.agent.agentId)).payload;
-      }
-      // Track whether the payload reflects a real config — used by the source-
-      // repo state reconcile to distinguish "config has zero repos" from "we
-      // couldn't reach the cache". A `false` here suppresses cleanup of
-      // previously-managed clones; see PR #869 P0-2.
-      const payloadResolved = payload !== null;
-      if (!payload) {
-        payload = {
-          kind: "codex",
-          prompt: { append: "" },
-          model: "",
-          mcpServers: [],
-          env: [],
-          gitRepos: [],
-          resourceSkills: [],
-          reasoningEffort: "high",
-        };
-      }
-
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-
-      // gitRepos first so the per-chat briefing can list the predeclared
-      // worktree paths the agent should know about.
-      await prepareSourceRepos(payload, cwd, sessionCtx, payloadResolved);
-      await materializeResourceSkills(cwd, payload, sessionCtx);
-
-      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
-      markWorkspaceInitComplete(cwd);
-
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = new Codex({ env, config: buildCodexConfig(payload) });
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
       // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
@@ -1147,39 +1020,24 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
     async resume(message, sessionId, sessionCtx) {
       ctx = sessionCtx;
-      cwd = acquireAgentHome(workspaceRoot);
+      const bootstrap = await prepareProviderBootstrap({
+        workspaceRoot,
+        sessionCtx,
+        contextTreePath,
+        agentConfigCache,
+        gitMirrorManager,
+        agentName,
+        payloadStrategy: "refresh",
+        defaultPayload: defaultCodexPayload,
+        envOptions: { trimUndefined: true },
+        beforeBootstrap: ({ cwd: workspace, sessionCtx }) =>
+          detectAgentsMdConcurrentWrite(workspace, Date.now(), (message) => sessionCtx.log(message)),
+      });
+      cwd = bootstrap.cwd;
+      const payload = bootstrap.payload;
+      const env = bootstrap.env as Record<string, string>;
 
-      let payload: AgentRuntimeConfigPayload | null = null;
-      if (agentConfigCache) {
-        payload = (await agentConfigCache.refresh(sessionCtx.agent.agentId)).payload;
-      }
-      const resumePayloadResolved = payload !== null;
-      if (!payload) {
-        payload = {
-          kind: "codex",
-          prompt: { append: "" },
-          model: "",
-          mcpServers: [],
-          env: [],
-          gitRepos: [],
-          resourceSkills: [],
-          reasoningEffort: "high",
-        };
-      }
-
-      // Re-fetch chat-context every resume so newly-joined participants
-      // surface in AGENTS.md. The sentinel still gates the expensive
-      // `<binName> tree skill install` shell-out.
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-
-      await prepareSourceRepos(payload, cwd, sessionCtx, resumePayloadResolved);
-      await materializeResourceSkills(cwd, payload, sessionCtx);
-
-      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
-      markWorkspaceInitComplete(cwd);
-
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = new Codex({ env, config: buildCodexConfig(payload) });
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
       try {

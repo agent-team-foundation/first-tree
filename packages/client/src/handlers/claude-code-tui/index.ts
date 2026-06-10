@@ -2,21 +2,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos,
-  releaseSourceReposForSession,
-} from "../../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { releaseSourceReposForSession } from "../../runtime/source-repos.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
+import { prepareProviderBootstrap } from "../provider-bootstrap.js";
 import {
   capturePane,
   deriveSessionName,
@@ -110,54 +102,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let configTempDir: string | null = null;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
-  // Per-chat state captured at session start — feeds the unified briefing
-  // (AGENTS.md / CLAUDE.md symlink) that claude reads at startup via
-  // `--setting-sources user,project`. The TUI handler can't update the
-  // briefing mid-thread (claude is a persistent process holding the file
-  // contents in memory), so we snapshot once per startClaude().
-  let chatContextForPrompt: ChatContext | undefined;
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
-
-  function buildEnv(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === "string") env[k] = v;
-    }
-    for (const e of payload.env) env[e.key] = e.value;
-    const merged = sessionCtx.buildAgentEnv(env);
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(merged)) {
-      if (typeof v === "string") out[k] = v;
-    }
-    return out;
-  }
-
-  /**
-   * Build the unified briefing for the current session — agent identity,
-   * payload.prompt.append, source-repo list, chat context, and the Context
-   * Tree / runtime sections. Materialised by {@link ensureAgentBootstrap} as
-   * `<cwd>/AGENTS.md` (with `<cwd>/CLAUDE.md` symlinked to it) before claude
-   * spawns; the CLI then loads CLAUDE.md via `--setting-sources user,project`.
-   */
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      chatContext: chatContextForPrompt,
-      workspacePath: workspaceCwd,
-      sourceRepos: sourceReposForPrompt,
-      contextTreePath,
-    });
-  }
-
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
-  }
 
   function ensureConfigTempDir(workspaceCwd: string, sessionId: string): string {
     const dir = join(workspaceCwd, ".claude-code-tui", sessionId);
@@ -214,19 +158,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     return args.join(" ");
   }
 
-  async function loadPayload(sessionCtx: SessionContext): Promise<AgentRuntimeConfigPayload | null> {
-    if (!agentConfigCache) return null;
-    const cached = agentConfigCache.get(sessionCtx.agent.agentId);
-    if (cached) return cached.payload;
-    const refreshed = await agentConfigCache.refresh(sessionCtx.agent.agentId);
-    return refreshed.payload;
-  }
-
-  async function startClaude(input: { sessionCtx: SessionContext; resumeSessionId: string | null }): Promise<string> {
-    const { sessionCtx, resumeSessionId } = input;
+  async function startClaude(input: {
+    sessionCtx: SessionContext;
+    resumeSessionId: string | null;
+    payload: AgentRuntimeConfigPayload;
+    env: Record<string, string>;
+  }): Promise<string> {
+    const { sessionCtx, resumeSessionId, payload, env } = input;
     if (!cwd) throw new Error("startClaude called before cwd was acquired");
-
-    const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
     const sessionId = resumeSessionId ?? randomUUID();
     const sessionName = deriveSessionName(clientId, sessionCtx.agent.agentId, sessionCtx.chatId);
@@ -246,7 +185,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       name: sessionName,
       cwd,
       command,
-      env: buildEnv(sessionCtx, payload),
+      env,
     });
     // Track the session name immediately so a waitForReady failure still has a
     // teardown path — otherwise the detached tmux session (and its claude
@@ -537,45 +476,22 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       try {
         await orphanSweep(clientId);
         ctx = sessionCtx;
-        cwd = acquireAgentHome(workspaceRoot);
-
-        const resolvedPayload = await loadPayload(sessionCtx);
-        const payload = resolvedPayload ?? defaultPayload();
-
-        // Per-chat material flows through the unified briefing
-        // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
-        // chat-context and source repos BEFORE bootstrap so the briefing the
-        // shared `ensureAgentBootstrap` materialises is fully populated; claude
-        // then reads CLAUDE.md once on spawn via `--setting-sources project`.
-        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
-          workspace: cwd,
-          payload,
-          sessionCtx,
-          gitMirrorManager,
-          agentName,
-          // `payloadResolved: false` when we fell back to `defaultPayload()` —
-          // the empty `gitRepos: []` is then NOT authoritative and state-based
-          // cleanup is suppressed for this session (see PR #869 P0-2).
-          payloadResolved: resolvedPayload !== null && resolvedPayload !== undefined,
-        });
-        ensureAgentBootstrap({
-          workspace: cwd,
+        const bootstrap = await prepareProviderBootstrap({
+          workspaceRoot,
           sessionCtx,
           contextTreePath,
-          briefing: buildBriefing(sessionCtx, payload, cwd),
-          // Forward the authoritative current source-repo set to migrations
-          // (PR #869 baixiaohang round-3 P0). Same `payloadResolved` signal as
-          // above — null when defaultPayload was used, so v1-orphan-ft-clones
-          // defers until a future resolved start.
-          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-            payload,
-            resolvedPayload !== null && resolvedPayload !== undefined,
-          ),
+          agentConfigCache,
+          gitMirrorManager,
+          agentName,
+          payloadStrategy: "cached-or-refresh",
+          defaultPayload,
+          envOptions: { trimUndefined: true },
         });
-        markWorkspaceInitComplete(cwd);
+        cwd = bootstrap.cwd;
+        const payload = bootstrap.payload;
+        const env = bootstrap.env as Record<string, string>;
 
-        const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
+        const sessionId = await startClaude({ sessionCtx, resumeSessionId: null, payload, env });
 
         const inputText = await sessionCtx.formatInboundContent(message);
         currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
@@ -597,38 +513,22 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       try {
         await orphanSweep(clientId);
         ctx = sessionCtx;
-        cwd = acquireAgentHome(workspaceRoot);
-
-        const resumePayloadResolved = await loadPayload(sessionCtx);
-        const payload = resumePayloadResolved ?? defaultPayload();
-
-        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
-          workspace: cwd,
-          payload,
-          sessionCtx,
-          gitMirrorManager,
-          agentName,
-          // See PR #869 P0-2: same gate as the start() path.
-          payloadResolved: resumePayloadResolved !== null && resumePayloadResolved !== undefined,
-        });
-        // Same shared bootstrap as start(): ensureAgentBootstrap handles the
-        // sentinel + Context-Tree/CLI drift internally, so a stale or failed
-        // integration is re-run on resume instead of being skipped.
-        ensureAgentBootstrap({
-          workspace: cwd,
+        const bootstrap = await prepareProviderBootstrap({
+          workspaceRoot,
           sessionCtx,
           contextTreePath,
-          briefing: buildBriefing(sessionCtx, payload, cwd),
-          // See PR #869 baixiaohang round-3 P0 — same gate as start().
-          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-            payload,
-            resumePayloadResolved !== null && resumePayloadResolved !== undefined,
-          ),
+          agentConfigCache,
+          gitMirrorManager,
+          agentName,
+          payloadStrategy: "cached-or-refresh",
+          defaultPayload,
+          envOptions: { trimUndefined: true },
         });
-        markWorkspaceInitComplete(cwd);
+        cwd = bootstrap.cwd;
+        const payload = bootstrap.payload;
+        const env = bootstrap.env as Record<string, string>;
 
-        await startClaude({ sessionCtx, resumeSessionId: sessionId });
+        await startClaude({ sessionCtx, resumeSessionId: sessionId, payload, env });
 
         if (message) {
           const inputText = await sessionCtx.formatInboundContent(message);

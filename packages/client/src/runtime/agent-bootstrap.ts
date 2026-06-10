@@ -43,6 +43,12 @@ export type AgentBootstrapParams = {
   currentSourceRepoNames: ReadonlySet<string> | null;
 };
 
+export type AgentBootstrapResult = {
+  treeDrifted: boolean;
+  cliDrifted: boolean;
+  bootstrapped: boolean;
+};
+
 /**
  * Hash-check the existing identity.json against current agent metadata and
  * rewrite the stable `.first-tree-workspace/` section only when something
@@ -100,7 +106,7 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
  * list, current payload prompt.append) that changes between sessions for the
  * same agent home. See proposal §⓪.3 for the race window this accepts.
  */
-export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
+export function ensureAgentBootstrap(params: AgentBootstrapParams): AgentBootstrapResult {
   const { workspace, sessionCtx, contextTreePath, briefing, currentSourceRepoNames } = params;
 
   // One-shot workspace migrations: sweep legacy directory-structure residue
@@ -152,7 +158,7 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   if (sentinelPresent && !treeDrifted && !cliDrifted && !integrationNeverPinned) {
     ensureStableIdentity(workspace, sessionCtx, contextTreePath);
     writeAgentBriefing(workspace, briefing);
-    return;
+    return { treeDrifted, cliDrifted, bootstrapped: false };
   }
 
   if (sentinelPresent && treeDrifted) {
@@ -198,4 +204,5 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   if (integrationOk) {
     writeBundledCliVersion(workspace, currentCliVersion);
   }
+  return { treeDrifted, cliDrifted, bootstrapped: true };
 }

@@ -17,7 +17,6 @@ import {
   isImageRefContent,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
@@ -29,15 +28,10 @@ import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } fro
 import { ResumeUnavailableError } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
-import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import { releaseSourceReposForSession } from "../runtime/source-repos.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import { buildProviderEnv, prepareProviderBootstrap } from "./provider-bootstrap.js";
 
 const MAX_RETRIES = 2;
 
@@ -795,28 +789,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * `ctx.buildAgentEnv` so all handlers expose the same vars uniformly.
    */
   function buildEnv(sessionCtx: SessionContext): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...process.env };
-
-    // Parent session markers — not needed by the child
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-    delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
-    delete env.npm_lifecycle_script;
-
-    // Step 6: layer in user-configured env (sensitive already decrypted at
-    // service level; see config-service.getDecrypted()). User vars come
-    // BEFORE First Tree-internal vars so the latter wins on collision.
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-    if (payload) {
-      for (const e of payload.env) env[e.key] = e.value;
-    }
-
-    // Child processes receive the member access JWT as FIRST_TREE_ACCESS_TOKEN
-    // and pair it with X-Agent-Id (sent by the SDK automatically) to act as
-    // the current agent. Obtaining the token at buildEnv-time means the child
-    // sees the JWT valid at its spawn moment; long-lived runtimes should
-    // re-spawn after refresh, or re-read the env on their own cadence.
-    return sessionCtx.buildAgentEnv(env);
+    return buildProviderEnv(sessionCtx, payload, { stripClaudeCodeParentEnv: true });
   }
 
   /** Create query and input controller, then start consumer loop. */
@@ -1365,55 +1339,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   // instead of churning a new id per chat.
   const agentName = (config.agentName as string | undefined) ?? null;
 
-  /**
-   * Materialise the runtime config's `gitRepos` as **predeclared source
-   * repos** at the **top level** of the agent home (`<cwd>/<localPath>/`),
-   * NOT under `<cwd>/worktrees/`. Per the 2026-05-22 redesign, the
-   * `worktrees/` subdirectory is reserved entirely for agent-on-demand
-   * worktrees the LLM creates per task — the runtime never pre-creates any.
-   *
-   * Idempotent across sessions: with the per-agent-home model the checkout
-   * is **shared** across every chat for this agent. First call clones the
-   * repo as a standalone clone; subsequent calls fetch and — when the
-   * checkout is clean and not in use by another live session — bring it to
-   * the latest default branch. A dirty or in-use checkout is left at its
-   * current commit, so pending state the LLM left behind survives.
-   *
-   * Concurrency: the manager serialises per clone path so two sessions
-   * starting at the same time don't race a clone / update for the same path.
-   * See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
-   *
-   * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
-   * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
-   * list absolute paths + upstream coordinates for the LLM.
-   *
-   * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
-   * and the error bubbles up to the caller (SessionManager).
-   */
-  async function prepareSourceRepos(
-    workspace: string,
-    payload: AgentRuntimeConfigPayload | undefined,
-    sessionCtx: SessionContext,
-  ): Promise<void> {
-    // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
-    // TUI handlers share one worktree-lock / Hub-marker implementation rather
-    // than each carrying its own source-repo invariant.
-    //
-    // `payloadResolved` distinguishes "agent config truly says zero repos"
-    // from "we couldn't reach the cache/server and `payload` is undefined".
-    // Without this gate, a cache miss would compute an empty current-repo
-    // set and the state-reconcile path would `rm` every previously-managed
-    // clone. See `PrepareSourceReposParams.payloadResolved`.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved: payload !== undefined,
-    });
-  }
-
   /** Tear down all worktrees this session owns; best-effort. */
   async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
     // Drop this session's live-use references on shared source-repo checkouts so
@@ -1506,76 +1431,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
   }
 
-  /**
-   * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree skill install` shell-out). Gated by the stage-2 sentinel + Context-Tree
-   * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
-   *
-   *   - Sentinel absent → full bootstrap.
-   *   - Sentinel present + Tree HEAD unchanged → cheap identity refresh only.
-   *   - Sentinel present + Tree HEAD drifted → full bootstrap re-runs so the
-   *     stable `.first-tree-workspace/` layout and first-tree skill pick up
-   *     the new tree state.
-   *
-   * The unified briefing is rewritten on every call regardless of the drift
-   * decision — chat context and the agent payload may have changed between
-   * sessions for the same agent home.
-   *
-   * `workspaceId` for the integrate shell-out is the agent name — the home
-   * directory is per-agent, so the skill identity stays stable across chats.
-   */
-  function ensureAgentBootstrap(
-    workspace: string,
-    sessionCtx: SessionContext,
-    briefing: string,
-    payload: AgentRuntimeConfigPayload | undefined,
-  ): void {
-    // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
-    // and TUI handlers share one briefing / core-skill / drift-pin contract
-    // rather than each maintaining a partial copy.
-    //
-    // `currentSourceRepoNames` is threaded through to the migration applier
-    // so `v1-orphan-ft-clones` can defer when the live config is unresolved
-    // (cache miss). See PR #869 baixiaohang round-3 P0.
-    ensureAgentBootstrapShared({
-      workspace,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payload !== undefined),
-    });
-  }
-
   const handler: AgentHandler = {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
-      // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
-      // chat session. acquireAgentHome creates the directory and writes the
-      // boundary marker on first call; afterwards it is a no-op.
-      cwd = acquireAgentHome(workspaceRoot);
-
-      // Resolve the per-chat inputs that drive the unified briefing BEFORE
-      // bootstrap: the briefing is the single channel that materialises agent
-      // identity, payload.prompt.append, source-repo list, and Current Chat
-      // Context for the Claude Code SDK (read via `settingSources:
-      // ["project"]` from CLAUDE.md → AGENTS.md). Bootstrap must therefore
-      // see fully-resolved inputs.
-      const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
-      // Materialise gitRepos under `<cwd>/<localPath>/` before computing the
-      // briefing so the source-repo list reflects what the agent will see on
-      // disk. Failures here abort session creation (D10/D13).
-      await prepareSourceRepos(cwd, payload, sessionCtx);
-      await materializeResourceSkills(cwd, payload, sessionCtx);
-
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
-
-      // Stage-2 sentinel: written once per agent home. Future starts short-
-      // circuit the expensive integrate path on its presence.
-      markWorkspaceInitComplete(cwd);
+      const bootstrap = await prepareProviderBootstrap({
+        workspaceRoot,
+        sessionCtx,
+        contextTreePath,
+        agentConfigCache,
+        gitMirrorManager,
+        agentName,
+        payloadStrategy: "cached",
+        envOptions: { stripClaudeCodeParentEnv: true },
+      });
+      cwd = bootstrap.cwd;
+      chatContextForPrompt = bootstrap.chatContext;
+      sourceReposForPrompt = bootstrap.sourceRepos;
 
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
@@ -1661,22 +1533,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       // Normal new-design resume path: cwd is the agent home.
-      cwd = acquireAgentHome(workspaceRoot);
-
-      // Identical control flow to start(): bootstrap is idempotent and the
-      // sentinel gates the expensive integrate. The cheap stable-identity
-      // hash check runs every time so agent rename / inboxId changes
-      // propagate even after the sentinel is set (R5 in the proposal).
-      const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
-      await prepareSourceRepos(cwd, payload, sessionCtx);
-      await materializeResourceSkills(cwd, payload, sessionCtx);
-
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
-
-      markWorkspaceInitComplete(cwd);
+      const bootstrap = await prepareProviderBootstrap({
+        workspaceRoot,
+        sessionCtx,
+        contextTreePath,
+        agentConfigCache,
+        gitMirrorManager,
+        agentName,
+        payloadStrategy: "cached",
+        envOptions: { stripClaudeCodeParentEnv: true },
+      });
+      cwd = bootstrap.cwd;
+      chatContextForPrompt = bootstrap.chatContext;
+      sourceReposForPrompt = bootstrap.sourceRepos;
 
       // Defensive fallback: sessionId isn't recognised at EITHER cwd (likely
       // a stale registry entry from machine swap / fs cleanup / tampering).
