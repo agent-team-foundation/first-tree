@@ -1068,6 +1068,47 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
+  it("injects later same-chat messages after one waiter resumes a suspended session", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn((entryId: number) => (entryId === 41 ? ack.promise : Promise.resolve()));
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn<AgentHandler["resume"]>(async () => "session-id-mock");
+    const injectSpy = vi.fn<AgentHandler["inject"]>();
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+      inject: injectSpy,
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 41, chatId: "chat-suspend-multi-waiter", messageId: "msg-w1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+
+    await sm.handleCommand("chat-suspend-multi-waiter", "session:suspend");
+    expect(ackEntry).toHaveBeenCalledWith(41);
+
+    const dispatchB = sm.dispatch(mockEntry({ id: 42, chatId: "chat-suspend-multi-waiter", messageId: "msg-w2" }));
+    const dispatchC = sm.dispatch(mockEntry({ id: 43, chatId: "chat-suspend-multi-waiter", messageId: "msg-w3" }));
+    await Promise.resolve();
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(injectSpy).not.toHaveBeenCalled();
+
+    ack.resolve();
+    await Promise.all([dispatchB, dispatchC]);
+
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect((resumeSpy.mock.calls[0]?.[0] as SessionMessage | undefined)?.id).toBe("msg-w2");
+    expect(injectSpy).toHaveBeenCalledTimes(1);
+    expect((injectSpy.mock.calls[0]?.[0] as SessionMessage | undefined)?.id).toBe("msg-w3");
+
+    await sm.shutdown();
+  });
+
   it("suspend leaves injected but not consumed entries unacked for recovery", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);

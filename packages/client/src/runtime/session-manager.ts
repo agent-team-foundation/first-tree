@@ -795,10 +795,7 @@ export class SessionManager {
     if (existing) {
       switch (existing.status) {
         case "active":
-          existing.handler.inject(message);
-          existing.lastActivity = Date.now();
-          this.recomputeSessionRuntimeState(chatId);
-          this.config.log.debug({ chatId }, "message injected");
+          this.injectIntoActiveSession(existing, message);
           return;
 
         case "suspended":
@@ -896,7 +893,14 @@ export class SessionManager {
       await entry.suspending;
     }
     const currentEntry = this.sessions.get(entry.chatId);
-    if (currentEntry !== entry || (entry.status !== "suspended" && entry.status !== "evicted")) {
+    if (currentEntry !== entry) {
+      return;
+    }
+    if (entry.status === "active") {
+      if (message) this.injectIntoActiveSession(entry, message);
+      return;
+    }
+    if (entry.status !== "suspended" && entry.status !== "evicted") {
       return;
     }
     if (this.requiresInboxRecovery.has(entry.chatId)) {
@@ -975,6 +979,13 @@ export class SessionManager {
       if (!isResumeUnavailableError(err)) throw err;
       return this.replaceProviderSession(entry, message, previousSessionId, err.reason, err.message, ctx);
     }
+  }
+
+  private injectIntoActiveSession(entry: SessionEntry, message: SessionMessage): void {
+    entry.handler.inject(message);
+    entry.lastActivity = Date.now();
+    this.recomputeSessionRuntimeState(entry.chatId);
+    this.config.log.debug({ chatId: entry.chatId }, "message injected");
   }
 
   private async replaceProviderSession(
