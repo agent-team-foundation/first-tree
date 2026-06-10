@@ -1,5 +1,5 @@
 import { Check, ChevronRight } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { COPY } from "./copy.js";
 
 /**
@@ -217,7 +217,7 @@ export function InstallGuide() {
     <div>
       <div
         role="img"
-        aria-label="Flow: choose your projects on GitHub, click install, then return to setup."
+        aria-label={COPY.connectCode.installFlowAria}
         className="flex items-center"
         style={{
           gap: "var(--sp-2)",
@@ -228,19 +228,20 @@ export function InstallGuide() {
           background: "color-mix(in oklch, var(--bg-raised) 40%, transparent)",
         }}
       >
-        <FlowChip label="Choose your projects" />
-        <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--fg-4)", flexShrink: 0 }} aria-hidden="true" />
-        <FlowChip label="Click Install" />
-        <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--fg-4)", flexShrink: 0 }} aria-hidden="true" />
-        <FlowChip label="Back here automatically" />
+        {COPY.connectCode.installFlow.map((label, i) => (
+          <Fragment key={label}>
+            {i > 0 && (
+              <ChevronRight
+                className="h-3.5 w-3.5"
+                style={{ color: "var(--fg-4)", flexShrink: 0 }}
+                aria-hidden="true"
+              />
+            )}
+            <FlowChip label={label} />
+          </Fragment>
+        ))}
       </div>
-      <GuideSteps
-        steps={[
-          "GitHub asks which projects First Tree may access — pick yours.",
-          "Click the green Install button.",
-          "GitHub sends you straight back here to keep going.",
-        ]}
-      />
+      <GuideSteps steps={COPY.connectCode.installSteps} />
     </div>
   );
 }

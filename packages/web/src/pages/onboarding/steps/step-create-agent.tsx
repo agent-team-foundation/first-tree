@@ -41,6 +41,8 @@ export function StepCreateAgent() {
     retryAgent,
     agentPhase,
     agentError,
+    goTo,
+    sequence,
   } = useOnboardingFlow();
 
   const trimmed = agentDisplayName.trim();
@@ -58,12 +60,8 @@ export function StepCreateAgent() {
   if (agentPhase === "timeout") {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <p className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
-          {COPY.createAgent.timeoutTitle}
-        </p>
-        {/* Light treatment (consistent with the connect-computer states): the
-            heading already signals the problem, so the body is a plain line,
-            not a saturated callout box. */}
+        {/* One plain paragraph — the shell's step h1 ("Create your first agent")
+            already heads the screen, so no second bold title here — then retry. */}
         <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {COPY.createAgent.timeoutBody}
         </p>
@@ -128,6 +126,25 @@ export function StepCreateAgent() {
         // Light inline error; the Create button right below is the retry.
         <FlowHint tone="error" role="alert">
           {COPY.errors.agentFailed}
+        </FlowHint>
+      )}
+
+      {!computer.connectedClient && (
+        // Computer dropped (slept / offline) or resumed here with it not
+        // connected — Create is gated on a live client. One line with the
+        // "reconnect it" action inline (→ connect-computer), not a separate
+        // orphaned link. Auto-clears once the poll sees it reconnect.
+        <FlowHint>
+          {COPY.createAgent.computerDisconnected.pre}
+          <button
+            type="button"
+            className="font-medium underline underline-offset-2"
+            style={{ color: "var(--primary)" }}
+            onClick={() => goTo(sequence.indexOf("connect-computer"))}
+          >
+            {COPY.createAgent.computerDisconnected.link}
+          </button>
+          {COPY.createAgent.computerDisconnected.post}
         </FlowHint>
       )}
 

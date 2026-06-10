@@ -1,10 +1,15 @@
 /**
  * Every user-facing string in the onboarding flow, in one place.
  *
- * Goal: a complete beginner — someone who has never heard "repo", "runtime",
- * or "binding" — can read these and know what to do and why.
- * The vocabulary is deliberately small: "team", "your project", "a computer",
- * "agent", "Context Tree". We distinguish people from AI: human members are
+ * Goal: a near-beginner can read these and know what to do and why. The
+ * vocabulary is deliberately small: "team", "a computer", "agent", "Context
+ * Tree". Two implementation words are used DELIBERATELY where the step's
+ * audience already knows them and a softer word would be vaguer: "agent
+ * runtime" in connect-computer (the user just ran a terminal command) and
+ * "repo" in connect-computer's sibling connect-code / kickoff (they're
+ * installing a GitHub App — and "project" is ambiguous next to GitHub's own
+ * "Projects" feature). "binding" and other deep internals still never leak.
+ * We distinguish people from AI: human members are
  * "teammates", the AI workers are "agents" (matching the rest of the product;
  * "AI agent" on first mention, then just "agent"). "Context Tree" is the one
  * product concept we deliberately teach (with a plain-language gloss on first
@@ -38,15 +43,37 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "Let's start with your team — where you, your teammates, and your AI agents work together.",
   },
   "connect-code": {
-    title: "Connect your code",
+    // "repo" (not "project"): this step connects a GitHub repository — the App
+    // install dialog and the picker below both show repos as owner/name, and
+    // "project" is ambiguous in a GitHub context (GitHub has a separate "Projects"
+    // feature). This audience installs a GitHub App + runs a CLI, so "repo" reads
+    // clearer than the beginner-softened "project". Role-framed and agent-centric,
+    // matching the connect-computer title; NOT "your agent's repo" (the repo
+    // belongs to the user/team, the agent only works on it).
+    title: "Connect the repos your agent works on",
     // Answer "why connect a repo?" in value terms (the issue-834 UR gap): connecting
-    // isn't just access — it's how the agent learns the project and turns it
+    // isn't just access — it's how the agent learns the repo and turns it
     // into the team's shared context. The second clause reassures the user the
     // agent won't touch their code unsupervised.
-    why: "Connect a project — your agent learns it and turns it into shared context. It never changes your code without your okay.",
+    why: "Connect a repo so your agent can learn your codebase and work on it. It never changes your code without your okay.",
   },
   "connect-computer": {
-    title: "Connect your computer",
+    // Names where the *agent* runs, not a bare "Connect your computer" — the
+    // latter read as an unmotivated demand ("why am I connecting my computer?")
+    // as the first hands-on step. We frame it around the agent (the flow's
+    // spine) but via its *place/role* ("where your agent runs"), not possession
+    // ("your agent's computer"): this step precedes create-agent, so a
+    // possessive would claim the agent before it exists. "Set up" (not "Connect"):
+    // the action is provisioning a machine — running a command, readying a runtime —
+    // not wiring it to something. We say "where your agent runs", NOT "the computer
+    // your agent runs on": the per-state subtitle already names the concrete noun
+    // ("…on a computer you pick. Run the command below.") and the screen visibly
+    // concerns a computer, so repeating it in the title is redundant and just makes
+    // the title the longest in the flow. Title carries the place/why; subtitle carries
+    // the concrete what. "runs" is plain English, deliberately not the banned
+    // implementation word "runtime"; rhymes with the connected subtitle "This is
+    // where your agent will run".
+    title: "Set up where your agent runs",
     // why is rendered per-state by StepConnectComputer (the "run the command
     // below" line is only true while waiting — once connected there's no
     // command shown, so a static shell subtitle would read as stale). The
@@ -54,10 +81,14 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "",
   },
   "create-agent": {
-    // "an agent", not "your agent": it can be team-visible (see the Visibility
-    // choice), so "your" would over-claim private ownership. No `why` — the
-    // title + form are self-explanatory; a subtitle would only restate fields.
-    title: "Create an agent",
+    // "your first agent": warmer + a milestone framing that fits building out a team
+    // of agents ("first" implies more to come). We re-introduce "your" — earlier copy
+    // deliberately said "an agent" to avoid over-claiming private ownership (the agent
+    // can be team-visible) — but "first" reframes "your" as a creation milestone (the
+    // first one you make) rather than exclusive possession, which reads honestly even
+    // for a team-visible agent. NOT "your AI teammate": the vocabulary reserves
+    // "teammate" for humans and "agent" for AI. No `why` — title + form self-explain.
+    title: "Create your first agent",
     why: "",
   },
   kickoff: {
@@ -102,67 +133,74 @@ export const COPY = {
     // `STEP_COPY['connect-code'].why` verbatim and had no remaining
     // consumer after the connect-code step started reading from
     // STEP_COPY directly. Keep the why as the single source of truth.
-    cta: "Install First Tree on GitHub",
+    /** The step's two sub-phases, shown as an in-step indicator so the user can
+        see it's "connect, then pick" and where they are. */
+    phases: ["Connect GitHub", "Pick repos"],
+    cta: "Install on GitHub",
     waiting: "Waiting for GitHub…",
-    connected: "Connected",
-    pickProject: "Which projects should your agent work on?",
+    // (connected status row removed — the PhaseNav's "✓ Connect GitHub" already
+    // signals the connection, and the repo picker shows the org + repos.)
+    pickProject: "Which repos should your agent work on?",
+    /** Loading state for the repo picker (was hardcoded in the step). */
+    loading: "Loading your repos…",
     // The picker is sourced from the team's GitHub App installation grant, so
     // "your GitHub account" would be wrong — an empty list means the App was
     // connected but isn't granted any repos yet.
-    noRepos: "No projects are connected to your team's GitHub yet — add some on GitHub, or continue without one.",
+    noRepos: "No repos are shared with First Tree yet — add some on GitHub, or continue without one.",
     // Shown when the org-scoped repo list fails to load (502 upstream / 503
     // suspended etc.). The new installation-backed endpoint can return these,
     // and without this branch the failure was misrendered as an empty
-    // "no projects" list. The "Continue without a project" button below keeps
+    // "no projects" list. The "Continue without a repo" button below keeps
     // it from being a dead end.
-    loadFailed: "Couldn't load your team's projects. Try again in a moment — or continue without one.",
-    reconnect: "Reconnect GitHub with project access",
-    notConfigured:
-      "Code connection isn't set up here yet. You can continue now and connect a project later from Settings.",
-    notAdmin: "Only a team admin can connect code. Ask an admin to finish this, or continue for now.",
-    continueWithout: "Continue without connecting code",
-    continueNoProject: "Continue without a project",
-    pickHint: "Pick one or more projects for your agent — or continue without any for now.",
+    loadFailed: "Couldn't load your team's repos — continue without one for now.",
+    reconnect: "Reconnect GitHub with repo access",
+    // Collapsed the two rare, not-user-fixable install errors (App not set up on
+    // this server / caller lacks permission) into one recoverable message — the
+    // action is the same either way (continue, set up later), so two separate
+    // screens added surface without adding clarity.
+    cantConnect: "Couldn't connect a repo here right now — continue now and add one later from Settings.",
+    continueWithout: "Continue without a repo",
+    continueNoProject: "Continue without a repo",
+    pickHint: "Pick one or more repos for your agent — or continue without any for now.",
     /**
-     * Non-owner hint shown under the primary CTA. We deliberately don't hand
-     * out a copy-the-install-link button — GitHub's install URL is bound to
-     * a per-browser `oauth_state_nonce` cookie, so a link opened in someone
-     * else's browser would fail the callback. GitHub already routes
-     * non-owner installs through an owner-approval flow, so the right
-     * advice is to click Install anyway and let GitHub handle the ask.
+     * Shown under the CTA/Skip row: the install caveat (who can install) merged
+     * with the skip reassurance into one muted line. `emphasis` renders bold so
+     * the gating fact ("a GitHub org owner") stands out. The Request-instead-of-
+     * Install mechanic lives in Need help? (step 3), keeping this one tight line.
      */
-    notOwnerHint:
-      "Only a GitHub org owner can connect your team's code. Not one? Installing sends them a request — continue now and connect it later.",
-    /** Connected but GitHub access lacks repo scope — explain; the link carries the verb. */
-    scopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
-    /**
-     * Replaces the "Waiting for GitHub…" status once the user returns from the
-     * install dialog without an installation (postAttemptStuck). Guidance-y, so
-     * the auto-opened "Need help?" below isn't missed — not a flat "still
-     * waiting" (which would contradict the help saying it didn't go through).
-     */
-    stuckStatus: "Still not connected? The steps under Need help? can get you unstuck.",
+    notOwnerHint: {
+      pre: "Only ",
+      emphasis: "a GitHub org owner",
+      post: " can install First Tree — if that's not you, clicking Install asks an owner to approve. You can skip and connect anytime from Settings.",
+    },
+    /** Explicit "abandon the in-flight attempt and re-mint" action, shown under
+        the "Waiting for GitHub…" status. Retry is deliberate (not an
+        auto-unlocked button) because a fresh install URL overwrites the
+        `oauth_state_nonce` cookie — re-minting while the first install tab is
+        mid-flow would fail its callback. */
+    restartInstall: "Start over",
     /**
      * Troubleshooting shown inside the "Need help?" disclosure (alongside the
      * InstallGuide how-to), mirroring connect-computer. The disclosure
      * auto-opens when the user returns from GitHub without an installation, so
      * the title is state-neutral (it can also be opened proactively).
      */
-    troubleshootTitle: "If GitHub didn't add First Tree:",
-    troubleshootBody: "Click Install again — it'll ask an org owner to approve if you're not one.",
-    /**
-     * Calm, always-visible reassurance shown beside the skip affordance so
-     * the choice is *informed before* clicking. Replaces the old confirm
-     * panel (a "Skip connecting code?" title + consequence bullets +
-     * Keep-connecting / Skip-anyway), which confirmshamed a legitimate,
-     * fully-recoverable choice — re-asking the question, leading with a
-     * teammates-will-hit-errors scare, and under-weighting the real exit.
-     * The "agent starts with just an intro" consequence is already stated
-     * honestly on the kickoff no-project screen, so one recovery line is
-     * enough here; the team-level consequence (invitees need the install)
-     * is caught gracefully by the invitee no-installation screen.
-     */
-    skipReassure: "You can connect code anytime from Settings.",
+    /** "Need help?" InstallGuide — a 3-beat visual flow + numbered how-to,
+        written to match GitHub's REAL App-install screen: choose where to
+        install → pick repo access (all / select) → click Install (or Request,
+        for non-owners) → auto-return. */
+    installFlow: ["Choose org", "Pick repos", "Install", "Back here"],
+    installFlowAria: "Flow: choose your org, pick repos, click Install on GitHub, then return to setup.",
+    installSteps: [
+      "Choose where to install First Tree — your team's GitHub org (or your account, if your repos live there).",
+      "Pick which repos it can access: all of them, or just the ones you choose.",
+      "Click Install. Not a GitHub org owner? The button says Request instead — an owner approves it.",
+      "GitHub sends you straight back here, and this page connects on its own.",
+    ],
+    troubleshootTitle: "If it didn't connect:",
+    troubleshootBody:
+      "Make sure you clicked Install (or Request) on GitHub. If you're not a GitHub org owner, an owner has to approve it — once they do, it connects here automatically.",
+    // (skipReassure merged into `notOwnerHint` — one muted line under the row.)
   },
   /** connect-computer states */
   connectComputer: {
@@ -170,13 +208,33 @@ export const COPY = {
     // command-pointing line only holds while waiting; once connected we swap
     // to a neutral confirmation so it doesn't tell the user to "run the
     // command below" when no command is shown.
-    whyWaiting: "Your agent does real work on a computer you pick. Run the command below.",
-    whyConnected: "This is where your agent will run.",
+    // "does its work" (not "does real work" / "gets work done"): answers "why
+    // connect a computer?" by naming the mechanism — the agent runs and does its
+    // work on the machine you pick. Stays general (the agent's work isn't only
+    // code: research, docs, Context Tree, tasks), so we avoid narrowing examples
+    // like "writes code". The trailing "to connect one" gives the bare command a
+    // purpose (closes the loop).
+    whyWaiting: "Your agent does its work on a computer you pick. Run the command below to connect one.",
+    whyConnected: "Your computer's connected — this is where your agent will run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
-      "Your computer is connected, but it doesn't have an AI coding tool ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
+      "Your computer is connected, but no agent runtime is ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
     detecting: "Checking what's installed…",
+    /**
+     * Ready · exactly one runtime detected — nothing to choose, so name the
+     * tool and confirm. `name` is the friendly PROVIDER_LABEL (e.g. "Claude
+     * Code"). We say "runtime" deliberately here (and in `runtimesReady` /
+     * noRuntime): by this step the user has run a terminal command, so the
+     * precise word reads better than a vaguer "tool", and it stays consistent
+     * across all three runtime states.
+     */
+    runtimeReady: (name: string) => `${name} runtime is ready — your agent will use it.`,
+    /**
+     * Ready · two or more runtimes detected — state the count and prompt the
+     * user to pick which one powers the agent (a single-select list follows).
+     */
+    runtimesReady: (count: number) => `${count} agent runtimes are ready — pick which one runs your agent.`,
     stuckTitle: "Taking a while? A few common reasons:",
     stuckReasons: [
       "If you saw “command not found”, your computer needs Node.js first — it's a free install. Get it, then run the command again.",
@@ -199,12 +257,26 @@ export const COPY = {
   /** create-agent states */
   createAgent: {
     nameLabel: "What should we call your agent?",
-    creating: "Setting up your agent…",
-    creatingHint: "Usually about 10 seconds",
-    timeoutTitle: "This is taking longer than expected.",
+    // "Bringing your agent online…" (not "Setting up…"): the step creates the
+    // agent then polls until it comes online, and "set up" echoed step1's title
+    // ("Set up where your agent runs"). Pairs with timeout's "isn't online yet".
+    creating: "Bringing your agent online…",
+    creatingHint: "This usually takes a few seconds.",
+    // Timeout: created but didn't report online within 30s. ONE paragraph, no
+    // separate bold title — the shell already renders the step h1 ("Create your
+    // first agent"), so a second heading read as a stacked double-title. Leads
+    // with the situation, then causes + fix. "agent runtime" matches connect-computer.
     timeoutBody:
-      "Your agent was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI coding tool couldn't start. Check that computer, then try again.",
+      "Your agent isn't online yet — it was created, but the computer it runs on may have gone to sleep, lost its connection, or its agent runtime didn't start. Check that computer, then try again.",
     retry: "Try again",
+    /** Shown on the form when the computer isn't connected (Create is disabled).
+        Rendered as one line with an inline "reconnect it" link (→ connect-computer)
+        rather than a separate orphaned link line. Auto-clears on reconnect. */
+    computerDisconnected: {
+      pre: "Your computer isn't connected — ",
+      link: "reconnect it",
+      post: " to create your agent.",
+    },
   },
   /** kickoff / "Start" states (title/why are per-state, rendered by the step) */
   kickoff: {
@@ -229,15 +301,16 @@ export const COPY = {
     // admin — no project connected
     noProjectTitle: "Start your agent",
     noProjectBody:
-      "No project connected, so your agent will start with a quick intro. Connect a project later from Settings to give it real context.",
-    // invitee — team's tree is ready, pick a project
-    inviteePickerTitle: "Pick a project to work on",
-    inviteePickerWhy: "Your team's set up — pick which of your own projects your agent should help with.",
+      "No repo connected, so your agent will start with a quick intro. Connect a repo later from Settings to give it real context.",
+    // invitee — team's tree is ready, pick a repo
+    inviteePickerTitle: "Pick a repo to work on",
+    inviteePickerWhy: "Your team's set up — pick which of your own repos your agent should help with.",
+    inviteePickerLoading: "Loading your repos…",
     inviteePickerEmpty:
-      "No projects found on your GitHub account yet. You can continue without one and add later from Settings.",
-    inviteePickerScopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
-    inviteePickerNetworkError: "Couldn't load your projects. Try again in a moment.",
-    inviteeContinueNoProject: "Continue without a project",
+      "No repos found on your GitHub account yet. You can continue without one and add later from Settings.",
+    inviteePickerScopeMissing: "Couldn't see your repos — First Tree needs permission to read them.",
+    inviteePickerNetworkError: "Couldn't load your repos. Try again in a moment.",
+    inviteeContinueNoProject: "Continue without a repo",
     /** Shown atop confirm / picker so invitee knows where the work lands. */
     treeLabel: "Context Tree",
     // Launch CTA — per-substate so it names what's actually starting:
@@ -256,18 +329,18 @@ export const COPY = {
   invitee: {
     waitingTitle: "Waiting for your team to set up",
     waitingBody:
-      "Your team's admin is still setting up projects and a Context Tree. This page updates on its own as soon as they're done.",
+      "Your team's admin is still setting up repos and a Context Tree. This page updates on its own as soon as they're done.",
     waitingStatus: "Watching for updates…",
     // NEW: admin set up tree but never connected the GitHub App. Without
     // an installation, every git op the agent runs will 403, so we hard-stop
     // the invitee here rather than letting them sail into the picker.
-    noInstallTitle: "Almost there — your team's code isn't connected yet",
+    noInstallTitle: "Almost there — your team's repo isn't connected yet",
     noInstallBody:
-      "Your team's admin set up the Context Tree but hasn't connected code on GitHub yet. Your agent needs that connection to do real work.",
+      "Your team's admin set up the Context Tree but hasn't connected a repo on GitHub yet. Your agent needs that connection to do real work.",
     noInstallStatus: "Watching for the connection…",
-    noInstallShareIntro: "Send this link so your admin can connect your team's code:",
+    noInstallShareIntro: "Send this link so your admin can connect your team's repo:",
     confirmTitle: "Your team is ready",
-    confirmBody: "Your team set up its projects and Context Tree. Pick what your agent should work on.",
+    confirmBody: "Your team set up its repos and Context Tree. Pick what your agent should work on.",
     // Bailout on the waiting / no-installation screens — proceed with your
     // own agent now instead of waiting on the team. Framed positively around
     // the agent (was "Start chatting anyway"; "anyway" read as defiant/
@@ -278,7 +351,7 @@ export const COPY = {
   errors: {
     generic: "Something went wrong. Try again in a moment.",
     chatFailed: "Couldn't start the first task. Try again.",
-    agentFailed: "Couldn't create your agent. Try again.",
+    agentFailed: "Couldn't create your agent — please try again.",
     noAgent: "We couldn't find your agent. Go back a step and create one.",
   },
 } as const;
