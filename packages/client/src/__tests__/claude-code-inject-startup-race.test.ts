@@ -114,7 +114,7 @@ function makeMessage(id: string, content: string): SessionMessage {
 }
 
 function makeContext(
-  markCompleted: (count?: number) => void,
+  finish: (count?: number) => void,
   opts: { formatInboundContent?: SessionContext["formatInboundContent"] } = {},
 ): SessionContext {
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -131,13 +131,10 @@ function makeContext(
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-claude-startup-race",
     log: () => {},
-    touch: () => {},
-    setRuntimeState: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, "chat-claude-startup-race"),
     ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
-    markCompleted,
-    markMessagesCompleted: () => markCompleted(),
+    finishTurn: async (messages) => finish(Array.isArray(messages) ? messages.length : 1),
   };
 }
 
@@ -195,7 +192,7 @@ describe("claude-code handler startup inject queue", () => {
 
     expect(state.observedInputs[0]).toContain("first");
     expect(state.observedInputs[1]).toContain("second");
-    expect(completedCounts).toEqual([undefined, undefined]);
+    expect(completedCounts).toEqual([1, 1]);
 
     await handler.shutdown();
   });
@@ -242,7 +239,7 @@ describe("claude-code handler startup inject queue", () => {
     expect(state.observedInputs[0]).toContain("first");
     expect(state.observedInputs[1]).toContain("second");
     expect(state.observedInputs[2]).toContain("third");
-    expect(completedCounts).toEqual([undefined, undefined, undefined]);
+    expect(completedCounts).toEqual([1, 1, 1]);
 
     await handler.shutdown();
   });

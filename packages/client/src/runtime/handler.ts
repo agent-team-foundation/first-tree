@@ -48,10 +48,8 @@ export type HandlerContext = {
 export type SessionContext = HandlerContext & {
   /** The server-side chat this session belongs to. */
   chatId: string;
-  /** Refresh `lastActivity` timestamp to prevent idle timeout. */
-  touch: () => void;
-  /** Report per-session runtime state (working/idle/blocked/error). */
-  setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
+  /** Report provider activity without directly changing effective runtime state. */
+  recordProviderActivity: () => void;
   /**
    * Persist a structured session event (tool_call / error) to the server.
    * Assistant text does NOT go through here — it flows via `forwardResult`.
@@ -66,13 +64,6 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Mark a single-message turn complete. Built-in handlers should prefer
-   * `markMessagesCompleted(messageOrBatch)` so the runtime can ack-through
-   * the exact inbox entry the handler actually consumed.
-   */
-  markCompleted: () => void;
-
-  /**
    * Mark the concrete message or fused batch as entered into the current
    * provider turn. This is an in-memory boundary used by suspend: consumed
    * entries can be ACKed when the turn is paused, while handler queues that
@@ -81,21 +72,21 @@ export type SessionContext = HandlerContext & {
   markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
 
   /**
-   * Mark the concrete message or fused message batch a handler has actually
-   * consumed. The runtime sends one `inbox:ack` for the last message's
-   * `inboxEntryId`; the server interprets it as ack-through for the chat's
-   * delivered prefix. This replaces the old `markCompleted(count)` FIFO
-   * pairing, which could ack an older queued entry while the completed entry
-   * remained unacked.
+   * Finish a concrete provider turn. The runtime emits turn_end, ACKs the
+   * completed inbox prefix, clears local in-flight tracking on ACK success,
+   * and recomputes effective runtime state.
    */
-  markMessagesCompleted: (messages: SessionMessage | readonly SessionMessage[]) => void;
+  finishTurn: (
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: { status: "success" | "error"; terminal?: boolean },
+  ) => Promise<void>;
 
   /**
    * Mark a concrete message or batch as abandoned by a retryable path
    * (abort, timeout, unknown failure). The runtime leaves the server-side
    * entries unacked; a later chat recovery or bind reset redelivers them.
    */
-  markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
+  retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.
@@ -124,6 +115,25 @@ export type SessionContext = HandlerContext & {
    */
   resolveSenderLabel: (senderId: string) => Promise<string>;
 };
+
+export type ResumeUnavailableReason =
+  | "transcript_missing"
+  | "provider_resume_rejected"
+  | "local_session_artifact_missing";
+
+export class ResumeUnavailableError extends Error {
+  readonly reason: ResumeUnavailableReason;
+
+  constructor(reason: ResumeUnavailableReason, message: string) {
+    super(message);
+    this.name = "ResumeUnavailableError";
+    this.reason = reason;
+  }
+}
+
+export function isResumeUnavailableError(err: unknown): err is ResumeUnavailableError {
+  return err instanceof ResumeUnavailableError;
+}
 
 /** Message content extracted from an inbox entry (no entry metadata). */
 export type SessionMessage = {

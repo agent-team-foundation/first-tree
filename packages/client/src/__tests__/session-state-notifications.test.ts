@@ -189,30 +189,27 @@ describe("SessionManager: state notifications", () => {
 describe("SessionManager: state-before-runtime ordering (codex review P2)", () => {
   // The server's `setSessionRuntime` is active-gated — if `session:state
   // active` hasn't landed yet, any `session:runtime` for the same
-  // (agent, chat) is dropped. Handlers (codex especially) emit
-  // `setRuntimeState("working")` synchronously from inside handler.start(),
-  // and codex's start() awaits the WHOLE turn before returning. If
+  // (agent, chat) is dropped. SessionManager now computes runtime from
+  // delivery facts before invoking handler.start(), and codex's start()
+  // awaits the WHOLE turn before returning. If
   // SessionManager fired the `active` notification only AFTER start()
   // returned, the working frame would arrive at the server before the
   // active row existed and the composite would stay `ready`. This test
   // pins the fixed order: the `active` notification fires before the
-  // handler returns (so before any setRuntimeState the handler does).
+  // handler returns.
   it("emits onStateChange('active') BEFORE handler.start (so handler runtime reports land on an active row)", async () => {
     const emissions: Array<{ kind: "state" | "runtime"; value: string }> = [];
     let observedActiveBeforeHandlerCompletion = false;
 
     const handler = createMockHandler({
-      // Codex-style handler: awaits the entire turn. Synchronously reports
-      // working at the top, then idle on the way out, all before start()
-      // returns. The pre-fix SessionManager would have queued both frames
-      // ahead of the `active` notification.
-      start: vi.fn(async (_msg, ctx: SessionContext) => {
+      // Codex-style handler: awaits the entire turn before start() returns.
+      start: vi.fn(async (msg, ctx: SessionContext) => {
         // Snapshot the state emissions seen so far — if the `active`
         // notification fired before invoking start, it must already be in
         // `emissions`.
         observedActiveBeforeHandlerCompletion = emissions.some((e) => e.kind === "state" && e.value === "active");
-        ctx.setRuntimeState("working");
-        ctx.setRuntimeState("idle");
+        ctx.markMessagesConsumed(msg);
+        await ctx.finishTurn(msg, { status: "success" });
         return "session-id-mock";
       }),
     });

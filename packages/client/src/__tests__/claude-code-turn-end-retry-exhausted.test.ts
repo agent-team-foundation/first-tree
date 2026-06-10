@@ -67,11 +67,12 @@ function buildCache() {
 }
 
 describe("claude-code handler — retry-exhausted surfacing", () => {
-  it("emits error + turn_end:error, flips runtimeState to error, AND acks the in-flight entry after MAX_RETRIES", async () => {
+  it("emits error + turn_end:error and finishes the in-flight entry after MAX_RETRIES", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
-    const runtimeStates: string[] = [];
-    const markCompleted = vi.fn();
+    const finishTurn = vi.fn(async (_messages, outcome: { status: "success" | "error"; terminal?: boolean }) => {
+      emitted.push({ kind: "turn_end", payload: { status: outcome.status } });
+    });
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -90,12 +91,9 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-retry",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: (state) => runtimeStates.push(state),
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-retry"),
-      markCompleted,
-      markMessagesCompleted: () => markCompleted(),
+      finishTurn,
     };
 
     await handler.start(
@@ -111,7 +109,8 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     // Reviewer Blocking 2 regression: the retry-exhausted return MUST ack
     // the entry. Without this the row sits `delivered` forever and the
     // in-process Deduplicator collapses every bind-reset replay.
-    expect(markCompleted).toHaveBeenCalledTimes(1);
+    expect(finishTurn).toHaveBeenCalledTimes(1);
+    expect(finishTurn.mock.calls[0]?.[1]).toEqual({ status: "error", terminal: true });
 
     const errors = emitted.filter((e) => e.kind === "error");
     expect(errors).toHaveLength(1);
@@ -134,18 +133,16 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
     expect(errIdx).toBeLessThan(turnEndIdx);
 
-    // setRuntimeState("error") MUST run so the SessionManager's idle path
-    // can reclaim the slot. (Pre-fix this was the only signal of failure.)
-    expect(runtimeStates).toContain("error");
+    // terminal:true is now the SessionManager-owned runtime error marker.
   });
 
-  it("still flips runtimeState to error even when emitEvent throws", async () => {
+  it("still finishes with terminal error even when emitEvent throws", async () => {
     // Defensive contract: if the onSessionEvent callback throws (e.g. the
     // agent-slot reporting hits a dead WS), the handler must still run
-    // setRuntimeState("error") so the SessionManager can reclaim the slot.
+    // finishTurn(..., terminal:true) so the SessionManager can reclaim/report the slot.
     // Without this, the session stays counted as `working` forever.
     const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const runtimeStates: string[] = [];
+    const finishTurn = vi.fn().mockResolvedValue(undefined);
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -164,12 +161,11 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-retry-emit-throw",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: (state) => runtimeStates.push(state),
       emitEvent: () => {
         throw new Error("event sink down");
       },
       ...mockCtxPlumbing({ sendMessage }, "chat-retry-emit-throw"),
+      finishTurn,
     };
 
     await handler.start(
@@ -179,6 +175,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    expect(runtimeStates).toContain("error");
+    expect(finishTurn).toHaveBeenCalledTimes(1);
+    expect(finishTurn.mock.calls[0]?.[1]).toEqual({ status: "error", terminal: true });
   });
 });

@@ -56,7 +56,7 @@ import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import { IDENTITY_JSON_REL } from "../runtime/bootstrap.js";
 import { createGitMirrorManager, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
-import type { SessionContext } from "../runtime/handler.js";
+import type { ResumeUnavailableError, SessionContext } from "../runtime/handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -117,8 +117,6 @@ function buildSessionCtx(chatId: string): SessionContext {
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId,
     log: () => {},
-    touch: () => {},
-    setRuntimeState: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
@@ -370,12 +368,10 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("E8: resume of a stale pre-upgrade sessionId falls back to fresh start (R2 fallback)", async () => {
-    // Defensive fallback path: when sessionId can't be located at EITHER
-    // cwd (legacy chatId dir or agent home), the handler mints a fresh
-    // id and starts cold — First Tree-side chat history is preserved.
-    // SessionManager then persists the returned id, so subsequent inbox
-    // messages resume against the new id cleanly (no permanent error loop).
+  it("E8: resume of a stale pre-upgrade sessionId reports typed transcript_missing", async () => {
+    // Defensive fallback path: when sessionId can't be located at EITHER cwd
+    // (legacy chatId dir or agent home), the handler must not mint a fresh id
+    // inside resume(). SessionManager owns explicit provider replacement.
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e8-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
@@ -387,25 +383,52 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
     // No transcript exists anywhere under `~/.claude/projects/<encoded-cwd>/`.
     const staleSessionId = "72a19485-ca9e-4bc3-9add-a57e8314e5c3";
-    const returnedSessionId = await handler.resume(
-      makeMessage("chat-e8", "msg-e8"),
-      staleSessionId,
-      buildSessionCtx("chat-e8"),
-    );
-
-    // Returned sessionId MUST differ from the stale input — that's how
-    // SessionManager learns to update its registry.
-    expect(returnedSessionId).not.toBe(staleSessionId);
-    expect(returnedSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-
-    // The SDK was invoked WITHOUT a resume argument (fresh start semantics).
-    expect(capturedSdkOptions.length).toBeGreaterThan(0);
-    const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
-    expect(lastOptions?.resume).toBeUndefined();
-    expect(lastOptions?.sessionId).toBe(returnedSessionId);
+    await expect(
+      handler.resume(makeMessage("chat-e8", "msg-e8"), staleSessionId, buildSessionCtx("chat-e8")),
+    ).rejects.toMatchObject({
+      name: "ResumeUnavailableError",
+      reason: "transcript_missing",
+    } satisfies Partial<ResumeUnavailableError>);
+    expect(capturedSdkOptions).toHaveLength(0);
 
     await handler.shutdown();
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("E8b: new-design resume preserves old session id when the agent-home transcript exists", async () => {
+    capturedSdkOptions.length = 0;
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-e8b-"));
+    const workspaceRoot = join(dataDir, "workspaces", "agent-1");
+    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
+    mkdirSync(workspaceRoot, { recursive: true });
+
+    const sessionId = "bbbb1234-5678-90ab-cdef-1234567890ab";
+    const encoded = workspaceRoot.replace(/[^a-zA-Z0-9-]/g, "-");
+    const transcriptDir = join(homedir(), ".claude", "projects", encoded);
+    mkdirSync(transcriptDir, { recursive: true });
+    writeFileSync(join(transcriptDir, `${sessionId}.jsonl`), '{"type":"system","subtype":"init"}\n');
+
+    try {
+      const cache = buildCache([]);
+      await cache.refresh(AGENT_ID);
+
+      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+      const returnedSessionId = await handler.resume(
+        makeMessage("chat-e8b", "msg-e8b"),
+        sessionId,
+        buildSessionCtx("chat-e8b"),
+      );
+
+      expect(returnedSessionId).toBe(sessionId);
+      const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
+      expect(lastOptions?.resume).toBe(sessionId);
+      expect(lastOptions?.cwd).toBe(workspaceRoot);
+
+      await handler.shutdown();
+    } finally {
+      rmSync(transcriptDir, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("E9: resume of a pre-redesign session routes to the legacy chat-dir cwd (R2 primary path)", async () => {

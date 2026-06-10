@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   agentMessagesByTurn: new Map<number, string[]>(),
   failureByTurn: new Map<number, string>(),
   streamErrorByTurn: new Map<number, string>(),
+  resumeThreadCalls: [] as Array<{ threadId: string; options: unknown }>,
 }));
 
 vi.mock("@openai/codex-sdk", () => {
@@ -57,7 +58,8 @@ vi.mock("@openai/codex-sdk", () => {
       startThread() {
         return thread;
       }
-      resumeThread() {
+      resumeThread(threadId: string, options: unknown) {
+        state.resumeThreadCalls.push({ threadId, options });
         return thread;
       }
     },
@@ -113,7 +115,7 @@ function makeMessage(id: string, content: string): SessionMessage {
 type SendMessageMock = ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
 
 function makeContext(
-  markCompleted: (count?: number) => void,
+  finish: (count?: number) => void,
   opts: { sendMessage?: SendMessageMock; emitEvent?: SessionContext["emitEvent"] } = {},
 ): SessionContext {
   const sendMessage =
@@ -132,12 +134,12 @@ function makeContext(
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-startup-race",
     log: () => {},
-    touch: () => {},
-    setRuntimeState: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-startup-race"),
-    markCompleted,
-    markMessagesCompleted: (messages) => markCompleted(Array.isArray(messages) ? messages.length : 1),
+    finishTurn: async (messages, outcome) => {
+      finish(Array.isArray(messages) ? messages.length : 1);
+      (opts.emitEvent ?? (() => {}))({ kind: "turn_end", payload: { status: outcome.status } });
+    },
   };
 }
 
@@ -147,6 +149,7 @@ beforeEach(() => {
   state.agentMessagesByTurn.clear();
   state.failureByTurn.clear();
   state.streamErrorByTurn.clear();
+  state.resumeThreadCalls.length = 0;
   state.chatContextPromise = new Promise((resolve) => {
     state.resolveChatContext = resolve;
   });
@@ -316,5 +319,26 @@ describe("codex handler startup inject queue", () => {
     expect(completedCounts).toEqual([1]);
 
     await handler.shutdown();
+  });
+
+  it("resumes the provided old thread id instead of starting a fresh thread", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => {
+      completedCounts.push(count);
+    });
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      participants: [],
+    });
+
+    const returned = await handler.resume(makeMessage("m-old", "resume input"), "old-thread-id", ctx);
+
+    expect(returned).toBe("old-thread-id");
+    expect(state.resumeThreadCalls).toHaveLength(1);
+    expect(state.resumeThreadCalls[0]?.threadId).toBe("old-thread-id");
+    expect(completedCounts).toEqual([1]);
   });
 });

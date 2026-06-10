@@ -405,7 +405,7 @@ export class AgentSlot {
    * Ack happens INSIDE the SessionManager via the `ackEntry` callback we
    * pinned at construction time — `clientConnection.sendInboxAck`. Post
    * inflight-message-recovery the ack is deferred until the handler closes
-   * the turn via `ctx.markCompleted()`. Sending an additional ack here
+   * the turn via `ctx.finishTurn(...)`. Sending an additional ack here
    * would double-ack: a WS frame the server cannot match against any
    * `delivered` row, which leaks the server's per-agent in-flight counter
    * and stalls push after `inboxMaxInFlightPerAgent` messages.

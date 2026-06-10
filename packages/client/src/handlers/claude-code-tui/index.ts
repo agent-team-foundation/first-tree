@@ -326,7 +326,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       throw new Error("runTurn called before session was prepared");
     }
     sessionCtx.markMessagesConsumed(messages);
-    sessionCtx.setRuntimeState("working");
+    sessionCtx.recordProviderActivity();
     turnAborted = false;
 
     const state: TurnState = { finalTexts: [] };
@@ -341,12 +341,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       transcriptTailer.drainEntries();
 
       await pasteText(tmuxSessionName, text);
-      sessionCtx.touch();
+      sessionCtx.recordProviderActivity();
 
       const startTs = Date.now();
       while (Date.now() - startTs < TURN_TIMEOUT_MS) {
         if (turnAborted) break;
-        sessionCtx.touch();
+        sessionCtx.recordProviderActivity();
 
         await drainAndConsume(sessionCtx, state);
 
@@ -443,14 +443,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     // ackTurnClose, avoiding redelivery storms); an abort or a timeout
     // withholds the ack so the message gets a real retry.
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
-    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
     if (disposition.ack) {
-      sessionCtx.markMessagesCompleted(messages);
+      await sessionCtx.finishTurn(messages, {
+        status: disposition.status,
+        terminal: disposition.terminalRuntimeError,
+      });
     } else {
       const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
-      sessionCtx.markMessagesRetryable(messages, reason);
+      sessionCtx.retryTurn(messages, reason);
     }
-    sessionCtx.setRuntimeState(disposition.runtimeState);
     resetProcessor();
   }
 
@@ -478,7 +479,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         }
       }
       if (inputs.length === 0) {
-        sessionCtx.markMessagesCompleted(drained);
+        await sessionCtx.finishTurn(drained, { status: "error", terminal: true });
         return;
       }
       await runTurn(inputs.join("\n\n"), sessionCtx, drained);
@@ -627,7 +628,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         });
         markWorkspaceInitComplete(cwd);
 
-        const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
+        await startClaude({ sessionCtx, resumeSessionId: sessionId });
 
         if (message) {
           const inputText = await sessionCtx.formatInboundContent(message);
@@ -638,7 +639,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             currentTurnPromise = null;
           }
         }
-        return restartedId;
+        return sessionId;
       } finally {
         turnRunning = false;
         setImmediate(pump);

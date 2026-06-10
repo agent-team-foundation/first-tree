@@ -21,6 +21,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "../runtime/handler.js";
+import { ResumeUnavailableError } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import {
   currentSourceRepoNamesFromPayload,
@@ -185,6 +186,14 @@ export function isTransientCodexErrorMessage(message: string): boolean {
     m.includes("econnrefused") ||
     m.includes("etimedout") ||
     m.includes("epipe")
+  );
+}
+
+function isCodexResumeUnavailableMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("thread") &&
+    (m.includes("not found") || m.includes("does not exist") || m.includes("missing") || m.includes("resume"))
   );
 }
 
@@ -744,7 +753,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     sessionCtx.markMessagesConsumed(messages);
     const abort = new AbortController();
     currentAbort = abort;
-    sessionCtx.setRuntimeState("working");
+    sessionCtx.recordProviderActivity();
 
     // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
     // mirrors claude-code so admin events + completion bookkeeping reflect
@@ -788,7 +797,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
             for await (const event of streamed.events) {
               if (attemptAbort.signal.aborted) break;
-              sessionCtx.touch();
+              sessionCtx.recordProviderActivity();
               if (event.type === "thread.started") {
                 threadId = event.thread_id;
               } else if (event.type === "turn.started") {
@@ -806,6 +815,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 // still emitted after forwardResult below.
                 usageBox.value = event.usage;
               } else if (event.type === "turn.failed") {
+                if (isCodexResumeUnavailableMessage(event.error.message)) {
+                  throw new ResumeUnavailableError("provider_resume_rejected", event.error.message);
+                }
                 if (
                   !userVisibleEmitted &&
                   attempt < MAX_TURN_RETRIES &&
@@ -825,6 +837,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   payload: { source: "sdk", message },
                 });
               } else if (event.type === "error") {
+                if (isCodexResumeUnavailableMessage(event.message)) {
+                  throw new ResumeUnavailableError("provider_resume_rejected", event.message);
+                }
                 if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(event.message)) {
                   retryRequested = true;
                   retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
@@ -844,6 +859,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
           } catch (err) {
             if (abort.signal.aborted) return;
             const msg = err instanceof Error ? err.message : String(err);
+            if (err instanceof ResumeUnavailableError) throw err;
+            if (isCodexResumeUnavailableMessage(msg)) {
+              throw new ResumeUnavailableError("provider_resume_rejected", msg);
+            }
             if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
               retryRequested = true;
               retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
@@ -962,16 +981,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: succeeded ? "success" : "error" },
-    });
-    sessionCtx.setRuntimeState("idle");
     // Ack the entries this turn consumed. All four turn outcomes (success,
     // silent / no-text, SDK turn.failed, forwardResult failure) are
     // terminal for this turn — redelivery would either replay an already-
     // delivered reply or re-hit the same failure.
-    sessionCtx.markMessagesCompleted(messages);
+    await sessionCtx.finishTurn(messages, { status: succeeded ? "success" : "error" });
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1029,7 +1043,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // permanent failure for this batch (redelivery would re-hit the same
       // format errors). Ack the entries so they don't leak in
       // `inFlightEntries` and pile up server-side as `delivered` rows.
-      sessionCtx.markMessagesCompleted(drained);
+      await sessionCtx.finishTurn(drained, { status: "error", terminal: true });
       return;
     }
     await runTurn(inputs.join("\n\n"), sessionCtx, drained);
@@ -1168,7 +1182,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
-      thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
+      try {
+        thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new ResumeUnavailableError("provider_resume_rejected", message);
+      }
       threadId = sessionId;
       currentModel = payload.model || "";
 

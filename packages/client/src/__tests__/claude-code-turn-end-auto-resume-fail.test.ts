@@ -80,12 +80,13 @@ function buildCache() {
 }
 
 describe("claude-code handler — auto-resume failure surfacing", () => {
-  it("emits error + turn_end:error, flips runtimeState, AND acks the in-flight entry when respawnQuery throws", async () => {
+  it("emits error + turn_end:error and finishes the in-flight entry when respawnQuery throws", async () => {
     queryCallCount = 0;
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
-    const runtimeStates: string[] = [];
-    const markCompleted = vi.fn();
+    const finishTurn = vi.fn(async (_messages, outcome: { status: "success" | "error"; terminal?: boolean }) => {
+      emitted.push({ kind: "turn_end", payload: { status: outcome.status } });
+    });
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -104,12 +105,9 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-resume-fail",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: (state) => runtimeStates.push(state),
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-resume-fail"),
-      markCompleted,
-      markMessagesCompleted: () => markCompleted(),
+      finishTurn,
     };
 
     await handler.start(
@@ -139,14 +137,13 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
     expect(errIdx).toBeLessThan(turnEndIdx);
 
-    // setRuntimeState("error") MUST run so the SessionManager can reclaim
-    // the slot even though respawnQuery never produced a working session.
-    expect(runtimeStates).toContain("error");
+    // terminal:true is the SessionManager-owned runtime error marker.
+    expect(finishTurn.mock.calls[0]?.[1]).toEqual({ status: "error", terminal: true });
 
     // Reviewer Blocking 2 regression: the auto-resume-failure return MUST
     // ack the entry. Without this the row stays `delivered` server-side
     // and the in-process Deduplicator collapses every bind-reset replay
     // (entry → server → push → dispatch dedup skip → never re-acked).
-    expect(markCompleted).toHaveBeenCalledTimes(1);
+    expect(finishTurn).toHaveBeenCalledTimes(1);
   });
 });

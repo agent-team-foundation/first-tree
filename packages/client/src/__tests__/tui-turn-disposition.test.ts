@@ -4,12 +4,12 @@ import { resolveTurnDisposition } from "../handlers/claude-code-tui/turn-disposi
 const CLEAN = { aborted: false, timedOut: false, turnFailed: false, forwardFailed: false };
 
 describe("resolveTurnDisposition", () => {
-  it("a clean turn reports success, acks, forwards, and goes idle", () => {
+  it("a clean turn reports success, acks, forwards, and has no terminal marker", () => {
     expect(resolveTurnDisposition(CLEAN)).toEqual({
       status: "success",
       ack: true,
       forward: true,
-      runtimeState: "idle",
+      terminalRuntimeError: false,
     });
   });
 
@@ -21,32 +21,32 @@ describe("resolveTurnDisposition", () => {
    * the no-ack decision — so the chat got a partial message while the entry
    * stayed un-acked and re-ran on reconnect, double-posting. A timeout must
    * report error, must NOT ack AND must NOT forward (so the redelivered retry
-   * is the single source of output), and must surface an error runtime state.
+   * is the single source of output), and must surface a terminal error marker.
    */
-  it("a timed-out turn reports error, does NOT ack, does NOT forward, and surfaces error state", () => {
+  it("a timed-out turn reports error, does NOT ack, does NOT forward, and surfaces terminal error", () => {
     expect(resolveTurnDisposition({ ...CLEAN, timedOut: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
+      terminalRuntimeError: true,
     });
   });
 
-  it("a body failure reports error, acks + forwards (clean close, avoid storm), and surfaces error state", () => {
+  it("a body failure reports error, acks + forwards (clean close, avoid storm), and surfaces terminal error", () => {
     expect(resolveTurnDisposition({ ...CLEAN, turnFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "error",
+      terminalRuntimeError: true,
     });
   });
 
-  it("a forward-only failure reports error and acks but keeps the session idle", () => {
+  it("a forward-only failure reports error and acks without a terminal marker", () => {
     expect(resolveTurnDisposition({ ...CLEAN, forwardFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "idle",
+      terminalRuntimeError: false,
     });
   });
 
@@ -55,7 +55,7 @@ describe("resolveTurnDisposition", () => {
       status: "success",
       ack: false,
       forward: false,
-      runtimeState: "idle",
+      terminalRuntimeError: false,
     });
   });
 
@@ -64,7 +64,7 @@ describe("resolveTurnDisposition", () => {
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
+      terminalRuntimeError: true,
     });
   });
 

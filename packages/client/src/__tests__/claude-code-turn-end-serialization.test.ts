@@ -120,12 +120,13 @@ describe("claude-code handler — turn_end serialization (race guard)", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-1",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: () => {},
       emitEvent: (e: SessionEvent) => {
         emitted.push({ kind: e.kind, at: Date.now() - start });
       },
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
+      finishTurn: async (_messages, _outcome) => {
+        emitted.push({ kind: "turn_end", at: Date.now() - start });
+      },
     };
 
     const startPromise = handler.start(

@@ -25,6 +25,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "./handler.js";
+import { isResumeUnavailableError } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -67,6 +68,8 @@ type PendingMessage = {
   message: SessionMessage;
   chatId: string;
 };
+
+type RuntimeMarker = "blocked" | "error";
 
 /**
  * Resolve the directory the runtime reads markdown doc snapshots against —
@@ -306,12 +309,12 @@ export class SessionManager {
    * Kept here (not on `SessionEntry`) because dispatch may push an entryId
    * before any session record exists for the chat (`startNewSession` runs
    * `routeMessage` first), and the queue must survive a session being
-   * suspended / evicted between dispatch and markCompleted.
+   * suspended / evicted between dispatch and finishTurn.
    *
    * Sized small in practice: usually 1, briefly up to N when several
    * messages land while a turn is mid-flight. Entries that were delivered
    * but only queued inside a handler remain tracked until the handler's
-   * actual consuming turn calls `markMessagesCompleted`.
+   * actual consuming turn calls `finishTurn`.
    * See
    * docs/inflight-message-recovery-design.md §4.
    */
@@ -331,6 +334,7 @@ export class SessionManager {
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
+  private readonly sessionRuntimeMarkers = new Map<string, RuntimeMarker>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -361,7 +365,7 @@ export class SessionManager {
 
   /**
    * Dispatch an inbox entry. ACK is deferred until the handler reports a
-   * completed turn via `ctx.markMessagesCompleted(...)`.
+   * completed turn via `ctx.finishTurn(...)`.
    *
    * Delayed ACK semantics (post inflight-message-recovery): the entry stays
    * `delivered` server-side until forwardResult succeeds (or the handler
@@ -394,7 +398,10 @@ export class SessionManager {
       const queue = this.inFlightEntries.get(chatId);
       const stillInFlight = queue ? queue.some((tracked) => tracked.entryId === entry.id) : false;
       this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message observed");
-      if (stillInFlight) return;
+      if (stillInFlight) {
+        this.recomputeSessionRuntimeState(chatId);
+        return;
+      }
       this.config.log.debug(
         { chatId, messageId, entryId: entry.id },
         "duplicate key is not tied to an active entry; reprocessing redelivery",
@@ -407,6 +414,7 @@ export class SessionManager {
     const tracked = { entryId: entry.id, messageId, dedupKey, accepted: false, consumed: false };
     if (queue) queue.push(tracked);
     else this.inFlightEntries.set(chatId, [tracked]);
+    this.recomputeSessionRuntimeState(chatId);
 
     let routePromise: Promise<void> | undefined;
     await this.withAdmissionBarrier(chatId, async () => {
@@ -538,6 +546,7 @@ export class SessionManager {
       this.sessions.delete(chatId);
       this.evictedMappings.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
+      this.sessionRuntimeMarkers.delete(chatId);
       this.lastReportedStates.delete(chatId);
       this.currentTrigger.delete(chatId);
 
@@ -617,6 +626,7 @@ export class SessionManager {
     this.evictedMappings.clear();
     this.lastReportedStates.clear();
     this.sessionRuntimeStates.clear();
+    this.sessionRuntimeMarkers.clear();
     this.lastReportedRuntimeState = null;
     this._activeCount = 0;
   }
@@ -684,7 +694,10 @@ export class SessionManager {
     const next = prev.then(op, op);
     this.admissionQueues.set(chatId, next);
     const cleanup = () => {
-      if (this.admissionQueues.get(chatId) === next) this.admissionQueues.delete(chatId);
+      if (this.admissionQueues.get(chatId) === next) {
+        this.admissionQueues.delete(chatId);
+        this.recomputeSessionRuntimeState(chatId);
+      }
     };
     void next.then(cleanup, cleanup);
     await next;
@@ -736,14 +749,20 @@ export class SessionManager {
         this.requiresInboxRecovery.delete(chatId);
         this.recoveryActivationReady.add(chatId);
         this.config.log.debug({ chatId, entryId, messageId }, "chat inbox recovery accepted before dispatch");
+        this.recomputeSessionRuntimeState(chatId);
       })
       .catch((err) => {
         this.config.log.warn({ chatId, entryId, messageId, err }, "chat inbox recovery failed before dispatch");
+        this.recomputeSessionRuntimeState(chatId);
       })
       .finally(() => {
-        if (this.recoveringChats.get(chatId) === recovery) this.recoveringChats.delete(chatId);
+        if (this.recoveringChats.get(chatId) === recovery) {
+          this.recoveringChats.delete(chatId);
+          this.recomputeSessionRuntimeState(chatId);
+        }
       });
     this.recoveringChats.set(chatId, recovery);
+    this.recomputeSessionRuntimeState(chatId);
     await recovery;
   }
 
@@ -777,16 +796,7 @@ export class SessionManager {
         case "active":
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
-          // Re-arm the working-grace guard in `evictIdle`. Without this, a
-          // turn that ends with `setRuntimeState("idle")` (claude-code.ts on
-          // every result message) leaves the next inject-triggered turn
-          // observable as `idle` — and a long-thinking turn that produces
-          // no SDK messages for `idle_timeout` (300s default) trips
-          // evictIdle's suspend path even though the agent is actively
-          // working. Setting `working` here puts the session under the
-          // `idle_timeout + working_grace_seconds` umbrella until the next
-          // result flips it back.
-          this.setSessionRuntimeState(chatId, "working");
+          this.recomputeSessionRuntimeState(chatId);
           this.config.log.debug({ chatId }, "message injected");
           return;
 
@@ -838,23 +848,15 @@ export class SessionManager {
     this._activeCount++;
     if (evicted) this.evictedMappings.delete(chatId);
 
-    // Report `active` BEFORE invoking handler.start / handler.resume. Handlers
-    // can call `ctx.setRuntimeState("working")` synchronously inside start()
-    // (claude-code does; codex always does — its handler awaits the whole
-    // turn before returning, so the initial working AND final idle reports
-    // both fire from inside start()). Those `session:runtime` frames are
-    // active-gated on the server, so they would be dropped if the
-    // `session:state active` write hadn't landed yet — leaving the composite
-    // stuck at `ready` until a reaffirm (or never, for short turns). The
-    // server's `upsertSessionState` short-circuits same-state reports, and
-    // `notifySessionState` here additionally dedupes against the last
-    // reported value, so doing it before AND after is harmless if a future
-    // refactor adds a second site. Failure path replaces this `active` with
-    // `errored` in the catch below (different state → goes through).
+    // Report `active` before invoking handler.start / handler.resume, then
+    // compute runtime state from manager-owned delivery facts. The server
+    // active-gates `session:runtime`, so this order keeps the first working
+    // projection from being dropped.
     this.notifySessionState(chatId, "active");
+    this.recomputeSessionRuntimeState(chatId);
     try {
       if (evicted) {
-        const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
+        const sessionId = await this.resumeProviderSession(entry, message, evicted.claudeSessionId, ctx);
         entry.claudeSessionId = sessionId;
         this.config.log.info({ chatId, sessionId }, "session resumed from eviction");
       } else {
@@ -880,6 +882,7 @@ export class SessionManager {
         this.drainAllInFlightEntries(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
+        this.sessionRuntimeMarkers.delete(chatId);
         this.recomputeRuntimeState();
         this._activeCount--;
       }
@@ -910,22 +913,18 @@ export class SessionManager {
     this._activeCount++;
     entry.lastActivity = Date.now();
 
-    // Same rationale as `startNewSession`: report `active` BEFORE invoking
-    // the handler so any synchronous `ctx.setRuntimeState("working")` inside
-    // handler.resume() lands on a server row that is already active-gated.
+    // Same rationale as `startNewSession`: report `active` before invoking the
+    // handler so the manager-owned runtime projection lands on an active row.
     // Failure path overrides with `errored` in the catch below.
     this.notifySessionState(entry.chatId, "active");
+    this.recomputeSessionRuntimeState(entry.chatId);
     try {
-      // Mirror the pattern in `startNewSession` (line 449): the handler may
-      // return a DIFFERENT sessionId than the one passed in — e.g. when the
-      // claude-code handler detects a stale SDK transcript and falls
-      // through to fresh-start semantics — and `entry.claudeSessionId` has
-      // to track the handler's truth or future resume cycles will keep
-      // calling the stale id. PR #530 nit baixiaohang flagged: without the
-      // assignment back, a fresh-start fallback would persist the OLD id,
-      // and the next suspend→resume cycle would re-trigger the same
-      // missing-transcript fallback ad infinitum.
-      const resumedSessionId = await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      const resumedSessionId = await this.resumeProviderSession(
+        entry,
+        message ?? undefined,
+        entry.claudeSessionId,
+        ctx,
+      );
       entry.claudeSessionId = resumedSessionId;
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
@@ -942,10 +941,75 @@ export class SessionManager {
         this.drainAllInFlightEntries(entry.chatId);
         this.sessions.delete(entry.chatId);
         this.sessionRuntimeStates.delete(entry.chatId);
+        this.sessionRuntimeMarkers.delete(entry.chatId);
         this.recomputeRuntimeState();
         this._activeCount--;
       }
     }
+  }
+
+  private async resumeProviderSession(
+    entry: SessionEntry,
+    message: SessionMessage | undefined,
+    previousSessionId: string,
+    ctx: SessionContext,
+  ): Promise<string> {
+    try {
+      const resumedSessionId = await entry.handler.resume(message, previousSessionId, ctx);
+      if (resumedSessionId !== previousSessionId) {
+        throw new Error(
+          `handler.resume returned a different provider session id (${resumedSessionId}) than requested (${previousSessionId}) without typed resume-unavailable`,
+        );
+      }
+      return resumedSessionId;
+    } catch (err) {
+      if (!isResumeUnavailableError(err)) throw err;
+      return this.replaceProviderSession(entry, message, previousSessionId, err.reason, err.message, ctx);
+    }
+  }
+
+  private async replaceProviderSession(
+    entry: SessionEntry,
+    message: SessionMessage | undefined,
+    previousSessionId: string,
+    reason: string,
+    detail: string,
+    ctx: SessionContext,
+  ): Promise<string> {
+    if (!message) {
+      this.config.log.warn(
+        { chatId: entry.chatId, previousSessionId, reason, detail },
+        "provider resume unavailable during no-input resume; replacement deferred until concrete input",
+      );
+      throw new Error(`Provider resume unavailable during no-input resume (${reason}): ${detail}`);
+    }
+
+    this.config.log.warn(
+      { chatId: entry.chatId, previousSessionId, reason, detail },
+      "provider resume unavailable; explicitly replacing provider session",
+    );
+    try {
+      ctx.emitEvent({
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: encodeResilienceMessage("resilience.session.provider_replaced", {
+            reason,
+            previousSessionId,
+          }),
+        },
+      });
+    } catch (emitErr) {
+      this.config.log.warn({ chatId: entry.chatId, emitErr }, "provider replacement event emit failed");
+    }
+
+    const replacementSessionId = await entry.handler.start(message, ctx);
+    this.sessionRuntimeMarkers.delete(entry.chatId);
+    this.config.log.info(
+      { chatId: entry.chatId, previousSessionId, sessionId: replacementSessionId, reason },
+      "provider session replacement started",
+    );
+    return replacementSessionId;
   }
 
   /**
@@ -995,6 +1059,7 @@ export class SessionManager {
       this._activeCount--;
       entry.status = "suspended";
       this.sessionRuntimeStates.delete(chatId);
+      this.sessionRuntimeMarkers.delete(chatId);
       this.recomputeRuntimeState();
 
       this.config.log.info(
@@ -1128,7 +1193,7 @@ export class SessionManager {
       const resumeMessage = entry.startMessage ?? null;
       const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
       if (previousSessionId) {
-        const sid = await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
+        const sid = await this.resumeProviderSession(entry, resumeMessage ?? undefined, previousSessionId, ctx);
         entry.claudeSessionId = sid;
       } else {
         // No resume key yet — fall back to fresh start.
@@ -1175,6 +1240,7 @@ export class SessionManager {
         this.drainAllInFlightEntries(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
+        this.sessionRuntimeMarkers.delete(chatId);
         this.recomputeRuntimeState();
         this._activeCount--;
       }
@@ -1229,6 +1295,7 @@ export class SessionManager {
     // `inFlightEntries[chatId]` until the eventual turn finishes.
     this.config.log.info({ chatId }, "concurrency limit reached, queuing");
     this.pendingQueue.push({ message, chatId });
+    this.recomputeSessionRuntimeState(chatId);
     return false;
   }
 
@@ -1239,6 +1306,7 @@ export class SessionManager {
     this._activeCount--;
     // Clear per-session runtime state on suspend
     this.sessionRuntimeStates.delete(entry.chatId);
+    this.sessionRuntimeMarkers.delete(entry.chatId);
     this.recomputeRuntimeState();
     entry.suspending = entry.handler
       .suspend()
@@ -1261,6 +1329,7 @@ export class SessionManager {
 
     const next = this.pendingQueue.shift();
     if (!next) return;
+    this.recomputeSessionRuntimeState(next.chatId);
     // Route asynchronously — the in-flight entryId for this message is
     // already in `inFlightEntries[chatId]` from the original `dispatch`.
     this.routeMessage(next.chatId, next.message).catch((err) => {
@@ -1307,6 +1376,7 @@ export class SessionManager {
       // every eviction.
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
+      this.sessionRuntimeMarkers.delete(candidate.key);
       // Drop the trigger alongside the session — the next message routed to
       // this chat will set a fresh one. Leaving stale entries here would
       // only burn memory (wrong replies are not a risk since `routeMessage`
@@ -1314,7 +1384,7 @@ export class SessionManager {
       // cleans the same maps we keep the two paths symmetric.
       this.currentTrigger.delete(candidate.key);
       // Drop local in-flight tracking too — the handler is gone, so no
-      // markCompleted will ever fire. The server-side entries stay
+      // finishTurn will ever fire. The server-side entries stay
       // `delivered`; a later chat recovery or bind reset redelivers them
       // against a fresh session.
       this.clearInFlightForRecovery(candidate.key, "session_evicted");
@@ -1329,7 +1399,7 @@ export class SessionManager {
    * Invariants this routine relies on:
    *   1. `lastActivity` is monotonic per session and is bumped by every
    *      inbound activity — `dispatch` (new chat / resume), `inject`
-   *      (mid-turn message), and the handler's `touch()` on each SDK event.
+   *      (mid-turn message), and the handler's provider activity reports.
    *   2. `runtimeState` reflects what the agent is currently doing as best
    *      the runtime can tell:
    *        - `working` — a turn is in flight. Set by the handler at the top
@@ -1346,7 +1416,7 @@ export class SessionManager {
    *          (e.g. if/when the SDK transport exposes a real stuck signal).
    *        - `idle` — no work in flight.
    *      If you add a new way to wake the session up, you MUST also set
-   *      `runtimeState` to `working` from that path, or this guard will
+   *      manager-owned delivery facts from that path, or this guard will
    *      treat the chat as idle and reap it.
    *   3. `working_grace_seconds` is an UPPER bound on how long a `working`
    *      / `blocked` chat can hold a slot past `idle_timeout` — defends
@@ -1371,7 +1441,7 @@ export class SessionManager {
       const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
 
       // `lastActivity` is bumped per inbound SDK message/event (handler
-      // `touch()`), so a long thinking turn or a single very large message
+      // provider activity), so a long thinking turn or a single very large message
       // looks identical to "session has been idle" here. Without this
       // exemption the runtime suspends the SDK transport mid-thinking and
       // the work is lost. The hard cap above bounds the worst case.
@@ -1440,11 +1510,6 @@ export class SessionManager {
     });
   }
 
-  private ackOldestTrackedEntry(chatId: string): void {
-    const entryId = this.inFlightEntries.get(chatId)?.[0]?.entryId;
-    if (entryId !== undefined) this.ackThroughTrackedEntry(chatId, entryId);
-  }
-
   private clearInFlightForRecovery(chatId: string, reason: string): void {
     const queue = this.inFlightEntries.get(chatId);
     if (!queue || queue.length === 0) return;
@@ -1455,6 +1520,7 @@ export class SessionManager {
       { chatId, reason, entryIds: queue.map((entry) => entry.entryId) },
       "cleared local in-flight inbox entries; waiting for recovery redelivery",
     );
+    this.recomputeSessionRuntimeState(chatId);
   }
 
   private ackConsumedInFlightForSuspend(chatId: string): void {
@@ -1484,9 +1550,21 @@ export class SessionManager {
     for (const tracked of queue) {
       if (consumedIds.has(tracked.entryId)) tracked.consumed = true;
     }
+    this.recomputeSessionRuntimeState(chatId);
   }
 
-  private markMessagesCompleted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
+  private async finishTurn(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: { status: "success" | "error"; terminal?: boolean },
+  ): Promise<void> {
+    this.config.onSessionEvent?.(chatId, { kind: "turn_end", payload: { status: outcome.status } });
+    if (outcome.status === "success") {
+      this.sessionRuntimeMarkers.delete(chatId);
+    } else if (outcome.terminal) {
+      this.sessionRuntimeMarkers.set(chatId, "error");
+    }
+
     const batch = Array.isArray(messages) ? messages : [messages];
     let throughEntryId: number | undefined;
     for (const message of batch) {
@@ -1494,17 +1572,46 @@ export class SessionManager {
       if (message.inboxEntryId !== undefined) throughEntryId = message.inboxEntryId;
     }
     if (throughEntryId === undefined) {
-      this.config.log.warn({ chatId }, "attempt completion ignored because no inboxEntryId was provided");
+      if (batch.length > 0) {
+        this.config.log.warn({ chatId }, "attempt completion ignored because no inboxEntryId was provided");
+      }
+      this.recomputeSessionRuntimeState(chatId);
       return;
     }
-    this.ackThroughTrackedEntry(chatId, throughEntryId);
+
+    try {
+      await this.ackThroughTrackedEntryAfterServerAck(chatId, throughEntryId);
+    } finally {
+      this.recomputeSessionRuntimeState(chatId);
+    }
   }
 
-  private markMessagesRetryable(
-    chatId: string,
-    messages: SessionMessage | readonly SessionMessage[],
-    reason: string,
-  ): void {
+  private async ackThroughTrackedEntryAfterServerAck(chatId: string, throughEntryId: number): Promise<void> {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+    const index = queue.findIndex((tracked) => tracked.entryId === throughEntryId);
+    if (index < 0) {
+      this.config.log.warn({ chatId, throughEntryId }, "attempt completion ignored for untracked inbox entry");
+      return;
+    }
+
+    try {
+      await this.config.ackEntry(throughEntryId);
+    } catch (err) {
+      this.config.log.warn({ chatId, entryId: throughEntryId, err }, "ACK-through failed; leaving entry for recovery");
+      this.clearInFlightForRecovery(chatId, "ack_failed");
+      return;
+    }
+
+    const committed = queue.splice(0, index + 1);
+    for (const tracked of committed) {
+      this.deduplicator.drop(tracked.dedupKey);
+    }
+    if (queue.length === 0) this.inFlightEntries.delete(chatId);
+  }
+
+  private retryTurn(chatId: string, messages: SessionMessage | readonly SessionMessage[], reason: string): void {
+    this.config.onSessionEvent?.(chatId, { kind: "turn_end", payload: { status: "error" } });
     const batch = Array.isArray(messages) ? messages : [messages];
     const hasTrackedMessage = batch.some(
       (message) =>
@@ -1512,8 +1619,8 @@ export class SessionManager {
         message.inboxEntryId !== undefined &&
         (this.inFlightEntries.get(chatId) ?? []).some((entry) => entry.entryId === message.inboxEntryId),
     );
-    if (!hasTrackedMessage) return;
-    this.clearInFlightForRecovery(chatId, reason);
+    if (hasTrackedMessage) this.clearInFlightForRecovery(chatId, reason);
+    this.recomputeSessionRuntimeState(chatId);
   }
 
   /**
@@ -1522,7 +1629,7 @@ export class SessionManager {
    * entry is doomed) and on permanent `handler.start` / `handler.resume`
    * failure (re-handling on redelivery would re-hit the same permanent
    * error, so acking avoids a loop). NOT to be called from handlers — the
-   * per-turn pairing path is `markMessagesCompleted(messageOrBatch)`.
+   * per-turn pairing path is `finishTurn(messageOrBatch, outcome)`.
    */
   private drainAllInFlightEntries(chatId: string): void {
     const queue = this.inFlightEntries.get(chatId);
@@ -1608,30 +1715,25 @@ export class SessionManager {
       sdk: this.config.sdk,
       log,
       chatId,
-      touch: () => {
+      recordProviderActivity: () => {
         const entry = this.sessions.get(chatId);
         if (entry && entry.status === "active") {
           entry.lastActivity = Date.now();
+          this.recomputeSessionRuntimeState(chatId);
         }
-      },
-      setRuntimeState: (state) => {
-        this.setSessionRuntimeState(chatId, state);
       },
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
       },
       forwardResult,
-      markCompleted: () => {
-        this.ackOldestTrackedEntry(chatId);
-      },
       markMessagesConsumed: (messages) => {
         this.markMessagesConsumed(chatId, messages);
       },
-      markMessagesCompleted: (messages) => {
-        this.markMessagesCompleted(chatId, messages);
+      finishTurn: (messages, outcome) => {
+        return this.finishTurn(chatId, messages, outcome);
       },
-      markMessagesRetryable: (messages, reason) => {
-        this.markMessagesRetryable(chatId, messages, reason);
+      retryTurn: (messages, reason) => {
+        this.retryTurn(chatId, messages, reason);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
@@ -1657,8 +1759,42 @@ export class SessionManager {
     }
   }
 
+  private hasDeliveryWork(chatId: string): boolean {
+    if ((this.inFlightEntries.get(chatId)?.length ?? 0) > 0) return true;
+    if (this.admissionQueues.has(chatId)) return true;
+    if (this.pendingQueue.some((entry) => entry.chatId === chatId)) return true;
+    if (this.requiresInboxRecovery.has(chatId)) return true;
+    if (this.recoveringChats.has(chatId)) return true;
+    const session = this.sessions.get(chatId);
+    if (session?.retryAttempt && session.retryAttempt > 0) return true;
+    if (session?.retryTimer || session?.retryNextAt) return true;
+    return false;
+  }
+
+  private isSessionQuiescent(chatId: string): boolean {
+    const session = this.sessions.get(chatId);
+    return Boolean(session && session.status === "active" && !session.suspending && !this.hasDeliveryWork(chatId));
+  }
+
+  private recomputeSessionRuntimeState(chatId: string): void {
+    const session = this.sessions.get(chatId);
+    if (!session || session.status !== "active") {
+      this.sessionRuntimeMarkers.delete(chatId);
+      if (this.sessionRuntimeStates.delete(chatId)) this.recomputeRuntimeState();
+      return;
+    }
+
+    const marker = this.sessionRuntimeMarkers.get(chatId);
+    const nextState: RuntimeState = marker ?? (this.hasDeliveryWork(chatId) ? "working" : "idle");
+    if (nextState === "idle" && !this.isSessionQuiescent(chatId)) {
+      this.reportSessionRuntimeState(chatId, "working");
+      return;
+    }
+    this.reportSessionRuntimeState(chatId, nextState);
+  }
+
   /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */
-  private setSessionRuntimeState(chatId: string, state: RuntimeState): void {
+  private reportSessionRuntimeState(chatId: string, state: RuntimeState): void {
     const session = this.sessions.get(chatId);
     if (!session || session.status !== "active") return;
     this.sessionRuntimeStates.set(chatId, state);

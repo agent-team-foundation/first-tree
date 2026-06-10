@@ -89,12 +89,13 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-1",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: () => {},
       emitEvent: (e) => {
         emitted.push(e);
       },
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
+      finishTurn: async (_messages, outcome) => {
+        emitted.push({ kind: "turn_end", payload: { status: outcome.status } });
+      },
     };
 
     await handler.start(

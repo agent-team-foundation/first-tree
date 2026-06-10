@@ -129,7 +129,7 @@ function makeMessage(id: string, content: string): SessionMessage {
 }
 
 function makeContext(
-  markCompleted: (count?: number) => void,
+  finish: (count?: number) => void,
   opts: {
     sendMessage?: SendMessageMock;
     emitEvent?: SessionContext["emitEvent"];
@@ -152,12 +152,12 @@ function makeContext(
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-retry-abort",
     log: opts.log ?? (() => {}),
-    touch: () => {},
-    setRuntimeState: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-retry-abort"),
-    markCompleted,
-    markMessagesCompleted: (messages) => markCompleted(Array.isArray(messages) ? messages.length : 1),
+    finishTurn: async (messages, outcome) => {
+      finish(Array.isArray(messages) ? messages.length : 1);
+      (opts.emitEvent ?? (() => {}))({ kind: "turn_end", payload: { status: outcome.status } });
+    },
   };
 }
 

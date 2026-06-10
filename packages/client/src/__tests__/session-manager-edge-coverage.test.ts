@@ -10,6 +10,7 @@ import type {
 } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { ResumeUnavailableError } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -341,6 +342,93 @@ describe("SessionManager edge coverage", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("daemon restart with persisted mapping routes to resume(oldId), not start", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-session-restart-resume-"));
+    const registryPath = join(dir, "sessions.json");
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "chat-drift": {
+            claudeSessionId: "old-provider-session",
+            lastActivity: new Date(1_000).toISOString(),
+            status: "evicted",
+          },
+        },
+      }),
+      "utf-8",
+    );
+    const resumed = handler({
+      start: vi.fn().mockResolvedValue("new-provider-session"),
+      resume: vi.fn().mockResolvedValue("old-provider-session"),
+    });
+    const sm = makeManager({ handlers: [resumed], registryPath });
+
+    await sm.dispatch(mockEntry({ id: 51, chatId: "chat-drift" }));
+
+    expect(resumed.resume).toHaveBeenCalledWith(expect.anything(), "old-provider-session", expect.anything());
+    expect(resumed.start).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("typed transcript_missing triggers explicit SessionManager replacement", async () => {
+    const events: SessionEvent[] = [];
+    const replacement = handler({
+      resume: vi.fn(async () => {
+        throw new ResumeUnavailableError("transcript_missing", "old transcript missing");
+      }),
+      start: vi.fn().mockResolvedValue("replacement-provider-session"),
+    });
+    const sm = makeManager({
+      handlers: [replacement],
+      onSessionEvent: (_chatId, event) => events.push(event),
+    });
+    internals(sm).evictedMappings.set("chat-replace", {
+      claudeSessionId: "old-provider-session",
+      lastActivity: 1_000,
+    });
+
+    await sm.dispatch(mockEntry({ id: 52, chatId: "chat-replace" }));
+
+    expect(replacement.resume).toHaveBeenCalledWith(expect.anything(), "old-provider-session", expect.anything());
+    expect(replacement.start).toHaveBeenCalledTimes(1);
+    expect(internals(sm).sessions.get("chat-replace")?.claudeSessionId).toBe("replacement-provider-session");
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "error" &&
+          typeof event.payload.message === "string" &&
+          event.payload.message.includes("transcript_missing"),
+      ),
+    ).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("no-input admin resume does not ack or create phantom in-flight delivery", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const adminHandler = handler({ resume: vi.fn().mockResolvedValue("admin-session") });
+    const sm = makeManager({ handlers: [adminHandler], ackEntry, onSessionRuntimeChange: vi.fn() });
+    const record = makeSessionRecord("chat-admin", {
+      handler: adminHandler,
+      claudeSessionId: "admin-session",
+      status: "suspended",
+    });
+    internals(sm).sessions.set("chat-admin", record);
+
+    await internals(sm).resumeSession(record, undefined);
+
+    expect(adminHandler.resume).toHaveBeenCalledWith(undefined, "admin-session", expect.anything());
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(internals(sm).inFlightEntries.has("chat-admin")).toBe(false);
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-admin", runtimeState: "idle" }]);
+
+    await sm.shutdown();
+  });
+
   it("builds session context plumbing from cached config and falls back when self-fence refresh fails", async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "ft-session-context-"));
     const sdk = mockSdk();
@@ -368,7 +456,7 @@ describe("SessionManager edge coverage", () => {
       async start(_message, ctx) {
         captured = ctx;
         ctx.log("started");
-        ctx.touch();
+        ctx.recordProviderActivity();
         return "session-context";
       },
     });
@@ -480,7 +568,7 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("waits for in-flight suspension and supports admin resume without a message", async () => {
-    const resume = vi.fn().mockResolvedValue("resumed-admin");
+    const resume = vi.fn().mockResolvedValue("old-session");
     const record = makeSessionRecord("chat-admin-resume", {
       status: "suspended",
       claudeSessionId: "old-session",
@@ -515,7 +603,7 @@ describe("SessionManager edge coverage", () => {
       concurrency: 1,
       handlers: [
         handler({ start: vi.fn().mockResolvedValue("retry-empty-start") }),
-        handler({ resume: vi.fn().mockResolvedValue("retry-from-evicted") }),
+        handler({ resume: vi.fn(async (_message, sessionId: string) => sessionId) }),
       ],
       onSessionEvent: (_chatId, event) => events.push(event),
     });
@@ -556,7 +644,7 @@ describe("SessionManager edge coverage", () => {
     });
     internals(sm).sessions.set("chat-retry-evicted", fromEvicted);
     await internals(sm).runRetry("chat-retry-evicted");
-    expect(fromEvicted.claudeSessionId).toBe("retry-from-evicted");
+    expect(fromEvicted.claudeSessionId).toBe("evicted-session");
 
     expect(events.some((event) => event.kind === "error")).toBe(true);
 
@@ -926,17 +1014,18 @@ describe("SessionManager edge coverage", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-runtime" }));
-    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "idle" }]);
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "working" }]);
     if (!captured) throw new Error("context was not captured");
+    runtimeChanges.length = 0;
     await sm.handleCommand("chat-runtime", "session:suspend");
-    captured.setRuntimeState("working");
+    captured.recordProviderActivity();
     expect(runtimeChanges).not.toContain("working");
 
     internals(sm).reaffirmRuntimeStates();
     await sm.shutdown();
   });
 
-  it("uses idle fallback in evictIdle logging when no runtime state was recorded", async () => {
+  it("uses computed working state in evictIdle logging when delivery work is present", async () => {
     vi.useFakeTimers({ now: 100_000 });
     const log = recordingLogger();
     const first = handler();
@@ -964,9 +1053,9 @@ describe("SessionManager edge coverage", () => {
 
     vi.advanceTimersByTime(10_000);
 
-    expect(log.records.some((entry) => entry.msg === "session idle, suspending" && entry.runtimeState === "idle")).toBe(
-      true,
-    );
+    expect(
+      log.records.some((entry) => entry.msg === "session idle, suspending" && entry.runtimeState === "working"),
+    ).toBe(true);
     await sm.shutdown();
   });
 });

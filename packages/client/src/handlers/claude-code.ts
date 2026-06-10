@@ -26,6 +26,7 @@ import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { ResumeUnavailableError } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
@@ -637,7 +638,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * the next turn). We stash the already-converted SDK form (rather
    * than the raw `SessionMessage`) so the retry path stays synchronous
    * and timing-compatible with the existing consumer-loop catch block.
-   * Cleared once `ackTurnClose()` acks the entry — turn fully processed,
+   * Cleared once `finishTurnClose()` finishes the entry — turn fully processed,
    * no further replay needed.
    *
    * Invariant — single-consumer loop: this stash is safe ONLY because
@@ -831,23 +832,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Single helper for "turn closed → ack the pending inbox message AND
+   * Single helper for "turn closed → finish the pending inbox message AND
    * drop the replay stash". The two operations are paired everywhere a
    * turn finishes (success / sniff-permanent / forward-error / no-result /
    * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
    * one call keeps the invariant "stash lives only as long as the turn
    * still might need a replay" enforced in one place. Use the raw
-   * `markMessagesCompleted(message)` directly for per-message terminal
+   * `finishTurn(message, outcome)` directly for per-message terminal
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
-  function ackTurnClose(sessionCtx: SessionContext): void {
+  async function finishTurnClose(
+    sessionCtx: SessionContext,
+    outcome: { status: "success" | "error"; terminal?: boolean },
+  ): Promise<void> {
     const message = pendingAckMessages.shift();
-    if (message) {
-      sessionCtx.markMessagesCompleted(message);
-    } else {
-      sessionCtx.markCompleted();
-    }
+    await sessionCtx.finishTurn(message ? [message] : [], outcome);
     markCurrentPendingMessageConsumed(sessionCtx);
     stashedSdkMessage = null;
   }
@@ -886,7 +886,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // entry with an SDK result. Ack here — re-handling on
       // redelivery would re-hit the same conversion error
       // (permanent failure semantics, design §4).
-      sessionCtx.markMessagesCompleted(message);
+      await sessionCtx.finishTurn(message, { status: "error", terminal: true });
     }
   }
 
@@ -1094,11 +1094,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (!currentQuery) return;
 
         try {
-          sessionCtx.setRuntimeState("working");
+          sessionCtx.recordProviderActivity();
 
           for await (const message of currentQuery) {
             // Every message refreshes lastActivity to prevent idle timeout
-            sessionCtx.touch();
+            sessionCtx.recordProviderActivity();
 
             toolCallProcessor.onMessage(message);
 
@@ -1172,11 +1172,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         message: `Claude API error (${classification.reasonCode}): ${sniff.message}`,
                       },
                     });
-                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    ackTurnClose(sessionCtx);
+                    await finishTurnClose(sessionCtx, { status: "error" });
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1191,9 +1190,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // handler shares one code path — see runtime/result-sink.ts.
                       await sessionCtx.forwardResult(resultText);
                       sessionCtx.log("Result forwarded to chat");
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      ackTurnClose(sessionCtx);
+                      await finishTurnClose(sessionCtx, { status: "success" });
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -1203,7 +1201,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         kind: "error",
                         payload: { source: "runtime", message: forwardErrMessage },
                       });
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                       // forwardResult failure is treated as terminal for
                       // this turn — ack so we don't loop on redelivery.
                       // Long-lived sdk.sendMessage failures are rare; if
@@ -1218,15 +1215,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      ackTurnClose(sessionCtx);
+                      await finishTurnClose(sessionCtx, { status: "error" });
                     }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
                   // Same reset rationale as the forward-success branch above.
                   retryCount = 0;
-                  sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  ackTurnClose(sessionCtx);
+                  await finishTurnClose(sessionCtx, { status: "success" });
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -1240,12 +1236,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 if (!authHintEmitted) {
                   sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
                 }
-                sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                ackTurnClose(sessionCtx);
+                await finishTurnClose(sessionCtx, { status: "error" });
               }
-              sessionCtx.setRuntimeState("idle");
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
               // working, while suppressing a duplicate hint when the next
@@ -1257,7 +1251,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               }
             }
           }
-          sessionCtx.setRuntimeState("idle");
           return;
         } catch (err) {
           // Process crash, OOM, or unexpected termination
@@ -1283,7 +1276,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // would just go quiet.
             //
             // Wrap the emits so a broken `onSessionEvent` callback can't
-            // short-circuit the `setRuntimeState("error")` call below —
+            // short-circuit the terminal `finishTurn` call below —
             // if that one is skipped the SessionManager keeps the slot
             // counted as `working` and never reclaims it.
             try {
@@ -1292,19 +1285,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 ? `Query failed after ${MAX_RETRIES} retries: ${preview}`
                 : `Query failed and no resume id available: ${preview}`;
               sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: reason } });
-              sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
             } catch (emitErr) {
               sessionCtx.log(
                 `Failed to emit retry-exhaustion error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Ack the in-flight entry for this turn. Without this the row
             // stays `delivered` server-side forever: the in-process
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await finishTurnClose(sessionCtx, { status: "error", terminal: true });
             return;
           }
 
@@ -1337,27 +1328,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           } catch (resumeErr) {
             const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
             sessionCtx.log(`Auto-resume failed: ${resumeMsg}`);
-            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
-            // `working` would block the SessionManager's idle-suspend grace
-            // window from ever firing on this session, so the slot would
-            // never be reclaimed. Wrap the emits defensively so the
-            // setRuntimeState call still runs if the callback throws.
+            // Mirror the MAX_RETRIES branch above: finish the turn with a
+            // terminal error marker so the SessionManager can reclaim/report
+            // the session even if event callbacks fail.
             try {
               sessionCtx.emitEvent({
                 kind: "error",
                 payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
               });
-              sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
             } catch (emitErr) {
               sessionCtx.log(
                 `Failed to emit auto-resume error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await finishTurnClose(sessionCtx, { status: "error", terminal: true });
             return;
           }
         }
@@ -1693,28 +1680,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
       // Defensive fallback: sessionId isn't recognised at EITHER cwd (likely
       // a stale registry entry from machine swap / fs cleanup / tampering).
-      // Mint a fresh id and start cold — First Tree message history survives.
+      // Report typed resume-unavailable to SessionManager. The manager owns
+      // explicit provider session replacement; tree/CLI/bootstrap drift must
+      // not silently mint a fresh id inside handler.resume().
       if (!claudeSessionFileExists(cwd, sessionId)) {
-        const freshSessionId = randomUUID();
-        sessionCtx.log(
-          `Resume: SDK transcript for ${sessionId} not found at legacy (${legacyCwd}) ` +
-            `or agent home (${cwd}); starting fresh session ${freshSessionId} — ` +
-            "First Tree message history is preserved.",
+        throw new ResumeUnavailableError(
+          "transcript_missing",
+          `SDK transcript for ${sessionId} not found at legacy cwd (${legacyCwd}) or agent home (${cwd})`,
         );
-        claudeSessionId = freshSessionId;
-        let freshSdkMsg: SDKUserMessage | null = null;
-        if (message) {
-          freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
-          stashedSdkMessage = freshSdkMsg;
-        }
-        spawnQuery(freshSessionId, sessionCtx);
-        if (freshSdkMsg) {
-          inputController?.push(freshSdkMsg);
-          if (message) pushPendingAckMessage(message, sessionCtx);
-        }
-        scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
-        sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
-        return freshSessionId;
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);

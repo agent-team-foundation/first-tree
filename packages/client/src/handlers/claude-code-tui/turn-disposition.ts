@@ -22,7 +22,7 @@ export type TurnDisposition = {
   /** Status reported on the `turn_end` event. */
   status: "success" | "error";
   /**
-   * Whether to `markCompleted` (ack the triggering inbox entries). The runtime
+   * Whether to `finishTurn` (ack the triggering inbox entries). The runtime
    * never auto-acks on turn_end, so a false here leaves the entries in-flight
    * for at-least-once redelivery.
    */
@@ -34,8 +34,8 @@ export type TurnDisposition = {
    * double-posts once the replay produces the real answer.
    */
   forward: boolean;
-  /** Runtime state to settle into after the turn. */
-  runtimeState: "idle" | "error";
+  /** Whether SessionManager should retain a fatal runtime error marker. */
+  terminalRuntimeError: boolean;
 };
 
 /**
@@ -69,7 +69,7 @@ export function resolveTurnDisposition(outcome: TurnOutcome): TurnDisposition {
     ack: consume,
     forward: consume,
     // A broken (turnFailed) or interrupted (timedOut) session is advertised as
-    // error; a forward-only failure leaves the session healthy, so it stays idle.
-    runtimeState: turnFailed || timedOut ? "error" : "idle",
+    // error; a forward-only failure leaves the session healthy.
+    terminalRuntimeError: turnFailed || timedOut,
   };
 }
