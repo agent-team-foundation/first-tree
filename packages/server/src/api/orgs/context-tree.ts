@@ -17,6 +17,24 @@ import { getOrganization } from "../../services/organization.js";
 
 const BRANCH = "main";
 const ROOT_NODE_PATH = "NODE.md";
+const VALIDATE_TREE_WORKFLOW_PATH = ".github/workflows/validate-tree.yml";
+const VALIDATE_TREE_WORKFLOW_CONTENT = `name: Validate Context Tree
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Context Tree
+        run: npx -p first-tree first-tree tree verify
+`;
 const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 
@@ -57,7 +75,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     if (!hasInitializationPermissions(mint.permissions)) {
       return reply.status(403).send({
         error:
-          "The GitHub App installation needs administration: write and contents: write permissions to initialize a Context Tree repo.",
+          "The GitHub App installation needs administration: write, contents: write, and workflows: write permissions to initialize a Context Tree repo.",
         code: "installation_permissions_insufficient",
       });
     }
@@ -115,7 +133,14 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
 
     const nodeContent = initialRootNode(teamName, installation.accountLogin);
     try {
-      await ensureRootNode(mint.token, repo, nodeContent);
+      await ensureRepoFile(mint.token, repo, {
+        path: ROOT_NODE_PATH,
+        content: nodeContent,
+        commitMessage: "Initialize Context Tree root node",
+        verifyErrorMessage: "Couldn't verify the Context Tree root node. Try again in a moment.",
+        createErrorMessage: "Couldn't initialize the Context Tree root node. Try again in a moment.",
+        verifyExistingErrorMessage: "Couldn't verify the existing Context Tree root node. Try again in a moment.",
+      });
     } catch (err) {
       if (err instanceof ContextTreeInitializeError) {
         app.log.warn(
@@ -125,6 +150,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
             userId: scope.userId,
             repo: repo.fullName,
             nodePath: ROOT_NODE_PATH,
+            filePath: ROOT_NODE_PATH,
             code: err.code,
           },
           "context tree initialize: create root node failed",
@@ -138,8 +164,49 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
           userId: scope.userId,
           repo: repo.fullName,
           nodePath: ROOT_NODE_PATH,
+          filePath: ROOT_NODE_PATH,
         },
         "context tree initialize: create root node failed",
+      );
+      throw err;
+    }
+
+    try {
+      await ensureRepoFile(mint.token, repo, {
+        path: VALIDATE_TREE_WORKFLOW_PATH,
+        content: VALIDATE_TREE_WORKFLOW_CONTENT,
+        commitMessage: "Initialize Context Tree validation workflow",
+        verifyErrorMessage: "Couldn't verify the Context Tree validation workflow. Try again in a moment.",
+        createErrorMessage: "Couldn't initialize the Context Tree validation workflow. Try again in a moment.",
+        verifyExistingErrorMessage:
+          "Couldn't verify the existing Context Tree validation workflow. Try again in a moment.",
+      });
+    } catch (err) {
+      if (err instanceof ContextTreeInitializeError) {
+        app.log.warn(
+          {
+            err,
+            organizationId: scope.organizationId,
+            userId: scope.userId,
+            repo: repo.fullName,
+            workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
+            filePath: VALIDATE_TREE_WORKFLOW_PATH,
+            code: err.code,
+          },
+          "context tree initialize: create validation workflow failed",
+        );
+        return reply.status(err.statusCode).send({ error: err.message, code: err.code });
+      }
+      app.log.warn(
+        {
+          err,
+          organizationId: scope.organizationId,
+          userId: scope.userId,
+          repo: repo.fullName,
+          workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
+          filePath: VALIDATE_TREE_WORKFLOW_PATH,
+        },
+        "context tree initialize: create validation workflow failed",
       );
       throw err;
     }
@@ -159,6 +226,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         userId: scope.userId,
         repo: repo.fullName,
         nodePath: ROOT_NODE_PATH,
+        workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
       },
       "context tree initialize: saved organization setting",
     );
@@ -207,7 +275,9 @@ function sendMintFailure(
 }
 
 function hasInitializationPermissions(permissions: Record<string, "read" | "write" | "admin">): boolean {
-  return permissions.administration === "write" && permissions.contents === "write";
+  return (
+    permissions.administration === "write" && permissions.contents === "write" && permissions.workflows === "write"
+  );
 }
 
 async function createOrAdoptContextTreeRepo(input: {
@@ -263,18 +333,29 @@ async function adoptExistingRepository(
   }
 }
 
-async function ensureRootNode(installationToken: string, repo: GithubCreatedRepo, nodeContent: string): Promise<void> {
+async function ensureRepoFile(
+  installationToken: string,
+  repo: GithubCreatedRepo,
+  input: {
+    path: string;
+    content: string;
+    commitMessage: string;
+    verifyErrorMessage: string;
+    createErrorMessage: string;
+    verifyExistingErrorMessage: string;
+  },
+): Promise<void> {
   try {
     await getRepoFileWithToken(installationToken, {
       owner: repo.ownerLogin,
       repo: repo.name,
-      path: ROOT_NODE_PATH,
+      path: input.path,
       branch: BRANCH,
     });
     return;
   } catch (err) {
     if (!(err instanceof GithubAppApiError) || err.status !== 404) {
-      throw mapUpstreamError(err, "Couldn't verify the Context Tree root node. Try again in a moment.");
+      throw mapUpstreamError(err, input.verifyErrorMessage);
     }
   }
 
@@ -282,30 +363,35 @@ async function ensureRootNode(installationToken: string, repo: GithubCreatedRepo
     await createRepoFileWithToken(installationToken, {
       owner: repo.ownerLogin,
       repo: repo.name,
-      path: ROOT_NODE_PATH,
+      path: input.path,
       branch: BRANCH,
-      message: "Initialize Context Tree root node",
-      contentBase64: Buffer.from(nodeContent, "utf8").toString("base64"),
+      message: input.commitMessage,
+      contentBase64: Buffer.from(input.content, "utf8").toString("base64"),
     });
   } catch (err) {
     if (err instanceof GithubAppApiError && (err.status === 409 || err.status === 422)) {
-      await verifyExistingRootNode(installationToken, repo);
+      await verifyExistingRepoFile(installationToken, repo, input.path, input.verifyExistingErrorMessage);
       return;
     }
-    throw mapUpstreamError(err, "Couldn't initialize the Context Tree root node. Try again in a moment.");
+    throw mapUpstreamError(err, input.createErrorMessage);
   }
 }
 
-async function verifyExistingRootNode(installationToken: string, repo: GithubCreatedRepo): Promise<void> {
+async function verifyExistingRepoFile(
+  installationToken: string,
+  repo: GithubCreatedRepo,
+  path: string,
+  errorMessage: string,
+): Promise<void> {
   try {
     await getRepoFileWithToken(installationToken, {
       owner: repo.ownerLogin,
       repo: repo.name,
-      path: ROOT_NODE_PATH,
+      path,
       branch: BRANCH,
     });
   } catch (err) {
-    throw mapUpstreamError(err, "Couldn't verify the existing Context Tree root node. Try again in a moment.");
+    throw mapUpstreamError(err, errorMessage);
   }
 }
 

@@ -21,6 +21,25 @@ const ACCOUNT_LOGIN = "acme-github";
 const REPO_NAME = "acme-labs-context-tree";
 const CLONE_URL = `https://github.com/${ACCOUNT_LOGIN}/${REPO_NAME}.git`;
 const HTML_URL = `https://github.com/${ACCOUNT_LOGIN}/${REPO_NAME}`;
+const ROOT_NODE_PATH = "NODE.md";
+const VALIDATE_TREE_WORKFLOW_PATH = ".github/workflows/validate-tree.yml";
+const VALIDATE_TREE_WORKFLOW_CONTENT = `name: Validate Context Tree
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Context Tree
+        run: npx -p first-tree first-tree tree verify
+`;
 
 const { privateKey: githubAppPrivateKeyPem } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -43,14 +62,15 @@ describe("POST /orgs/:orgId/context-tree/initialize", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates an organization repo with the bound installation token, writes NODE.md, and persists context_tree", async () => {
+  it("creates an organization repo with the bound installation token, writes NODE.md and the validation workflow, and persists context_tree", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
 
     let createRepoPayload: unknown;
-    let createFilePayload: unknown;
+    let createRootNodePayload: unknown;
+    let createWorkflowPayload: unknown;
     const fetchSpy = mockFetch(async (url, init) => {
       if (url === installationTokenUrl(installationId)) {
         expectAuth(init, "Bearer");
@@ -65,14 +85,23 @@ describe("POST /orgs/:orgId/context-tree/initialize", () => {
         expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
         return githubRepoResponse(200);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md", "main")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
         expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
         return jsonResponse({ message: "Not Found" }, 404);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
         expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
-        createFilePayload = parseJsonBody(init);
-        return jsonResponse({ content: { path: "NODE.md" } }, 201);
+        createRootNodePayload = parseJsonBody(init);
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        createWorkflowPayload = parseJsonBody(init);
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -92,11 +121,11 @@ describe("POST /orgs/:orgId/context-tree/initialize", () => {
       auto_init: false,
       description: "Acme Labs Context Tree",
     });
-    expect(createFilePayload).toMatchObject({
+    expect(createRootNodePayload).toMatchObject({
       branch: "main",
       message: "Initialize Context Tree root node",
     });
-    const nodeContent = readBase64Content(createFilePayload);
+    const nodeContent = readBase64Content(createRootNodePayload);
     expect(nodeContent).toBe(`---
 title: "Acme Labs Context Tree"
 description: "Shared context, decisions, ownership, and operating knowledge for Acme Labs."
@@ -105,7 +134,12 @@ owners: [${ACCOUNT_LOGIN}]
 
 # Acme Labs's Context Tree
 `);
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(createWorkflowPayload).toMatchObject({
+      branch: "main",
+      message: "Initialize Context Tree validation workflow",
+    });
+    expect(readBase64Content(createWorkflowPayload)).toBe(VALIDATE_TREE_WORKFLOW_CONTENT);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
 
     const setting = await getOrgContextTree(app.db, admin.organizationId);
     expect(setting).toEqual({ repo: CLONE_URL, branch: "main" });
@@ -246,8 +280,9 @@ owners: [${ACCOUNT_LOGIN}]
   });
 
   const permissionCases: Array<[string, Record<string, "read" | "write" | "admin">]> = [
-    ["administration", { administration: "read", contents: "write" }],
-    ["contents", { administration: "write", contents: "read" }],
+    ["administration", { administration: "read", contents: "write", workflows: "write" }],
+    ["contents", { administration: "write", contents: "read", workflows: "write" }],
+    ["workflows", { administration: "write", contents: "write", workflows: "read" }],
   ];
   for (const [missingPermission, permissions] of permissionCases) {
     it(`returns 403 installation_permissions_insufficient when ${missingPermission} is not write`, async () => {
@@ -274,17 +309,25 @@ owners: [${ACCOUNT_LOGIN}]
     const admin = await createTestAdmin(app);
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
-    let fileWrites = 0;
+    let rootNodeWrites = 0;
+    let workflowWrites = 0;
     const fetchSpy = mockFetch(async (url) => {
       if (url === installationTokenUrl(installationId)) return installationTokenResponse();
       if (url === orgReposUrl(ACCOUNT_LOGIN)) return jsonResponse({ message: "Repository creation failed." }, 422);
       if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md", "main")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
         return jsonResponse({ message: "Not Found" }, 404);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md")) {
-        fileWrites += 1;
-        return jsonResponse({ content: { path: "NODE.md" } }, 201);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        rootNodeWrites += 1;
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        workflowWrites += 1;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -292,8 +335,9 @@ owners: [${ACCOUNT_LOGIN}]
     const res = await initialize(app, admin);
 
     expect(res.statusCode).toBe(201);
-    expect(fileWrites).toBe(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(rootNodeWrites).toBe(1);
+    expect(workflowWrites).toBe(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
     expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
@@ -317,7 +361,44 @@ owners: [${ACCOUNT_LOGIN}]
     expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
   });
 
-  it("adopts an existing repo with an existing NODE.md without rewriting the file", async () => {
+  it("adopts an existing repo with an existing NODE.md without rewriting it and writes the missing workflow", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    let rootNodeWrites = 0;
+    let workflowWrites = 0;
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return jsonResponse({ message: "Repository creation failed." }, 422);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ path: ROOT_NODE_PATH }, 200);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        rootNodeWrites += 1;
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        workflowWrites += 1;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(201);
+    expect(rootNodeWrites).toBe(0);
+    expect(workflowWrites).toBe(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
+    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+  });
+
+  it("adopts an existing repo with an existing validation workflow without rewriting it", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = await seedInstallation(app, admin.organizationId);
@@ -327,12 +408,18 @@ owners: [${ACCOUNT_LOGIN}]
       if (url === installationTokenUrl(installationId)) return installationTokenResponse();
       if (url === orgReposUrl(ACCOUNT_LOGIN)) return jsonResponse({ message: "Repository creation failed." }, 422);
       if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md", "main")) {
-        return jsonResponse({ path: "NODE.md" }, 200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ path: ROOT_NODE_PATH }, 200);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ path: VALIDATE_TREE_WORKFLOW_PATH }, 200);
+      }
+      if (
+        url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH) ||
+        url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)
+      ) {
         fileWrites += 1;
-        return jsonResponse({ content: { path: "NODE.md" } }, 201);
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -341,9 +428,82 @@ owners: [${ACCOUNT_LOGIN}]
 
     expect(res.statusCode).toBe(201);
     expect(fileWrites).toBe(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
     expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
+
+  it("returns 502 and does not persist context_tree when the validation workflow write fails", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        return jsonResponse({ message: "GitHub unavailable" }, 500);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ code: "upstream" });
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+  });
+
+  for (const createConflictStatus of [409, 422]) {
+    it(`initializes successfully when validation workflow create returns ${createConflictStatus} and the file now exists`, async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      let workflowReadCalls = 0;
+      let workflowCreateCalls = 0;
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+        if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+        if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+          return jsonResponse({ message: "Not Found" }, 404);
+        }
+        if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+          return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+        }
+        if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+          workflowReadCalls += 1;
+          return workflowReadCalls === 1
+            ? jsonResponse({ message: "Not Found" }, 404)
+            : jsonResponse({ path: VALIDATE_TREE_WORKFLOW_PATH }, 200);
+        }
+        if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+          workflowCreateCalls += 1;
+          return jsonResponse({ message: "File already exists" }, createConflictStatus);
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(201);
+      expect(workflowReadCalls).toBe(2);
+      expect(workflowCreateCalls).toBe(1);
+      expect(fetchSpy).toHaveBeenCalledTimes(8);
+      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    });
+  }
 
   it("can retry successfully when the root-node write failed after repo creation", async () => {
     const app = getApp();
@@ -351,7 +511,8 @@ owners: [${ACCOUNT_LOGIN}]
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
     let repoCreateCalls = 0;
-    let fileWriteCalls = 0;
+    let rootNodeWriteCalls = 0;
+    let workflowWriteCalls = 0;
     mockFetch(async (url) => {
       if (url === installationTokenUrl(installationId)) return installationTokenResponse();
       if (url === orgReposUrl(ACCOUNT_LOGIN)) {
@@ -361,14 +522,21 @@ owners: [${ACCOUNT_LOGIN}]
           : jsonResponse({ message: "Repository creation failed." }, 422);
       }
       if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md", "main")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
         return jsonResponse({ message: "Not Found" }, 404);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md")) {
-        fileWriteCalls += 1;
-        return fileWriteCalls === 1
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        rootNodeWriteCalls += 1;
+        return rootNodeWriteCalls === 1
           ? jsonResponse({ message: "GitHub unavailable" }, 500)
-          : jsonResponse({ content: { path: "NODE.md" } }, 201);
+          : jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        workflowWriteCalls += 1;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -381,17 +549,19 @@ owners: [${ACCOUNT_LOGIN}]
     const second = await initialize(app, admin);
     expect(second.statusCode).toBe(201);
     expect(repoCreateCalls).toBe(2);
-    expect(fileWriteCalls).toBe(2);
+    expect(rootNodeWriteCalls).toBe(2);
+    expect(workflowWriteCalls).toBe(1);
     expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
-  it("can retry successfully when DB save failed after repo creation and root-node write", async () => {
+  it("can retry successfully when DB save failed after repo creation, root-node write, and workflow write", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
     let repoCreateCalls = 0;
     let rootNodeExists = false;
+    let workflowExists = false;
     vi.spyOn(app.db, "transaction").mockRejectedValueOnce(new Error("db down"));
     mockFetch(async (url) => {
       if (url === installationTokenUrl(installationId)) return installationTokenResponse();
@@ -402,12 +572,23 @@ owners: [${ACCOUNT_LOGIN}]
           : jsonResponse({ message: "Repository creation failed." }, 422);
       }
       if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md", "main")) {
-        return rootNodeExists ? jsonResponse({ path: "NODE.md" }, 200) : jsonResponse({ message: "Not Found" }, 404);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return rootNodeExists
+          ? jsonResponse({ path: ROOT_NODE_PATH }, 200)
+          : jsonResponse({ message: "Not Found" }, 404);
       }
-      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, "NODE.md")) {
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
         rootNodeExists = true;
-        return jsonResponse({ content: { path: "NODE.md" } }, 201);
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return workflowExists
+          ? jsonResponse({ path: VALIDATE_TREE_WORKFLOW_PATH }, 200)
+          : jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        workflowExists = true;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -415,6 +596,7 @@ owners: [${ACCOUNT_LOGIN}]
     const first = await initialize(app, admin);
     expect(first.statusCode).toBe(500);
     expect(rootNodeExists).toBe(true);
+    expect(workflowExists).toBe(true);
     expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
 
     const second = await initialize(app, admin);
@@ -462,7 +644,7 @@ async function seedInstallation(
       accountType: opts.accountType ?? "Organization",
       accountLogin: opts.accountLogin ?? ACCOUNT_LOGIN,
       accountGithubId: installationId + 1_000_000,
-      permissions: opts.permissions ?? { administration: "write", contents: "write" },
+      permissions: opts.permissions ?? { administration: "write", contents: "write", workflows: "write" },
       events: opts.repositoryEvents ?? ["push"],
       suspendedAt: opts.suspendedAt ?? null,
     },
@@ -512,7 +694,7 @@ function installationTokenResponse(
     {
       token: INSTALLATION_TOKEN,
       expires_at: "2026-05-15T01:00:00Z",
-      permissions: overrides.permissions ?? { administration: "write", contents: "write" },
+      permissions: overrides.permissions ?? { administration: "write", contents: "write", workflows: "write" },
       repository_selection: overrides.repository_selection ?? "all",
     },
     201,

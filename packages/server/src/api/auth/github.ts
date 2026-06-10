@@ -280,6 +280,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
             permissions: {
               administration: "write",
               contents: "write",
+              workflows: "write",
               pull_requests: "write",
               issues: "read",
               metadata: "read",

@@ -68,13 +68,13 @@ state — **not** wired into onboarding.
 > initial review): the repo is created through the **org installation token**,
 > not the signed-in user's OAuth token. The endpoint hard-requires an
 > **Organization** installation with `repositorySelection: "all"` and the App's
-> `Administration: write` + `Contents: write` repository permissions, and
-> returns distinct status codes when those aren't met:
+> `Administration: write` + `Contents: write` + `Workflows: write` repository
+> permissions, and returns distinct status codes when those aren't met:
 > - `409 organization_installation_required` — installation is a personal/User
 >   account (so **personal-account users cannot use one-click new-tree** — a
 >   real constraint of the Cloud-provision choice);
 > - `409 selected_repositories_unsupported` — installed on selected repos only;
-> - `403 installation_permissions_insufficient` — missing admin/contents write;
+> - `403 installation_permissions_insufficient` — missing admin/contents/workflows write;
 > - `503 no_installation` — no installation connected;
 > - `409 ConflictError` — `org.context_tree` already set.
 
@@ -88,7 +88,8 @@ add agent-driven repo creation.
    creation (the "variant G" host-`gh` fallback) is **dropped** — onboarding
    always provisions via `POST …/context-tree/initialize`. Owner accepted the
    external-customer trade-off this implies (see O3 below): the shared GitHub
-   App must hold repo **Administration: write**, which every customer authorizes.
+   App must hold repo **Administration: write** and **Workflows: write**, which
+   every customer authorizes.
 2. **Gap④ = Option A:** the cloud runtime makes the agent home a real W1
    workspace and writes `.first-tree/workspace.json`, so the skills stay
    layout-agnostic (no per-skill cloud branch, seed's self-check stays a real
@@ -223,9 +224,8 @@ per-chat runtime state already lets the UI show "working" on that chat.
   §3 correction), the prerequisites are on the installation, not a user OAuth
   token:
   - the App's repository permissions must include **`Administration: write`**
-    (governs repo creation) **and `Contents: write`** (to write the root
-    `NODE.md`) — owner reports Administration was set to write ✅; **verify
-    `Contents: write` too**;
+    (governs repo creation), **`Contents: write`** (to write the root
+    `NODE.md`), and **`Workflows: write`** (to write the validation workflow);
   - the team must install the App on a GitHub **Organization** with
     **all repositories** (not a personal account, not selected repos);
   - existing installations are re-prompted to accept new permissions; the change

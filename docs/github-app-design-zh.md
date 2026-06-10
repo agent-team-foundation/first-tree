@@ -25,6 +25,7 @@ Repository permissions:
 
 - `Administration`: Read and write
 - `Contents`: Read and write
+- `Workflows`: Read and write
 - `Pull requests`: Read and write
 - `Issues`: Read-only
 - `Metadata`: Read-only
@@ -47,7 +48,7 @@ Subscribed events:
 Operator rollout note:
 
 - Operators must update the GitHub App settings to request
-  `Administration: Read and write`.
+  `Administration: Read and write` and `Workflows: Read and write`.
 - Existing installations must re-approve the permission upgrade in GitHub
   before relying on one-click Context Tree initialization.
 - Until an installation is re-approved, initializer calls return
