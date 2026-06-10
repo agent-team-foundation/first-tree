@@ -17,6 +17,7 @@ import {
   isLikelyHttpsAuthFailure,
   isLikelySshAuthFailure,
   isLikelyTransientNetworkError,
+  protocolFallbackFailure,
   retryOnTransientNetwork,
   sshToHttpsBaseRewrite,
 } from "../runtime/git-mirror-manager.js";
@@ -557,6 +558,39 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
     "fatal: could not read Username for 'https://github.com'",
   ])("does NOT match: %s", (msg) => {
     expect(isLikelySshAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — protocol-fallback failure shaping (protocolFallbackFailure)", () => {
+  const combined = "Could not clone https://github.com/x/y.git over HTTPS or SSH. …";
+
+  it.each([
+    // True double-auth failure: SSH side rejected credentials / host key.
+    "git@github.com: Permission denied (publickey).",
+    "Host key verification failed.\nfatal: Could not read from remote repository.",
+  ])("peer auth-shaped failure → GitMirrorAuthError (no session retry): %s", (peerMessage) => {
+    const err = protocolFallbackFailure(combined, peerMessage);
+    expect(err).toBeInstanceOf(GitMirrorAuthError);
+    expect(err.message).toBe(combined);
+  });
+
+  it.each([
+    // Peer died for a transient network reason (DNS / VPN / proxy outage that
+    // outlasted gitWithNetworkRetry's short budget). Only the primary side is
+    // known to be credential-shaped — keep the session-level retry alive.
+    "ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.",
+    "ssh: Could not resolve hostname github.com: Name or service not known",
+    "ssh: connect to host github.com port 22: Connection refused",
+  ])("peer transient-network failure → plain GitMirrorError (session retry preserved): %s", (peerMessage) => {
+    const err = protocolFallbackFailure(combined, peerMessage);
+    expect(err).toBeInstanceOf(GitMirrorError);
+    expect(err).not.toBeInstanceOf(GitMirrorAuthError);
+    expect(err.message).toBe(combined);
+  });
+
+  it("peer failure of unrecognised shape stays GitMirrorAuthError (conservative: primary was credential-shaped)", () => {
+    const err = protocolFallbackFailure(combined, "fatal: something nobody has seen before");
+    expect(err).toBeInstanceOf(GitMirrorAuthError);
   });
 });
 
