@@ -6,20 +6,37 @@ function markdownBool(value: boolean): string {
   return value ? "true" : "false";
 }
 
-export function driftNote(metrics: EvalMetrics): string | null {
-  if (!metrics.helpAttempted) return null;
-  const exitCodes = metrics.helpExitCodes.length > 0 ? metrics.helpExitCodes.join(", ") : "not captured";
-  const hasNonZeroExit = metrics.helpExitCodes.some((exitCode) => exitCode !== 0);
+function formatArg(arg: string): string {
+  if (/^[A-Za-z0-9_./:=@+-]+$/u.test(arg)) return arg;
+  return JSON.stringify(arg);
+}
 
-  if (hasNonZeroExit) {
-    return `first-tree-dev tree tree --help was attempted and returned non-zero exit code(s): ${exitCodes}.`;
+function formatCommand(argv: readonly string[]): string {
+  return argv.map(formatArg).join(" ");
+}
+
+export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): string | null {
+  const notes: string[] = [];
+  const nonZeroResults = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
+
+  if (nonZeroResults.length > 0) {
+    const detail = nonZeroResults
+      .map((result) => `first-tree ${formatCommand(result.argv)} => ${result.exitCode}`)
+      .join("; ");
+    notes.push(`first-tree command(s) returned non-zero exit code(s): ${detail}.`);
   }
 
-  return [
-    "first-tree-dev tree tree --help was attempted.",
-    "The current CLI returns parent tree help with exit 0 for this --help form even though only tree verify is registered.",
-    "This still records first-tree-read selector drift.",
-  ].join(" ");
+  if (expectedTrigger && !metrics.expectedFactsObserved) {
+    notes.push(
+      "Expected Context Tree facts were not surfaced in the model output; inspect events.jsonl for the final assistant messages.",
+    );
+  }
+
+  if (!expectedTrigger && metrics.expectedFactHits.length > 0) {
+    notes.push(`Off-topic case surfaced Context Tree fact(s): ${metrics.expectedFactHits.join(" | ")}.`);
+  }
+
+  return notes.length > 0 ? notes.join(" ") : null;
 }
 
 function validationRows(validation: FixtureValidation): string {
@@ -33,6 +50,18 @@ function validationRows(validation: FixtureValidation): string {
   ].join("\n");
 }
 
+function commandResultRows(metrics: EvalMetrics): string {
+  if (metrics.firstTreeCommandResults.length === 0) return "- none";
+  return metrics.firstTreeCommandResults
+    .map((result) => `- first-tree ${formatCommand(result.argv)}: exit=${result.exitCode}`)
+    .join("\n");
+}
+
+function expectedFactRows(metrics: EvalMetrics): string {
+  if (metrics.expectedFactHits.length === 0) return "- none";
+  return metrics.expectedFactHits.map((fact) => `- ${fact}`).join("\n");
+}
+
 export function writeCaseSummaries(summary: CaseRunSummary): void {
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
@@ -44,8 +73,9 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - passed: ${markdownBool(summary.passed)}
 - expectedTrigger: ${markdownBool(summary.expectedTrigger)}
 - skillHit: ${markdownBool(summary.metrics.skillHit)}
-- helpCalls: ${summary.metrics.helpCalls}
-- firstTreeDevCalls: ${summary.metrics.firstTreeDevCalls}
+- skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
+- expectedFactsObserved: ${markdownBool(summary.metrics.expectedFactsObserved)}
+- firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
 
 ## Prompt
@@ -57,6 +87,14 @@ ${summary.prompt}
 ## Fixture Validation
 
 ${validationRows(summary.fixtureValidation)}
+
+## Expected Fact Hits
+
+${expectedFactRows(summary.metrics)}
+
+## first-tree Command Results
+
+${commandResultRows(summary.metrics)}
 ${drift}
 ## Paths
 
@@ -76,11 +114,20 @@ export function formatSummaryTable(batch: BatchSummary): string {
     summary.caseId,
     String(summary.expectedTrigger),
     String(summary.metrics.skillHit),
-    String(summary.metrics.helpCalls),
-    String(summary.metrics.firstTreeDevCalls),
+    String(summary.metrics.firstTreeCalls),
+    String(summary.metrics.skillFileReadObserved),
+    String(summary.metrics.expectedFactsObserved),
     String(summary.passed),
   ]);
-  const header = ["case_id", "expected_trigger", "skill_hit", "help_calls", "first_tree_dev_calls", "passed"];
+  const header = [
+    "case_id",
+    "expected_trigger",
+    "skill_hit",
+    "first_tree_calls",
+    "skill_file_read",
+    "expected_facts_observed",
+    "passed",
+  ];
   const widths = header.map((label, index) => {
     let width = label.length;
     for (const row of rows) {

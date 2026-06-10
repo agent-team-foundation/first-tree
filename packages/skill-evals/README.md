@@ -16,13 +16,13 @@ pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-softwa
 
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
-`first-tree-read`, prepends a `first-tree-dev` shim to `PATH`, and runs
+`first-tree-read`, prepends a `first-tree` shim to `PATH`, and runs
 `codex exec --json` from the case workspace.
 
 Each case writes:
 
 - `events.jsonl` with harness events, Codex JSONL events, and shimmed
-  `first-tree-dev` invocations.
+  `first-tree` invocations.
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report.
 

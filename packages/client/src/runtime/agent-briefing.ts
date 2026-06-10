@@ -391,8 +391,7 @@ function cliOverviewBlock(bin: string): string {
   // Subcommand lists are the actually-registered ones, not aspirational —
   // every command named here must exist or the agent burns a turn on
   // `unknown command`. The `tree` namespace was retired in 2026-06 down
-  // to just `verify` (cloud now owns workspace + tree provisioning; the
-  // client runtime inlines its own skill payload install). The `org`
+  // to validation (`verify`) and hierarchy browsing (`tree`). The `org`
   // namespace is operator-only and not surfaced to in-agent use.
   return `## CLI Overview
 
@@ -404,7 +403,8 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree verify\` | validate a Context Tree's structure (the only surviving \`tree\` subcommand) |
+| \`${bin} tree verify\` | validate a Context Tree's structure |
+| \`${bin} tree tree\` | browse Context Tree nodes as a hierarchy |
 
 Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
 workspace ↔ tree binding) runs from the web console or a human terminal
@@ -492,8 +492,8 @@ Read its root \`NODE.md\` first to map the domains before you act.`);
     // action (web console / human at the terminal), not something an
     // agent can self-serve — so surface the gap to a human instead of
     // suggesting any in-agent action. (The retired `first-tree-onboarding`
-    // skill used to live here; PR following #844 deleted the skill +
-    // the entire `first-tree tree` CLI namespace it depended on.)
+    // skill used to live here; PR following #844 deleted that provisioning
+    // flow and the broad tree-management commands it depended on.)
     blocks.push(`## Tree Location
 
 This agent has no Context Tree bound. If a task needs cross-domain

@@ -1,8 +1,15 @@
 import type { FirstTreeReadEvalCase } from "./types.js";
 
+const JWT_AUTH_EXPECTED_FACTS = [
+  "User JWT auth is the unified authorization surface.",
+  "Route scopes must be checked against live organization membership before cross-org actions.",
+  "HTTP routes must follow the repo path conventions document before auth or multi-org changes.",
+] as const;
+
 export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
   {
     description: "Blank workspace with first-tree-read installed and a casual prompt.",
+    expectedFacts: JWT_AUTH_EXPECTED_FACTS,
     expectedTrigger: false,
     id: "blank-casual-no-trigger",
     prompt: "Please explain the Pomodoro technique in one sentence.",
@@ -11,6 +18,7 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
   },
   {
     description: "Context Tree workspace with a software engineering prompt.",
+    expectedFacts: JWT_AUTH_EXPECTED_FACTS,
     expectedTrigger: true,
     id: "tree-software-trigger",
     prompt: "For this project, what constraints should JWT auth routes follow?",
@@ -19,6 +27,7 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
   },
   {
     description: "Context Tree workspace with a non-software prompt.",
+    expectedFacts: JWT_AUTH_EXPECTED_FACTS,
     expectedTrigger: false,
     id: "tree-nonsoftware-no-trigger",
     prompt: "Recommend a weekend cooking menu.",

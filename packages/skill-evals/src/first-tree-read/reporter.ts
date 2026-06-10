@@ -20,7 +20,7 @@ export type EvalReporter = {
 };
 
 const CODex_EVENT_PREVIEW_LENGTH = 240;
-const SHIM_TRACE_PATTERN = /^\[[^\]\r\n]+\] first-tree-dev (call|result):/u;
+const SHIM_TRACE_PATTERN = /^\[[^\]\r\n]+\] first-tree (call|result):/u;
 const TEXT_KEYS = ["content", "message", "text"];
 const FINAL_TYPE_PATTERN = /(?:agent_message|final|response\.completed|turn\.completed|message)/iu;
 
@@ -29,7 +29,7 @@ export function isShimTraceLine(line: string): boolean {
 }
 
 export function stripShimTraceLines(text: string): string {
-  if (!text.includes("first-tree-dev ")) return text;
+  if (!text.includes("first-tree ")) return text;
   return text
     .split("\n")
     .filter((line) => !isShimTraceLine(line))
@@ -98,7 +98,7 @@ export function createEvalReporter(caseId: string, verbose: boolean): EvalReport
       write("fixture validation skipped");
     },
     fixtureValidationStarted(args, contextTreePath) {
-      write(`fixture validation: ${formatCommand(["first-tree-dev", ...args])} (${contextTreePath})`);
+      write(`fixture validation: ${formatCommand(["first-tree", ...args])} (${contextTreePath})`);
     },
     shimTraceLines(text) {
       for (const line of collectShimTraceLines(text)) {

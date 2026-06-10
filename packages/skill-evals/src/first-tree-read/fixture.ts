@@ -132,7 +132,7 @@ function workspaceAgentsMarkdown(skillDescription: string): string {
   return `# Eval Workspace Instructions
 
 Use installed skills only when the skill description applies to the user's
-prompt. Do not call \`first-tree-dev\` for casual or non-software prompts.
+prompt. Do not call \`first-tree\` for casual or non-software prompts.
 
 ## Available Skills
 
@@ -143,7 +143,7 @@ prompt. Do not call \`first-tree-dev\` for casual or non-software prompts.
 When \`first-tree-read\` applies, load it by reading
 \`.agents/skills/first-tree-read/SKILL.md\` before acting. Follow the loaded
 skill workflow exactly. In particular, if the skill instructs you to inspect a
-\`first-tree-dev\` help command, run that command rather than guessing flags.
+\`first-tree\` help command, run that command rather than guessing flags.
 `;
 }
 
@@ -230,7 +230,10 @@ function systemNodes(): DomainNode[] {
       path: "systems/web/context/tree-panel",
       facts: ["Context Tree UI should surface tree binding and validation state without self-binding agents."],
     },
-    { path: "systems/cli/commands/tree-verify", facts: ["The only surviving tree subcommand is tree verify."] },
+    {
+      path: "systems/cli/commands/tree-verify",
+      facts: ["Tree verify validates Context Tree structure; tree tree browses hierarchy for selectors."],
+    },
     { path: "systems/cli/commands/org-bind", facts: ["Workspace tree binding is an operator action."] },
     { path: "systems/cli/commands/chat-send", facts: ["Agent-to-agent action requires explicit chat send."] },
     { path: "systems/cli/config/channel-home", facts: ["Development channel state lives under .first-tree-dev."] },
@@ -414,10 +417,10 @@ function writeShellPathBootstrap(paths: RunPaths): void {
   writeText(join(paths.shellEnvDir, "sh-env"), bootstrap);
 }
 
-export function createFirstTreeDevShim(paths: RunPaths): void {
+export function createFirstTreeShim(paths: RunPaths): void {
   const tsxBin = join(paths.repoRoot, "node_modules", ".bin", "tsx");
   const cliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
-  const shimPath = join(paths.binDir, "first-tree-dev");
+  const shimPath = join(paths.binDir, "first-tree");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -452,11 +455,11 @@ function trace(message) {
 
 const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
-append({ type: "first_tree_dev_call", phase, argv, cwd: process.cwd() });
-trace("first-tree-dev call: " + commandLine(argv));
+append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
+trace("first-tree call: " + commandLine(argv));
 
-const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE_DEV || TSX_BIN;
-const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE_DEV ? argv : [CLI_ENTRY, ...argv];
+const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || TSX_BIN;
+const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE ? argv : [CLI_ENTRY, ...argv];
 const result = spawnSync(realCommand, realArgs, {
   cwd: process.cwd(),
   encoding: "utf8",
@@ -469,7 +472,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 
 if (result.error) {
   append({
-    type: "first_tree_dev_result",
+    type: "first_tree_result",
     phase,
     argv,
     cwd: process.cwd(),
@@ -478,13 +481,13 @@ if (result.error) {
     stdoutPreview: preview(result.stdout || ""),
     stderrPreview: preview(result.stderr || ""),
   });
-  trace("first-tree-dev result: exit=127 error=" + preview(String(result.error)));
+  trace("first-tree result: exit=127 error=" + preview(String(result.error)));
   process.exit(127);
 }
 
 const exitCode = result.status == null ? 1 : result.status;
 append({
-  type: "first_tree_dev_result",
+  type: "first_tree_result",
   phase,
   argv,
   cwd: process.cwd(),
@@ -493,7 +496,7 @@ append({
   stdoutPreview: preview(result.stdout || ""),
   stderrPreview: preview(result.stderr || ""),
 });
-trace("first-tree-dev result: exit=" + exitCode);
+trace("first-tree result: exit=" + exitCode);
 
 process.exit(exitCode);
 `;
@@ -644,7 +647,7 @@ function runFixtureVerify(
     FIRST_TREE_EVAL_VERBOSE: verbose ? "1" : "0",
     PATH: `${paths.binDir}:${process.env.PATH ?? ""}`,
   };
-  const result = spawnSync("first-tree-dev", args, {
+  const result = spawnSync("first-tree", args, {
     cwd: paths.workspacePath,
     encoding: "utf8",
     env,
@@ -656,7 +659,7 @@ function runFixtureVerify(
 
   const commandResult: CommandResult = {
     args,
-    command: "first-tree-dev",
+    command: "first-tree",
     cwd: paths.workspacePath,
     exitCode: result.status ?? 1,
     stderr: stripShimTraceLines(stderr),

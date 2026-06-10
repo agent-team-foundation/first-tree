@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { appendEvent, previewText, readEvents } from "./events.js";
-import { createFirstTreeDevShim, createRunPaths, setupFixture, validateFixture } from "./fixture.js";
+import { createFirstTreeShim, createRunPaths, setupFixture, validateFixture } from "./fixture.js";
 import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
 import type { EvalReporter } from "./reporter.js";
 import { createEvalReporter, isShimTraceLine } from "./reporter.js";
@@ -167,18 +167,23 @@ export async function runFirstTreeReadCase(
   });
   reporter.caseStarted();
 
-  createFirstTreeDevShim(paths);
+  createFirstTreeShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
   const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
   const runnerExitCode = options.validateFixtures ? 0 : await runCodex(options, evalCase, paths, reporter);
-  const metrics = deriveMetrics(readEvents(paths.eventsPath), fixtureValidation, runnerExitCode);
+  const metrics = deriveMetrics(
+    readEvents(paths.eventsPath),
+    fixtureValidation,
+    runnerExitCode,
+    evalCase.expectedFacts,
+  );
   const passed = options.validateFixtures
     ? fixtureOnlyPassed(fixtureValidation)
     : casePassed(evalCase.expectedTrigger, metrics);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
-    driftNote: driftNote(metrics),
+    driftNote: driftNote(metrics, evalCase.expectedTrigger),
     expectedTrigger: evalCase.expectedTrigger,
     fixtureValidation,
     metrics,

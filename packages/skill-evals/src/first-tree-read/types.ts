@@ -2,6 +2,7 @@ export type WorkspaceKind = "blank" | "context-tree";
 
 export type FirstTreeReadEvalCase = {
   description: string;
+  expectedFacts: readonly string[];
   expectedTrigger: boolean;
   id: string;
   prompt: string;
@@ -49,8 +50,14 @@ export type CliOptions = {
 };
 
 export type EvalMetrics = {
-  firstTreeDevArgv: readonly (readonly string[])[];
-  firstTreeDevCalls: number;
+  expectedFactHits: readonly string[];
+  expectedFactsObserved: boolean;
+  firstTreeArgv: readonly (readonly string[])[];
+  firstTreeCalls: number;
+  firstTreeCommandResults: readonly {
+    argv: readonly string[];
+    exitCode: number;
+  }[];
   fixtureValidationOk: boolean;
   helpAttempted: boolean;
   helpCalls: number;

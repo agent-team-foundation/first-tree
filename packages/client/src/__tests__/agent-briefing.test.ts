@@ -397,14 +397,15 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
     // Real namespaces — each must appear inside the CLI Overview table.
-    // `tree` is now scoped to its single surviving subcommand (`verify`)
-    // rather than `tree …`; `org` is operator-only and was removed from
-    // the agent-facing table in the same edit.
+    // `tree` is scoped to registered concrete subcommands rather than
+    // `tree …`; `org` is operator-only and was removed from the
+    // agent-facing table in the same edit.
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
     expect(overview).toContain("first-tree chat …");
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
     expect(overview).toContain("first-tree tree verify");
+    expect(overview).toContain("first-tree tree tree");
 
     // Retired / unregistered surface must NOT appear.
     expect(overview).not.toContain("github scan");
@@ -413,19 +414,20 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     expect(overview).not.toContain("first-tree tree …");
   });
 
-  it("CLI Overview lists only the surviving `tree` subcommand (verify) — retired commands must stay out", () => {
-    // Post-2026-06 the `tree` namespace was retired to just `verify`
-    // (cloud now owns workspace + tree provisioning; client runtime
-    // inlines its own skill payload install). The briefing's CLI
-    // Overview must NOT advertise any deleted subcommand or the agent
-    // will burn a turn on `unknown command`. This test is the runtime
-    // counterpart to the `command-registration-smoke` test that pins
-    // the actual registered surface.
+  it("CLI Overview lists only registered `tree` subcommands — retired commands must stay out", () => {
+    // Post-2026-06 the `tree` namespace was retired to concrete
+    // registered subcommands: `verify` for validation and `tree` for
+    // hierarchy browsing. The briefing's CLI Overview must NOT advertise
+    // any deleted subcommand or the agent will burn a turn on `unknown
+    // command`. This test is the runtime counterpart to the
+    // `command-registration-smoke` test that pins the actual registered
+    // surface.
     const briefing = buildAgentBriefing(makeOpts());
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
 
-    // The survivor must be listed.
+    // The surviving subcommands must be listed.
     expect(overview).toContain("tree verify");
+    expect(overview).toContain("tree tree");
 
     // Every retired tree subcommand must NOT appear in the CLI Overview
     // text. Use word-boundary regex (not `.toContain`) so prose like
@@ -502,8 +504,8 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // Retired skills must not appear:
     //   - `first-tree-write` was folded into `first-tree-context` under
     //     the simplify-context-skill pass (PR #843).
-    //   - `first-tree-onboarding` was retired with the rest of the
-    //     `first-tree tree` namespace deletion (this PR).
+    //   - `first-tree-onboarding` was retired with the old tree
+    //     provisioning commands.
     //   - `first-tree-github-scan` predates both and never shipped.
     expect(writingBlock).not.toContain("`first-tree-write`");
     expect(writingBlock).not.toContain("`first-tree-onboarding`");

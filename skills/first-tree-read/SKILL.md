@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files from the bound context repo. Always inspect `first-tree-dev tree tree --help` in the context repo first, then use `first-tree-dev tree tree` filtering options to select candidate files; read the selected file contents with the agent's native file-reading capability.
+description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files from the bound context repo. Always inspect `first-tree tree tree --help` in the context repo first, then use `first-tree tree tree` filtering options to select candidate files; read the selected file contents with the agent's native file-reading capability.
 ---
 
 # First Tree Read
@@ -8,7 +8,7 @@ description: Read the current repo's Context Tree before acting. Use when the us
 ## Purpose
 
 Read the Context Tree for the current repo before acting. This skill is
-read-only: it uses `first-tree-dev tree tree` to find relevant tree files, then
+read-only: it uses `first-tree tree tree` to find relevant tree files, then
 uses the agent's native file-reading capability to read their content and
 summarize the constraints that matter for the user's task.
 
@@ -56,7 +56,7 @@ Run the help command from inside the context repo before using any
 
 ```bash
 cd "$CONTEXT_REPO"
-first-tree-dev tree tree --help
+first-tree tree tree --help
 ```
 
 Treat this help output as the source of truth for flags and filtering modes.
@@ -80,15 +80,15 @@ matter. Prefer reading:
 - `soft_links` targets from matched files when they affect the task
 - `members/<id>/NODE.md` only when ownership or review scope matters
 
-### 4. Use `first-tree-dev tree tree` to select files
+### 4. Use `first-tree tree tree` to select files
 
-Use the filtering options shown by `first-tree-dev tree tree --help` to list
+Use the filtering options shown by `first-tree tree tree --help` to list
 candidate files. The exact flags may change; choose them from the fresh help
 output.
 
 Operational rules:
 
-- Use `first-tree-dev tree tree` for tree discovery and filtering instead of
+- Use `first-tree tree tree` for tree discovery and filtering instead of
   raw `find` / ad hoc grep when the command can identify the needed files.
 - First list candidates, then read content only for the relevant files with
   the agent's native file-reading capability.

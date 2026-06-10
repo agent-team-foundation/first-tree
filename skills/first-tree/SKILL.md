@@ -148,7 +148,8 @@ map of which commands live where:
 | `agent …` | workspace | agent records — `status`, `session`, `config show` for self-introspection; `create` / `claim` / `bind` are operator actions taken via the web console | `docs/cli-reference.md` |
 | `chat …` | workspace | messaging (`send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
 | `config …` | workspace | local `client.yaml` (operator-edited) | `docs/cli-reference.md` |
-| `tree verify` | context | Validate a Context Tree's structure (only surviving `tree` subcommand) | `first-tree-context` |
+| `tree verify` | context | Validate a Context Tree's structure | `first-tree-context` |
+| `tree tree` | context | Browse Context Tree nodes as a hierarchy | `first-tree-read` |
 | `org …` | both | workspace-tree binding metadata | `docs/cli-reference.md` (operator) |
 
 For exhaustive flags / env vars / behavior of each command, see
@@ -165,9 +166,9 @@ downstream skills assume you have done them.
 
 The workspace-rooted layout (W1, shipped 2026-06) consolidates binding
 state into a single file at `<workspace-root>/.first-tree/workspace.json`.
-There is no longer a `<binName> tree status` CLI to read it — the `tree`
-namespace was retired down to just `verify` in 2026-06. Read the file
-yourself (it is small JSON):
+There is no longer a `<binName> tree status` CLI to read it — `tree verify`
+validates tree structure and `tree tree` browses hierarchy, but neither is a
+workspace-binding status reader. Read the file yourself (it is small JSON):
 
 ```bash
 # Walk up from cwd to find the workspace root + read the manifest.
