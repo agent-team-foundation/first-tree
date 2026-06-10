@@ -443,6 +443,44 @@ describe("workspace-migrations registry", () => {
     expect(existsSync(claudeDir)).toBe(true);
     expect(existsSync(join(claudeDir, "user-content.md"))).toBe(true);
   });
+
+  it("v1-legacy-workspace-gitignore deletes a `.gitignore` that contains only the legacy entries", () => {
+    const target = join(workspace, ".gitignore");
+    writeFileSync(target, ".first-tree/tmp/\n.agents/skills/\n.claude/skills/\n");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("v1-legacy-workspace-gitignore strips legacy entries but preserves user content", () => {
+    // The retired writer UPSERTED into an existing file, so a user-authored
+    // `.gitignore` can carry the legacy entries alongside the user's own
+    // patterns. Only the legacy lines go; the rest stays.
+    const target = join(workspace, ".gitignore");
+    writeFileSync(target, "node_modules/\n.first-tree/tmp/\n.agents/skills/\n.claude/skills/\n*.log\n");
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(readFileSync(target, "utf-8")).toBe("node_modules/\n*.log\n");
+  });
+
+  it("v1-legacy-workspace-gitignore leaves a user `.gitignore` without legacy entries untouched", () => {
+    const target = join(workspace, ".gitignore");
+    const content = "node_modules/\ndist/\n";
+    writeFileSync(target, content);
+
+    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(readFileSync(target, "utf-8")).toBe(content);
+  });
+
+  it("v1-legacy-workspace-gitignore is a noop when no `.gitignore` exists", () => {
+    const result = applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
+
+    expect(result.applied).toContain("v1-legacy-workspace-gitignore");
+    expect(existsSync(join(workspace, ".gitignore"))).toBe(false);
+  });
 });
 
 describe("applyPendingMigrations applier", () => {

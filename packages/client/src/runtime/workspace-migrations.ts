@@ -471,6 +471,38 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       }
     },
   },
+  {
+    id: "v1-legacy-workspace-gitignore",
+    description:
+      "Remove the workspace-root `.gitignore` that the retired `first-tree tree bootstrap/init/upgrade` commands used to write via `upsertLocalTreeGitIgnore` (entries: `.first-tree/tmp/`, `.agents/skills/`, `.claude/skills/`; writer deleted with the `tree` namespace in PR #848). The workspace root is no longer a git repo, so the file is inert residue. Because the old writer UPSERTED into a possibly user-authored `.gitignore`, this migration strips only the known legacy entries and deletes the file only when nothing else remains; any other user content is preserved.",
+    apply: (workspacePath, log) => {
+      const target = join(workspacePath, ".gitignore");
+      // Only act on a regular file — a symlink or directory at this path is
+      // not the legacy writer's output (mirrors the `v1-whitepaper-symlink`
+      // shape-check posture).
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(target);
+      } catch {
+        return; // missing — nothing to do
+      }
+      if (!stat.isFile()) return;
+      const legacyEntries = new Set([".first-tree/tmp/", ".agents/skills/", ".claude/skills/"]);
+      const lines = readFileSync(target, "utf-8").replaceAll("\r\n", "\n").split("\n");
+      const kept = lines.filter((line) => !legacyEntries.has(line.trim()));
+      if (kept.length === lines.length) return; // no legacy entries present — user file, leave alone
+      if (kept.every((line) => line.trim() === "")) {
+        unlinkSync(target);
+        log("workspace-migrations: v1-legacy-workspace-gitignore removed legacy workspace .gitignore");
+        return;
+      }
+      const body = kept.join("\n");
+      writeFileSync(target, body.endsWith("\n") ? body : `${body}\n`, "utf-8");
+      log(
+        "workspace-migrations: v1-legacy-workspace-gitignore stripped legacy entries from workspace .gitignore (user content preserved)",
+      );
+    },
+  },
 ];
 
 // `readCurrentSourceRepoNames` was the round-3/4 fallback for "live ctx
