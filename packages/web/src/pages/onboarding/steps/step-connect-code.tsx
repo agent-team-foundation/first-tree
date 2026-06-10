@@ -215,14 +215,12 @@ export function StepConnectCode() {
                 if the GitHub tab didn't work, "Start over" re-mints (the only
                 safe way to retry — see the CTA-lock note above). */}
             {attempted ? (
-              <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+              // One row: the live "waiting" status plus the re-mint retry as a
+              // quiet inline link (the GitHub tab can fail silently; re-minting
+              // is the only safe retry — see the CTA-lock note above).
+              <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
                 <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto self-start p-0 text-label"
-                  onClick={handleStartOver}
-                >
+                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
                   {COPY.connectCode.restartInstall}
                 </Button>
               </div>
@@ -268,18 +266,35 @@ export function StepConnectCode() {
         )}
       </div>
 
-      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        {hasPickableRepos && selectedRepoUrls.length === 0 && (
-          <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-            {COPY.connectCode.pickHint}
-          </p>
+      <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
+        {selectedRepoUrls.length > 0 ? (
+          // Happy path: a repo is picked → bind it. Strong primary.
+          <Button type="button" onClick={goNext} className="self-start">
+            <span>{COPY.continue}</span>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        ) : (
+          // No repo (didn't pick / couldn't load / none exist): continuing
+          // without one is never the desired path, so it's always a very weak
+          // muted micro-link — never a strong button. When there ARE repos to
+          // pick, add the consequence line so the skip is an informed, deliberate
+          // choice (friction, not a block). When the list failed/empty, the
+          // picker area already explains why, so no extra line.
+          <>
+            {hasPickableRepos && <FlowHint>{COPY.connectCode.noRepoConsequence}</FlowHint>}
+            {/* A quiet text link: clearly clickable (persistent underline, no
+                button chrome) but never the prominent path, so picking a repo
+                stays obvious. Never disabled. */}
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto self-start p-0 text-label underline underline-offset-2"
+              onClick={goNext}
+            >
+              {COPY.connectCode.continueNoProject}
+            </Button>
+          </>
         )}
-        {/* Primary is never disabled: with a project it binds, without one it
-            continues anyway — a beginner should never face a dead button. */}
-        <Button type="button" onClick={goNext} className="self-start">
-          <span>{selectedRepoUrls.length > 0 ? COPY.continue : COPY.connectCode.continueNoProject}</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
       </div>
     </div>
   );

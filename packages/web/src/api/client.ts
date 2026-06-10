@@ -88,6 +88,8 @@ export class ApiError extends Error {
     message: string,
     /** Zod validation issues when `status === 400` and the server returned `details`. */
     public readonly issues?: ValidationIssue[],
+    /** Machine-readable code from the error body (`{ code }`), when the server sent one. */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -183,9 +185,11 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
     const text = await res.text();
     let message: string;
     let issues: ValidationIssue[] | undefined;
+    let code: string | undefined;
     try {
-      const json = JSON.parse(text) as { error?: string; details?: unknown };
+      const json = JSON.parse(text) as { error?: string; code?: string; details?: unknown };
       message = json.error ?? text;
+      code = typeof json.code === "string" ? json.code : undefined;
       if (Array.isArray(json.details)) {
         issues = json.details.filter(
           (d): d is ValidationIssue =>
@@ -195,7 +199,7 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
     } catch {
       message = text;
     }
-    throw new ApiError(res.status, message, issues);
+    throw new ApiError(res.status, message, issues, code);
   }
 
   if (res.status === 204) return undefined as T;

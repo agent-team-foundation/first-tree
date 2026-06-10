@@ -18,7 +18,7 @@ export function StepWelcome() {
         <span className="font-semibold" style={{ color: "var(--fg)" }}>
           {teamDisplayName ?? "your team"}
         </span>
-        . It's all set up — you just need your own agent.
+        . To get started, let's create your own agent.
       </p>
       <div className="flex">
         <Button type="button" onClick={goNext}>

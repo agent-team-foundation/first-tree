@@ -1,4 +1,4 @@
-import type { AgentVisibility } from "@first-tree/shared";
+import type { AgentVisibility, ResourceRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
@@ -199,7 +199,13 @@ type NetProfile = {
   installExists?: boolean;
   /** GET /orgs/:id/settings/context_tree → { repo } */
   contextTree?: string | null | "pending";
-  /** GET /orgs/:id/settings/source_repos → { repos: [{ url }] } */
+  /**
+   * Team-recommended repos the invitee inherits. Served as ResourceRow[] from
+   * GET /orgs/:id/resources (what listTeamResourcesForOrg actually calls since
+   * the Resources Phase 1 refactor); InviteeKickoff filters to
+   * type==="repo" && defaultEnabled==="recommended" — non-empty picks the
+   * "works with your team's repos" ready copy, empty the intro copy.
+   */
   sourceRepos?: string[];
   /**
    * GET /orgs/:id/github-app-installation/install-url — when set, the install
@@ -228,6 +234,26 @@ function reposResponse(outcome: RepoOutcome | undefined): Promise<Response> | Re
   if (outcome === "scope") return statusResponse(403, JSON.stringify({ error: "missing project read permission" }));
   if (outcome === "neterror") return Promise.reject(new TypeError("Failed to fetch"));
   return jsonResponse({ repos: outcome ?? [] });
+}
+
+/** A team-recommended repo resource, matching what GET /orgs/:id/resources returns. */
+function teamRepoResource(url: string, i: number): ResourceRow {
+  return {
+    id: `res-${i}`,
+    organizationId: ORG_ID,
+    type: "repo",
+    scope: "team",
+    ownerAgentId: null,
+    name: url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, ""),
+    repoCanonicalKey: null,
+    defaultEnabled: "recommended",
+    status: "active",
+    payload: { url },
+    createdBy: "preview",
+    updatedBy: "preview",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 /** Map a request path (with `/api/v1` prefix) to a canned response, or null to fall through. */
@@ -262,8 +288,8 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
     return jsonResponse({ repo: activeNet.contextTree ?? null });
   }
-  if (p === `/orgs/${ORG_ID}/settings/source_repos`) {
-    return jsonResponse({ repos: (activeNet.sourceRepos ?? []).map((url) => ({ url })) });
+  if (p === `/orgs/${ORG_ID}/resources`) {
+    return jsonResponse((activeNet.sourceRepos ?? []).map((url, i) => teamRepoResource(url, i)));
   }
   return null;
 }
@@ -519,17 +545,6 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
   },
   {
-    id: "admin-ko-invalid",
-    label: "Existing · invalid URL",
-    group: "5 · Kickoff",
-    role: "admin",
-    wizard: {
-      step: "kickoff",
-      flow: { selectedRepoUrls: [REPO_WEB], treeMode: "existing", treeUrl: "ftp://not-a-link", treeAutoInitDone: true },
-      net: { contextTree: null },
-    },
-  },
-  {
     id: "admin-ko-checking",
     label: "Checking team setup",
     group: "5 · Kickoff",
@@ -756,49 +771,18 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: false } },
   },
   {
-    id: "inv-ko-confirm",
-    label: "Confirm team repos",
+    id: "inv-ko-ready",
+    label: "Ready · team has repos",
     group: "4 · Kickoff (start work)",
     role: "invitee",
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [REPO_WEB, REPO_API] } },
   },
   {
-    id: "inv-ko-picker",
-    label: "Picker · pick own",
+    id: "inv-ko-ready-norepos",
+    label: "Ready · no team repos (intro)",
     group: "4 · Kickoff (start work)",
     role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: REPOS } },
-  },
-  {
-    id: "inv-ko-picker-empty",
-    label: "Picker · no repos",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: [] } },
-  },
-  {
-    id: "inv-ko-picker-loading",
-    label: "Picker · loading",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "pending" } },
-  },
-  {
-    id: "inv-ko-picker-scope",
-    label: "Picker · scope missing",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "scope" } },
-  },
-  {
-    id: "inv-ko-picker-neterr",
-    label: "Picker · network error",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: {
-      step: "kickoff",
-      net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "neterror" },
-    },
+    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [] } },
   },
   {
     id: "inv-ko-starting",

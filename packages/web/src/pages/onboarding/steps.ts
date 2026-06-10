@@ -208,27 +208,27 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
 /**
  * Which invitee kickoff sub-state to show, given what the team has set up.
  * Pure so it's unit-testable (the React component just maps the result to a
- * body). Ordered upstream-first — fix the biggest blocker before the next:
- *   - no Context Tree link yet              → "waiting"          (admin isn't done at all)
- *   - link but no GitHub App installation   → "no-installation"  (admin skipped code; agent would 403)
- *   - link + install + team listed projects → "confirm"          (pick from them)
- *   - link + install but no team projects   → "picker"           (invitee picks own)
+ * body). Ordered upstream-first — fix the biggest blocker before launch:
+ *   - no Context Tree link yet            → "waiting"          (admin isn't done at all)
+ *   - link but no GitHub App installation → "no-installation"  (admin skipped code; agent would 403)
+ *   - link + install                      → "ready"            (just launch)
  *
- * The "no-installation" state was added because the previous flow silently
- * advanced invitees into the picker, where they'd successfully select repos
- * and only discover the missing install when the agent's first git op
- * failed with 403. We hard-stop here instead, with a "remind admin"
- * affordance and a "Meet your agent" bailout so the invitee is never
- * truly blocked.
+ * There is deliberately no repo-selection sub-state. The invitee's agent
+ * inherits the team's `recommended` repo resources automatically (they're
+ * enabled for every org agent), so picking repos here changed nothing about
+ * what the agent could access — it only flavoured the kickoff message. The
+ * "ready" state is a pure launch; the body names the team's repos when there
+ * are any, otherwise frames it as an intro.
+ *
+ * The "no-installation" state exists because the previous flow silently
+ * advanced invitees past it, where the agent's first git op would 403. We
+ * hold there instead, with a "Meet your agent" bailout so the invitee is
+ * never truly blocked.
  */
-export type InviteeKickoffState = "waiting" | "no-installation" | "confirm" | "picker";
+export type InviteeKickoffState = "waiting" | "no-installation" | "ready";
 
-export function resolveInviteeKickoffState(args: {
-  treeUrl: string;
-  hasInstallation: boolean;
-  teamRepoCount: number;
-}): InviteeKickoffState {
+export function resolveInviteeKickoffState(args: { treeUrl: string; hasInstallation: boolean }): InviteeKickoffState {
   if (!args.treeUrl) return "waiting";
   if (!args.hasInstallation) return "no-installation";
-  return args.teamRepoCount > 0 ? "confirm" : "picker";
+  return "ready";
 }
