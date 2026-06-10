@@ -560,16 +560,23 @@ After all sub-agents return:
    sub-agents may have named the same cross-cutting concept
    differently — normalise to one name).
 2. Verify `soft_links` references resolve — mechanically, not by
-   eyeball. Extract every `soft_links:` entry from every drafted
-   node and check each target on disk:
+   eyeball, and with the **same criteria `tree verify` enforces**: a
+   valid target is either an existing `.md` file, or an existing
+   directory that contains a `NODE.md`. A bare `test -e` is not
+   enough — a directory without `NODE.md` (or a non-markdown file)
+   exists on disk but still fails verify. Extract every
+   `soft_links:` entry from every drafted node and check:
 
    ```bash
    # entries are tree-root-relative, e.g. /system/cli.md
-   test -e "<tree>${entry}" || echo "DANGLING: ${src} -> ${entry}"
+   t="<tree>${entry}"
+   { [ -f "$t" ] && case "$t" in *.md) true;; *) false;; esac; } \
+     || [ -f "$t/NODE.md" ] \
+     || echo "DANGLING: ${src} -> ${entry}"
    ```
 
-   Where a sub-agent linked to a sibling subtree's leaf that does
-   not exist, drop the link and surface it as a known gap.
+   Where a sub-agent linked to a target that fails this check, drop
+   the link and surface it as a known gap.
 3. Aggregate escalations into a single section in the PR2 body
    ("Sub-agents flagged the following as out of their scope; user to
    decide whether to act now or later").
