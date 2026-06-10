@@ -200,7 +200,8 @@ system/                       [recommended ON]
  └─ cloud/                    ← evidence: packages/server/ + packages/web/
 
 product/                      [recommended ON, weak signal]
- └─ evidence: README L1-3 frames a product positioning
+ └─ evidence: README L1-3 frames a product positioning (single soft
+              signal — flagged so you know the evidence is thin)
 
 team-practice/                [recommended ON]
  └─ evidence: CONTRIBUTING.md + AGENTS.md describe team workflow
@@ -364,7 +365,12 @@ scope, time budget, stopping discipline, and a coverage report per
 unit. Wall-clock is slower; the outputs and the PR2 shape are
 identical. Everything below that says "sub-agent" applies to a
 self-dispatched unit unchanged, except the parallel-write-safety
-rules, which become trivial.
+rules, which become trivial. **In sequential mode, still defer all
+git commits until after the consolidation pass** — name normalisation
+and the soft_links resolution check happen across every unit's
+output and may rewrite earlier drafts; committing per-unit inline
+would force consolidation fixes into extra commits and blur the
+per-unit `git log` boundaries that PR2 review depends on.
 
 **Concurrency cap: 6 sub-agents per batch.** Empirical limit.
 Beyond this, wall-clock savings flatten while token cost and
@@ -469,12 +475,14 @@ Each sub-agent receives:
 - The time budget (default 15 minutes wall-clock; the main agent
   may set a lower budget for thin domains).
 - The hard rules from `first-tree-context` (loaded by reference).
-- The **leaf shape target**: ~30–60 lines per leaf, structured as
-  `## Decision` / `## Rationale` / `## Constraints` (matching
-  `first-tree-context`'s node shape). Shorter is fine when the
-  signal is thin — do not pad. Consistently longer is a smell that
-  implementation detail is leaking in; push it back to the source
-  repo and keep the durable claim.
+- The **leaf shape target**: **up to ~60 lines** per leaf, structured
+  as `## Decision` / `## Rationale` / `## Constraints` (matching
+  `first-tree-context`'s node shape; omit a section you don't need).
+  Shorter is better when the signal is thin — a six-line node that
+  captures the decision cleanly beats a sixty-line node that buries
+  it; do not pad to hit a length. Consistently longer is a smell
+  that implementation detail is leaking in; push it back to the
+  source repo and keep the durable claim.
 
 The sub-agent's authority within its assigned subtree:
 
