@@ -429,7 +429,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block with reasoning-trace / chat-send split, courtesy-send guard, Issue #389", () => {
+  it("emits the runtime intro block with reasoning-trace / chat-send split, courtesy-send guard, runtime-bridge honesty, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
     // Reasoning-trace / chat-send decoupling — output stream is free,
@@ -440,13 +440,29 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree chat send <name>");
     expect(briefing).toContain("only delivery path you should rely on");
 
+    // Runtime-bridge honesty (added in response to PR #938 review):
+    // non-empty final output is still auto-bridged as a silent
+    // `agent-final-text` row, so the briefing acknowledges that fact and
+    // tells the agent not to restate what it already chat send-ed —
+    // without re-introducing the "output nothing" prescription.
+    // The note wraps across template-literal lines, so use regex matches
+    // that tolerate intra-bullet whitespace / newlines.
+    expect(briefing).toMatch(/non-empty final output still lands in chat history/);
+    expect(briefing).toContain("agent-final-text");
+    expect(briefing).toContain("don't rely on it for delivery");
+    expect(briefing).toMatch(/don't[\s\n]+restate in final output what you already/);
+
     // Courtesy-send guard (replaces the old "Stay silent / output
     // nothing" directive) — the brake is on the send side, not the
     // output side; result-sink's empty-output guard is a runtime
     // safety belt, not the contract.
     expect(briefing).toContain("Don't fire a courtesy");
     expect(briefing).toContain("end the turn without sending");
-    expect(briefing).not.toContain("output nothing");
+    // No bare "output nothing" prescription survives. The runtime-bridge
+    // honesty note uses "non-empty final output" / "don't restate in
+    // final output" — the bare phrase that prescribes suppression is
+    // exactly what this guard rejects.
+    expect(briefing).not.toMatch(/\boutput nothing\b/);
 
     // Issue #389: pin the anti-double-encode rule.
     expect(briefing).toContain("Content rules (Issue #389)");

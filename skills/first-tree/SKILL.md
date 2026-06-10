@@ -83,6 +83,11 @@ send` back. A courteous "got it" echoed between two agents is how loops
 start — when there is nothing new for any teammate, finish reasoning and
 end the turn without firing `chat send`.
 
+Note: until the runtime bridge is retired, a non-empty final output still
+lands in chat history as a silent `agent-final-text` row — don't rely on
+it for delivery, and don't restate in final output what you already
+`chat send`-ed.
+
 (The runtime's empty-output guard at `result-sink.ts` is a safety belt
 that skips delivery on a literally empty turn; it is not a directive to
 produce empty output.)
