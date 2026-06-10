@@ -399,7 +399,7 @@ describe("OAuth callback rejects malformed state", () => {
     expect(row?.hubOrganizationId).not.toBeNull();
     // App-declared permissions mirror D0b — the dev stub looks like a real
     // install for downstream QA.
-    expect(row?.permissions).toMatchObject({ contents: "write", members: "read" });
+    expect(row?.permissions).toMatchObject({ administration: "write", contents: "write", members: "read" });
   });
 
   it("dev-callback without installationId leaves github_app_installations untouched (legacy OAuth-only dev flow)", async () => {
