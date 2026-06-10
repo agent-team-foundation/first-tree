@@ -12,8 +12,12 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const meDocsMocks = vi.hoisted(() => ({
   getMeDoc: vi.fn(),
 }));
+const chatsMocks = vi.hoisted(() => ({
+  listChatMessages: vi.fn(),
+}));
 
 vi.mock("../../api/me-docs.js", () => meDocsMocks);
+vi.mock("../../api/chats.js", () => chatsMocks);
 vi.mock("../../lib/use-agent-name-map.js", () => ({
   useAgentSlugToIdMap: () => (slug: string | null | undefined) => (slug === "kael" ? "agent-owner" : null),
 }));
@@ -131,7 +135,22 @@ beforeEach(() => {
     content: "# Guide\nSee [next](next.md).",
     ref: { path: "docs/guide.md" },
   });
+  chatsMocks.listChatMessages.mockReset();
+  chatsMocks.listChatMessages.mockResolvedValue({ items: [], nextCursor: null });
 });
+
+// A snapshot-variant message whose metadata still carries the doc bytes —
+// the immutable source recovery re-derives from. sha256 must be 64 hex chars
+// because the recovery path schema-validates metadata.
+const recoveryMessage = {
+  id: "msg-1",
+  metadata: {
+    documentContext: {
+      kind: "snapshot",
+      docs: [{ path: "docs/plan.md", content: "# Recovered Plan", sha256: "a".repeat(64), size: 16 }],
+    },
+  },
+};
 
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
@@ -166,6 +185,66 @@ describe("DocPreviewDrawer", () => {
 
     await click(dom.querySelector('button[aria-label="Close document preview"]'));
     expect(latestSearch).not.toContain("docPath=");
+  });
+
+  it("recovers from the warm messages cache when the seeded entry was GC'd (chat open)", async () => {
+    // Reproduces the GC bug: the URL still carries docMsg, but the seeded
+    // `docSnapshotQueryKey` entry was garbage-collected (no observer). While
+    // the chat is open, ChatView keeps `chat-messages` warm — model that with
+    // a pre-seeded cache entry. The drawer must re-derive the snapshot from
+    // the message's `metadata.documentContext` instead of falling through to
+    // the path endpoint (which 404s on the cloud topology).
+    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fplan.md&docMsg=msg-1";
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      // No docSnapshotQueryKey seed — simulate the post-GC state.
+      client.setQueryData(["chat-messages", "chat-1"], { items: [recoveryMessage], nextCursor: null });
+    });
+    await flush();
+
+    expect(dom.textContent).toContain("Recovered Plan");
+    expect(meDocsMocks.getMeDoc).not.toHaveBeenCalled();
+  });
+
+  it("recovers by fetching the messages window after a cold reload", async () => {
+    // Reproduces the reload P2 codex flagged: no seeded snapshot AND no warm
+    // messages cache on first render. A non-reactive cache peek would memoise
+    // `undefined` and never recompute. The drawer must observe the messages
+    // query, fetch the window, and recover — never hitting the path endpoint.
+    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fplan.md&docMsg=msg-1";
+    const dom = await renderAt(route, <DocPreviewDrawer />);
+    await flush();
+
+    expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
+    expect(dom.textContent).toContain("Recovered Plan");
+    expect(meDocsMocks.getMeDoc).not.toHaveBeenCalled();
+  });
+
+  it("still uses the path endpoint for an in-preview link to a non-snapshotted doc", async () => {
+    // Guards the second regression: a snapshot-origin preview keeps `docMsg` in
+    // the URL when navigating to an in-doc link. If that target was never one
+    // of the message's snapshots, recovery comes up empty and the drawer must
+    // still fall through to the legacy path endpoint (single-host) rather than
+    // being gated out wholesale by `docMsg`.
+    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    // docPath is docs/design.md — present in neither the seed nor the message's
+    // docs[] (which only has docs/plan.md), but docMsg is still msg-1.
+    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fdesign.md&docMsg=msg-1";
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      client.setQueryData(["chat-messages", "chat-1"], { items: [recoveryMessage], nextCursor: null });
+    });
+    await flush();
+
+    expect(meDocsMocks.getMeDoc).toHaveBeenCalledWith("chat-1", {
+      agentId: "agent-1",
+      basePath: undefined,
+      path: "docs/design.md",
+    });
+    expect(dom.textContent).toContain("Guide");
   });
 
   it("loads fallback previews for cross-agent paths and renders API errors", async () => {
