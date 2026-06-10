@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { Command } from "commander";
@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { readSourceBindingContract } from "./binding-contract.js";
-import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
+import { TREE_PROGRESS_FILE } from "./binding-state.js";
 import { resolveRepoRoot } from "./shared.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
 import { runValidateMembers } from "./validate-members.js";
@@ -105,11 +105,15 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
   const progressItems = readUncheckedProgressItems(targetRoot);
   const nodeResult = runValidateNodes(targetRoot);
   const memberResult = runValidateMembers(targetRoot);
+  // W1 moved workspace/tree identity out of the tree repo and into the
+  // workspace-root manifest. A fresh CI checkout of a tree repo is therefore
+  // valid without the pre-W1 `.first-tree/VERSION` / `tree.json` files.
+  // Keep these rows as compatibility signals for existing parsers, but do not
+  // fail validation on metadata that is no longer durable tree content.
   const summary: VerifySummary = {
     checks: {
       frameworkVersion: {
-        ok: existsSync(join(targetRoot, TREE_VERSION_FILE)),
-        ...(existsSync(join(targetRoot, TREE_VERSION_FILE)) ? {} : { errors: [`.first-tree/VERSION is missing.`] }),
+        ok: true,
       },
       members: {
         ok: memberResult.exitCode === 0,
@@ -131,14 +135,7 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
         ...(rootNodeErrors.length === 0 ? {} : { errors: rootNodeErrors }),
       },
       treeState: {
-        ok: readTreeIdentityContract(targetRoot) !== undefined,
-        ...(readTreeIdentityContract(targetRoot) !== undefined
-          ? {}
-          : {
-              errors: [
-                "Managed tree identity is missing — expected .first-tree/tree.json (or a legacy AGENTS.md / CLAUDE.md identity block).",
-              ],
-            }),
+        ok: true,
       },
     },
     ok: false,
