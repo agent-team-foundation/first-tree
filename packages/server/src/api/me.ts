@@ -10,7 +10,6 @@ import { getChannelConfig } from "@first-tree/shared/channel";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
@@ -20,9 +19,8 @@ import { listAgentsManagedByUser, listOrgsWithUsableNonHumanAgent } from "../ser
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { decryptValue, encryptValue } from "../services/crypto.js";
-import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
+import { GithubUserTokenError, getFreshGithubUserToken } from "../services/github-user-token.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import { updateOwnProfile } from "../services/member.js";
 import {
@@ -249,76 +247,26 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get("/me/github/repos", async (request, reply) => {
     const { userId } = requireUser(request);
-    const [identity] = await app.db
-      .select({ metadata: authIdentities.metadata })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
-      .limit(1);
-    const metadata = identity?.metadata && typeof identity.metadata === "object" ? identity.metadata : null;
-    const encrypted =
-      metadata && "accessToken" in metadata ? (metadata as { accessToken?: unknown }).accessToken : undefined;
-    if (typeof encrypted !== "string" || !encrypted) {
-      return reply.status(503).send({ error: "GitHub access token unavailable — please reconnect your account" });
-    }
     let token: string;
     try {
-      token = decryptValue(encrypted, app.config.secrets.encryptionKey);
-    } catch {
-      return reply.status(503).send({ error: "GitHub access token could not be decoded — please reconnect" });
-    }
-
-    // Refresh-on-expiry: only attempt when the row carries the
-    // App-flavoured expiry fields. Legacy (pre-App) rows have only
-    // `accessToken` — those tokens don't expire, so skip refresh.
-    const appCfg = app.config.oauth?.githubApp;
-    const expiresAtRaw =
-      metadata && "accessTokenExpiresAt" in metadata
-        ? (metadata as { accessTokenExpiresAt?: unknown }).accessTokenExpiresAt
-        : undefined;
-    const encryptedRefresh =
-      metadata && "refreshToken" in metadata ? (metadata as { refreshToken?: unknown }).refreshToken : undefined;
-    if (typeof expiresAtRaw === "string" && typeof encryptedRefresh === "string" && encryptedRefresh && appCfg) {
-      const expiresAt = Date.parse(expiresAtRaw);
-      // 60-second buffer — refresh slightly early so we don't hit the
-      // window where the token is technically still valid but expires
-      // mid-request.
-      if (!Number.isNaN(expiresAt) && expiresAt - 60_000 <= Date.now()) {
-        try {
-          const refreshPlain = decryptValue(encryptedRefresh, app.config.secrets.encryptionKey);
-          const refreshed = await refreshAppUserToken(appCfg.clientId, appCfg.clientSecret, refreshPlain);
-          // Persist the new pair so subsequent calls don't re-refresh.
-          // GitHub rotates the refresh token on every refresh — using
-          // the old one after this point is `bad_refresh_token`.
-          const nextMetadata: Record<string, unknown> = {
-            ...(metadata ?? {}),
-            accessToken: encryptValue(refreshed.accessToken, app.config.secrets.encryptionKey),
-            accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
-            refreshToken: encryptValue(refreshed.refreshToken, app.config.secrets.encryptionKey),
-            refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt,
-          };
-          await app.db
-            .update(authIdentities)
-            .set({ metadata: nextMetadata, updatedAt: new Date() })
-            .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")));
-          token = refreshed.accessToken;
-        } catch (err) {
-          // Refresh failure → caller gets the same "please reconnect"
-          // 503 the legacy paths return. We DON'T fall back to the
-          // expired token because GitHub will reject it anyway and
-          // the user's experience is just a slightly slower 403.
-          app.log.warn({ err, userId }, "github app user-token refresh failed");
-          const status = err instanceof GithubAppApiError ? err.status : 503;
-          if (status === 401) {
-            return reply.status(403).send({
-              error: "Your GitHub session has expired. Please sign in again.",
-              code: "refresh_failed",
-            });
-          }
-          return reply
-            .status(503)
-            .send({ error: "Couldn't refresh GitHub credentials. Try again, or reconnect your GitHub account." });
+      const github = await getFreshGithubUserToken(
+        app.db,
+        userId,
+        app.config.secrets.encryptionKey,
+        app.config.oauth?.githubApp,
+      );
+      token = github.accessToken;
+    } catch (err) {
+      if (err instanceof GithubUserTokenError) {
+        if (err.cause) {
+          app.log.warn({ err: err.cause, userId }, "github user-token refresh failed");
         }
+        return reply.status(err.statusCode).send({
+          error: err.message,
+          ...(err.code ? { code: err.code } : {}),
+        });
       }
+      throw err;
     }
 
     try {

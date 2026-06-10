@@ -29,6 +29,16 @@ export type GithubRepo = {
   pushedAt: string | null;
 };
 
+export type GithubCreatedRepo = {
+  name: string;
+  fullName: string;
+  ownerLogin: string;
+  cloneUrl: string;
+  htmlUrl: string;
+  private: boolean;
+  defaultBranch: string | null;
+};
+
 /**
  * Thrown when GitHub's API returns a non-2xx for a token-scoped call.
  * Carries the HTTP status so callers can distinguish auth failures (401 /
@@ -91,4 +101,107 @@ export async function listUserRepos(
     if (rows.length < perPage) break;
   }
   return out;
+}
+
+export async function createUserRepo(
+  accessToken: string,
+  input: { name: string; description?: string; private: boolean },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubCreatedRepo> {
+  const fetcher = opts.fetcher ?? fetch;
+  const payload: Record<string, unknown> = {
+    name: input.name,
+    private: input.private,
+    auto_init: false,
+  };
+  if (input.description) payload.description = input.description;
+
+  const res = await fetcher(`${GITHUB_API_BASE}/user/repos`, {
+    method: "POST",
+    headers: githubJsonHeaders(accessToken),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new GithubApiError(res.status, `GitHub repo create failed (${res.status})`);
+  }
+  return parseCreatedRepo(await res.json());
+}
+
+export async function createRepoFile(
+  accessToken: string,
+  input: { owner: string; repo: string; path: string; branch: string; message: string; contentBase64: string },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<void> {
+  const fetcher = opts.fetcher ?? fetch;
+  const path = encodePath(input.path);
+  const res = await fetcher(
+    `${GITHUB_API_BASE}/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${path}`,
+    {
+      method: "PUT",
+      headers: githubJsonHeaders(accessToken),
+      body: JSON.stringify({
+        message: input.message,
+        content: input.contentBase64,
+        branch: input.branch,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new GithubApiError(res.status, `GitHub file create failed (${res.status})`);
+  }
+}
+
+function githubJsonHeaders(accessToken: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+function parseCreatedRepo(body: unknown): GithubCreatedRepo {
+  if (!isRecord(body)) {
+    throw new GithubApiError(502, "GitHub repo create returned an invalid response");
+  }
+  const owner = isRecord(body.owner) ? readString(body.owner, "login") : null;
+  const name = readString(body, "name");
+  const fullName = readString(body, "full_name");
+  const cloneUrl = readString(body, "clone_url");
+  const htmlUrl = readString(body, "html_url");
+  const isPrivate = readBoolean(body, "private");
+  if (!owner || !name || !fullName || !cloneUrl || !htmlUrl || isPrivate === null) {
+    throw new GithubApiError(502, "GitHub repo create returned an invalid response");
+  }
+  return {
+    name,
+    fullName,
+    ownerLogin: owner,
+    cloneUrl,
+    htmlUrl,
+    private: isPrivate,
+    defaultBranch: readString(body, "default_branch"),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | null {
+  const value = record[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function encodePath(path: string): string {
+  return path
+    .split("/")
+    .filter((part) => part.length > 0)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }

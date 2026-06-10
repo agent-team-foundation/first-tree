@@ -1,9 +1,11 @@
+import type { InitializeContextTreeResponse } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getContextTreeSetting, putContextTreeSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
+import { ContextTreeInitializer } from "./context-tree-initializer.js";
 
 /**
  * Section for the per-org Context Tree binding (repo / branch). Replaces the
@@ -33,6 +35,7 @@ export function ContextTreeSettingsPanel() {
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("");
   const [saved, setSaved] = useState(false);
+  const hasConfiguredRepo = !!settingQuery.data?.repo;
 
   useEffect(() => {
     if (!settingQuery.data) return;
@@ -64,6 +67,15 @@ export function ContextTreeSettingsPanel() {
     mutation.mutate();
   };
 
+  const handleInitialized = (result: InitializeContextTreeResponse) => {
+    const next = { repo: result.repo, branch: result.branch };
+    queryClient.setQueryData(["org-setting", organizationId, "context_tree"], next);
+    setRepo(result.repo);
+    setBranch(result.branch);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   return (
     <Section
       title="Context tree"
@@ -79,6 +91,14 @@ export function ContextTreeSettingsPanel() {
         </div>
       ) : (
         <form onSubmit={handleSubmit}>
+          {isAdmin && !hasConfiguredRepo ? (
+            <ContextTreeInitializer organizationId={organizationId} onInitialized={handleInitialized} />
+          ) : null}
+          {!isAdmin && !hasConfiguredRepo ? (
+            <div className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
+              Ask an admin to initialize this team's Context Tree.
+            </div>
+          ) : null}
           <SettingsField
             label="Repo URL"
             hint="HTTPS URL of the Context Tree git repository for this team."

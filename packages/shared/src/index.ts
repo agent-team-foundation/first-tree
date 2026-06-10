@@ -284,6 +284,10 @@ export {
   contextTreeUpdateSchema,
   contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
+  type InitializeContextTreeRequest,
+  type InitializeContextTreeResponse,
+  initializeContextTreeRequestSchema,
+  initializeContextTreeResponseSchema,
 } from "./schemas/context-tree.js";
 export {
   GITHUB_ACCOUNT_TYPES,

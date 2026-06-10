@@ -1,7 +1,7 @@
 import { importPKCS8, SignJWT } from "jose";
 import type { GithubProfile } from "./auth-identity.js";
 import { GITHUB_API_BASE } from "./github-api-base.js";
-import type { GithubRepo } from "./github-oauth.js";
+import type { GithubCreatedRepo, GithubRepo } from "./github-oauth.js";
 
 /**
  * GitHub App service helpers. Two surfaces that ride on top of an App's
@@ -50,6 +50,11 @@ const APP_JWT_IAT_SKEW_SECONDS = 60;
 const APP_INSTALLATION_TOKEN_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}/access_tokens`;
 const APP_INSTALLATION_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}`;
 const INSTALLATION_REPOS_URL = `${GITHUB_API_BASE}/installation/repositories`;
+const ORGANIZATION_REPOS_URL = (org: string) => `${GITHUB_API_BASE}/orgs/${encodeURIComponent(org)}/repos`;
+const REPOSITORY_URL = (owner: string, repo: string) =>
+  `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+const REPOSITORY_CONTENTS_URL = (owner: string, repo: string, path: string) =>
+  `${REPOSITORY_URL(owner, repo)}/contents/${encodePath(path)}`;
 const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const USER_API_URL = `${GITHUB_API_BASE}/user`;
@@ -354,6 +359,95 @@ export async function listInstallationRepos(
   return out;
 }
 
+/**
+ * Create a repository under an organization account using a GitHub App
+ * installation token. GitHub supports this only for organization installs
+ * whose token has `administration: write`; callers should enforce that before
+ * invoking the upstream side effect so permission failures are stable and
+ * explainable.
+ */
+export async function createOrganizationRepo(
+  installationToken: string,
+  input: { org: string; name: string; description?: string; private: boolean },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubCreatedRepo> {
+  const fetcher = opts.fetcher ?? fetch;
+  const payload: Record<string, unknown> = {
+    name: input.name,
+    private: input.private,
+    auto_init: false,
+  };
+  if (input.description) payload.description = input.description;
+
+  const res = await fetcher(ORGANIZATION_REPOS_URL(input.org), {
+    method: "POST",
+    headers: githubJsonHeaders(installationToken),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw await githubAppApiError(res, "GitHub organization repo create failed");
+  }
+  return parseGithubRepo(await res.json(), "GitHub organization repo create returned an invalid response");
+}
+
+/**
+ * Read a repository with an installation token. The Context Tree initializer
+ * uses this as the same authority check the snapshot path relies on: if the
+ * bound installation cannot read the repo, First Tree must not persist it as
+ * this team's tree binding.
+ */
+export async function getRepository(
+  installationToken: string,
+  owner: string,
+  repo: string,
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubCreatedRepo> {
+  const fetcher = opts.fetcher ?? fetch;
+  const res = await fetcher(REPOSITORY_URL(owner, repo), {
+    headers: githubJsonHeaders(installationToken),
+  });
+  if (!res.ok) {
+    throw await githubAppApiError(res, "GitHub repository fetch failed");
+  }
+  return parseGithubRepo(await res.json(), "GitHub repository fetch returned an invalid response");
+}
+
+export async function getRepoFileWithToken(
+  installationToken: string,
+  input: { owner: string; repo: string; path: string; branch: string },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<void> {
+  const fetcher = opts.fetcher ?? fetch;
+  const url = new URL(REPOSITORY_CONTENTS_URL(input.owner, input.repo, input.path));
+  url.searchParams.set("ref", input.branch);
+  const res = await fetcher(url.toString(), {
+    headers: githubJsonHeaders(installationToken),
+  });
+  if (!res.ok) {
+    throw await githubAppApiError(res, "GitHub file fetch failed");
+  }
+}
+
+export async function createRepoFileWithToken(
+  installationToken: string,
+  input: { owner: string; repo: string; path: string; branch: string; message: string; contentBase64: string },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<void> {
+  const fetcher = opts.fetcher ?? fetch;
+  const res = await fetcher(REPOSITORY_CONTENTS_URL(input.owner, input.repo, input.path), {
+    method: "PUT",
+    headers: githubJsonHeaders(installationToken),
+    body: JSON.stringify({
+      message: input.message,
+      content: input.contentBase64,
+      branch: input.branch,
+    }),
+  });
+  if (!res.ok) {
+    throw await githubAppApiError(res, "GitHub file create failed");
+  }
+}
+
 export type RefreshedUserToken = {
   accessToken: string;
   /** ISO-8601. Typically ~8h after issue. */
@@ -369,6 +463,84 @@ export type RefreshedUserToken = {
   /** Granted scopes, comma-joined. Forwarded verbatim from GitHub. */
   scope: string;
 };
+
+function githubJsonHeaders(accessToken: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+async function githubAppApiError(res: Response, fallback: string): Promise<GithubAppApiError> {
+  const upstreamMessage = await readGithubErrorMessage(res);
+  return new GithubAppApiError(
+    res.status,
+    `${fallback} (${res.status})${upstreamMessage ? `: ${upstreamMessage}` : ""}`,
+  );
+}
+
+async function readGithubErrorMessage(res: Response): Promise<string | null> {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const body = await res.json().catch(() => null);
+    if (isRecord(body)) {
+      const message = readString(body, "message");
+      if (message) return message;
+    }
+    return null;
+  }
+  const text = await res.text().catch(() => "");
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 200) : null;
+}
+
+function parseGithubRepo(body: unknown, invalidMessage: string): GithubCreatedRepo {
+  if (!isRecord(body)) {
+    throw new GithubAppApiError(502, invalidMessage);
+  }
+  const owner = isRecord(body.owner) ? readString(body.owner, "login") : null;
+  const name = readString(body, "name");
+  const fullName = readString(body, "full_name");
+  const cloneUrl = readString(body, "clone_url");
+  const htmlUrl = readString(body, "html_url");
+  const isPrivate = readBoolean(body, "private");
+  if (!owner || !name || !fullName || !cloneUrl || !htmlUrl || isPrivate === null) {
+    throw new GithubAppApiError(502, invalidMessage);
+  }
+  return {
+    name,
+    fullName,
+    ownerLogin: owner,
+    cloneUrl,
+    htmlUrl,
+    private: isPrivate,
+    defaultBranch: readString(body, "default_branch"),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | null {
+  const value = record[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function encodePath(path: string): string {
+  return path
+    .split("/")
+    .filter((part) => part.length > 0)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
 
 /**
  * Trade an expiring user-to-server access token for a fresh pair using

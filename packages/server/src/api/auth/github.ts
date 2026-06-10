@@ -278,6 +278,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
             accountLogin: params.installationAccountLogin ?? params.login,
             accountGithubId: Number(params.installationAccountGithubId ?? params.githubId),
             permissions: {
+              administration: "write",
               contents: "write",
               pull_requests: "write",
               issues: "read",
