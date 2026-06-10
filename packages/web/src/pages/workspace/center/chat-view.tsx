@@ -3087,6 +3087,16 @@ export function ChatView({
                           left: 10,
                           right: 10,
                           color: "var(--fg-4)",
+                          // This toolbar sits inside the textarea's bottom-padding
+                          // strip (`--sp-7_5`). The textarea above carries
+                          // `zIndex: 1` (caret-over-overlay fix), which would
+                          // otherwise hit-test ABOVE this z-auto row — the
+                          // buttons stay visible through the textarea's
+                          // transparent background but every click lands on the
+                          // textarea instead (send/@/attach appear dead; only
+                          // Enter works). Stack the toolbar higher so it gets
+                          // pointer events back.
+                          zIndex: 2,
                         }}
                       >
                         <span className="mono flex items-center" style={{ gap: 10 }}>
