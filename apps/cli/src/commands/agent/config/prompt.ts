@@ -59,7 +59,8 @@ export function registerAgentConfigPromptCommands(config: Command): void {
       process.stdout.write(`\nPer-agent fragment: ${display ? `(${fragment.length} chars)` : "(empty)"}\n`);
       if (display) process.stdout.write(`  > ${display.replace(/\n/g, "\n  > ")}\n`);
       process.stdout.write(
-        "\nOnly the per-agent fragment is editable here — team prompts are managed in Cloud → Org Settings → Resources.\n" +
+        "\nOnly the per-agent fragment is editable here — team prompts are managed in Cloud → Org Settings → Resources,\n" +
+          "and so are inline replacements of team prompts (resource bindings).\n" +
           "Edit round-trip: prompt show <agent> --raw > f.md  →  edit f.md  →  prompt set <agent> -f f.md\n",
       );
     });
@@ -117,7 +118,14 @@ function inlineFragmentText(bindings: ReadonlyArray<AgentResourceBindingInput>):
 
 function describePromptRow(row: EffectiveResourceRow): string {
   const scope = row.source === "inline_prompt" || row.source === "agent_extra" ? "agent" : "team";
-  const name = row.source === "inline_prompt" ? "per-agent fragment" : row.name;
+  // An inline *replacement* of a team prompt is agent-specific but owned by
+  // resource bindings, not by `prompt set` — never call it the fragment.
+  const name =
+    row.source === "inline_prompt"
+      ? row.replacesResourceId
+        ? `inline replacement of team prompt "${row.name}" (managed via resource bindings)`
+        : "per-agent fragment"
+      : row.name;
   const size = row.promptBody ? `${row.promptBody.length} chars` : "empty";
   const state = row.mode === "enabled" ? size : row.mode;
   return `[${scope}] ${name} (${state})`;

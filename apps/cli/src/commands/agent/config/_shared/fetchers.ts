@@ -101,7 +101,14 @@ export function printConfig(cfg: AgentRuntimeConfig): void {
   if (promptSections.length > 0) {
     process.stdout.write(`Effective prompt stack (${promptSections.length} section(s); resolved team + agent):\n`);
     for (const section of promptSections) {
-      const label = section.scope === "agent" ? "per-agent fragment" : section.name || "team prompt";
+      // Agent scope splits on `editable`: only the standalone fragment is the
+      // thing `prompt set` owns; the rest are resource-binding overrides.
+      const label =
+        section.scope === "agent"
+          ? section.editable === true
+            ? "per-agent fragment"
+            : `${section.name || "agent prompt override"} (override; managed via resource bindings)`
+          : section.name || "team prompt";
       process.stdout.write(`  - [${section.scope}] ${label} (${section.body.length} chars)\n`);
     }
     process.stdout.write(

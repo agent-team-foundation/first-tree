@@ -134,6 +134,17 @@ describe("Resources Phase 1", () => {
       owner.memberId,
     );
 
+    const replacedPrompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Tone guide",
+        defaultEnabled: "available",
+        payload: { body: "Original team tone guide." },
+      },
+      owner.memberId,
+    );
+
     await app.resourcesService.replaceAgentResources(
       agent.uuid,
       {
@@ -141,6 +152,13 @@ describe("Resources Phase 1", () => {
         bindings: [
           { type: "prompt", mode: "include", resourceId: teamPrompt.id },
           { type: "prompt", mode: "include", resourceId: null, inlinePromptBody: "Prefer terse replies." },
+          {
+            type: "prompt",
+            mode: "replace",
+            resourceId: null,
+            replacesResourceId: replacedPrompt.id,
+            inlinePromptBody: "Agent-specific tone override.",
+          },
         ],
       },
       owner.memberId,
@@ -149,11 +167,15 @@ describe("Resources Phase 1", () => {
     const baseConfig = await app.configService.get(agent.uuid);
     const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
 
-    // Structured projection: provenance scope per row, inline fragment with
-    // an empty name (it has no resource name — the client labels it).
+    // Structured projection: provenance scope per row. Only the standalone
+    // inline fragment is `editable` — the one row `prompt set` owns. The
+    // inline *replacement* is agent-scope but managed via resource bindings,
+    // and keeps the replaced team prompt's name so readers know which team
+    // slot the agent-specific body stands in for.
     expect(resolved.payload.prompt.sections).toEqual([
-      { scope: "team", name: "Review rules", body: "Always review twice." },
-      { scope: "agent", name: "", body: "Prefer terse replies." },
+      { scope: "team", name: "Review rules", body: "Always review twice.", editable: false },
+      { scope: "agent", name: "", body: "Prefer terse replies.", editable: true },
+      { scope: "agent", name: "Tone guide", body: "Agent-specific tone override.", editable: false },
     ]);
 
     // Legacy merged blob stays populated for older clients, with the
@@ -164,6 +186,9 @@ describe("Resources Phase 1", () => {
     expect(resolved.payload.prompt.append).toContain("## Agent Prompt (this agent only)");
     expect(resolved.payload.prompt.append).toContain("Always review twice.");
     expect(resolved.payload.prompt.append).toContain("Prefer terse replies.");
+    // The replacement body is effective; the replaced team body is not.
+    expect(resolved.payload.prompt.append).toContain("Agent-specific tone override.");
+    expect(resolved.payload.prompt.append).not.toContain("Original team tone guide.");
   });
 
   it("rejects an inline prompt body carrying the generated-briefing marker, but lets bare briefing headings through", async () => {

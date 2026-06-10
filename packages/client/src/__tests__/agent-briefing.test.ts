@@ -179,8 +179,8 @@ describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prom
         // team content would render twice.
         append: "## Team Resource: Review Rules\n\nAlways review twice.",
         sections: [
-          { scope: "team" as const, name: "Review Rules", body: "Always review twice." },
-          { scope: "agent" as const, name: "", body: "Prefer terse replies." },
+          { scope: "team" as const, name: "Review Rules", body: "Always review twice.", editable: false },
+          { scope: "agent" as const, name: "", body: "Prefer terse replies.", editable: true },
         ],
       },
     };
@@ -231,7 +231,7 @@ describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prom
 
     const agentOnly = {
       ...basePayload,
-      prompt: { append: "", sections: [{ scope: "agent" as const, name: "", body: "Mine." }] },
+      prompt: { append: "", sections: [{ scope: "agent" as const, name: "", body: "Mine.", editable: true }] },
     };
     const agentOnlyBriefing = buildAgentBriefing(makeOpts({ payload: agentOnly }));
     expect(agentOnlyBriefing).not.toContain(teamHeading);
@@ -254,6 +254,53 @@ describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prom
     };
     const briefing = buildAgentBriefing(makeOpts({ payload }));
     expect(briefing).toContain("## Team prompt\n\nUnnamed body.");
+  });
+
+  it("renders non-editable agent-scope sections under # Agent Prompt Overrides, never under the editable heading", () => {
+    // An inline *replacement* of a team prompt projects as scope "agent"
+    // without `editable` — the `prompt show --raw` / `prompt set` round-trip
+    // cannot touch it, so presenting it under "editable" would instruct the
+    // agent to use a flow that cannot edit the content it sees.
+    const payload = {
+      ...basePayload,
+      prompt: {
+        append: "",
+        sections: [
+          { scope: "agent" as const, name: "", body: "My own fragment.", editable: true },
+          { scope: "agent" as const, name: "Tone guide", body: "Agent-specific tone override.", editable: false },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+
+    const agentHeading = "\n# Agent Prompt (this agent only — editable)\n";
+    const overridesHeading = "\n# Agent Prompt Overrides (this agent only — managed via resource bindings)\n";
+    expect(briefing).toContain(agentHeading);
+    expect(briefing).toContain(overridesHeading);
+    expect(briefing).toContain("## Tone guide\n\nAgent-specific tone override.");
+    expect(briefing).toMatch(/NOT editable with `prompt set`/);
+
+    // The override body must live in the overrides section, after the
+    // editable section — not inside it.
+    const agentIdx = briefing.indexOf(agentHeading);
+    const overridesIdx = briefing.indexOf(overridesHeading);
+    const overrideBodyIdx = briefing.indexOf("Agent-specific tone override.");
+    expect(overridesIdx).toBeGreaterThan(agentIdx);
+    expect(overrideBodyIdx).toBeGreaterThan(overridesIdx);
+
+    // Overrides alone (no editable fragment) must not produce the editable
+    // heading — and must not fall back to the legacy single-blob rendering.
+    const overridesOnly = {
+      ...basePayload,
+      prompt: {
+        append: "legacy blob",
+        sections: [{ scope: "agent" as const, name: "Tone guide", body: "Override only.", editable: false }],
+      },
+    };
+    const overridesOnlyBriefing = buildAgentBriefing(makeOpts({ payload: overridesOnly }));
+    expect(overridesOnlyBriefing).not.toContain(agentHeading);
+    expect(overridesOnlyBriefing).toContain(overridesHeading);
+    expect(overridesOnlyBriefing).not.toContain("## Agent-Specific Prompt");
   });
 });
 

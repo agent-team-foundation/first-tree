@@ -41,9 +41,13 @@ export type BuildAgentBriefingOptions = {
  *   2. `# Team Prompt (team-shared — read-only for agents)`
  *                                              — team prompt resources (`prompt.sections`, scope `team`)
  *   3. `# Agent Prompt (this agent only — editable)`
- *                                              — per-agent fragment (`prompt.sections`, scope `agent`);
- *                                                legacy servers without sections fall back to
- *                                                `## Agent-Specific Prompt` carrying `prompt.append`
+ *                                              — per-agent fragment (`prompt.sections`, scope `agent`,
+ *                                                `editable: true`); legacy servers without sections
+ *                                                fall back to `## Agent-Specific Prompt` carrying
+ *                                                `prompt.append`
+ *   3b. `# Agent Prompt Overrides (this agent only — managed via resource bindings)`
+ *                                              — agent-scope rows `prompt set` does NOT own
+ *                                                (inline replacements of team prompts)
  *   4. `# Working in First Tree (First Tree Managed)` — mostly static, with subsections:
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · Asking Humans ·
@@ -65,7 +69,9 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   if (teamPromptBlock) sections.push(teamPromptBlock);
   const agentPromptBlock = agentPromptSection(promptSections, opts.identity, getCliBinding().binName);
   if (agentPromptBlock) sections.push(agentPromptBlock);
-  if (!teamPromptBlock && !agentPromptBlock) {
+  const overridesBlock = agentPromptOverridesSection(promptSections);
+  if (overridesBlock) sections.push(overridesBlock);
+  if (!teamPromptBlock && !agentPromptBlock && !overridesBlock) {
     // Legacy server without structured sections — keep the old single-blob
     // rendering. The blob may mix team and agent content, so it must NOT be
     // presented under the editable `# Agent Prompt` heading.
@@ -133,6 +139,9 @@ function generatedBannerSection(bin: string): string {
     # Agent Prompt  → this agent's own prompt fragment;
                       read:  ${bin} agent config prompt show <agent> --raw
                       write: ${bin} agent config prompt set <agent> -f <file>
+    # Agent Prompt Overrides → agent-specific resource bindings that
+                      replace team prompts; managed in Cloud, NOT via
+                      prompt set
   Every other section is First Tree Managed — injected by the runtime and
   not editable through any prompt configuration.
 ====================================================================== -->`;
@@ -168,7 +177,13 @@ function agentPromptSection(
   identity: AgentIdentity,
   bin: string,
 ): string | null {
-  const own = promptSections.filter((section) => section.scope === "agent" && section.body.trim().length > 0);
+  // Only rows the `prompt show --raw` / `prompt set` round-trip actually owns
+  // may appear under an "editable" heading — agent-scope rows without
+  // `editable: true` (inline replacements of team prompts) go to
+  // `agentPromptOverridesSection` instead.
+  const own = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable === true && section.body.trim().length > 0,
+  );
   if (own.length === 0) return null;
   // agentId is the CLI-addressable name (display names may contain spaces,
   // which would break the copy-pasteable command examples below).
@@ -182,6 +197,31 @@ prompt edit should ever produce.*`,
   ];
   for (const section of own) {
     blocks.push(section.body.trim());
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * Agent-specific prompt rows that `prompt set` does NOT own — inline
+ * replacements of team prompt resources (and any future agent-scoped prompt
+ * resources). They get their own heading so the editable `# Agent Prompt`
+ * section never claims content the `prompt show --raw` / `prompt set`
+ * round-trip cannot touch.
+ */
+function agentPromptOverridesSection(promptSections: ReadonlyArray<PromptSection>): string | null {
+  const overrides = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable !== true && section.body.trim().length > 0,
+  );
+  if (overrides.length === 0) return null;
+  const blocks: string[] = [
+    "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    `*Source: agent-specific resource bindings that replace team prompt
+resources. NOT editable with \`prompt set\` — managed in Cloud → Org
+Settings → Resources. Do NOT copy any of this into your per-agent
+prompt.*`,
+  ];
+  for (const section of overrides) {
+    blocks.push(`## ${section.name.trim() || "Agent prompt override"}\n\n${section.body.trim()}`);
   }
   return blocks.join("\n\n");
 }

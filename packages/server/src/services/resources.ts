@@ -477,8 +477,8 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         continue;
       }
 
+      const replacedResource = binding.replacesResourceId ? byId.get(binding.replacesResourceId) : null;
       if (binding.mode === "replace") {
-        const replacedResource = binding.replacesResourceId ? byId.get(binding.replacesResourceId) : null;
         if (replacedResource) {
           bucket(binding.type).push(
             emptyRow({
@@ -504,7 +504,10 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         bindingId: binding.id,
         resource: resource ?? null,
         type: binding.type,
-        name: resource?.name ?? "Inline prompt",
+        // An inline *replacement* keeps the replaced team prompt's name so
+        // downstream consumers (sections projection, CLI) can say which team
+        // slot the agent-specific body stands in for.
+        name: resource?.name ?? replacedResource?.name ?? "Inline prompt",
         source: resourceSource(resource ?? null, !!inlinePrompt),
         mode: "enabled",
         order: binding.order,
@@ -625,16 +628,26 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
    * these sections under provenance-labelled briefing headings (`# Team
    * Prompt` / `# Agent Prompt`) so team-shared content is never presented
    * as part of the agent's own editable prompt.
+   *
+   * `editable` is true only for the standalone inline fragment — the one row
+   * `agent config prompt set` owns. Inline *replacements* of team prompts
+   * (and any agent-scoped prompt resources) are agent-specific but managed
+   * via resource bindings; labelling them editable would instruct an agent
+   * to use a flow that cannot touch them.
    */
   function runtimePromptSections(rows: EffectiveResourceRow[]): PromptSection[] {
     return rows
       .filter((row) => row.mode === "enabled" && row.promptBody)
       .sort((a, b) => a.order - b.order)
-      .map((row) => ({
-        scope: promptSectionScope(row.source),
-        name: row.source === "inline_prompt" ? "" : row.name,
-        body: (row.promptBody ?? "").trim(),
-      }));
+      .map((row) => {
+        const editable = row.source === "inline_prompt" && !row.replacesResourceId;
+        return {
+          scope: promptSectionScope(row.source),
+          name: editable ? "" : row.name,
+          body: (row.promptBody ?? "").trim(),
+          editable,
+        };
+      });
   }
 
   function runtimeSkills(rows: EffectiveResourceRow[]): RuntimeResourceSkill[] {

@@ -26,15 +26,19 @@ export type PromptSectionScope = z.infer<typeof promptSectionScopeSchema>;
  * One resolved entry of the effective prompt stack, tagged by provenance.
  *
  * `scope: "team"` rows come from team prompt resources (read-only for the
- * agent); `scope: "agent"` rows come from the agent's own inline prompt
- * fragment (the thing `agent config prompt set` edits). The client briefing
- * renders the two scopes under separate, provenance-labelled headings so an
- * agent can never mistake team-shared content for its own editable prompt.
+ * agent); `scope: "agent"` rows are agent-specific. Within agent scope,
+ * `editable: true` marks the ONE kind of row `agent config prompt set` owns —
+ * the standalone inline fragment. Agent-scope rows without it (inline
+ * *replacements* of team prompts, agent-scoped prompt resources) are managed
+ * via resource bindings, and the client briefing must not present them under
+ * an "editable" heading, or an agent following the heading's instructions
+ * would be unable to edit the content it sees.
  */
 export const promptSectionSchema = z.object({
   scope: promptSectionScopeSchema,
   name: z.string().default(""),
   body: z.string().default(""),
+  editable: z.boolean().optional(),
 });
 export type PromptSection = z.infer<typeof promptSectionSchema>;
 

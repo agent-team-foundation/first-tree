@@ -210,6 +210,8 @@ first-tree agent config
 ├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
 │                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
 │                                                   #   briefing headings); --force overrides the heading heuristic.
+│                                                   #   Does NOT cover inline replacements of team prompts — those are
+│                                                   #   resource bindings, managed in Cloud → Org Settings → Resources.
 ├── append-prompt <agent> [-f <file>]               # deprecated alias of `prompt set`
 ├── add-mcp <agent> --name <id> --transport <t> [--command <c> --args <a>... | --url <u>]
 ├── set-env <agent> KEY=VALUE [--sensitive]

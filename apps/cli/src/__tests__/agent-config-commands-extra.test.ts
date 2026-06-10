@@ -481,6 +481,17 @@ describe("agent config command behavior", () => {
           inlinePromptBody: storedBody,
           order: 1,
         },
+        // Inline *replacement* of a team prompt: not owned by `prompt set`,
+        // so it must not leak into the raw export either.
+        {
+          id: "replace-1",
+          type: "prompt",
+          mode: "replace",
+          resourceId: null,
+          replacesResourceId: "team-prompt",
+          inlinePromptBody: "Agent-specific tone override.",
+          order: 2,
+        },
       ],
       effective: { version: 3, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
       availableTeamResources: [],
@@ -543,6 +554,25 @@ describe("agent config command behavior", () => {
             unavailableReason: null,
             order: 2,
           },
+          // Inline replacement of a team prompt — agent scope, but managed
+          // via resource bindings, so it must not be called the fragment.
+          {
+            id: "binding:replace-1:enabled",
+            bindingId: "replace-1",
+            resourceId: null,
+            replacesResourceId: "team-prompt-2",
+            type: "prompt",
+            name: "Tone guide",
+            scope: "agent",
+            source: "inline_prompt",
+            mode: "enabled",
+            defaultEnabled: null,
+            payload: null,
+            repo: null,
+            promptBody: "Agent-specific tone override.",
+            unavailableReason: null,
+            order: 3,
+          },
         ],
         skills: [],
         mcp: [],
@@ -557,6 +587,7 @@ describe("agent config command behavior", () => {
 
     expect(out).toContain("[team] Review rules");
     expect(out).toContain("[agent] per-agent fragment");
+    expect(out).toContain('[agent] inline replacement of team prompt "Tone guide" (managed via resource bindings)');
     expect(out).toContain("Prefer small diffs.");
     // Round-trip hint: how to edit the only agent-editable source.
     expect(out).toContain("prompt show <agent> --raw");
