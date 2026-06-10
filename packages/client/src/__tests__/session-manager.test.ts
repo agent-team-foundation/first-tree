@@ -1030,6 +1030,44 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
+  it("does not resume a stale session entry after terminate wins the suspend ACK race", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn((entryId: number) => (entryId === 39 ? ack.promise : Promise.resolve()));
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 39, chatId: "chat-suspend-terminate-race", messageId: "msg-t1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+
+    await sm.handleCommand("chat-suspend-terminate-race", "session:suspend");
+    expect(ackEntry).toHaveBeenCalledWith(39);
+
+    const resumedInput = sm.dispatch(mockEntry({ id: 40, chatId: "chat-suspend-terminate-race", messageId: "msg-t2" }));
+    await Promise.resolve();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    await sm.handleCommand("chat-suspend-terminate-race", "session:terminate");
+    ack.resolve();
+    await resumedInput;
+
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(sm.activeCount).toBe(0);
+    expect(sm.totalCount).toBe(0);
+    expect(sm.getHeldChatIds()).not.toContain("chat-suspend-terminate-race");
+
+    await sm.shutdown();
+  });
+
   it("suspend leaves injected but not consumed entries unacked for recovery", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);

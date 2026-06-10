@@ -895,6 +895,10 @@ export class SessionManager {
     if (entry.suspending) {
       await entry.suspending;
     }
+    const currentEntry = this.sessions.get(entry.chatId);
+    if (currentEntry !== entry || (entry.status !== "suspended" && entry.status !== "evicted")) {
+      return;
+    }
     if (this.requiresInboxRecovery.has(entry.chatId)) {
       this.recomputeSessionRuntimeState(entry.chatId);
       return;
