@@ -278,73 +278,63 @@ export const COPY = {
       post: " to create your agent.",
     },
   },
-  /** kickoff / "Start" states (title/why are per-state, rendered by the step) */
+  /** kickoff — one unified "launch" finale across every path. Titles/bodies are
+      rendered per-state by the step; the shell leaves STEP_COPY.kickoff empty
+      for this bookend. */
   kickoff: {
-    // admin — new Context Tree (default when the team has none yet). This is
-    // the first time the user meets "Context Tree", so lead with a plain
-    // one-line gloss of what it is + why it helps before saying what happens.
-    // Approval is phrased concretely ("nothing's saved unless you say yes")
-    // instead of "walking you through each change to approve" — the latter
-    // reads vague about what is actually being approved (per issue-834 copy review).
-    newTitle: "Start your Context Tree",
-    newWhy:
-      "Your Context Tree is your team's shared memory — what agents need to work like they already know your project. Your agent drafts the first pieces with you in the chat, and nothing's saved unless you say yes.",
-    haveExisting: "I already have a Context Tree",
-    // admin — existing Context Tree (auto-detected from team settings, or pasted).
-    // Same gloss as newWhy so both kickoff paths teach the concept identically.
-    existingTitle: "Use your team's Context Tree",
-    existingWhy:
-      "Your Context Tree is your team's shared memory — what agents need to work like they already know your project. Your team already has one; your agent builds on it with you in the chat, and nothing's saved unless you say yes.",
-    existingUrlLabel: "Context Tree link",
-    autoDetectedNote: "Your team already has one — your agent will build on it. Edit the link or create a new one.",
-    createInstead: "Create new instead",
-    // admin — no project connected
-    noProjectTitle: "Start your agent",
-    noProjectBody:
-      "No repo connected, so your agent will start with a quick intro. Connect a repo later from Settings to give it real context.",
-    // invitee — team's tree is ready, pick a repo
-    inviteePickerTitle: "Pick a repo to work on",
-    inviteePickerWhy: "Your team's set up — pick which of your own repos your agent should help with.",
-    inviteePickerLoading: "Loading your repos…",
-    inviteePickerEmpty:
-      "No repos found on your GitHub account yet. You can continue without one and add later from Settings.",
-    inviteePickerScopeMissing: "Couldn't see your repos — First Tree needs permission to read them.",
-    inviteePickerNetworkError: "Couldn't load your repos. Try again in a moment.",
-    inviteeContinueNoProject: "Continue without a repo",
-    /** Shown atop confirm / picker so invitee knows where the work lands. */
-    treeLabel: "Context Tree",
-    // Launch CTA — per-substate so it names what's actually starting:
-    //   admin + tree → building the Context Tree; admin no-project → meeting
-    //   the agent (no project yet, so it's an intro — framed around the agent
-    //   as a teammate, not "chatting", which reads as a chatbot); invitee →
-    //   getting to work. (Green `cta` everywhere.)
-    startBuilding: "Start building",
+    // admin · new tree (the default — the team has none yet). Lead with the
+    // agent + the outcome (it seeds your team's memory from your code), not a
+    // Context-Tree lecture; the term is named once, lightly.
+    newTitle: "Your agent's ready to get to work",
+    newWhy: (repoCount: number): string =>
+      `It'll start by reading your ${repoCount === 1 ? "repo" : `${repoCount} repos`} and drafting your team's Context Tree — the shared memory that lets every agent work like it already knows your project.`,
+    startBuilding: "Create tree & start",
+
+    // admin · the team already has a Context Tree (re-run / second admin /
+    // CLI-bound). Detected silently — no fork, no paste — the agent reads it
+    // instead of seeding.
+    existingTitle: "Your agent's ready to get to work",
+    existingWhy: (repoCount: number): string =>
+      `Your team already has a Context Tree — your agent will get oriented and start working on your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
+    startExisting: "Start",
+
+    // admin · no repo connected (connect-code skipped / 0 picked). Nothing to
+    // seed from, so this is honestly "meet your agent" — not a tree moment. The
+    // affordance points back to connecting a repo (the only way to give the team
+    // a Context Tree), not a silent "do it later in Settings".
+    noProjectTitle: "Your agent's ready",
+    noProjectBody: "No repo connected, so your agent will start with a quick intro.",
+    connectRepoAffordance: "Want a team Context Tree? Connect a repo",
     startChatting: "Meet your agent",
+
+    // invitee · ready (team has a tree + a GitHub connection). Replaces the old
+    // confirm/picker screens — the agent already inherits the team's repos
+    // automatically (recommended team resources are enabled for every org
+    // agent), so there is nothing to select.
+    inviteeReadyTitle: "Your agent's ready to go",
+    inviteeReadyWithRepos: (repos: string): string =>
+      `Your team's all set up — your agent can already work on ${repos} and your shared Context Tree.`,
+    inviteeReadyNoRepos:
+      "Your team's all set up — your agent will start with a quick intro. Repos can be added anytime from Settings.",
     startWorking: "Start working",
+
+    // shared launch transition
     starting: "Starting your agent…",
-    invalidUrl:
-      "That doesn't look like a web link — paste the full address, e.g. https://github.com/your-team/context-tree",
   },
-  /** invitee states */
+  /** invitee blocked states — the team isn't ready yet (no tree, or no GitHub) */
   invitee: {
     waitingTitle: "Waiting for your team to set up",
     waitingBody:
       "Your team's admin is still setting up repos and a Context Tree. This page updates on its own as soon as they're done.",
     waitingStatus: "Watching for updates…",
-    // NEW: admin set up tree but never connected the GitHub App. Without
-    // an installation, every git op the agent runs will 403, so we hard-stop
-    // the invitee here rather than letting them sail into the picker.
+    // admin set up a tree but never connected the GitHub App; without an
+    // installation every git op the agent runs would 403, so we hold here.
     noInstallTitle: "Almost there — your team's repo isn't connected yet",
     noInstallBody:
       "Your team's admin set up the Context Tree but hasn't connected a repo on GitHub yet. Your agent needs that connection to do real work.",
     noInstallStatus: "Watching for the connection…",
-    noInstallShareIntro: "Send this link so your admin can connect your team's repo:",
-    confirmTitle: "Your team is ready",
-    confirmBody: "Your team set up its repos and Context Tree. Pick what your agent should work on.",
-    // Bailout on the waiting / no-installation screens — proceed with your
-    // own agent now instead of waiting on the team. Framed positively around
-    // the agent (was "Start chatting anyway"; "anyway" read as defiant/
-    // discouraging, and "chatting" as a chatbot).
+    // Bailout on the blocked screens — meet your agent now (an intro chat)
+    // instead of waiting on the team.
     startAnyway: "Meet your agent",
   },
   /** failure recovery, shared */
