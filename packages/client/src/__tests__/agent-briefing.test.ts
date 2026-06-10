@@ -329,7 +329,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/loading them \*\*is\*\* the first step of the[\s\n]+pre-task hygiene/);
     // Briefing↔skill split: minimum mechanics inline, durable rules
     // in full in the skills. Honest about the partial summarisation
-    // (final-text contract is in the briefing's Communication block;
+    // (chat send mechanics are in the briefing's Communication block;
     // write-side gate is in `## Writing the Tree`) — the briefing
     // can't claim "not duplicated" without contradicting itself.
     expect(briefing).toMatch(/minimum\s+mechanics you need to operate at all/);
@@ -429,18 +429,24 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block with final-text contract, silent-turn, Issue #389", () => {
+  it("emits the runtime intro block with reasoning-trace / chat-send split, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // Final-text contract (load-bearing for the result-sink + agent↔agent
-    // echo-loop prevention path).
-    expect(briefing).toContain("human observers");
-    expect(briefing).toContain("does NOT wake other agents");
+    // Reasoning-trace / chat-send decoupling — output stream is free,
+    // chat send is the only delivery path. The agent must never be
+    // directed to suppress its output for chat-related reasons.
+    expect(briefing).toContain("Your output stream is your reasoning trace");
+    expect(briefing).toContain("To reach a teammate");
     expect(briefing).toContain("first-tree chat send <name>");
+    expect(briefing).toContain("only delivery path you should rely on");
 
-    // Silent-turn protocol — pairs with result-sink's empty-output guard.
-    expect(briefing).toContain("Stay silent when you have nothing to add");
-    expect(briefing).toContain("If you have nothing new for the recipient, output nothing");
+    // Courtesy-send guard (replaces the old "Stay silent / output
+    // nothing" directive) — the brake is on the send side, not the
+    // output side; result-sink's empty-output guard is a runtime
+    // safety belt, not the contract.
+    expect(briefing).toContain("Don't fire a courtesy");
+    expect(briefing).toContain("end the turn without sending");
+    expect(briefing).not.toContain("output nothing");
 
     // Issue #389: pin the anti-double-encode rule.
     expect(briefing).toContain("Content rules (Issue #389)");
@@ -513,13 +519,20 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
-    // New contract: chat send is primary; humans get a plain-reply path and a
-    // structured --request ask path; agents must be woken explicitly.
+    // Chat-send contract: every teammate reach (human plain / human request /
+    // agent) goes through chat send; the courtesy-send guard prevents echo
+    // loops without touching the agent's output stream.
+    expect(briefing).toMatch(/\*\*Reaching a human in this chat\*\*/);
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
-    expect(briefing).toMatch(/Reaching an \*\*agent\*\*/);
+    expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
     expect(briefing).toContain("After an agent handoff, continue only independent work");
     expect(briefing).toContain("do not poll status");
-    expect(briefing).toContain("**Fallback**");
+    expect(briefing).toContain("Don't fire a courtesy");
+    expect(briefing).toContain("reasoning trace");
+    // Fallback block was retired in the chat-send-contract pass — the
+    // contract now is "always chat send for cross-participant", so the
+    // "drop to conservative mode" branch is redundant.
+    expect(briefing).not.toContain("**Fallback**");
 
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("`first-tree` skill");

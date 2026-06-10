@@ -3,7 +3,7 @@ name: first-tree
 version: 0.7.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: "Top-level First Tree skill — entry-point router and canonical home for the rules every in-chat agent must follow. Covers what First Tree is (workspace collaboration arm + Context management arm), the three-principal model (Server / Client / Agent), the canonical Communication Principles (final-text contract, who-do-I-talk-to decision guide, chat-context-missing fallback, channel-binary substitution), what the background daemon does and why you must not stop/restart it from inside yourself, a CLI Namespace Map of which command lives where, and the mandatory pre-task hygiene (binding check, tree HEAD freshness, role classification). Full `chat send` / `chat invite` CLI mechanics live in `references/agent-communication.md`. For Context Tree concepts drill into `first-tree-context`. Operator tasks (`login`, `daemon install`, `agent create`) are run from the web console, not inside a running agent — see `docs/cli-reference.md`."
+description: "Top-level First Tree skill — entry-point router and canonical home for the rules every in-chat agent must follow. Covers what First Tree is (workspace collaboration arm + Context management arm), the three-principal model (Server / Client / Agent), the canonical Communication Principles (who-do-I-talk-to decision guide, courtesy-send guard, channel-binary substitution), what the background daemon does and why you must not stop/restart it from inside yourself, a CLI Namespace Map of which command lives where, and the mandatory pre-task hygiene (binding check, tree HEAD freshness, role classification). Full `chat send` / `chat invite` CLI mechanics live in `references/agent-communication.md`. For Context Tree concepts drill into `first-tree-context`. Operator tasks (`login`, `daemon install`, `agent create`) are run from the web console, not inside a running agent — see `docs/cli-reference.md`."
 ---
 
 # First Tree — Top-Level Skill
@@ -55,46 +55,37 @@ context. The full `chat send` / `chat invite` CLI mechanics live in
 [`references/agent-communication.md`](references/agent-communication.md);
 this section is the *behavior contract*.
 
-### Final-text contract
-
-Your final response text is delivered to the chat for **human observers**
-to read. It does **NOT** wake other agents. To make another agent take
-action, you MUST explicitly call:
-
-    first-tree chat send <name> "..."
-
 ### Decision guide
 
 Based on the participant `type` in the Current Chat Context block of your
 prompt:
 
-`chat send` is the primary tool for reaching teammates; final text is the
-auto-delivered fallback for plain replies.
-
 | Target in this chat | What to do |
 |---|---|
-| **human** — plain reply / narration | Final text is enough (auto-delivered). Do *not* also fire a plain `chat send` to the same human — it double-posts. |
-| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot), never buried in final text. A plain reply only *threads* under it ("chat about this") and leaves it **open** — clarify back-and-forth freely. Resolution is **explicit**: the human submits a clean answer in their web UI, or you call `chat send <human> "<the confirmed answer>" --answer <requestId>` (answered) / `chat send <human> "<reason>" --close <requestId>` (withdrawn). Only those clear the red-dot, and only the target human or the asking agent may resolve. Re-asking opens a **new** independent question — close the stale one explicitly. See `references/agent-communication.md`. |
-| **agent** | They will NOT see your final text. You MUST `chat send <name>` if you need them to act. |
-| no specific target (narrating progress / thinking aloud) | Final text only; no send needed. |
+| **human** — plain reply / status | `chat send <name> "..."` — every reply directed at a human in this chat goes through `chat send`. |
+| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot / open-request count). A plain reply only *threads* under it ("chat about this") and leaves it **open** — clarify back-and-forth freely. Resolution is **explicit**: the human submits a clean answer in their web UI, or you call `chat send <human> "<the confirmed answer>" --answer <requestId>` (answered) / `chat send <human> "<reason>" --close <requestId>` (withdrawn). Only those clear the red-dot, and only the target human or the asking agent may resolve. Re-asking opens a **new** independent question — close the stale one explicitly. See `references/agent-communication.md`. |
+| **agent** — make them act | `chat send <name> "..."` — agents only act on explicit `chat send`. |
 
 After an agent handoff, continue only independent work. If their reply is
 the only remaining input, end the turn and wait to be woken; do not poll
 status or escalate on delayed replies alone.
 
-### Stay silent when you have nothing to add
+Your output stream outside `chat send` is your reasoning trace — think,
+plan, and narrate there freely as you work. It is not a chat reply path,
+and the table above is silent on it on purpose: only the actions in the
+table reach a teammate.
 
-The runtime's silent-turn protocol treats empty output as "skip delivery,
-free the turn". Not every wake-up needs a reply. A courteous "got it"
-echoed between two agents is how loops start — when you have nothing new
-for the recipient, output nothing.
+### Don't fire a courtesy chat send
 
-### Fallback — Current Chat Context missing
+Your output stream is your reasoning trace — use it freely. What this
+section prescribes is the *send* side: not every wake-up needs a `chat
+send` back. A courteous "got it" echoed between two agents is how loops
+start — when there is nothing new for any teammate, finish reasoning and
+end the turn without firing `chat send`.
 
-If the Current Chat Context block is missing from your prompt (injection
-may have failed), drop to conservative mode: route all cross-agent
-collaboration through explicit `chat send`; do not rely on final text to
-wake anyone.
+(The runtime's empty-output guard at `result-sink.ts` is a safety belt
+that skips delivery on a literally empty turn; it is not a directive to
+produce empty output.)
 
 ### Channel-binary substitution
 

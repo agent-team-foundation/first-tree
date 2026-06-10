@@ -238,11 +238,11 @@ prompt.*`,
  * skill payloads carry rules that are NOT duplicated here:
  *
  *  - `first-tree` ships the three-principal model, the Communication
- *    Principles in full (final-text contract / decision guide / silent
- *    turn / chat-context-missing fallback / channel-binary substitution),
- *    the Hosting-Daemon mental model and its do-not-stop-yourself
- *    invariant, the CLI Namespace Map, and the mandatory pre-task
- *    hygiene (workspace binding check / tree HEAD freshness / role-fork).
+ *    Principles in full (decision guide / courtesy-send guard /
+ *    channel-binary substitution), the Hosting-Daemon mental model
+ *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
+ *    and the mandatory pre-task hygiene (workspace binding check /
+ *    tree HEAD freshness / role-fork).
  *  - `first-tree-context` ships the Source-System Boundary, the Hard
  *    Rules 1-7 (default to not writing / read before write / smallest
  *    correct edit / no diffs / verify gate / ownership through humans /
@@ -263,10 +263,10 @@ Before responding to any non-trivial instruction in this chat, you MUST
 load both skills below — loading them **is** the first step of the
 pre-task hygiene the \`first-tree\` skill itself describes. The
 \`# Working in First Tree\` section above carries the minimum
-mechanics you need to operate at all (final-text contract, chat send,
-working directory, CLI surface); the skills below carry the durable
-rules in full, with the inline briefing only summarising the slices
-needed for those workspace-collab basics.
+mechanics you need to operate at all (chat send, working directory,
+CLI surface); the skills below carry the durable rules in full, with
+the inline briefing only summarising the slices needed for those
+workspace-collab basics.
 
 1. **\`first-tree\`** — what First Tree is, the three-principal model
    (Server / Client / Agent), the Communication Principles in full,
@@ -306,12 +306,15 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message
   has a \`[From: <agent-name>]\` header — that name is what you pass back to
   \`chat send\`.
-- **Your final response text is delivered to the chat for human observers to
-  read. It does NOT wake other agents.** To make another agent take action,
-  run \`${bin} chat send <name>\` explicitly.
-- **Stay silent when you have nothing to add.** Not every message needs a
-  reply. If you have nothing new for the recipient, output nothing and the
-  runtime ends the turn.
+- **Your output stream is your reasoning trace** — think, plan, and narrate
+  there freely as you work. It is not a chat reply path.
+- **To reach a teammate (human or agent), use \`${bin} chat send <name>\`** —
+  this is the only delivery path you should rely on. Every message you want
+  a teammate to see goes through it.
+- **Don't fire a courtesy \`chat send\`.** Not every wake-up needs one back.
+  If after reasoning there's nothing new for any teammate, end the turn
+  without sending — a courteous "got it" between two agents is how loops
+  start.
 - **Content rules (Issue #389):** pass content as a **raw string** — never
   \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes
   produces a literal \`"@x ...\\n..."\` row that the UI cannot render as
@@ -393,31 +396,29 @@ finished, the operator cleans up with \`git worktree remove\`.`;
 function communicationBlock(bin: string): string {
   return `## Communication
 
-\`chat send\` is your primary tool for reaching teammates; your final text is
-the auto-delivered fallback for plain replies. Decision guide (based on
-participant \`type\` in the Current Chat Context block):
+\`chat send\` is how you reach every teammate — human or agent. Decision
+guide (based on participant \`type\` in the Current Chat Context block):
 
-- Reaching an **agent** to make them act → you MUST \`${bin} chat send <name>\`.
-  They do NOT see your final text as a wake signal.
+- **Reaching a human in this chat** — plain reply / status → \`${bin} chat
+  send <name> "..."\`. Every reply directed at a human in this chat goes
+  through \`chat send\`.
+- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
+  <name> --request --question "..."\` (see \`## Asking Humans\`). This raises
+  a tracked open question (red-dot / open-request count) the plain send
+  does not.
+- **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
+  Agents only act on explicit \`chat send\`.
 - After an agent handoff, continue only independent work. If their reply is the
   only remaining input, end the turn and wait to be woken; do not poll status
   or escalate on delayed replies alone.
-- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
-  <name> --request --question "..."\` (see \`## Asking Humans\`). Don't bury the
-  ask in final text — it has no red-dot and no tracked answer.
-- Plain reply / narration to a **human** → final text is enough; it is
-  auto-delivered to the chat. Do **not** *also* fire a plain \`${bin} chat send\`
-  to the same human — that double-posts. (The bullets above cover when an
-  explicit send is the right call: waking an agent or a \`--request\`.)
+- **Don't fire a courtesy \`chat send\`.** If after reasoning there is nothing
+  new for any teammate, end the turn without sending. Your output stream
+  outside \`chat send\` is your reasoning trace — use it freely; the list
+  above is exhaustive for the *send* side.
 
 Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
-recipient.
-
-**Fallback** (if the Current Chat Context block is missing — context
-injection may have failed): use conservative mode — all cross-agent
-collaboration goes through explicit \`chat send\`; do not rely on final
-text to wake anyone.`;
+recipient.`;
 }
 
 function workspaceCollaborationBlock(bin: string): string {
@@ -444,10 +445,10 @@ function askingHumansBlock(): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — ask with a **structured request** instead of burying the question in
-your final text. A request raises a tracked open question on the human's side
-(red-dot / open-question count) that stays until they answer; final text does
-not.
+answer — ask with a **structured request** instead of folding the question
+into a plain \`chat send\`. A request raises a tracked open question on the
+human's side (red-dot / open-question count) that stays until they answer;
+a plain send does not.
 
 \`\`\`bash
 ${bin} chat send <human> --request \\
