@@ -443,7 +443,7 @@ requirements, and constraints that make acting on it correct.
 For the operational reader workflow, load \`first-tree-read\` and use
 the hierarchy command it describes to select focused files. At minimum,
 start at the tree's **root \`NODE.md\`** — the team's domain directory.
-**If the root also contains an \`AGENT.md\`, read it too** — it carries
+**If the root also contains an \`AGENTS.md\`, read it too** — it carries
 mandatory rules the org expects every agent to follow before acting.
 From there, follow the index / \`soft_links\` down to the nodes your
 task touches.
