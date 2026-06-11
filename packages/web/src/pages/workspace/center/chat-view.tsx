@@ -2410,11 +2410,11 @@ export function ChatView({
           <div
             className="shrink-0 flex items-center"
             style={{
-              // Min-height, not a fixed height: the title cluster carries a
-              // second line (the chat description) that wraps in full rather
-              // than truncating, so the header grows to fit it. Vertical
-              // padding keeps a short title comfortably near the min-height
-              // floor and gives a long description room to breathe as it grows.
+              // Min-height, not a fixed height: the topic + description flow
+              // inline in one cluster and wrap onto further lines as the
+              // description grows, so the header grows with them. Vertical
+              // padding keeps a single-line header (topic only, or topic +
+              // short description) sitting at the min-height floor.
               minHeight: 52,
               padding: "var(--sp-1_5) var(--sp-6)",
               gap: 10,
@@ -2473,137 +2473,157 @@ export function ChatView({
               also dropped — in chat-first, runtime is a per-agent
               concept that belongs on each chip avatar (D-4), not on
               the chat header. */}
-              <div className="flex flex-col min-w-0" style={{ gap: 1, flex: 1 }}>
-                {/* Line 1 — title (click-to-rename) + GitHub link. */}
-                <div className="flex items-center min-w-0" style={{ gap: 8 }}>
-                  {readOnly ? (
-                    <>
-                      <span className="truncate text-subtitle font-semibold min-w-0" style={{ color: "var(--fg)" }}>
-                        {chatDetail?.title ?? titleFallback ?? "…"}
-                      </span>
-                      <span
-                        className="mono uppercase text-eyebrow shrink-0"
-                        style={{
-                          padding: "var(--hairline) var(--sp-1_25)",
-                          borderRadius: 2,
-                          color: "var(--fg-3)",
-                          background: "var(--bg-sunken)",
-                        }}
-                      >
-                        watching
-                      </span>
-                    </>
-                  ) : renaming ? (
-                    <>
-                      <input
-                        ref={renameInputRef}
-                        value={renameDraft}
-                        onChange={(e) => setRenameDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.nativeEvent.isComposing) return;
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            commitRename();
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            setRenaming(false);
-                          }
-                        }}
-                        disabled={renameMut.isPending}
-                        maxLength={500}
-                        // Placeholder echoes the rendered title (auto-generated
-                        // from the first message when no topic is set). This
-                        // signals "leave blank to keep the current name" without
-                        // pre-filling the input with the auto-title — a pre-fill
-                        // would make a no-op commit silently promote the auto-
-                        // title to a sticky `topic`, locking it against future
-                        // first-message edits.
-                        placeholder={chatDetail?.title ?? "Chat name"}
-                        className="outline-none text-subtitle"
-                        // Auto-grow with content (modern CSS `field-sizing: content`)
-                        // so the ✓/× buttons sit immediately after the last typed
-                        // character instead of floating at the panel's right edge.
-                        // `minWidth` keeps the input usable from an empty draft;
-                        // `maxWidth` prevents it from pushing chips off-screen on
-                        // very long input. Browsers without `field-sizing` support
-                        // (older Safari/Firefox) fall back to a sensible default
-                        // sized by the input element's intrinsic width.
-                        style={{
-                          fieldSizing: "content",
-                          // Narrower floor on phones — the desktop minimum plus
-                          // the ✓/× buttons overflow a phone-width header row.
-                          minWidth: narrow ? 120 : 200,
-                          maxWidth: 480,
-                          color: "var(--fg)",
-                          background: "var(--bg-sunken)",
-                          border: "var(--hairline) solid var(--border)",
-                          borderRadius: "var(--radius-input)",
-                          padding: "var(--sp-0_5) var(--sp-1_5)",
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={commitRename}
-                        disabled={renameMut.isPending}
-                        title="Save"
-                        className="inline-flex items-center"
-                        style={{ color: "var(--primary)", padding: 2 }}
-                      >
-                        <Check className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRenaming(false)}
-                        disabled={renameMut.isPending}
-                        title="Cancel"
-                        className="inline-flex items-center"
-                        style={{ color: "var(--fg-3)", padding: 2 }}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Pre-fill with `topic` only (the existing manual
-                        // override). When `topic` is null, leave the input
-                        // empty so the auto-title shown as placeholder
-                        // signals "type to override, leave blank to keep
-                        // tracking the first message". A no-op commit thus
-                        // sends `null` to the server (clearing topic = stay
-                        // in auto-title mode), not the auto-title string —
-                        // which would have locked the title against future
-                        // first-message edits.
-                        setRenameDraft(chatDetail?.topic ?? "");
-                        setRenaming(true);
-                      }}
-                      title="Click to rename"
-                      className="truncate text-subtitle font-semibold text-left min-w-0"
+              {/* Title cluster — topic + description flow together on the
+                  same line and wrap by length: the topic leads in bold, the
+                  chat description follows inline right after it (reads as
+                  "**Topic** description …") and wraps onto further lines as it
+                  grows or the viewport narrows. NOT stacked on separate lines,
+                  and NOT a topic-left / description-right split. */}
+              {/* On portrait / narrow viewports (`narrow`, <768) the inline
+                  topic + description can wrap into many lines — a long
+                  description reached ~17 lines (about a third of the screen) in
+                  QA. Cap it: clamp the whole cluster to 3 lines so the mobile
+                  header stays a bounded
+                  chrome bar; the full description remains reachable via the
+                  tooltip. Desktop has room, so it flows unclamped. The clamp is
+                  lifted while renaming so the edit row (input + ✓/✗) is never
+                  clipped. */}
+              <div className={narrow && !renaming ? "min-w-0 line-clamp-3" : "min-w-0"} style={{ flex: 1 }}>
+                {readOnly ? (
+                  <>
+                    <span className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
+                      {chatDetail?.title ?? titleFallback ?? "…"}
+                    </span>
+                    <span
+                      className="mono uppercase text-eyebrow"
                       style={{
-                        color: "var(--fg)",
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        cursor: "pointer",
+                        marginLeft: 8,
+                        padding: "var(--hairline) var(--sp-1_25)",
+                        borderRadius: 2,
+                        color: "var(--fg-3)",
+                        background: "var(--bg-sunken)",
+                        whiteSpace: "nowrap",
                       }}
                     >
-                      {chatDetail?.title ?? "…"}
+                      watching
+                    </span>
+                  </>
+                ) : renaming ? (
+                  <span className="inline-flex items-center" style={{ gap: 8 }}>
+                    <input
+                      ref={renameInputRef}
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.nativeEvent.isComposing) return;
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitRename();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setRenaming(false);
+                        }
+                      }}
+                      disabled={renameMut.isPending}
+                      maxLength={500}
+                      // Placeholder echoes the rendered title (auto-generated
+                      // from the first message when no topic is set). This
+                      // signals "leave blank to keep the current name" without
+                      // pre-filling the input with the auto-title — a pre-fill
+                      // would make a no-op commit silently promote the auto-
+                      // title to a sticky `topic`, locking it against future
+                      // first-message edits.
+                      placeholder={chatDetail?.title ?? "Chat name"}
+                      className="outline-none text-subtitle"
+                      // Auto-grow with content (modern CSS `field-sizing: content`)
+                      // so the ✓/× buttons sit immediately after the last typed
+                      // character instead of floating at the panel's right edge.
+                      // `minWidth` keeps the input usable from an empty draft;
+                      // `maxWidth` prevents it from pushing chips off-screen on
+                      // very long input. Browsers without `field-sizing` support
+                      // (older Safari/Firefox) fall back to a sensible default
+                      // sized by the input element's intrinsic width.
+                      style={{
+                        fieldSizing: "content",
+                        // Narrower floor on phones — the desktop minimum plus
+                        // the ✓/× buttons overflow a phone-width header row.
+                        minWidth: narrow ? 120 : 200,
+                        maxWidth: 480,
+                        color: "var(--fg)",
+                        background: "var(--bg-sunken)",
+                        border: "var(--hairline) solid var(--border)",
+                        borderRadius: "var(--radius-input)",
+                        padding: "var(--sp-0_5) var(--sp-1_5)",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={commitRename}
+                      disabled={renameMut.isPending}
+                      title="Save"
+                      className="inline-flex items-center"
+                      style={{ color: "var(--primary)", padding: 2 }}
+                    >
+                      <Check className="h-3.5 w-3.5" />
                     </button>
-                  )}
-                  <EntityLink metadata={chatDetail?.metadata} />
-                </div>
-                {/* Line 2 — chat description (running work summary). Rendered
-                    in full (no truncation) so the header is the focus surface
-                    that shows the whole current-state paragraph; the bar grows
-                    to fit. Hidden while renaming the title so the rename row
-                    stays clean, and absent entirely when no description is set
-                    (no skeleton here — the header is not a fixed-height grid the
-                    way the conversation rows are). Read-only on the web: the
-                    description is written by the owning agent via
-                    `chat set-topic --description`, not edited from the console. */}
+                    <button
+                      type="button"
+                      onClick={() => setRenaming(false)}
+                      disabled={renameMut.isPending}
+                      title="Cancel"
+                      className="inline-flex items-center"
+                      style={{ color: "var(--fg-3)", padding: 2 }}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Pre-fill with `topic` only (the existing manual
+                      // override). When `topic` is null, leave the input
+                      // empty so the auto-title shown as placeholder
+                      // signals "type to override, leave blank to keep
+                      // tracking the first message". A no-op commit thus
+                      // sends `null` to the server (clearing topic = stay
+                      // in auto-title mode), not the auto-title string —
+                      // which would have locked the title against future
+                      // first-message edits.
+                      setRenameDraft(chatDetail?.topic ?? "");
+                      setRenaming(true);
+                    }}
+                    title="Click to rename"
+                    className="text-subtitle font-semibold text-left"
+                    style={{
+                      display: "inline",
+                      color: "var(--fg)",
+                      background: "transparent",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {chatDetail?.title ?? "…"}
+                  </button>
+                )}
+                <EntityLink metadata={chatDetail?.metadata} />
+                {/* Chat description (running work summary) — flows inline
+                    right after the topic on the same line and wraps onto
+                    further lines by length. Muted + a notch smaller than the
+                    topic so the topic still leads the cluster. Hidden while
+                    renaming the topic so the rename row stays clean, and
+                    absent entirely when no description is set. Read-only on
+                    the web: written by the owning agent via
+                    `chat set-topic --description`, not edited from the
+                    console; the full text also stays reachable via the native
+                    tooltip. */}
                 {!renaming && chatDetail?.description ? (
-                  <span className="text-label" style={{ color: "var(--fg-3)", maxWidth: 560 }}>
+                  <span
+                    className="text-label"
+                    style={{ color: "var(--fg-3)", marginLeft: 8 }}
+                    title={chatDetail.description}
+                  >
                     {chatDetail.description}
                   </span>
                 ) : null}
