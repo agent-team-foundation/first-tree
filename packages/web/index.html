@@ -16,6 +16,55 @@
         if (t === "dark" || (!t && m)) document.documentElement.classList.add("dark");
       })();
     </script>
+    <!--
+      ── Google Analytics 4 with Consent Mode v2 (region-scoped) ──
+      Same property as first-tree.ai (G-BHG918MZ02). The cookie lives on
+      .first-tree.ai, so sessions continue from the marketing site into the
+      app and README/site UTM campaigns (top-cta-app, awesome-loops-app,
+      nav-app, getstarted-app) attribute the login page. Outside the
+      EEA/UK/CH analytics_storage defaults to granted; inside those regions
+      it stays denied — the app has no consent banner, EEA users simply
+      stay cookieless. A stored choice on this origin (localStorage
+      ft_consent) is honored before gtag.js loads. Ad signals are denied
+      everywhere. Privacy policy at first-tree.ai/privacy covers subdomains.
+      Mirrors the snippet in first-tree-website (index.html / BaseLayout).
+    -->
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        // biome-ignore lint/complexity/noArguments: gtag.js processes its queue by Arguments object; pushing a real array (rest params) silently drops the commands
+        dataLayer.push(arguments);
+      }
+      gtag("consent", "default", {
+        ad_storage: "denied",
+        ad_user_data: "denied",
+        ad_personalization: "denied",
+        analytics_storage: "granted",
+      });
+      gtag("consent", "default", {
+        ad_storage: "denied",
+        ad_user_data: "denied",
+        ad_personalization: "denied",
+        analytics_storage: "denied",
+        wait_for_update: 500,
+        region: ["AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR",
+                 "HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK",
+                 "SI","ES","SE","IS","LI","NO","GB","CH"],
+      });
+      try {
+        const prior = localStorage.getItem("ft_consent");
+        if (prior === "granted") {
+          gtag("consent", "update", { analytics_storage: "granted" });
+        } else if (prior === "denied") {
+          gtag("consent", "update", { analytics_storage: "denied" });
+        }
+      } catch {
+        /* storage unavailable (private mode) — region defaults apply */
+      }
+      gtag("js", new Date());
+      gtag("config", "G-BHG918MZ02");
+    </script>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-BHG918MZ02"></script>
   </head>
   <body>
     <div id="root"></div>
