@@ -12,7 +12,6 @@ import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatCreateOperations } from "../db/schema/chat-create-operations.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
@@ -20,7 +19,7 @@ import { BadRequestError, ForbiddenError, NotFoundError, StructuredAppError } fr
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
-import { loadSendMessagePostCommitPlan, runSendMessagePostCommitEffects, sendMessageInTransaction } from "./message.js";
+import { runSendMessagePostCommitEffects, sendMessageInTransaction } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
@@ -223,6 +222,16 @@ type CreateChatWithInitialMessageServiceResult = CreateChatWithInitialMessageRes
   recipients: string[];
 };
 
+const CHAT_CREATE_PROCESS_DEDUPE_TTL_MS = 15 * 60 * 1000;
+
+type ChatCreateProcessDedupeEntry = {
+  requestHash: string;
+  promise: Promise<CreateChatWithInitialMessageServiceResult>;
+  expiresAt?: number;
+};
+
+const chatCreateProcessDedupe = new Map<string, ChatCreateProcessDedupeEntry>();
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
@@ -246,6 +255,49 @@ function createChatRequestHash(input: CreateChatWithInitialMessage): string {
     metadata: input.metadata,
   };
   return createHash("sha256").update(stableJson(payload)).digest("hex");
+}
+
+function chatCreateProcessDedupeKey(senderAgentId: string, operationId: string): string {
+  return `${senderAgentId}\0${operationId}`;
+}
+
+function pruneExpiredChatCreateProcessDedupe(now = Date.now()): void {
+  for (const [key, entry] of chatCreateProcessDedupe) {
+    if (entry.expiresAt !== undefined && entry.expiresAt <= now) {
+      chatCreateProcessDedupe.delete(key);
+    }
+  }
+}
+
+function assertChatCreateProcessDedupeRequestMatches(
+  operationId: string,
+  existingRequestHash: string,
+  requestHash: string,
+): void {
+  if (existingRequestHash === requestHash) return;
+  throw chatCreateStructuredError(
+    409,
+    "CHAT_CREATE_IDEMPOTENCY_KEY_REUSED",
+    "This operationId was already used with a different chat create request in this server process.",
+    {
+      operationId,
+      hint: "Use the original request body with this operationId, or retry the new request with a fresh operationId.",
+    },
+  );
+}
+
+function replayChatCreateProcessDedupeResult(
+  result: CreateChatWithInitialMessageServiceResult,
+): CreateChatWithInitialMessageServiceResult {
+  return {
+    ...result,
+    replayed: true,
+    recipients: [],
+  };
+}
+
+export function clearChatCreateProcessDedupeForTests(): void {
+  chatCreateProcessDedupe.clear();
 }
 
 function selectorParts(input: string): { kind: "id" | "name" | "raw"; value: string } {
@@ -352,113 +404,12 @@ function validateResolvedCreateTargets(senderId: string, targets: ReadonlyArray<
   }
 }
 
-async function reserveOrReplayChatCreateOperation(
-  tx: DbLike,
-  senderAgentId: string,
-  operationId: string,
-  requestHash: string,
-): Promise<{ kind: "reserved" } | { kind: "replay"; chatId: string; messageId: string }> {
-  const [inserted] = await tx
-    .insert(chatCreateOperations)
-    .values({ senderAgentId, operationId, requestHash })
-    .onConflictDoNothing({
-      target: [chatCreateOperations.senderAgentId, chatCreateOperations.operationId],
-    })
-    .returning({
-      senderAgentId: chatCreateOperations.senderAgentId,
-      operationId: chatCreateOperations.operationId,
-    });
-  if (inserted) return { kind: "reserved" };
-
-  const [existing] = await tx
-    .select({
-      requestHash: chatCreateOperations.requestHash,
-      chatId: chatCreateOperations.chatId,
-      messageId: chatCreateOperations.messageId,
-    })
-    .from(chatCreateOperations)
-    .where(
-      and(eq(chatCreateOperations.senderAgentId, senderAgentId), eq(chatCreateOperations.operationId, operationId)),
-    )
-    .for("update")
-    .limit(1);
-  if (!existing) {
-    throw new Error("Unexpected: operation conflict without readable existing row");
-  }
-  if (existing.requestHash !== requestHash) {
-    throw chatCreateStructuredError(
-      409,
-      "CHAT_CREATE_IDEMPOTENCY_KEY_REUSED",
-      "This operationId was already used with a different chat create request.",
-      {
-        operationId,
-        hint: "Use the original request body with this operationId, or retry the new request with a fresh operationId.",
-      },
-    );
-  }
-  if (!existing.chatId || !existing.messageId) {
-    throw chatCreateStructuredError(
-      409,
-      "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
-      "This chat create operation is not finalized yet.",
-      {
-        operationId,
-        hint: "Retry with the same --operation-id; if the first request committed, the server will return the same chat/message.",
-      },
-    );
-  }
-  return { kind: "replay", chatId: existing.chatId, messageId: existing.messageId };
-}
-
-async function completeChatCreateOperation(
-  tx: DbLike,
-  senderAgentId: string,
-  operationId: string,
-  chatId: string,
-  messageId: string,
-): Promise<void> {
-  await tx
-    .update(chatCreateOperations)
-    .set({ chatId, messageId })
-    .where(
-      and(eq(chatCreateOperations.senderAgentId, senderAgentId), eq(chatCreateOperations.operationId, operationId)),
-    );
-}
-
-async function listChatSpeakerIds(tx: DbLike, chatId: string): Promise<string[]> {
-  const rows = await tx
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-  return rows.map((row) => row.agentId);
-}
-
-export async function createChatWithInitialMessage(
+async function createChatWithInitialMessageOnce(
   db: Database,
   senderAgentId: string,
   input: CreateChatWithInitialMessage,
 ): Promise<CreateChatWithInitialMessageServiceResult> {
-  const requestHash = createChatRequestHash(input);
   const txResult = await db.transaction(async (tx) => {
-    const operation = await reserveOrReplayChatCreateOperation(tx, senderAgentId, input.operationId, requestHash);
-    if (operation.kind === "replay") {
-      const postCommitPlan = await loadSendMessagePostCommitPlan(tx, operation.chatId, operation.messageId);
-      const participantAgentIds = await listChatSpeakerIds(tx, operation.chatId);
-      return {
-        replayed: true,
-        postCommitPlan,
-        result: {
-          chat: { id: operation.chatId },
-          message: { id: operation.messageId },
-          operationId: input.operationId,
-          replayed: true,
-          senderAgentId,
-          recipientAgentIds: postCommitPlan.recipientAgentIds,
-          participantAgentIds,
-        },
-      };
-    }
-
     if (input.to.length === 0) {
       throw chatCreateStructuredError(
         400,
@@ -520,10 +471,8 @@ export async function createChatWithInitialMessage(
     const postCommitPlan = await sendMessageInTransaction(tx, chat.id, senderAgentId, messageData, {
       normalizeMentionsInContent: true,
     });
-    await completeChatCreateOperation(tx, senderAgentId, input.operationId, chat.id, postCommitPlan.message.id);
 
     return {
-      replayed: false,
       postCommitPlan,
       result: {
         chat: { id: chat.id },
@@ -537,13 +486,45 @@ export async function createChatWithInitialMessage(
     };
   });
 
-  if (!txResult.result.replayed) {
-    await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
-  }
+  await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
   return {
     ...txResult.result,
-    recipients: txResult.result.replayed ? [] : txResult.postCommitPlan.recipients,
+    recipients: txResult.postCommitPlan.recipients,
   };
+}
+
+export async function createChatWithInitialMessage(
+  db: Database,
+  senderAgentId: string,
+  input: CreateChatWithInitialMessage,
+): Promise<CreateChatWithInitialMessageServiceResult> {
+  pruneExpiredChatCreateProcessDedupe();
+  const requestHash = createChatRequestHash(input);
+  const key = chatCreateProcessDedupeKey(senderAgentId, input.operationId);
+  const existing = chatCreateProcessDedupe.get(key);
+  if (existing) {
+    assertChatCreateProcessDedupeRequestMatches(input.operationId, existing.requestHash, requestHash);
+    return replayChatCreateProcessDedupeResult(await existing.promise);
+  }
+
+  const entry: ChatCreateProcessDedupeEntry = {
+    requestHash,
+    promise: Promise.resolve().then(() => createChatWithInitialMessageOnce(db, senderAgentId, input)),
+  };
+  chatCreateProcessDedupe.set(key, entry);
+  entry.promise = entry.promise.then(
+    (result) => {
+      entry.expiresAt = Date.now() + CHAT_CREATE_PROCESS_DEDUPE_TTL_MS;
+      return result;
+    },
+    (error: unknown) => {
+      if (chatCreateProcessDedupe.get(key) === entry) {
+        chatCreateProcessDedupe.delete(key);
+      }
+      throw error;
+    },
+  );
+  return entry.promise;
 }
 
 export async function getChat(db: Database, chatId: string) {

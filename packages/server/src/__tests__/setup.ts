@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
+import { clearChatCreateProcessDedupeForTests } from "../services/chat.js";
 
 /** Fixed UUID for the default organization used across all tests. */
 // Fixed test fixture UUID — not a real org, recreated before each test
@@ -65,7 +66,6 @@ const TRUNCATE_TABLES = [
   "session_events",
   "notifications",
   "messages",
-  "chat_create_operations",
   "chat_user_state",
   "chat_membership",
   "chats",
@@ -87,6 +87,7 @@ const TRUNCATE_TABLES = [
 ].join(", ");
 
 beforeEach(async () => {
+  clearChatCreateProcessDedupeForTests();
   const db = getDb();
   // Silence cascade NOTICE chatter that otherwise floods test stdout.
   await db.execute(sql`SET client_min_messages TO WARNING`);

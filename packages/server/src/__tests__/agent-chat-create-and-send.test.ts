@@ -174,6 +174,26 @@ describe("Agent chat create-and-send API", () => {
     expect(await tableCount(app, messages)).toBe(1);
   });
 
+  it("does not retain the operation id after a failed create attempt", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: "retry-fail-sender" });
+    const target = await createTestAgent(app, { name: "retry-fail-target" });
+    const payload = {
+      operationId: "op-retry-after-failure",
+      to: [target.agent.name],
+      message: { format: "text", content: "" },
+    };
+
+    const failed = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
+    expect(failed.statusCode).toBe(400);
+
+    const retried = await sender.request("POST", "/api/v1/agent/chats/create-and-send", {
+      ...payload,
+      message: { format: "text", content: "fixed" },
+    });
+    expect(retried.statusCode).toBe(201);
+  });
+
   it("resolves raw, id:, and name: selectors and rejects ambiguous raw selectors", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: "selector-sender" });

@@ -125,8 +125,10 @@ Rules:
   still writes to the chat that woke your current turn.
 - If the CLI reports structured `details.hint`, adjust the named option/input
   and retry. If commit status is unknown, retry with the same `--operation-id`.
-- Replaying an operation id returns the original chat/message and does not
-  re-notify or reactivate the original recipients.
+- Replaying an operation id is best-effort and process-local: retry promptly
+  with the same `--operation-id`, but expect possible duplicates after a server
+  restart or a retry routed to another instance. Replay does not re-notify or
+  reactivate the original recipients.
 - Selectors may be raw names/UUIDs or explicit `name:<name>` / `id:<uuid>`;
   raw selectors are rejected when ambiguous.
 

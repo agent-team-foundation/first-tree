@@ -414,13 +414,6 @@
       "when": 1780994379048,
       "tag": "0058_happy_killer_shrike",
       "breakpoints": true
-    },
-    {
-      "idx": 59,
-      "version": "7",
-      "when": 1781143333862,
-      "tag": "0059_little_loa",
-      "breakpoints": true
     }
   ]
 }

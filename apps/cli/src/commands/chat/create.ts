@@ -68,7 +68,7 @@ function failUnknownCommitStatus(operationId: string, cause: unknown): never {
       operationId,
       cause: message,
       ...(serverCode ? { serverCode } : {}),
-      hint: `Retry with --operation-id ${operationId}; if the first request committed, the server will return the same chat/message instead of creating a duplicate.`,
+      hint: `Retry promptly with --operation-id ${operationId}; matching retries are deduplicated only while the original operation is still tracked by this server process.`,
     },
     ...(traceId ? { traceId } : {}),
   });
