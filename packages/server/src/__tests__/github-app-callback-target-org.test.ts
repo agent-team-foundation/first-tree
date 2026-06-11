@@ -362,6 +362,12 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       expect(res.headers.location).toContain("/auth/github/complete#");
       expect(res.headers.location).toContain("error=install-not-verified");
       expect(res.headers.location).not.toContain("access=");
+      // Review finding round 2: the error page renders `next` as its "Back
+      // to First Tree" link — it must NOT point at the auto-close
+      // "Connected" sentinel, or the error page offers a false-success
+      // escape hatch. The onboarding popup path normalizes to /onboarding.
+      const fragment = new URLSearchParams(res.headers.location?.split("#")[1] ?? "");
+      expect(fragment.get("next")).toBe("/onboarding");
     } finally {
       restore();
     }
@@ -416,6 +422,9 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       expect(res.headers.location).toContain("/auth/github/complete#");
       expect(res.headers.location).toContain("error=install-bind-failed");
       expect(res.headers.location).not.toContain("access=");
+      // Settings-flow `next` is a real recovery surface — preserved as-is.
+      const fragment = new URLSearchParams(res.headers.location?.split("#")[1] ?? "");
+      expect(fragment.get("next")).toBe("/settings/github");
     } finally {
       restore();
     }

@@ -349,9 +349,16 @@ type CallbackErrorCode =
  * back on the SPA — a raw JSON body strands them on the API URL with no
  * way forward. The error code rides in the fragment like the success
  * tokens do (never enters Referer headers or server logs).
+ *
+ * `next` becomes the error page's visible "Back to First Tree" link, so it
+ * must be a real recovery surface: the onboarding popup's auto-close
+ * "Connected" sentinel (`/onboarding/connected`) would present a
+ * false-success escape hatch right on the failure page — normalize it to
+ * the onboarding flow itself.
  */
 function redirectCallbackError(reply: FastifyReply, code: CallbackErrorCode, next?: string) {
-  const fragment = new URLSearchParams({ error: code, ...(next ? { next } : {}) }).toString();
+  const recoveryNext = next === "/onboarding/connected" ? "/onboarding" : next;
+  const fragment = new URLSearchParams({ error: code, ...(recoveryNext ? { next: recoveryNext } : {}) }).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }
 
