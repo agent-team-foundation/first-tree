@@ -608,13 +608,16 @@ export function ConversationList({
                           </span>
                           {/* Line 2 — description (running work summary). Single
                               line, truncated when long: the list is the density
-                              surface, so it stays equal-height and tidy (the chat
-                              header is the focus surface that shows it in full).
-                              No description → skeleton bar so the card keeps its
-                              height instead of reading as a visual gap. */}
-                          {row.description ? (
+                              surface, so it stays equal-height and tidy. Like the
+                              title (topic → first-message → participants), the
+                              line has a default: when no description is set it
+                              falls back to the last-message preview, so the
+                              second line is informative by default instead of an
+                              empty placeholder. Only when neither exists does the
+                              skeleton bar keep the card's height. */}
+                          {(row.description ?? row.lastMessagePreview) ? (
                             <span className="truncate text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-                              {row.description}
+                              {row.description ?? row.lastMessagePreview}
                             </span>
                           ) : (
                             <span

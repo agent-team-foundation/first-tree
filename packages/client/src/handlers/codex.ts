@@ -72,6 +72,19 @@ const RETRY_BASE_MS = 500;
 const RETRY_MULTIPLIER = 3;
 
 /**
+ * Chat-visible notice posted when a turn is detected as a usage-limit empty
+ * turn (issue #971 — codex account usage limit exhausted: the SDK reports
+ * `turn.completed` with no reply and zero token consumption, i.e. the model
+ * was never invoked). Delivered via the agent-final-text path, so it is
+ * authored as the agent itself — hence first person. We deliberately do NOT
+ * include an ETA: codex-sdk@0.134 does not expose `rate_limits.resets_at`,
+ * so there is no reliable recovery time to quote.
+ */
+const USAGE_LIMIT_NOTICE =
+  "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
+  "Please resend it once the limit resets.";
+
+/**
  * Concurrent-write detection window for the per-chat AGENTS.md briefing.
  *
  * Codex CLI reads AGENTS.md once at thread startup; the handler rewrites it
@@ -905,26 +918,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // chat message.
     const accumulated = finalResponse;
 
-    let forwardFailed = false;
-    if (!turnFailed && accumulated.trim()) {
-      try {
-        await sessionCtx.forwardResult(accumulated);
-      } catch (err) {
-        forwardFailed = true;
-        const msg = err instanceof Error ? err.message : String(err);
-        sessionCtx.emitEvent({
-          kind: "error",
-          payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
-        });
-      }
-    }
-
-    const succeeded = !turnFailed && !forwardFailed;
     // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
-    // the per-turn delta the `token_usage` schema documents before emitting.
-    // `usageBox.value` is null when the turn never reached `turn.completed`
-    // (abort / unrecoverable failure) — no totals to diff, so leave the
-    // baseline untouched and skip both the emit and the log below.
+    // the per-turn delta the `token_usage` schema documents. Computed here
+    // (before the forward decision) because the usage-limit empty-turn check
+    // below reads the delta. `usageBox.value` is null when the turn never
+    // reached `turn.completed` (abort / unrecoverable failure) — no totals to
+    // diff, so leave the baseline untouched and skip both the emit and the log
+    // below.
     const cumulativeUsage = usageBox.value;
     const perTurnUsage = cumulativeUsage
       ? computePerTurnUsageDelta(cumulativeUsage, prevCumulativeUsage, threadIsFresh)
@@ -937,6 +937,78 @@ export const createCodexHandler: HandlerFactory = (config) => {
       prevCumulativeUsage = cumulativeUsage;
       threadIsFresh = false;
     }
+
+    // Issue #971 — usage-limit empty-turn detection. When the codex account
+    // usage limit is exhausted, the SDK emits `turn.completed` almost instantly
+    // with NO agent_message item and ZERO token consumption: the model was
+    // never invoked. On the surface that is identical to the legitimate
+    // "silent turn" protocol (the agent chose to stay silent — see
+    // result-sink.ts forwardResult), with ONE discriminator: a chosen silence
+    // still ran the model and so burned input tokens, whereas a usage-limit
+    // turn burns zero. So `empty finalResponse + turn.completed fired + zero
+    // per-turn delta` means the model never ran (quota / credits exhausted),
+    // and we surface it rather than ack it away as a phantom success.
+    //
+    // `perTurnUsage === null` is the cold-resume first turn (no baseline to
+    // diff) — we cannot decide there, so we do NOT flag it (avoids false
+    // positives) and let it fall through to the normal path.
+    const zeroTokenDelta =
+      perTurnUsage !== null &&
+      perTurnUsage.input_tokens === 0 &&
+      perTurnUsage.cached_input_tokens === 0 &&
+      perTurnUsage.output_tokens === 0 &&
+      perTurnUsage.reasoning_output_tokens === 0;
+    const usageLimitEmptyTurn = !turnFailed && accumulated.trim().length === 0 && zeroTokenDelta;
+
+    let forwardFailed = false;
+    if (usageLimitEmptyTurn) {
+      // Layer 2 (observability): emit an error event + warn-level log so the
+      // daemon log and admin event stream record a real failure instead of a
+      // phantom `turn_end: success`. Mirrors the existing `turnFailed`
+      // treatment — runtime state still goes `idle` below so a later message
+      // can retry once the limit resets. We do NOT auto-redeliver THIS message
+      // (markMessagesCompleted still runs below); auto-redelivery is tracked
+      // separately (see #971 discussion) because it needs a reset-aware
+      // trigger + loop guard that the SDK's missing `rate_limits` can't supply.
+      sessionCtx.emitEvent({
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message:
+            "codex usage limit reached: turn completed with no model invocation (empty reply, zero token delta); message not processed",
+        },
+      });
+      sessionCtx.log(
+        `codex usage limit reached chatId=${sessionCtx.chatId}: empty turn, model not invoked (zero token delta); ` +
+          "posting a chat notice instead of silently acking the message",
+      );
+      // Layer 1-A (visibility): post a chat-visible notice via the
+      // agent-final-text path (forwardResult → notify=false, bypasses the
+      // group @mention guard) so a human observer sees WHY their message got
+      // no reply, rather than having to dig through codex rollout files.
+      try {
+        await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `usage-limit notice delivery failed: ${msg}` },
+        });
+      }
+    } else if (!turnFailed && accumulated.trim()) {
+      try {
+        await sessionCtx.forwardResult(accumulated);
+      } catch (err) {
+        forwardFailed = true;
+        const msg = err instanceof Error ? err.message : String(err);
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
+        });
+      }
+    }
+
+    const succeeded = !turnFailed && !forwardFailed && !usageLimitEmptyTurn;
 
     // Emit `token_usage` just before `turn_end` so the wire-order matches the
     // claude-code handler (consumers can group all usage events for a turn

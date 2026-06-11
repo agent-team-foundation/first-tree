@@ -246,7 +246,7 @@ CLI user-facing / CLI internal / build) lives in the design doc:
 | `FIRST_TREE_HUB_JSON` | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). |
 | `FIRST_TREE_HUB_SERVER_URL` | `FIRST_TREE_SERVER_URL` | Per-call server URL override. |
 | `FIRST_TREE_HUB_LOG_LEVEL` | `FIRST_TREE_LOG_LEVEL` | Logger level. |
-| `FIRST_TREE_HUB_UPDATE_*` | `FIRST_TREE_UPDATE_*` | Self-update channel / policy / intervals. |
+| `FIRST_TREE_HUB_UPDATE_*` | `FIRST_TREE_UPDATE_*` | Phase 1A self-update settings. The historical update-channel knob is later retired by Phase 2; server channel identity is `FIRST_TREE_CHANNEL`. |
 
 ### 5. Agent runtime envs (CLI injects these; users don't set them)
 
