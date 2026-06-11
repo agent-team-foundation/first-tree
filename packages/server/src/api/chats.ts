@@ -352,6 +352,14 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       senderId: result.message.senderId,
       format: result.message.format,
       content: result.message.content,
+      // Return the STORED row's metadata + inReplyTo (mirrors the GET list
+      // shape above). The web composer swaps its optimistic row for this
+      // response; omitting these fields stripped `metadata.resolves` /
+      // `metadata.mentions` / threading from the cache row during the
+      // POST-success → refetch window, flipping a just-answered request back
+      // to open and unthreading docked replies.
+      metadata: result.message.metadata,
+      inReplyTo: result.message.inReplyTo,
       source: result.message.source,
       createdAt: result.message.createdAt.toISOString(),
     });
