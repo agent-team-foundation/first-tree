@@ -62,8 +62,8 @@ function Harness({
     value,
     cursor,
     systemCommands,
-    agentSkills: withSkills ? { agentId: "agent-1", agentDisplayName: "Kael", skills } : null,
-    mentionedAgent: withSkills ? { agentId: "agent-1", displayName: "Kael" } : null,
+    agentSkills: withSkills ? { agentId: "agent-1", agentDisplayName: "Nova", skills } : null,
+    mentionedAgent: withSkills ? { agentId: "agent-1", displayName: "Nova" } : null,
     disabled,
     onSelect: (insert, picked) => {
       setValue(insert.text);
@@ -174,21 +174,21 @@ describe("slash command DOM behavior", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Expected textarea");
 
-    expect(container.textContent).toContain("open:0:4:Kael");
+    expect(container.textContent).toContain("open:0:4:Nova");
     expect(container.textContent).toContain("System");
-    expect(container.textContent).toContain("@Kael");
+    expect(container.textContent).toContain("@Nova");
     expect(container.textContent).toContain("/code:review");
     expect(container.querySelector('[role="option"]')?.getAttribute("aria-selected")).toBe("true");
 
     await keyDown(textarea, "ArrowDown");
-    expect(container.textContent).toContain("open:1:4:Kael");
+    expect(container.textContent).toContain("open:1:4:Nova");
 
     await keyDown(textarea, "ArrowUp");
-    expect(container.textContent).toContain("open:0:4:Kael");
+    expect(container.textContent).toContain("open:0:4:Nova");
 
     await keyDown(textarea, "Tab");
     expect(picked.at(-1)).toEqual({ text: "", cursor: 0, kind: "system", label: "clear" });
-    expect(container.textContent).toContain("closed:0:0:Kael::0");
+    expect(container.textContent).toContain("closed:0:0:Nova::0");
 
     await act(async () => root.unmount());
 
@@ -196,7 +196,7 @@ describe("slash command DOM behavior", () => {
     const dismissedTextarea = dismissed.container.querySelector<HTMLTextAreaElement>("textarea");
     if (!dismissedTextarea) throw new Error("Expected textarea");
     await keyDown(dismissedTextarea, "Escape");
-    expect(dismissed.container.textContent).toContain("closed:0:0:Kael:/:1");
+    expect(dismissed.container.textContent).toContain("closed:0:0:Nova:/:1");
     await act(async () => dismissed.root.unmount());
   });
 
@@ -230,11 +230,11 @@ describe("slash command DOM behavior", () => {
     await act(async () => publicPick.root.unmount());
 
     const disabled = await renderDom(<Harness disabled onPicked={(event) => picked.push(event)} />);
-    expect(disabled.container.textContent).toContain("closed:0:0:Kael");
+    expect(disabled.container.textContent).toContain("closed:0:0:Nova");
     await act(async () => disabled.root.unmount());
 
     const anchorless = await renderDom(<Harness withAnchor={false} onPicked={(event) => picked.push(event)} />);
-    expect(anchorless.container.textContent).toContain("open:0:4:Kael");
+    expect(anchorless.container.textContent).toContain("open:0:4:Nova");
     expect(anchorless.container.querySelector('[role="listbox"]')).toBeNull();
     await act(async () => anchorless.root.unmount());
 

@@ -152,7 +152,7 @@ describe("team preview page", () => {
 
     await click(buttonByText(container, "Mine"));
     expect(container.textContent).toContain("Scout");
-    expect(container.textContent).not.toContain("Kael");
+    expect(container.textContent).not.toContain("Nova");
 
     await click(buttonByText(container, "All"));
     await click(buttonByText(container, "7d"));

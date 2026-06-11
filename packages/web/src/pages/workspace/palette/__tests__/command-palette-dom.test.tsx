@@ -24,7 +24,7 @@ const orgAgentsMock = vi.hoisted(() => ({
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
 
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
-  useAgentNameMap: () => (id: string | null | undefined) => (id === "agent-1" ? "Kael" : (id ?? "unknown")),
+  useAgentNameMap: () => (id: string | null | undefined) => (id === "agent-1" ? "Nova" : (id ?? "unknown")),
 }));
 
 vi.mock("../../../../lib/use-org-agents.js", () => ({
@@ -41,8 +41,8 @@ const NOW = "2026-05-28T12:00:00.000Z";
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -74,8 +74,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     },
     {
       agentId: "agent-1",
-      name: "kael",
-      displayName: "Kael",
+      name: "nova",
+      displayName: "Nova",
       type: "agent" as const,
       avatarColorToken: null,
       avatarImageUrl: null,
@@ -188,7 +188,7 @@ describe("CommandPalette", () => {
     await waitForText(document.body, "Launch planning");
     await waitForText(document.body, "(untitled)");
     await waitForText(document.body, "Release train");
-    await waitForText(document.body, "Kael");
+    await waitForText(document.body, "Nova");
     await waitForText(document.body, "No Handle");
     await waitForText(document.body, "Workspace");
 
@@ -198,7 +198,7 @@ describe("CommandPalette", () => {
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
     expect(routerMocks.navigate).toHaveBeenLastCalledWith("/?c=chat-123456789");
 
-    await click(commandItemByText(document.body, "Kael"));
+    await click(commandItemByText(document.body, "Nova"));
     expect(routerMocks.navigate).toHaveBeenLastCalledWith("/agents/agent-1/profile");
 
     await click(commandItemByText(document.body, "Settings"));

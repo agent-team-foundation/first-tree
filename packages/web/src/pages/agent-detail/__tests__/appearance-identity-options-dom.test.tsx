@@ -49,8 +49,8 @@ const NOW = "2026-05-28T12:00:00.000Z";
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -228,7 +228,7 @@ describe("AppearanceSection (display-only)", () => {
       />,
     );
     expect(withImage.container.textContent).toContain("Custom image");
-    expect(withImage.container.querySelector('img[alt="Kael"]')).toBeTruthy();
+    expect(withImage.container.querySelector('img[alt="Nova"]')).toBeTruthy();
     await click(buttonByText(withImage.container, "Edit"));
     await click(withImage.container.querySelector('button[aria-label="Edit avatar"]'));
     expect(onEdit).toHaveBeenCalledTimes(2);
@@ -327,7 +327,7 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     // Save commits identity fields + the fallback color in one PATCH.
     await click(document.body.querySelector('button[title="hue-3"]'));
     await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Kael", avatarColorToken: "hue-3" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova", avatarColorToken: "hue-3" }));
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
 
@@ -351,9 +351,9 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     expect(document.body.textContent).toContain("Display name is required.");
     expect(onSave).not.toHaveBeenCalled();
 
-    await setInputValue(displayInput, "Kael Updated");
+    await setInputValue(displayInput, "Nova Updated");
     await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Kael Updated" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova Updated" }));
     // Save failed → dialog stays open (no close), error surfaced, no saved flash.
     expect(document.body.textContent).toContain("Identity update failed");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);

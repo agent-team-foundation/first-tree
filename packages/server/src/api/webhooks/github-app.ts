@@ -3,7 +3,7 @@ import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@fir
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { claimEvent, unclaimEvent } from "../../services/adapter-mapping.js";
+import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,

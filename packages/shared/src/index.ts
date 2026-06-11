@@ -27,20 +27,6 @@ export {
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
-  ADAPTER_PLATFORMS,
-  ADAPTER_STATUSES,
-  type AdapterConfig,
-  type AdapterPlatform,
-  type AdapterStatus,
-  adapterConfigSchema,
-  adapterPlatformSchema,
-  adapterStatusSchema,
-  type CreateAdapterConfig,
-  createAdapterConfigSchema,
-  type UpdateAdapterConfig,
-  updateAdapterConfigSchema,
-} from "./schemas/adapter.js";
-export {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
   AGENT_SOURCES,

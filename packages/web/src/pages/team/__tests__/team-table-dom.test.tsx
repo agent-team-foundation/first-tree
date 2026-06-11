@@ -49,8 +49,8 @@ function installMatchMedia(initialMatches: boolean): void {
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -81,9 +81,9 @@ function usage(agentId: string, overrides: Partial<UsageByAgentRow> = {}): Usage
 }
 
 function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
-  const kael: AgentRow = {
+  const nova: AgentRow = {
     kind: "agent",
-    agent: agent({ uuid: "agent-1", name: "kael", displayName: "Kael", runtimeState: "idle" }),
+    agent: agent({ uuid: "agent-1", name: "nova", displayName: "Nova", runtimeState: "idle" }),
     managerLabel: "Gandy",
     isOwnedBySelf: true,
   };
@@ -111,7 +111,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       displayName: "Gandy",
       role: "admin",
       isSelf: true,
-      delegate: { uuid: "agent-1", name: "kael", displayName: "Kael", colorToken: null, avatarImageUrl: null },
+      delegate: { uuid: "agent-1", name: "nova", displayName: "Nova", colorToken: null, avatarImageUrl: null },
       canEditDelegate: true,
       lastActiveLabel: "active now",
     },
@@ -129,7 +129,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     },
   ];
   return {
-    publicAgents: [kael],
+    publicAgents: [nova],
     privateAgents: [design],
     humans,
     isAdmin: true,
@@ -151,7 +151,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     getHumanMenuActions: (row) =>
       row.isSelf ? [] : [{ key: "remove", label: "Remove from org", destructive: true, onSelect: vi.fn() }],
     delegateCandidates: [
-      agent({ uuid: "agent-1", name: "kael", displayName: "Kael", visibility: "private" }),
+      agent({ uuid: "agent-1", name: "nova", displayName: "Nova", visibility: "private" }),
       agent({ uuid: "agent-3", name: "scout", displayName: "Scout", visibility: "private" }),
     ],
     onSetDelegate: vi.fn(),
@@ -212,7 +212,7 @@ describe("TeamTable", () => {
     const { container, root } = await renderDom(<TeamTable {...props} />);
     expect(container.textContent).toContain("Agent teammates");
     expect(container.textContent).toContain("Human teammates");
-    expect(container.textContent).toContain("Kael");
+    expect(container.textContent).toContain("Nova");
     expect(container.textContent).toContain("Design");
     expect(container.textContent).toContain("3.5K");
     expect(container.textContent).toContain("Online");
@@ -220,10 +220,10 @@ describe("TeamTable", () => {
     expect(container.textContent).toContain("Admin");
     expect(container.textContent).toContain("—");
 
-    await click(container.querySelector('[aria-label="Open Kael"]'));
+    await click(container.querySelector('[aria-label="Open Nova"]'));
     expect(props.onAgentDetails).toHaveBeenCalledWith("agent-1");
 
-    await click(container.querySelector('button[aria-label="Actions for Kael"]'));
+    await click(container.querySelector('button[aria-label="Actions for Nova"]'));
     expect(container.textContent).toContain("Chat");
     expect(container.textContent).toContain("Suspend");
     await click(buttonByText(container, "Chat"));

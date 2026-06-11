@@ -128,11 +128,11 @@ adding new log lines.
 
 ```ts
 // ✅
-log.error({ err }, "failed to reload adapter");
+log.error({ err }, "failed to reload config");
 log.info({ count }, "cleaned up stale sessions");
 
 // ❌
-log.error({ err }, "Failed to reload adapter.");
+log.error({ err }, "Failed to reload config.");
 log.info("CLEANUP DONE!");
 ```
 

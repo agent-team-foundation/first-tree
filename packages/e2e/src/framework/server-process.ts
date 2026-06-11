@@ -35,11 +35,6 @@ export type ServerSpawnOptions = {
 
 export async function spawnServer(opts: ServerSpawnOptions): Promise<ServerProcess> {
   const baseUrl = `http://127.0.0.1:${opts.port}`;
-  // NOTE: do NOT set FIRST_TREE_PUBLIC_URL here. The same env var is also
-  // a `kael.hubPublicUrl` field; setting it activates the optional `kael`
-  // config block and then `kael.endpoint` / `kael.apiKey` become required,
-  // crashing boot. publicUrl is only required in production (see
-  // `packages/shared/src/config/server-config.ts:server.publicUrl`).
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "test",

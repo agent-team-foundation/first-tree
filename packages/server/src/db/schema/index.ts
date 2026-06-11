@@ -1,4 +1,3 @@
-export { adapterConfigs } from "./adapter-configs.js";
 export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";

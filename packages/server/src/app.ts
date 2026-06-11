@@ -1,18 +1,16 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { extname, join, resolve } from "node:path";
+import { extname, resolve } from "node:path";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { getChannelConfig } from "@first-tree/shared/channel";
-import { defaultDataDir } from "@first-tree/shared/config";
 import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
-import { adapterRoutes } from "./api/adapters.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
@@ -40,7 +38,6 @@ import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
-import { orgAdapterRoutes } from "./api/orgs/adapters.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgAttachmentRoutes } from "./api/orgs/attachments.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
@@ -85,7 +82,6 @@ import { type BackgroundTasks, createBackgroundTasks } from "./services/backgrou
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
-import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
@@ -98,7 +94,6 @@ import "./types.js";
 export type AppContext = {
   notifier: Notifier;
   backgroundTasks: BackgroundTasks;
-  kaelRuntime: KaelRuntime | undefined;
 };
 
 /**
@@ -530,7 +525,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgIdentityRoutes);
           await scope.register(orgAgentRoutes, { prefix: "/agents" });
           await scope.register(orgChatRoutes, { prefix: "/chats" });
-          await scope.register(orgAdapterRoutes, { prefix: "/adapters" });
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
           await scope.register(orgUsageRoutes, { prefix: "/usage" });
@@ -561,7 +555,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentUsageRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
-          await scope.register(adapterRoutes, { prefix: "/adapters" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
         }),
@@ -636,36 +629,14 @@ export async function buildApp(config: Config) {
   // Decorate notifier so routes can trigger PG NOTIFY
   app.decorate("notifier", notifier);
 
-  // Kael runtime — server-embedded forwarding to Kael API
-  const contextTreeDir = join(defaultDataDir(), "context-tree");
-  const kaelRuntime = config.kael?.endpoint
-    ? createKaelRuntime(
-        db,
-        config.secrets.encryptionKey,
-        config.kael.endpoint,
-        config.kael.apiKey,
-        config.kael.hubPublicUrl,
-        app.log,
-        contextTreeDir,
-      )
-    : undefined;
-
   // Background tasks
-  const backgroundTasks = createBackgroundTasks(app, config.instanceId, kaelRuntime);
+  const backgroundTasks = createBackgroundTasks(app, config.instanceId);
 
   // NC1 pulse aggregator — 32-bucket rolling window over runtime state
   // transitions. Broadcasts a per-org `pulse:tick` frame every 5s to admin
   // sockets. Lifecycle aligned with backgroundTasks via the onReady/onClose
   // hooks below.
   const pulseAggregator = createPulseAggregator({ notifier, broadcast: broadcastToAdmins });
-
-  // Register config change handler for hot reload
-  const hotReloadLog = createLogger("HotReload");
-  notifier.onConfigChange((configType) => {
-    if (configType === "adapter_configs") {
-      kaelRuntime?.reload().catch((err) => hotReloadLog.error({ err }, "kael hot-reload failed (PG NOTIFY)"));
-    }
-  });
 
   // Chat-first workspace cross-process kick. The message hot path calls
   // `fireChatMessageKick(chatId, messageId)` after each tx commits; we
@@ -678,9 +649,6 @@ export async function buildApp(config: Config) {
   });
 
   // Start notifier and background tasks on server start.
-  // Kael initial reload happens inside backgroundTasks.start() as a
-  // fire-and-forget task so app.listen() is not blocked by remote handshakes —
-  // see docs/server-bootstrap-resilience-design.md (T1/T2).
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
@@ -698,7 +666,6 @@ export async function buildApp(config: Config) {
     commandVersionPoller.stop();
     pulseAggregator.stop();
     backgroundTasks.stop();
-    kaelRuntime?.shutdown();
     await notifier.stop();
     await listenClient.end();
     await db.end();

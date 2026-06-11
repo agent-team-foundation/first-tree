@@ -245,12 +245,6 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT",
     }),
   }),
-  kael: optional({
-    endpoint: field(z.string(), { env: "KAEL_ENDPOINT" }),
-    apiKey: field(z.string(), { env: "KAEL_API_KEY", secret: true }),
-    /** Public URL of this First Tree server, reachable from Kael for API callbacks */
-    hubPublicUrl: field(z.string(), { env: "FIRST_TREE_PUBLIC_URL" }),
-  }),
   feedback: optional({
     /**
      * GitHub repo where feedback issues are filed (owner/name).

@@ -103,7 +103,7 @@ beforeEach(() => {
   configMocks.resolveConfigReadonly.mockReturnValue({ client: { id: "client-1" } });
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
-  bootstrapMocks.saveAgentConfig.mockReturnValue(join(tempDir, "agents", "kael"));
+  bootstrapMocks.saveAgentConfig.mockReturnValue(join(tempDir, "agents", "nova"));
   coreMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   coreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   coreMocks.fetchLatestVersion.mockReturnValue({ ok: true, version: "99.0.0" });
@@ -111,7 +111,7 @@ beforeEach(() => {
   coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
   coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
   cliFetchMock.mockReset();
-  coreMocks.promptAddAgent.mockResolvedValue({ name: "kael", agentId: "agent-1" });
+  coreMocks.promptAddAgent.mockResolvedValue({ name: "nova", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
     { name: "old", agentId: "agent-old", reason: "unpinned" },
     { name: "broken", agentId: null, reason: "unreadable" },
@@ -130,11 +130,11 @@ describe("agent lifecycle CLI commands", () => {
 
     expect(coreMocks.promptAddAgent).toHaveBeenCalledWith({ agentId: "agent-1" });
     expect(configMocks.setConfigValue).toHaveBeenCalledWith(
-      join(tempDir, "agents", "kael", "agent.yaml"),
+      join(tempDir, "agents", "nova", "agent.yaml"),
       "agentId",
       "agent-1",
     );
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('Agent "kael" added');
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('Agent "nova" added');
 
     process.exit = vi.fn(((code?: number) => {
       throw Object.assign(new Error("process.exit"), { code });
@@ -154,11 +154,11 @@ describe("agent lifecycle CLI commands", () => {
           memberships: [{ organizationId: "org-1", organizationName: "Acme", role: "admin" }],
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ uuid: "agent-created", name: "kael" }));
+      .mockResolvedValueOnce(jsonResponse({ uuid: "agent-created", name: "nova" }));
 
     await runAgent([
       "create",
-      "kael",
+      "nova",
       "--type",
       "agent",
       "--client-id",
@@ -166,22 +166,22 @@ describe("agent lifecycle CLI commands", () => {
       "--runtime",
       "codex",
       "--display-name",
-      "Kael",
+      "Nova",
     ]);
 
     expect(cliFetchMock).toHaveBeenNthCalledWith(2, "https://hub.example/api/v1/orgs/org-1/agents", {
       method: "POST",
       headers: { Authorization: "Bearer user-token", "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "kael",
+        name: "nova",
         type: "agent",
         clientId: "client-1",
         runtimeProvider: "codex",
-        displayName: "Kael",
+        displayName: "Nova",
       }),
       signal: expect.any(AbortSignal),
     });
-    expect(bootstrapMocks.saveAgentConfig).toHaveBeenCalledWith("kael", "agent-created", "codex");
+    expect(bootstrapMocks.saveAgentConfig).toHaveBeenCalledWith("nova", "agent-created", "codex");
 
     cliFetchMock.mockResolvedValueOnce(
       jsonResponse({
@@ -207,21 +207,21 @@ describe("agent lifecycle CLI commands", () => {
   it("lists local and remote agents, including empty and error paths", async () => {
     configMocks.loadAgents.mockReturnValueOnce(
       new Map([
-        ["kael", { runtime: "claude-code", agentId: "agent-1" }],
+        ["nova", { runtime: "claude-code", agentId: "agent-1" }],
         ["codex", { runtime: "codex", agentId: "agent-2" }],
       ]),
     );
     await runAgent(["list"]);
     const localOutput = printLineMock.mock.calls.map((call) => String(call[0])).join("");
-    expect(localOutput).toContain("kael");
+    expect(localOutput).toContain("nova");
     expect(localOutput).toContain("uuid: agent-1");
 
     cliFetchMock.mockResolvedValueOnce(
       jsonResponse([
         {
           uuid: "agent-1",
-          name: "kael",
-          displayName: "Kael",
+          name: "nova",
+          displayName: "Nova",
           type: "agent",
           organizationId: "org-1",
           runtimeProvider: "claude-code",

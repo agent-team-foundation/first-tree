@@ -3,7 +3,6 @@ import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
-import type { KaelRuntime } from "./kael-runtime.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
 
@@ -14,14 +13,9 @@ export type BackgroundTasks = {
   stop(): void;
 };
 
-export function createBackgroundTasks(
-  app: FastifyInstance,
-  instanceId: string,
-  kaelRuntime?: KaelRuntime,
-): BackgroundTasks {
+export function createBackgroundTasks(app: FastifyInstance, instanceId: string): BackgroundTasks {
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
@@ -69,17 +63,6 @@ export function createBackgroundTasks(
         }
       }, 30_000);
 
-      // Kael outbound processing — runs every 5 seconds
-      if (kaelRuntime) {
-        kaelOutboundTimer = setInterval(async () => {
-          try {
-            await kaelRuntime.processOutbound();
-          } catch (err) {
-            log.error({ err }, "kael outbound processing failed");
-          }
-        }, 5_000);
-      }
-
       // Chat auto-archive sweeper — cadence comes from runtime config so
       // ops can tune (or zero-disable) without touching code. See
       // services/chat-archive.ts for the two routes and their idle
@@ -106,13 +89,6 @@ export function createBackgroundTasks(
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
       });
-
-      // Initial kael reload — fire-and-forget so server.listen() is not
-      // blocked by remote handshakes. Subsequent reloads come from PG NOTIFY
-      // (hot reload path). See docs/server-bootstrap-resilience-design.md.
-      kaelRuntime?.reload().catch((err) => {
-        log.error({ err }, "initial kael reload failed");
-      });
     },
 
     stop() {
@@ -123,10 +99,6 @@ export function createBackgroundTasks(
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
-      }
-      if (kaelOutboundTimer) {
-        clearInterval(kaelOutboundTimer);
-        kaelOutboundTimer = null;
       }
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);

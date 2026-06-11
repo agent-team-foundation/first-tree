@@ -140,14 +140,14 @@ vi.mock("../../../../lib/visibility-interval.js", () => ({
 const NOW = "2026-05-28T12:00:00.000Z";
 
 const AGENT_NAMES: Record<string, string> = {
-  "agent-1": "Kael",
+  "agent-1": "Nova",
   "agent-2": "Design Critique",
   "human-agent-self": "Gandy",
   "human-agent-alice": "Alice",
 };
 
 const AGENT_SLUGS: Record<string, string> = {
-  "agent-1": "kael",
+  "agent-1": "nova",
   "agent-2": "design",
   "human-agent-self": "gandy",
   "human-agent-alice": "alice",
@@ -156,8 +156,8 @@ const AGENT_SLUGS: Record<string, string> = {
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -200,7 +200,7 @@ function participant(overrides: Partial<ChatParticipantDetail> & { agentId: stri
 const PARTICIPANTS: ChatParticipantDetail[] = [
   participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
   participant({ agentId: "human-agent-alice", type: "human", name: "alice", displayName: "Alice" }),
-  participant({ agentId: "agent-1", name: "kael", displayName: "Kael" }),
+  participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
   participant({ agentId: "agent-2", name: "design", displayName: "Design Critique" }),
 ];
 
@@ -229,7 +229,7 @@ function message(overrides: Partial<MessageWithDelivery> & { id: string; senderI
     chatId: overrides.chatId ?? "chat-1",
     senderId: overrides.senderId,
     format: overrides.format ?? "text",
-    content: overrides.content ?? "Please review docs/plan.md and @kael.",
+    content: overrides.content ?? "Please review docs/plan.md and @nova.",
     metadata: overrides.metadata ?? {},
     inReplyTo: overrides.inReplyTo ?? null,
     source: overrides.source ?? "web",
@@ -276,7 +276,7 @@ const BASE_MESSAGES = messages([
     senderId: "agent-2",
     format: "file",
     content: {
-      caption: "Preview image for @kael.",
+      caption: "Preview image for @nova.",
       attachments: [{ imageId: "image-1", mimeType: "image/png", filename: "preview.png", size: 42 }],
     },
     source: "api",
@@ -714,10 +714,10 @@ describe("ChatView", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
     expect(textarea.placeholder).toContain("Type @ to pick a recipient");
-    await setValue(textarea, "Please review @kael");
+    await setValue(textarea, "Please review @nova");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text send");
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please review @kael", ["agent-1"]);
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please review @nova", ["agent-1"]);
 
     await setValue(textarea, "");
     const file = new File(["abc"], "preview.png", { type: "image/png" });
@@ -755,7 +755,7 @@ describe("ChatView", () => {
       type: "direct",
       participants: [
         participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
-        participant({ agentId: "agent-1", name: "kael", displayName: "Kael" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
       ],
     });
     const empty = await renderDom(
@@ -769,7 +769,7 @@ describe("ChatView", () => {
     await waitForText(empty.container, "Send a message to start the conversation");
     const textarea = empty.container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Direct composer textarea missing");
-    await waitForCondition(() => textarea.value.includes("Hi Kael!"), "Expected direct-chat greeting");
+    await waitForCondition(() => textarea.value.includes("Hi Nova!"), "Expected direct-chat greeting");
     await setValue(textarea, "hello there");
     await click(empty.container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected direct send");

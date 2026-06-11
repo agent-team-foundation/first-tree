@@ -185,8 +185,8 @@ type MemberListItem = {
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -263,10 +263,10 @@ const ALICE_HUMAN_AGENT = agent({
   managerId: "member-alice",
 });
 
-const KAEL = agent({
+const NOVA = agent({
   uuid: "agent-1",
-  name: "kael",
-  displayName: "Kael",
+  name: "nova",
+  displayName: "Nova",
   managerId: "member-self",
   visibility: "organization",
   clientId: "client-1",
@@ -311,8 +311,8 @@ const DORMANT = agent({
   runtimeState: null,
 });
 
-const ALL_AGENTS = [KAEL, SCOUT, DESIGN, SHARED_OTHER, DORMANT, SELF_HUMAN_AGENT, ALICE_HUMAN_AGENT];
-const MEMBER_AGENTS = [KAEL, SCOUT, SHARED_OTHER, DORMANT, SELF_HUMAN_AGENT, ALICE_HUMAN_AGENT];
+const ALL_AGENTS = [NOVA, SCOUT, DESIGN, SHARED_OTHER, DORMANT, SELF_HUMAN_AGENT, ALICE_HUMAN_AGENT];
+const MEMBER_AGENTS = [NOVA, SCOUT, SHARED_OTHER, DORMANT, SELF_HUMAN_AGENT, ALICE_HUMAN_AGENT];
 const MEMBERS = [
   member(),
   member({
@@ -453,10 +453,10 @@ function seedDefaultMocks(): void {
   agentMocks.listAllAgents.mockResolvedValue({ items: ALL_AGENTS, nextCursor: null });
   agentMocks.listAgents.mockResolvedValue({ items: MEMBER_AGENTS, nextCursor: null });
   agentMocks.updateAgent.mockImplementation(
-    async (uuid: string) => ALL_AGENTS.find((item) => item.uuid === uuid) ?? KAEL,
+    async (uuid: string) => ALL_AGENTS.find((item) => item.uuid === uuid) ?? NOVA,
   );
   agentMocks.suspendAgent.mockImplementation(async (uuid: string) =>
-    agent({ ...(ALL_AGENTS.find((item) => item.uuid === uuid) ?? KAEL), status: "suspended" }),
+    agent({ ...(ALL_AGENTS.find((item) => item.uuid === uuid) ?? NOVA), status: "suspended" }),
   );
   agentMocks.reactivateAgent.mockImplementation(async (uuid: string) =>
     agent({ ...(ALL_AGENTS.find((item) => item.uuid === uuid) ?? DORMANT), status: "active" }),
@@ -492,7 +492,7 @@ describe("TeamPage", () => {
     const { TeamPage } = await import("../index.js");
     const { container, root } = await renderDom(<TeamPage />);
 
-    await waitForText(container, "Kael");
+    await waitForText(container, "Nova");
     expect(agentMocks.listAllAgents).toHaveBeenCalledWith({ limit: 100 });
     expect(agentMocks.listAgents).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Invite link");
@@ -515,18 +515,18 @@ describe("TeamPage", () => {
     if (!search) throw new Error("Search input missing");
     await setInputValue(search, "design");
     expect(container.textContent).toContain("Design Critique");
-    expect(container.textContent).not.toContain("Kael");
+    expect(container.textContent).not.toContain("Nova");
     await setInputValue(search, "");
 
     await click(exactButton(container, "Mine"));
-    expect(container.textContent).toContain("Kael");
+    expect(container.textContent).toContain("Nova");
     expect(container.textContent).not.toContain("Ops Helper");
     await click(exactButton(container, "All"));
 
-    await click(container.querySelector('[aria-label="Open Kael"]'));
+    await click(container.querySelector('[aria-label="Open Nova"]'));
     expect(routerMocks.navigate).toHaveBeenCalledWith("/agents/agent-1");
 
-    await click(container.querySelector('button[aria-label="Actions for Kael"]'));
+    await click(container.querySelector('button[aria-label="Actions for Nova"]'));
     await click(exactButton(container, "Chat"));
     expect(routerMocks.navigate).toHaveBeenCalledWith("/?c=draft&with=agent-1");
 
@@ -538,9 +538,9 @@ describe("TeamPage", () => {
     await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected delegate update");
     expect(agentMocks.updateAgent).toHaveBeenCalledWith("human-agent-self", { delegateMention: null });
 
-    await click(container.querySelector('button[aria-label="Actions for Kael"]'));
+    await click(container.querySelector('button[aria-label="Actions for Nova"]'));
     await click(exactButton(container, "Suspend"));
-    await waitForText(document.body, "Suspend Kael");
+    await waitForText(document.body, "Suspend Nova");
     await click(exactButton(document.body, "Suspend agent"));
     await waitForCondition(() => agentMocks.suspendAgent.mock.calls.length > 0, "Expected suspend mutation");
     expect(agentMocks.suspendAgent.mock.calls[0]?.[0]).toBe("agent-1");
@@ -595,7 +595,7 @@ describe("TeamPage", () => {
     const { TeamPage } = await import("../index.js");
     const { container, root } = await renderDom(<TeamPage />);
 
-    await waitForText(container, "Kael");
+    await waitForText(container, "Nova");
     expect(agentMocks.listAgents).toHaveBeenCalledWith({ limit: 100 });
     expect(agentMocks.listAllAgents).not.toHaveBeenCalled();
     // Issue 836: sharing the invite link is member-level, so the "Invite link"
@@ -622,7 +622,7 @@ describe("TeamPage", () => {
     const { TeamPage } = await import("../index.js");
     const { container, root } = await renderDom(<TeamPage />);
 
-    await waitForText(container, "Kael");
+    await waitForText(container, "Nova");
     expect(exactButton(container, "Mine")?.getAttribute("aria-pressed")).toBe("true");
     expect(container.textContent).not.toContain("Ops Helper");
 

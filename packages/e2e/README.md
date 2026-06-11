@@ -22,8 +22,6 @@ the Context Tree.
 | **M2.5** | GitHub PR → chat delivery (server self-creates chat + mapping), PG NOTIFY → server WS push → `inbox:deliver` frame on a parallel client. | `github-pr-delivery`, `ws-inbox-push` |
 | **TUI** | `claude-code-tui` runtime coverage: a fake `claude` TUI driven through real tmux (`mocks/fake-claude-tui.mjs`), a tmux-observer driver, a per-agent fixture, and worker-owned worlds for daemon-restart scenarios. Run with `pnpm e2e:tui` (own config, isolated from the SDK suite). One-shot local bring-up: `pnpm e2e:tui:bootstrap`. | `tui-runtime-basic`, `tui-runtime-tool-call`, `tui-askuser-degrade`, `tui-crash-recovery`, `tui-orphan-sweep`, `tui-restart-resume`, `tui-tmux-lifecycle`, `tui-capability-probe` |
 
-Feishu coverage stays in-process per F4 — there is no Feishu e2e mock.
-
 The TUI suite needs a real `tmux` (≥ 3.0) on the runner. The fake binary
 speaks the pane-marker + transcript-JSONL contract the handler observes (not
 the SDK stream-json protocol), so it runs on its own vitest config /

@@ -390,30 +390,30 @@ describe("ClientRuntime context-tree wiring", () => {
     if (!pinned) throw new Error("agent:pinned listener missing");
     pinned({
       agentId: "019e70b3-0000-7000-8000-000000000001",
-      name: "kael",
+      name: "nova",
       runtimeProvider: "claude-code",
     });
 
-    const text = readFileSync(join(agentsDir, "kael", "agent.yaml"), "utf8");
+    const text = readFileSync(join(agentsDir, "nova", "agent.yaml"), "utf8");
     expect(text).toContain("019e70b3-0000-7000-8000-000000000001");
     expect(text).toContain("claude-code");
-    expect(slotInstances.map((slot) => slot.name)).toEqual(["kael"]);
+    expect(slotInstances.map((slot) => slot.name)).toEqual(["nova"]);
     expect(slotInstances[0]?.start).toHaveBeenCalled();
 
     pinned({
       agentId: "019e70b3-0000-7000-8000-000000000001",
-      name: "kael",
+      name: "nova",
       runtimeProvider: "claude-code",
     });
     expect(slotInstances).toHaveLength(1);
 
     pinned({
       agentId: "019e70b3-0000-7000-8000-000000000002",
-      name: "kael",
+      name: "nova",
       runtimeProvider: "codex",
     });
     expect(readFileSync(join(agentsDir, "agent-019e70b300007000", "agent.yaml"), "utf8")).toContain("codex");
-    expect(slotInstances.map((slot) => slot.name)).toEqual(["kael", "agent-019e70b300007000"]);
+    expect(slotInstances.map((slot) => slot.name)).toEqual(["nova", "agent-019e70b300007000"]);
     await rt.stop();
   });
 

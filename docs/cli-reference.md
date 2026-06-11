@@ -508,7 +508,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | Variable | Purpose | Production |
 |---|---|---|
 | `FIRST_TREE_JWT_SECRET` | JWT signing key. `channel=dev` local development auto-generates a value when omitted. | Required for staging/prod |
-| `FIRST_TREE_ENCRYPTION_KEY` | AES-256-GCM key for encrypted server-side secrets. Must be 32 bytes encoded as 64-char hex or base64url. `channel=dev` local development auto-generates a value when omitted. | Required for staging/prod |
+| `FIRST_TREE_ENCRYPTION_KEY` | AES-256-GCM key for encrypted server-side secrets (GitHub tokens, org-settings secrets). Must be 32 bytes encoded as 64-char hex or base64url. `channel=dev` local development auto-generates a value when omitted. | Required for staging/prod |
 
 The server Docker image sets `NODE_ENV=production`, which disables generated
 server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.

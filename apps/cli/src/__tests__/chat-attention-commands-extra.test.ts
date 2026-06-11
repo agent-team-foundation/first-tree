@@ -80,7 +80,7 @@ beforeEach(() => {
   process.env.FIRST_TREE_CHAT_ID = "chat-env";
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
-  resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "kael", displayName: "Kael" });
+  resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova", displayName: "Nova" });
   docCaptureMock.captureOutboundDocs.mockImplementation(async (content: string) => ({ content }));
   ioMocks.readStdin.mockResolvedValue("stdin message");
   localAgentMocks.createSdk.mockReturnValue({
@@ -115,38 +115,38 @@ describe("chat command behavior", () => {
       documentContext: [{ path: "docs/plan.md", content: "Plan" }],
     });
     const sdk = localAgentMocks.createSdk();
-    await runChat(["send", "kael", "see docs/plan.md", "--metadata", '{"priority":2}', "--format", "markdown"]);
+    await runChat(["send", "nova", "see docs/plan.md", "--metadata", '{"priority":2}', "--format", "markdown"]);
 
     expect(sdk.sendMessage).toHaveBeenCalledWith("chat-env", {
       format: "markdown",
       content: "see docs/plan.md",
       metadata: { priority: 2, documentContext: [{ path: "docs/plan.md", content: "Plan" }] },
       source: "cli",
-      receiverNames: ["kael"],
+      receiverNames: ["nova"],
     });
     expect(outputMocks.success).toHaveBeenCalledWith({ id: "msg-1" });
 
-    await runChat(["send", "kael"]);
+    await runChat(["send", "nova"]);
     expect(sdk.sendMessage).toHaveBeenLastCalledWith("chat-env", expect.objectContaining({ content: "stdin message" }));
 
     delete process.env.FIRST_TREE_CHAT_ID;
-    await expect(runChat(["send", "kael", "hello"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
+    await expect(runChat(["send", "nova", "hello"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
 
     process.env.FIRST_TREE_CHAT_ID = "chat-env";
-    await expect(runChat(["send", "kael", "hello", "--metadata", "{bad"])).rejects.toMatchObject({
+    await expect(runChat(["send", "nova", "hello", "--metadata", "{bad"])).rejects.toMatchObject({
       code: "INVALID_METADATA",
       exitCode: 2,
     });
 
     ioMocks.readStdin.mockResolvedValueOnce(null);
-    await expect(runChat(["send", "kael"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
+    await expect(runChat(["send", "nova"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
   });
 
   it("sends a --request with the body as context and --question as just the ask", async () => {
     const sdk = localAgentMocks.createSdk();
     await runChat([
       "send",
-      "kael",
+      "nova",
       "Rollout is at 5% and error rate is flat for 24h.",
       "--request",
       "--question",
@@ -162,7 +162,7 @@ describe("chat command behavior", () => {
       expect.objectContaining({
         format: "request",
         content: "Rollout is at 5% and error rate is flat for 24h.",
-        receiverNames: ["kael"],
+        receiverNames: ["nova"],
         metadata: expect.objectContaining({
           request: {
             questions: [{ id: "q1", prompt: "Ship to 20%?", kind: "single", options: ["yes", "hold"], required: true }],
@@ -174,7 +174,7 @@ describe("chat command behavior", () => {
 
   it("rejects a --request with no body — context belongs in the body, not the question", async () => {
     ioMocks.readStdin.mockResolvedValueOnce(null);
-    await expect(runChat(["send", "kael", "--request", "--question", "Ship to 20%?"])).rejects.toMatchObject({
+    await expect(runChat(["send", "nova", "--request", "--question", "Ship to 20%?"])).rejects.toMatchObject({
       code: "REQUEST_NEEDS_BODY",
       exitCode: 2,
     });
@@ -183,8 +183,8 @@ describe("chat command behavior", () => {
   it("sets, clears, and validates chat topics", async () => {
     const sdk = localAgentMocks.createSdk();
 
-    await runChat(["set-topic", "  Launch plan  ", "--chat", "chat-1", "--agent", "kael"]);
-    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("kael");
+    await runChat(["set-topic", "  Launch plan  ", "--chat", "chat-1", "--agent", "nova"]);
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("nova");
     expect(sdk.updateChat).toHaveBeenCalledWith("chat-1", { topic: "Launch plan" });
 
     await runChat(["set-topic", "--clear"]);
@@ -242,7 +242,7 @@ describe("chat command behavior", () => {
       .mockResolvedValueOnce(jsonResponse({ createdAt: "2026-06-01T00:00:01.000Z" }))
       .mockResolvedValueOnce(jsonResponse("nope", false, 500));
 
-    await runChat(["open", "kael"]);
+    await runChat(["open", "nova"]);
 
     emitter.emit("line", " hello ");
     await Promise.resolve();

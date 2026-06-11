@@ -64,7 +64,7 @@ function build(over: Partial<AgentChatStatusInput> & { agentId: string }): Agent
 }
 
 const DEV = agent("agent-dev", "gandy-developer");
-const KAEL = agent("agent-kael", "kael");
+const NOVA = agent("agent-nova", "nova");
 const RESEARCH = agent("agent-res", "research");
 
 type Variant = {
@@ -133,9 +133,9 @@ const VARIANTS: Variant[] = [
     name: "working · thinking",
     subtitle: "goal + 🧠 Thinking",
     chatId: "v-thinking",
-    agents: [KAEL],
+    agents: [NOVA],
     statuses: [
-      working("agent-kael", {
+      working("agent-nova", {
         kind: "thinking",
         label: "Thinking",
         turnText: "Working out the rollout plan",
@@ -147,9 +147,9 @@ const VARIANTS: Variant[] = [
     name: "working · writing prose (no redundant 'Writing')",
     subtitle: "the prose IS the goal — the means segment is suppressed",
     chatId: "v-writing",
-    agents: [KAEL],
+    agents: [NOVA],
     statuses: [
-      working("agent-kael", {
+      working("agent-nova", {
         kind: "assistant_text",
         label: "Writing",
         detail: "Here's the summary of what I changed and why",
@@ -184,7 +184,7 @@ const VARIANTS: Variant[] = [
     name: "multi-agent · failed lead + working others (+N)",
     subtitle: "failure preempts the lead; others fold behind +N",
     chatId: "v-multi",
-    agents: [DEV, KAEL, RESEARCH],
+    agents: [DEV, NOVA, RESEARCH],
     statuses: [
       build({ agentId: "agent-res", errored: true }),
       working("agent-dev", {
@@ -194,7 +194,7 @@ const VARIANTS: Variant[] = [
         turnText: "Verifying the build",
         startedAt: ago(9),
       }),
-      working("agent-kael", { kind: "thinking", label: "Thinking", turnText: "Drafting the plan", startedAt: ago(5) }),
+      working("agent-nova", { kind: "thinking", label: "Thinking", turnText: "Drafting the plan", startedAt: ago(5) }),
     ],
   },
 ];

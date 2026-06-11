@@ -83,7 +83,7 @@ describe("sessionEventSchema", () => {
     it("rejects an unknown source", () => {
       const r = sessionEventSchema.safeParse({
         kind: "error",
-        payload: { source: "adapter", message: "boom" },
+        payload: { source: "bogus", message: "boom" },
       });
       expect(r.success).toBe(false);
     });

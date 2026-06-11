@@ -8,7 +8,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Mention enforcement + content normalisation are core server routing
- * logic. The agent runtime, web UI, and adapter bridges all depend on
+ * logic. The agent runtime and web UI both depend on
  * the invariants this file pins. Each behavioural axis is covered at
  * the service layer (so failures localise to the rule, not the HTTP
  * layer) plus one HTTP-level integration test per endpoint to guard the

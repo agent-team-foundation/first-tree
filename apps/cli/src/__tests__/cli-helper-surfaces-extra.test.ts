@@ -170,11 +170,11 @@ describe("doctor checks and agent resolver", () => {
     const { resolveAgent } = await import("../commands/_shared/resolve-agent.js");
     cliFetchMock.mockResolvedValueOnce(
       jsonResponse([
-        { uuid: "agent-1", name: "kael", displayName: "Kael" },
+        { uuid: "agent-1", name: "nova", displayName: "Nova" },
         { uuid: "agent-2", name: null, displayName: null },
       ]),
     );
-    await expect(resolveAgent("https://hub.example", "token", "kael")).resolves.toMatchObject({ uuid: "agent-1" });
+    await expect(resolveAgent("https://hub.example", "token", "nova")).resolves.toMatchObject({ uuid: "agent-1" });
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse([{ uuid: "agent-2", name: null, displayName: null }]));
     await expect(resolveAgent("https://hub.example", "token", "agent-2")).resolves.toMatchObject({ uuid: "agent-2" });

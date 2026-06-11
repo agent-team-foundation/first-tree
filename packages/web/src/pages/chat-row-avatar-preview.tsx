@@ -55,7 +55,7 @@ function participant(name: string, agentId?: string): MeChatRow["participants"][
   };
 }
 
-const KAEL = participant("kael", "agent-kael");
+const NOVA = participant("nova", "agent-nova");
 const DESIGN = participant("design-critique", "agent-design");
 const MARKET = participant("marketing-writer", "agent-market");
 const RES = participant("research", "agent-res");
@@ -68,24 +68,24 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
   {
     name: "1-on-1 · idle",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       lastMessagePreview: "Will pick this up after lunch.",
     }),
   },
   {
     name: "1-on-1 · working ring",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       lastMessagePreview: "Analyzing logs from the last 24h…",
     }),
   },
   {
     name: "1-on-1 · unread(1)",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       unreadMentionCount: 1,
       lastMessagePreview: "Done — see PR 422.",
     }),
@@ -93,8 +93,8 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
   {
     name: "1-on-1 · unread(12)",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       unreadMentionCount: 12,
       lastMessagePreview: "Lots of context for you.",
     }),
@@ -102,8 +102,8 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
   {
     name: "1-on-1 · unread(99+)",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       unreadMentionCount: 137,
       lastMessagePreview: "Daily digest backlog…",
     }),
@@ -111,8 +111,8 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
   {
     name: "1-on-1 · working + unread(3)",
     row: row({
-      title: "kael",
-      participants: [KAEL],
+      title: "nova",
+      participants: [NOVA],
       unreadMentionCount: 3,
       lastMessagePreview: "Pulling the next batch now.",
     }),
@@ -133,8 +133,8 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       type: "group",
       title: "Q2 hero copy",
-      participants: [KAEL, DESIGN],
-      lastMessagePreview: "Kael: Two variants up for review.",
+      participants: [NOVA, DESIGN],
+      lastMessagePreview: "Nova: Two variants up for review.",
     }),
   },
   {
@@ -142,7 +142,7 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       type: "group",
       title: "platform-trio",
-      participants: [KAEL, DESIGN, MARKET],
+      participants: [NOVA, DESIGN, MARKET],
       unreadMentionCount: 2,
       lastMessagePreview: "design-critique: spacing nudge on the hero",
     }),
@@ -152,7 +152,7 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       type: "group",
       title: "research squad",
-      participants: [KAEL, DESIGN, MARKET, RES],
+      participants: [NOVA, DESIGN, MARKET, RES],
       lastMessagePreview: "research: 12 papers summarized this week",
     }),
   },
@@ -161,7 +161,7 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       type: "group",
       title: "platform-design",
-      participants: [PLAT, ARCH, SUPP, KAEL, DESIGN],
+      participants: [PLAT, ARCH, SUPP, NOVA, DESIGN],
       lastMessagePreview: "platform: shipped the new tokens spec",
     }),
   },
@@ -170,7 +170,7 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       type: "group",
       title: "all-hands",
-      participants: [KAEL, DESIGN, MARKET, RES, SUPP, ARCH, PLAT, KAEL, DESIGN, MARKET],
+      participants: [NOVA, DESIGN, MARKET, RES, SUPP, ARCH, PLAT, NOVA, DESIGN, MARKET],
       unreadMentionCount: 4,
       lastMessagePreview: "all-hands kickoff in 5 minutes",
     }),

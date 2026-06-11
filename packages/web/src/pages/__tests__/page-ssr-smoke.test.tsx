@@ -105,14 +105,14 @@ const MEMBER_NAMES: Record<string, string> = {
 };
 
 const AGENT_NAMES: Record<string, string> = {
-  "agent-1": "Kael",
+  "agent-1": "Nova",
   "agent-2": "Design Critique",
   "human-agent-self": "Gandy",
   "human-agent-alice": "Alice",
 };
 
 const AGENT_SLUGS: Record<string, string> = {
-  "agent-1": "kael",
+  "agent-1": "nova",
   "agent-2": "design",
   "human-agent-self": "gandy",
   "human-agent-alice": "alice",
@@ -121,8 +121,8 @@ const AGENT_SLUGS: Record<string, string> = {
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "nova",
+    displayName: overrides.displayName ?? "Nova",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -253,7 +253,7 @@ function participant(overrides: Partial<ChatParticipantDetail> & { agentId: stri
     role: overrides.role ?? "member",
     mode: overrides.mode ?? "full",
     joinedAt: overrides.joinedAt ?? NOW,
-    name: overrides.name ?? (overrides.type === "human" ? "gandy" : "kael"),
+    name: overrides.name ?? (overrides.type === "human" ? "gandy" : "nova"),
     displayName: overrides.displayName ?? AGENT_NAMES[overrides.agentId] ?? overrides.agentId,
     type: overrides.type ?? "agent",
     avatarColorToken: overrides.avatarColorToken ?? null,
@@ -264,7 +264,7 @@ function participant(overrides: Partial<ChatParticipantDetail> & { agentId: stri
 const CHAT_PARTICIPANTS: ChatParticipantDetail[] = [
   participant({ agentId: "human-agent-self", name: "gandy", displayName: "Gandy", type: "human" }),
   participant({ agentId: "human-agent-alice", name: "alice", displayName: "Alice", type: "human" }),
-  participant({ agentId: "agent-1", name: "kael", displayName: "Kael", type: "agent", avatarColorToken: "hue-2" }),
+  participant({ agentId: "agent-1", name: "nova", displayName: "Nova", type: "agent", avatarColorToken: "hue-2" }),
   participant({ agentId: "agent-2", name: "design", displayName: "Design Critique", type: "agent" }),
 ];
 
@@ -331,7 +331,7 @@ function message(overrides: Partial<Message> & { id: string; senderId: string; c
     chatId: overrides.chatId ?? "chat-1",
     senderId: overrides.senderId,
     format: overrides.format ?? "text",
-    content: overrides.content ?? "Please review `docs/plan.md` and @kael for rollout risks.",
+    content: overrides.content ?? "Please review `docs/plan.md` and @nova for rollout risks.",
     metadata: overrides.metadata ?? {},
     inReplyTo: overrides.inReplyTo ?? null,
     source: overrides.source ?? "web",
@@ -345,7 +345,7 @@ const CHAT_MESSAGES: PaginatedMessages = {
       id: "msg-1",
       senderId: "human-agent-self",
       createdAt: "2026-05-28T11:55:00.000Z",
-      content: "Please review `docs/plan.md` and @kael for rollout risks.",
+      content: "Please review `docs/plan.md` and @nova for rollout risks.",
       metadata: {
         documentContext: {
           basePath: "/workspace/acme",
@@ -963,7 +963,7 @@ describe("page SSR smoke coverage", () => {
       "/agents/agent-1/profile",
     );
 
-    expect(html).toContain("Kael");
+    expect(html).toContain("Nova");
     expect(html).toContain("Profile");
 
     for (const [route, expected] of [

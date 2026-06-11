@@ -73,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   bootstrapMocks.ensureFreshAdminToken.mockResolvedValue("admin-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
-  fetcherMocks.resolveAgentRecord.mockResolvedValue({ uuid: "agent-uuid", name: "kael" });
+  fetcherMocks.resolveAgentRecord.mockResolvedValue({ uuid: "agent-uuid", name: "nova" });
   fetcherMocks.getCurrent.mockResolvedValue(config());
   fetcherMocks.getAgentResources.mockResolvedValue({
     version: 1,
@@ -114,7 +114,7 @@ afterEach(() => {
 describe("agent config command behavior", () => {
   it("rejects legacy per-agent MCP writes", async () => {
     await expect(
-      runConfig(["add-mcp", "kael", "--name", "tools", "--transport", "stdio", "--command", "uvx", "--args", "a", "b"]),
+      runConfig(["add-mcp", "nova", "--name", "tools", "--transport", "stdio", "--command", "uvx", "--args", "a", "b"]),
     ).rejects.toMatchObject({
       code: "LEGACY_MCP_CONFIG_DISABLED",
       exitCode: 2,
@@ -128,7 +128,7 @@ describe("agent config command behavior", () => {
   });
 
   it("updates git repos, env vars, model, reasoning effort, and prompt append", async () => {
-    await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
+    await runConfig(["add-repo", "nova", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
       "admin-token",
@@ -148,7 +148,7 @@ describe("agent config command behavior", () => {
       },
     );
 
-    await runConfig(["set-env", "kael", "OPENAI_API_KEY=secret", "--sensitive"]);
+    await runConfig(["set-env", "nova", "OPENAI_API_KEY=secret", "--sensitive"]);
     expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
       env: [
         { key: "KEEP", value: "1", sensitive: false },
@@ -156,15 +156,15 @@ describe("agent config command behavior", () => {
       ],
     });
 
-    await expect(runConfig(["set-env", "kael", "BROKEN"])).rejects.toMatchObject({ code: "BAD_KV", exitCode: 2 });
+    await expect(runConfig(["set-env", "nova", "BROKEN"])).rejects.toMatchObject({ code: "BAD_KV", exitCode: 2 });
 
-    await runConfig(["set-model", "kael", "opus"]);
+    await runConfig(["set-model", "nova", "opus"]);
     expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
       model: "opus",
     });
     expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-1", version: 2, model: "opus" });
 
-    await runConfig(["set-reasoning-effort", "kael", "high"]);
+    await runConfig(["set-reasoning-effort", "nova", "high"]);
     expect(fetcherMocks.patchConfig).toHaveBeenLastCalledWith("https://hub.example", "admin-token", "agent-uuid", 1, {
       reasoningEffort: "high",
     });
@@ -176,7 +176,7 @@ describe("agent config command behavior", () => {
 
     const promptFile = join(tempDir, "prompt.md");
     writeFileSync(promptFile, "Prefer small diffs.");
-    await runConfig(["append-prompt", "kael", "--file", promptFile]);
+    await runConfig(["append-prompt", "nova", "--file", promptFile]);
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
       "admin-token",
@@ -224,7 +224,7 @@ describe("agent config command behavior", () => {
 
     const promptFile = join(tempDir, "prompt-replacement.md");
     writeFileSync(promptFile, "New prompt.");
-    await runConfig(["append-prompt", "kael", "--file", promptFile]);
+    await runConfig(["append-prompt", "nova", "--file", promptFile]);
 
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
@@ -295,7 +295,7 @@ describe("agent config command behavior", () => {
       availableTeamResources: [],
     });
 
-    await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
+    await runConfig(["add-repo", "nova", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
 
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
@@ -377,7 +377,7 @@ describe("agent config command behavior", () => {
       ],
     });
 
-    await runConfig(["add-repo", "kael", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
+    await runConfig(["add-repo", "nova", "https://github.com/acme/web.git", "--ref", "main", "--path", "web"]);
 
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
@@ -402,7 +402,7 @@ describe("agent config command behavior", () => {
   it("`prompt set` replaces the inline fragment exactly like append-prompt", async () => {
     const promptFile = join(tempDir, "fragment.md");
     writeFileSync(promptFile, "Prefer small diffs.");
-    await runConfig(["prompt", "set", "kael", "--file", promptFile]);
+    await runConfig(["prompt", "set", "nova", "--file", promptFile]);
     expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
       "https://hub.example",
       "admin-token",
@@ -425,19 +425,19 @@ describe("agent config command behavior", () => {
 
   it("`prompt set` hard-rejects a body carrying the generated-briefing marker (no --force escape)", async () => {
     const promptFile = join(tempDir, "assembled-agents-md.md");
-    writeFileSync(promptFile, "<!-- first-tree:generated — rebuilt every session -->\n# Identity\n\nYou are kael.");
+    writeFileSync(promptFile, "<!-- first-tree:generated — rebuilt every session -->\n# Identity\n\nYou are nova.");
 
-    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile])).rejects.toMatchObject({
+    await expect(runConfig(["prompt", "set", "nova", "--file", promptFile])).rejects.toMatchObject({
       code: "ASSEMBLED_BRIEFING",
       exitCode: 2,
     });
     // --force must NOT bypass the conclusive marker tier.
-    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile, "--force"])).rejects.toMatchObject({
+    await expect(runConfig(["prompt", "set", "nova", "--file", promptFile, "--force"])).rejects.toMatchObject({
       code: "ASSEMBLED_BRIEFING",
       exitCode: 2,
     });
     // The deprecated alias carries the same guard.
-    await expect(runConfig(["append-prompt", "kael", "--file", promptFile])).rejects.toMatchObject({
+    await expect(runConfig(["append-prompt", "nova", "--file", promptFile])).rejects.toMatchObject({
       code: "ASSEMBLED_BRIEFING",
       exitCode: 2,
     });
@@ -454,13 +454,13 @@ describe("agent config command behavior", () => {
     const promptFile = join(tempDir, "heading.md");
     writeFileSync(promptFile, "# Working in First Tree (First Tree Managed)\n\nPasted section.");
 
-    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile])).rejects.toMatchObject({
+    await expect(runConfig(["prompt", "set", "nova", "--file", promptFile])).rejects.toMatchObject({
       code: "ASSEMBLED_BRIEFING_HEADING",
       exitCode: 2,
     });
     expect(fetcherMocks.patchAgentResources).not.toHaveBeenCalled();
 
-    await runConfig(["prompt", "set", "kael", "--file", promptFile, "--force"]);
+    await runConfig(["prompt", "set", "nova", "--file", promptFile, "--force"]);
     expect(fetcherMocks.patchAgentResources).toHaveBeenCalledTimes(1);
   });
 
@@ -497,7 +497,7 @@ describe("agent config command behavior", () => {
       availableTeamResources: [],
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    await runConfig(["prompt", "show", "kael", "--raw"]);
+    await runConfig(["prompt", "show", "nova", "--raw"]);
     expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe(storedBody);
     stdout.mockRestore();
   });
@@ -581,7 +581,7 @@ describe("agent config command behavior", () => {
       availableTeamResources: [],
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    await runConfig(["prompt", "show", "kael"]);
+    await runConfig(["prompt", "show", "nova"]);
     const out = stdout.mock.calls.map((call) => String(call[0])).join("");
     stdout.mockRestore();
 
@@ -596,7 +596,7 @@ describe("agent config command behavior", () => {
   });
 
   it("shows config and prints dry-run diffs", async () => {
-    await runConfig(["show", "kael"]);
+    await runConfig(["show", "nova"]);
     expect(fetcherMocks.printConfig).toHaveBeenCalledWith(config());
 
     const patchFile = join(tempDir, "patch.json");
@@ -611,7 +611,7 @@ describe("agent config command behavior", () => {
       ],
     });
 
-    await runConfig(["dry-run", "kael", "--file", patchFile]);
+    await runConfig(["dry-run", "nova", "--file", patchFile]);
 
     expect(fetcherMocks.adminFetch).toHaveBeenCalledWith(
       "https://hub.example/api/v1/agents/agent-uuid/config/dry-run",

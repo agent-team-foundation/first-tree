@@ -121,7 +121,7 @@ beforeEach(() => {
   sharedConfigMocks.getConfigValue.mockReturnValue(undefined);
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
-  resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "kael" });
+  resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova" });
   coreMocks.isServiceSupported.mockReturnValue(true);
   coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd", detail: "pid 123" });
   coreMocks.stopClientService.mockReturnValue({ ok: true });
@@ -254,21 +254,21 @@ describe("agent admin and local commands", () => {
     cliFetchMock
       .mockResolvedValueOnce(jsonResponse({ memberId: "member-1" }))
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
-    await runAgent(["claim", "kael"]);
+    await runAgent(["claim", "nova"]);
     expect(cliFetchMock).toHaveBeenLastCalledWith(
       "https://hub.example/api/v1/agents/agent-1",
       expect.objectContaining({ method: "PATCH", body: JSON.stringify({ managerId: "member-1" }) }),
     );
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 500));
-    await expect(runAgent(["claim", "kael"])).rejects.toMatchObject({ code: "CLAIM_ERROR", exitCode: 1 });
+    await expect(runAgent(["claim", "nova"])).rejects.toMatchObject({ code: "CLAIM_ERROR", exitCode: 1 });
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
-    await runAgent(["bind", "client", "kael", "--client-id", "client-1"]);
+    await runAgent(["bind", "client", "nova", "--client-id", "client-1"]);
     expect(outputMocks.success).toHaveBeenCalledWith({ agentId: "agent-1", clientId: "client-1" });
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse({ error: "already bound" }, false, 409));
-    await expect(runAgent(["bind", "client", "kael", "--client-id", "client-1"])).rejects.toMatchObject({
+    await expect(runAgent(["bind", "client", "nova", "--client-id", "client-1"])).rejects.toMatchObject({
       code: "BIND_CLIENT_ERROR",
       exitCode: 1,
     });
@@ -277,14 +277,14 @@ describe("agent admin and local commands", () => {
     await runAgent(["reset", "agent-1"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('Agent "agent-1" reset');
 
-    const agentDir = join(tempDir, "config", "agents", "kael");
+    const agentDir = join(tempDir, "config", "agents", "nova");
     mkdirSync(agentDir, { recursive: true });
-    await runAgent(["remove", "kael"]);
-    expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("kael");
+    await runAgent(["remove", "nova"]);
+    expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("nova");
     await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
 
     localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
-    await runAgent(["debug", "register", "--agent", "kael"]);
+    await runAgent(["debug", "register", "--agent", "nova"]);
     expect(outputMocks.success).toHaveBeenCalledWith({ agentId: "agent-1" });
 
     cliFetchMock.mockResolvedValueOnce(
@@ -298,7 +298,7 @@ describe("agent admin and local commands", () => {
         },
       ]),
     );
-    await runAgent(["session", "list", "kael", "--state", "active"]);
+    await runAgent(["session", "list", "nova", "--state", "active"]);
     expect(cliFetchMock).toHaveBeenLastCalledWith(
       "https://hub.example/api/v1/agents/agent-1/sessions?state=active",
       expect.any(Object),
@@ -308,27 +308,27 @@ describe("agent admin and local commands", () => {
     );
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse([], true));
-    await runAgent(["session", "list", "kael"]);
+    await runAgent(["session", "list", "nova"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No sessions");
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse("bad", false, 503));
-    await expect(runAgent(["session", "list", "kael"])).rejects.toMatchObject({ code: "SESSIONS_ERROR" });
+    await expect(runAgent(["session", "list", "nova"])).rejects.toMatchObject({ code: "SESSIONS_ERROR" });
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
-    await runAgent(["session", "suspend", "kael", "chat-1"]);
+    await runAgent(["session", "suspend", "nova", "chat-1"]);
     expect(cliFetchMock).toHaveBeenLastCalledWith(
       "https://hub.example/api/v1/agents/agent-1/sessions/chat-1/suspend",
       expect.objectContaining({ method: "POST" }),
     );
     cliFetchMock.mockResolvedValueOnce(jsonResponse("denied", false, 403));
-    await expect(runAgent(["session", "terminate", "kael", "chat-1"])).rejects.toMatchObject({
+    await expect(runAgent(["session", "terminate", "nova", "chat-1"])).rejects.toMatchObject({
       code: "SESSION_CMD_ERROR",
     });
   });
 
   it("cleans workspaces across all agents or one agent", async () => {
     const workspaces = join(tempDir, "data", "workspaces");
-    mkdirSync(join(workspaces, "kael"), { recursive: true });
+    mkdirSync(join(workspaces, "nova"), { recursive: true });
     mkdirSync(join(workspaces, "mira"), { recursive: true });
     clientMocks.SessionRegistry.mockImplementation(() => ({
       load: vi.fn(
@@ -343,7 +343,7 @@ describe("agent admin and local commands", () => {
 
     await runAgent(["workspace", "clean", "--ttl", "3"]);
     expect(clientMocks.cleanWorkspaces).toHaveBeenCalledWith(
-      join(workspaces, "kael"),
+      join(workspaces, "nova"),
       new Set(["chat-active"]),
       3 * 24 * 60 * 60 * 1000,
     );
@@ -362,14 +362,14 @@ describe("chat lightweight commands", () => {
   it("lists chats, reads history, invites participants, and handles missing chat context", async () => {
     const sdk = localAgentMocks.createSdk();
 
-    await runChat(["list", "--limit", "5", "--cursor", "next", "--agent", "kael"]);
+    await runChat(["list", "--limit", "5", "--cursor", "next", "--agent", "nova"]);
     expect(sdk.listChats).toHaveBeenCalledWith({ limit: 5, cursor: "next" });
 
     await runChat(["history", "chat-1", "--limit", "10", "--cursor", "older"]);
     expect(sdk.listMessages).toHaveBeenCalledWith("chat-1", { limit: 10, cursor: "older" });
 
     process.env.FIRST_TREE_CHAT_ID = "chat-1";
-    await runChat(["invite", "mira", "--agent", "kael"]);
+    await runChat(["invite", "mira", "--agent", "nova"]);
     expect(sdk.addChatParticipant).toHaveBeenCalledWith("chat-1", { agentName: "mira" });
 
     delete process.env.FIRST_TREE_CHAT_ID;

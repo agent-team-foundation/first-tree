@@ -19,7 +19,7 @@ const chatsMocks = vi.hoisted(() => ({
 vi.mock("../../api/me-docs.js", () => meDocsMocks);
 vi.mock("../../api/chats.js", () => chatsMocks);
 vi.mock("../../lib/use-agent-name-map.js", () => ({
-  useAgentSlugToIdMap: () => (slug: string | null | undefined) => (slug === "kael" ? "agent-owner" : null),
+  useAgentSlugToIdMap: () => (slug: string | null | undefined) => (slug === "nova" ? "agent-owner" : null),
 }));
 
 let root: Root | null = null;
@@ -250,7 +250,7 @@ describe("DocPreviewDrawer", () => {
   it("loads fallback previews for cross-agent paths and renders API errors", async () => {
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
     const dom = await renderAt(
-      "/?docChat=chat-1&docAgent=sender&docPath=kael%2Fchat-1%2Fdocs%2Fguide.md",
+      "/?docChat=chat-1&docAgent=sender&docPath=nova%2Fchat-1%2Fdocs%2Fguide.md",
       <DocPreviewDrawer />,
     );
 

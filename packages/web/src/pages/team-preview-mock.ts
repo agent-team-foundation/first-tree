@@ -109,9 +109,9 @@ export const PREVIEW_HUMANS: PreviewHuman[] = [
 export const PREVIEW_AGENTS: PreviewAgent[] = [
   // ── Public (organization) ──────────────────────────────────────────────
   {
-    uuid: "a-kael",
-    name: "kael",
-    displayName: "Kael",
+    uuid: "a-nova",
+    name: "nova",
+    displayName: "Nova",
     tagline: "Flagship reasoning & chat agent for the whole team",
     visibility: "organization",
     managerId: "u-ava",

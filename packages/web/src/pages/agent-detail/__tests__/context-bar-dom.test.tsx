@@ -28,14 +28,14 @@ describe("ContextBar", () => {
   it("renders the agent identity only when visible", async () => {
     const { ContextBar } = await import("../context-bar.js");
     const hidden = await renderDom(
-      <ContextBar displayName="Kael" seed="agent-1" runtimeState="idle" visible={false} />,
+      <ContextBar displayName="Nova" seed="agent-1" runtimeState="idle" visible={false} />,
     );
     expect(hidden.container.textContent).toBe("");
     await act(async () => hidden.root.unmount());
 
-    const shown = await renderDom(<ContextBar displayName="Kael" seed="agent-1" runtimeState="idle" />);
+    const shown = await renderDom(<ContextBar displayName="Nova" seed="agent-1" runtimeState="idle" />);
     // Identity (name) is pinned; the old "Runs on <runtime> @ <computer>" strap is gone.
-    expect(shown.container.textContent).toContain("Kael");
+    expect(shown.container.textContent).toContain("Nova");
     expect(shown.container.textContent).not.toContain("Runs on");
     await act(async () => shown.root.unmount());
   });
