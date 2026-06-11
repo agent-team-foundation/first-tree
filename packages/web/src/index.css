@@ -475,6 +475,7 @@
   --sp-60: 15rem; /* 240px */
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
+  --sp-95: 23.75rem; /* 380px — chat-description popover card width (~60ch) */
 
   /* Agent detail content rail — one uniform readable width across every tab
      (header, tabs, and content all share it), centered like the context / team
