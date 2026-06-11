@@ -218,6 +218,27 @@ describe("toLiveActivity pure helper", () => {
     expect(toLiveActivity({ ...baseRow, kind: "thinking" })?.detail).toBeUndefined();
   });
 
+  it("strips codex command shell wrappers from liveActivity detail only for codex command rows", () => {
+    const wrapped = "/bin/bash -lc \"sed -n '1,40p' /home/op/context-tree/NODE.md\"";
+    expect(
+      toLiveActivity({
+        ...baseRow,
+        kind: "tool_call",
+        runtime_provider: "codex",
+        payload: { toolUseId: "t1", name: "command", args: { command: wrapped }, status: "pending" },
+      })?.detail,
+    ).toBe("sed -n '1,40p' /home/op/context…");
+
+    expect(
+      toLiveActivity({
+        ...baseRow,
+        kind: "tool_call",
+        runtime_provider: "claude-code",
+        payload: { toolUseId: "t1", name: "command", args: { command: wrapped }, status: "pending" },
+      })?.detail,
+    ).toBe("/bin/bash -lc \"sed -n '1,40p' /…");
+  });
+
   it("assistant_text carries a collapsed reply preview; empty text → none", () => {
     const writing = toLiveActivity({
       ...baseRow,
