@@ -234,9 +234,10 @@ export class ClientOrgMismatchError extends Error {
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
  * `instanceof` and guides the operator to run
- * `<binName> login <token> --override` to take ownership (which unpins
- * the previous owner's agents from this machine). See decouple-client-from-
- * identity §4.4.
+ * `<binName> login <token> --override`, which rotates the machine's local
+ * client identity and registers a fresh clientId under the new account —
+ * there is no server-side ownership transfer; the previous owner's client
+ * row and pinned agents are left untouched (offline).
  */
 export class ClientUserMismatchError extends Error {
   readonly code = "CLIENT_USER_MISMATCH";

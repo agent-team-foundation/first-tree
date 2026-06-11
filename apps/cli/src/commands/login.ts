@@ -137,8 +137,9 @@ export function registerLoginCommand(program: Command): void {
         const newMemberId = typeof payload?.memberId === "string" ? payload.memberId : null;
 
         // `--override` skips the local replace-or-cancel prompt because the
-        // operator has explicitly asked to take over the machine. The
-        // ownership-transfer POST below is the server-side counterpart.
+        // operator has explicitly asked to take over the machine. The local
+        // identity rotation below is what actually performs the takeover —
+        // there is no server-side transfer.
         if (!options.override && newMemberId) {
           const decision = await promptReplaceOrCancel(newMemberId);
           if (decision === "cancel") {
