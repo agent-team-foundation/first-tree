@@ -55,7 +55,13 @@ export const CORE_SKILL_NAMES = [] as const;
  * `scripts/copy-bundled-skills.mjs` — that script materialises these
  * directories under `<client-pkg>/skills/`.
  */
-export const TREE_SKILL_NAMES = ["first-tree", "first-tree-context", "first-tree-sync", "first-tree-seed"] as const;
+export const TREE_SKILL_NAMES = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-read",
+  "first-tree-sync",
+  "first-tree-seed",
+] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
 export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];

@@ -243,7 +243,8 @@ prompt.*`,
  *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
  *    and the mandatory pre-task hygiene (workspace binding check /
  *    tree HEAD freshness / role-fork).
- *  - `first-tree-context` ships the Source-System Boundary, the Hard
+ *  - `first-tree-context` ships the Context Tree concept model, the
+ *    Source-System Boundary, the authorship read-discipline, the Hard
  *    Rules 1-7 (default to not writing / read before write / smallest
  *    correct edit / no diffs / verify gate / ownership through humans /
  *    `decisionLocksCode`), the Double Test, Node Shape, and the
@@ -274,12 +275,12 @@ workspace-collab basics.
    invariant), the CLI Namespace Map, and the mandatory pre-task
    hygiene (workspace binding check / tree HEAD freshness / role-fork).
 2. **\`first-tree-context\`** — what a Context Tree is, the
-   source-system boundary, how to read the tree before acting, and
-   the Hard Rules + Double Test that govern every tree write.
+   source-system boundary, authorship read-discipline, and the Hard
+   Rules + Double Test that govern every tree write.
 
-These two are unconditional. The remaining First Tree skill
-(\`first-tree-sync\`) loads on demand based on the task signal as
-listed in the First Tree Family map below.
+These two are unconditional. The remaining First Tree skills
+(\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
+task signal as listed in the First Tree Family map below.
 
 Skipping either skill costs you the daemon-lifecycle invariants, the
 full Communication Principles, the source-system boundary, and the
@@ -571,8 +572,7 @@ function cliOverviewBlock(bin: string): string {
   // Subcommand lists are the actually-registered ones, not aspirational —
   // every command named here must exist or the agent burns a turn on
   // `unknown command`. The `tree` namespace was retired in 2026-06 down
-  // to just `verify` (cloud now owns workspace + tree provisioning; the
-  // client runtime inlines its own skill payload install). The `org`
+  // to validation (`verify`) and hierarchy browsing (`tree`). The `org`
   // namespace is operator-only and not surfaced to in-agent use.
   return `## CLI Overview
 
@@ -584,7 +584,8 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
-| \`${bin} tree verify\` | validate a Context Tree's structure (the only surviving \`tree\` subcommand) |
+| \`${bin} tree verify\` | validate a Context Tree's structure |
+| \`${bin} tree tree\` | browse Context Tree nodes as a hierarchy |
 
 Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
 workspace ↔ tree binding) runs from the web console or a human terminal
@@ -609,7 +610,8 @@ directory; each node is a markdown file with frontmatter (\`owners\`,
 \`soft_links\`) plus the actual content.
 
 For node anatomy, ownership tiers, and soft_link navigation, load
-\`first-tree-context\`.`);
+\`first-tree-context\`. For task-scoped file selection and operational
+read workflow, load \`first-tree-read\`.`);
 
   blocks.push(`## Reading the Tree
 
@@ -618,11 +620,13 @@ ones that look like pure code, CLI, or review work.** An instruction is
 underspecified on its own; in this org the tree supplies the background,
 requirements, and constraints that make acting on it correct.
 
-Always start at the tree's **root \`NODE.md\`** — the team's domain
-directory. **If the root also contains an \`AGENT.md\`, read it too** —
-it carries mandatory rules the org expects every agent to follow before
-acting. From there, follow the index / \`soft_links\` down to the nodes
-your task touches; Read, Grep, or list folders to get there.
+For the operational reader workflow, load \`first-tree-read\` and use
+the hierarchy command it describes to select focused files. At minimum,
+start at the tree's **root \`NODE.md\`** — the team's domain directory.
+**If the root also contains an \`AGENTS.md\`, read it too** — it carries
+mandatory rules the org expects every agent to follow before acting.
+From there, follow the index / \`soft_links\` down to the nodes your
+task touches.
 
 Where the tree's requirements or constraints **conflict with the
 instruction, the tree wins** — follow it and surface the conflict.
@@ -672,8 +676,8 @@ Read its root \`NODE.md\` first to map the domains before you act.`);
     // action (web console / human at the terminal), not something an
     // agent can self-serve — so surface the gap to a human instead of
     // suggesting any in-agent action. (The retired `first-tree-onboarding`
-    // skill used to live here; PR following #844 deleted the skill +
-    // the entire `first-tree tree` CLI namespace it depended on.)
+    // skill used to live here; PR following #844 deleted that provisioning
+    // flow and the broad tree-management commands it depended on.)
     blocks.push(`## Tree Location
 
 This agent has no Context Tree bound. If a task needs cross-domain
@@ -727,7 +731,7 @@ function firstTreeFamilyMap(): string {
 
 \`first-tree\` and \`first-tree-context\` are **unconditional** — load
 them on every task per \`# Required Reading\` above. The remaining
-row loads on demand: each skill's \`description\` field drives
+rows load on demand: each skill's \`description\` field drives
 progressive disclosure when you mention its domain. For general /
 harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 …) trust the auto-injected list.
@@ -735,7 +739,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | Skill | Load when |
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — read context before acting OR write tree updates from a specific PR / doc / note |
+| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
+| \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
 }
@@ -752,6 +757,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree",
   "first-tree-context",
+  "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",
 ] as const;

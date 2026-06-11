@@ -1,6 +1,7 @@
 // Drift guard for the `first-tree tree` namespace deletion (2026-06).
 //
-// PR #848 retired everything under `first-tree tree` except `verify`.
+// PR #848 retired everything under `first-tree tree` except `verify`; the
+// narrow hierarchy browser later returned as `tree tree`.
 // Agents pick up CLI instructions from two places at session start:
 //
 //   1. The runtime briefing emitted by `buildAgentBriefing()` —
@@ -45,7 +46,7 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = ["first-tree", "first-tree-context", "first-tree-sync", "first-tree-seed"];
+const SHIPPED_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
@@ -210,12 +211,12 @@ describe("retired tree subcommand drift guard", () => {
         .map((f) => `  ${f.file}:${f.line}: \`first-tree tree ${f.subcommand}\` — ${f.snippet}`)
         .join("\n");
       throw new Error(
-        `Retired tree subcommand resurfaced in shipped skill bash blocks (will 404 with "unknown command"):\n${detail}\n\nReplace with the supported alternative (workspace.json read / human handoff / tree verify) or update the test if a subcommand is intentionally being un-retired.`,
+        `Retired tree subcommand resurfaced in shipped skill bash blocks (will 404 with "unknown command"):\n${detail}\n\nReplace with the supported alternative (workspace.json read / human handoff / tree verify / tree tree) or update the test if a subcommand is intentionally being un-retired.`,
       );
     }
   });
 
-  it("buildAgentBriefing CLI Overview lists only `tree verify` — no retired commands", () => {
+  it("buildAgentBriefing CLI Overview lists only registered tree subcommands — no retired commands", () => {
     // Reuse a tiny stub of `BuildAgentBriefingOptions`. The CLI Overview
     // section doesn't depend on identity / payload / sourceRepos / tree
     // path, so a minimal stub renders the same output.
@@ -245,6 +246,7 @@ describe("retired tree subcommand drift guard", () => {
     const overview = briefing.slice(overviewStart, overviewEnd === -1 ? undefined : overviewEnd);
 
     expect(overview).toContain("tree verify");
+    expect(overview).toContain("tree tree");
     for (const sub of RETIRED_TREE_SUBCOMMANDS) {
       // Word-boundary regex (not `.toContain`) so prose like
       // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.
@@ -282,7 +284,7 @@ describe("retired tree subcommand drift guard", () => {
     if (failures.length > 0) {
       const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.skill}\` — ${f.snippet}`).join("\n");
       throw new Error(
-        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
+        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-read\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
       );
     }
   });

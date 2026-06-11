@@ -39,7 +39,7 @@ leaves a half-formed JSON record on disk.
   "cliVersion": "0.3.2",
   "updatedAt": "2026-06-08T15:50:00.000Z",
   "sourceRepos": ["first-tree", "first-tree-context"],
-  "skills": ["first-tree", "first-tree-context", "first-tree-sync", "first-tree-seed"]
+  "skills": ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"]
 }
 ```
 

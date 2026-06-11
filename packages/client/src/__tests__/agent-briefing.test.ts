@@ -311,7 +311,8 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
   // guarantees `first-tree` and `first-tree-context` get loaded on
   // every task — otherwise progressive disclosure (keyword-triggered)
   // can silently skip them and the agent acts without the rules in
-  // those skills (daemon lifecycle, hard write rules, etc.).
+  // those skills (daemon lifecycle, tree concept model, hard write
+  // rules, etc.).
 
   it("emits the # Required Reading section for tree-bound agents with MUST framing and both skill names", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
@@ -345,6 +346,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/either omits or only summarises/);
     // Calls out the on-demand-only sibling so the agent doesn't
     // over-load every First Tree family skill on every task.
+    expect(briefing).toContain("`first-tree-read`");
     expect(briefing).toContain("`first-tree-sync`");
   });
 
@@ -354,7 +356,8 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     // communication) it needs to operate at all, then hits the hard
     // mandate to load `first-tree` + `first-tree-context` before any
     // real work. The mandate sits adjacent to `# Context Tree` because
-    // the two skills cover the read/write rules for that section.
+    // those skills cover the shared runtime and tree concept/write
+    // rules for that section.
     const payload = {
       kind: "claude-code" as const,
       model: "",
@@ -421,9 +424,16 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     const contextRow = familyMap.match(/\|\s*`first-tree-context`\s*\|[^\n]*/)?.[0] ?? "";
     expect(contextRow).toContain("unconditional");
     expect(contextRow).toContain("`# Required Reading`");
+    expect(contextRow).toContain("concept model");
+    expect(contextRow).toContain("source-driven tree writes");
+    expect(contextRow).not.toContain("read context before acting");
 
     // On-demand rows must NOT pick up the unconditional label by
     // accident — they're triggered by keyword / task signal.
+    const readRow = familyMap.match(/\|\s*`first-tree-read`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(readRow).not.toContain("unconditional");
+    expect(readRow).toContain("before acting");
+
     const syncRow = familyMap.match(/\|\s*`first-tree-sync`\s*\|[^\n]*/)?.[0] ?? "";
     expect(syncRow).not.toContain("unconditional");
   });
@@ -625,14 +635,15 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
     // Real namespaces — each must appear inside the CLI Overview table.
-    // `tree` is now scoped to its single surviving subcommand (`verify`)
-    // rather than `tree …`; `org` is operator-only and was removed from
-    // the agent-facing table in the same edit.
+    // `tree` is scoped to registered concrete subcommands rather than
+    // `tree …`; `org` is operator-only and was removed from the
+    // agent-facing table in the same edit.
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
     expect(overview).toContain("first-tree chat …");
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
     expect(overview).toContain("first-tree tree verify");
+    expect(overview).toContain("first-tree tree tree");
 
     // Retired / unregistered surface must NOT appear.
     expect(overview).not.toContain("github scan");
@@ -641,19 +652,20 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     expect(overview).not.toContain("first-tree tree …");
   });
 
-  it("CLI Overview lists only the surviving `tree` subcommand (verify) — retired commands must stay out", () => {
-    // Post-2026-06 the `tree` namespace was retired to just `verify`
-    // (cloud now owns workspace + tree provisioning; client runtime
-    // inlines its own skill payload install). The briefing's CLI
-    // Overview must NOT advertise any deleted subcommand or the agent
-    // will burn a turn on `unknown command`. This test is the runtime
-    // counterpart to the `command-registration-smoke` test that pins
-    // the actual registered surface.
+  it("CLI Overview lists only registered `tree` subcommands — retired commands must stay out", () => {
+    // Post-2026-06 the `tree` namespace was retired to concrete
+    // registered subcommands: `verify` for validation and `tree` for
+    // hierarchy browsing. The briefing's CLI Overview must NOT advertise
+    // any deleted subcommand or the agent will burn a turn on `unknown
+    // command`. This test is the runtime counterpart to the
+    // `command-registration-smoke` test that pins the actual registered
+    // surface.
     const briefing = buildAgentBriefing(makeOpts());
     const overview = briefing.slice(briefing.indexOf("## CLI Overview"));
 
-    // The survivor must be listed.
+    // The surviving subcommands must be listed.
     expect(overview).toContain("tree verify");
+    expect(overview).toContain("tree tree");
 
     // Every retired tree subcommand must NOT appear in the CLI Overview
     // text. Use word-boundary regex (not `.toContain`) so prose like
@@ -694,13 +706,15 @@ describe("buildAgentBriefing — # Context Tree", () => {
 
     // Reading discipline anchors.
     expect(briefing).toContain("root `NODE.md`");
-    // Reading the Tree must also point the agent at root `AGENT.md` when
+    expect(briefing).toContain("load `first-tree-read`");
+    expect(briefing).toContain("hierarchy command");
+    // Reading the Tree must also point the agent at root `AGENTS.md` when
     // present — orgs put mandatory rules there and the de-injection
     // direction would otherwise lose them silently. The check anchors on
     // the conditional phrasing rather than the bare filename so it can't
     // accidentally pass on a hit elsewhere in the briefing (e.g. the
-    // legacy "`AGENT.md`" string in someone's `prompt.append`).
-    expect(briefing).toMatch(/If the root also contains an `AGENT\.md`, ?\s*read it too/);
+    // legacy "`AGENTS.md`" string in someone's `prompt.append`).
+    expect(briefing).toMatch(/If the root also contains an `AGENTS\.md`, ?\s*read it too/);
     expect(briefing).toContain("mandatory rules the org expects every agent");
     expect(briefing).toContain("before you act on any instruction");
     expect(briefing).toContain("the tree wins");
@@ -730,8 +744,8 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // Retired skills must not appear:
     //   - `first-tree-write` was folded into `first-tree-context` under
     //     the simplify-context-skill pass (PR #843).
-    //   - `first-tree-onboarding` was retired with the rest of the
-    //     `first-tree tree` namespace deletion (this PR).
+    //   - `first-tree-onboarding` was retired with the old tree
+    //     provisioning commands.
     //   - `first-tree-github-scan` predates both and never shipped.
     expect(writingBlock).not.toContain("`first-tree-write`");
     expect(writingBlock).not.toContain("`first-tree-onboarding`");
