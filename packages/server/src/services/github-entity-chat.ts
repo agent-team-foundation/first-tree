@@ -1,4 +1,4 @@
-import { chatMetadataSchema } from "@first-tree/shared";
+import { chatMetadataSchema, type GithubEntityBoundVia, githubEntityBoundViaSchema } from "@first-tree/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle, refreshEntityTitle } from "../api/webhooks/github-entity.js";
@@ -13,7 +13,9 @@ import { createChat } from "./chat.js";
 const log = createLogger("GithubEntityChat");
 
 /**
- * `bound_via` audit values:
+ * `bound_via` audit values — the value set is owned by the shared
+ * `githubEntityBoundViaSchema` (single source of truth; the wire, this
+ * service, and the audience carve-out all derive from it):
  *   - "direct"          — first-touch row created in `resolveTargetChat` step (c)
  *   - "fixes_link"      — secondary row written by the `Fixes #N` linker
  *   - "agent_declared"  — written by an explicit `github follow` declared by an
@@ -21,7 +23,9 @@ const log = createLogger("GithubEntityChat");
  *                         PR/Issue never auto-follows). See
  *                         `services/github-entity-follow.ts`. Legacy rows
  *                         written by the retired session-event auto-binder
- *                         (`agent_created`) were backfilled into this value.
+ *                         (`agent_created`) were backfilled into this value;
+ *                         the shared schema also normalises the legacy string
+ *                         at read time.
  *   - "human_declared"  — written by an explicit follow issued by a human
  *                         (user-scoped route); the delegate side comes from
  *                         the human's `delegate_mention`.
@@ -36,14 +40,13 @@ const log = createLogger("GithubEntityChat");
  * Routing logic ignores the distinction; the column exists for audit and the
  * narrow `pull_request.opened` carve-out in `github-audience.ts`.
  */
-export type BoundVia = "direct" | "fixes_link" | "agent_declared" | "human_declared" | "human_fallback";
+export type BoundVia = GithubEntityBoundVia;
 
 function asBoundVia(value: string): BoundVia {
-  if (value === "fixes_link") return "fixes_link";
-  if (value === "agent_declared") return "agent_declared";
-  if (value === "human_declared") return "human_declared";
-  if (value === "human_fallback") return "human_fallback";
-  return "direct";
+  const parsed = githubEntityBoundViaSchema.safeParse(value);
+  // Unknown legacy strings collapse to the first-touch default rather than
+  // erroring — the column is audit-only on this path.
+  return parsed.success ? parsed.data : "direct";
 }
 
 /**

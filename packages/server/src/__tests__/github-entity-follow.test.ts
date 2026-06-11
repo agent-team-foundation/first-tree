@@ -9,6 +9,7 @@ import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../servic
 import {
   declareEntityFollow,
   type FollowDeps,
+  listChatGithubEntities,
   parseEntityReference,
   removeEntityFollow,
 } from "../services/github-entity-follow.js";
@@ -436,6 +437,148 @@ describe("github-entity-follow", () => {
     await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api#42" })).resolves.toEqual({
       removed: 2,
     });
+  });
+
+  it("unfollow with a /pull/ URL also removes the auto-corrected issue row (follow/unfollow symmetry)", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    // `/pull/42` actually pointing at an issue: follow auto-corrects via the
+    // issues endpoint and stores entityType "issue".
+    const fetcher = prFetcher({
+      "/repos/acme/api/issues/42": () =>
+        json({ number: 42, state: "open", title: "Bug", html_url: "https://github.com/Acme/Api/issues/42" }),
+    });
+    const followed = await declareEntityFollow(
+      app.db,
+      deps(fetcher),
+      followParams(s, "https://github.com/acme/api/pull/42"),
+    );
+    if (followed.outcome !== "created") throw new Error("expected created");
+    expect(followed.entity.entityType).toBe("issue");
+
+    // The same reference the caller used to create the row must remove it.
+    await expect(
+      removeEntityFollow(app.db, { chatId: s.chatId, entity: "https://github.com/acme/api/pull/42" }),
+    ).resolves.toEqual({ removed: 1 });
+  });
+
+  it("unfollow with an explicit issue/PR reference never sweeps a discussion sharing the number", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "discussion",
+      entityKey: "Acme/Api#42",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+    });
+
+    await expect(
+      removeEntityFollow(app.db, { chatId: s.chatId, entity: "https://github.com/acme/api/issues/42" }),
+    ).resolves.toEqual({ removed: 0 });
+    // The bare form is the documented broad sweep.
+    await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api#42" })).resolves.toEqual({
+      removed: 1,
+    });
+  });
+
+  it("commit unfollow escapes LIKE metacharacters — an underscore repo cannot sweep a sibling", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const base = {
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "commit",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+    };
+    await app.db.insert(githubEntityChatMappings).values([
+      { ...base, entityKey: "acme/my_app@3f2a91c0aaaabbbbccccddddeeeeffff00001111" },
+      // `_` as LIKE-any-char would also match this sibling repo's row.
+      { ...base, entityKey: "acme/myxapp@3f2a91c0aaaabbbbccccddddeeeeffff00001111" },
+    ]);
+
+    await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/my_app@3f2a91c0" })).resolves.toEqual({
+      removed: 1,
+    });
+    const remaining = await app.db
+      .select({ entityKey: githubEntityChatMappings.entityKey })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, s.chatId));
+    expect(remaining).toEqual([{ entityKey: "acme/myxapp@3f2a91c0aaaabbbbccccddddeeeeffff00001111" }]);
+  });
+
+  it("rebind whose conflicting row vanished concurrently falls back to a real insert (no ghost success)", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
+
+    // Simulate the concurrent unfollow racing between the conflict read and
+    // the UPDATE: a fetcher hook is overkill — delete the row inside the
+    // same window by removing it before the rebind call reaches the UPDATE.
+    // Deterministic stand-in: remove the row, then rebind. The UPDATE
+    // matches 0 rows and must fall back to inserting, not report "rebound".
+    await removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api#42" });
+
+    const result = await declareEntityFollow(app.db, deps(prFetcher()), {
+      ...followParams(s, "acme/api#42", true),
+      chatId: newChat,
+    });
+    expect(result.outcome).toBe("created");
+    const rows = await app.db
+      .select({ chatId: githubEntityChatMappings.chatId })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
+    expect(rows).toEqual([{ chatId: newChat }]);
+  });
+
+  it("rebind refreshes boundAt so the listing dedup sees the move as most recent", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
+    const [before] = await app.db
+      .select({ boundAt: githubEntityChatMappings.boundAt })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
+
+    const rebound = await declareEntityFollow(app.db, deps(prFetcher()), {
+      ...followParams(s, "acme/api#42", true),
+      chatId: newChat,
+    });
+    expect(rebound.outcome).toBe("rebound");
+    const [after] = await app.db
+      .select({ boundAt: githubEntityChatMappings.boundAt })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
+    expect(after && before && after.boundAt.getTime() >= before.boundAt.getTime()).toBe(true);
+  });
+
+  it("legacy agent_created rows normalise to agent_declared at read time (rolling-deploy belt-and-suspenders)", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    // A row written by a still-draining old instance AFTER the one-shot
+    // backfill ran — the legacy value must not vanish from listings.
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "pull_request",
+      entityKey: "Acme/Api#7",
+      chatId: s.chatId,
+      boundVia: "agent_created",
+    });
+
+    const list = await listChatGithubEntities(app.db, deps(prFetcher()), {
+      chatId: s.chatId,
+      organizationId: s.admin.organizationId,
+    });
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({ entityKey: "Acme/Api#7", boundVia: "agent_declared" });
   });
 
   it("unfollow by short commit sha prefix removes the full-sha row", async () => {

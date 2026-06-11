@@ -175,6 +175,8 @@ export {
   type ChatGithubEntityListResponse,
   chatGithubEntityListResponseSchema,
   chatGithubEntitySchema,
+  DECLARED_BOUND_VIA,
+  type DeclaredBoundVia,
   type FollowGithubEntityConflict,
   type FollowGithubEntityRequest,
   type FollowGithubEntityResponse,
@@ -185,6 +187,7 @@ export {
   type GithubEntityLiveState,
   githubEntityBoundViaSchema,
   githubEntityLiveStateSchema,
+  isDeclaredBoundVia,
   type UnfollowGithubEntityResponse,
   unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";

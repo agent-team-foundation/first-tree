@@ -19,17 +19,32 @@ import { githubEntityTypeSchema } from "./chat-metadata.js";
  * How a mapping row came to exist. `agent_declared` / `human_declared` are
  * written by the explicit `github follow` paths (agent route / user route);
  * there is no implicit agent-side wiring — creating a PR or Issue never
- * follows it. Legacy `agent_created` rows from the retired session-event
- * auto-binder were backfilled into `agent_declared`.
+ * follows it.
+ *
+ * Legacy `agent_created` rows from the retired session-event auto-binder were
+ * backfilled into `agent_declared` by a data-only migration. The preprocess
+ * below additionally normalises the value at READ time — belt-and-suspenders
+ * for any row written by a still-draining old instance after the one-shot
+ * backfill ran (rolling deploy window). Without it such a row would fail the
+ * enum parse and silently vanish from every listing.
  */
-export const githubEntityBoundViaSchema = z.enum([
-  "direct",
-  "fixes_link",
-  "human_fallback",
-  "agent_declared",
-  "human_declared",
-]);
+export const githubEntityBoundViaSchema = z.preprocess(
+  (value) => (value === "agent_created" ? "agent_declared" : value),
+  z.enum(["direct", "fixes_link", "human_fallback", "agent_declared", "human_declared"]),
+);
 export type GithubEntityBoundVia = z.infer<typeof githubEntityBoundViaSchema>;
+
+/**
+ * The subset of `bound_via` values written by an explicit follow. Exported as
+ * the single definition of "deliberately declared" so consumers (e.g. the
+ * `pull_request.opened` audience carve-out) can't drift when a new declared
+ * flavour is added.
+ */
+export const DECLARED_BOUND_VIA = ["agent_declared", "human_declared"] as const;
+export type DeclaredBoundVia = (typeof DECLARED_BOUND_VIA)[number];
+export function isDeclaredBoundVia(value: string): value is DeclaredBoundVia {
+  return (DECLARED_BOUND_VIA as readonly string[]).includes(value);
+}
 
 /**
  * Coarse live state. PR-specific values (`merged`, `draft`) are folded

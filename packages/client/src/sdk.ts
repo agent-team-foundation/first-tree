@@ -340,7 +340,16 @@ export class FirstTreeHubSDK {
       body: JSON.stringify(body),
     });
     if (response.status === 409) {
-      const parsed = followGithubEntityConflictSchema.safeParse(await response.json());
+      // Guard the body read: a proxy or middleware can answer 409 with a
+      // non-JSON page, and an unguarded .json() would surface as an opaque
+      // SyntaxError instead of the conflict contract.
+      let conflictBody: unknown;
+      try {
+        conflictBody = await response.json();
+      } catch {
+        throw new SdkError(409, "Entity already followed in another chat (non-JSON conflict body)");
+      }
+      const parsed = followGithubEntityConflictSchema.safeParse(conflictBody);
       if (parsed.success) return { ok: false, conflict: parsed.data };
       throw new SdkError(409, "Entity already followed in another chat (malformed conflict body)");
     }

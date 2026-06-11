@@ -181,6 +181,15 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
    * comes from their `delegate_mention` configuration — without one there is
    * no (human, delegate) pair to wire, so the request is rejected with
    * guidance. Agents follow through the Class D route instead.
+   *
+   * The delegate must be an ACTIVE SPEAKER of this chat before the mapping
+   * is recorded: GitHub delivery addresses event cards to the delegate, and
+   * `sendMessage` only fans out to active speaker rows — a mapping whose
+   * delegate isn't in the room would "succeed" while every event lands as a
+   * silently stored card that wakes nobody, violating the follow contract
+   * (every event wakes the wiring agent). Rejecting with guidance beats
+   * silently wiring a dead line; inviting the delegate is one explicit
+   * `chat invite` away.
    */
   app.post<{ Params: { chatId: string } }>(
     "/:chatId/github-entities",
@@ -198,6 +207,27 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError(
           "Following needs a delegate agent to receive the entity's events, and your account has no " +
             "delegate_mention configured. Set one in your member settings, then retry.",
+        );
+      }
+
+      const [delegate] = await app.db
+        .select({ agentId: chatMembership.agentId })
+        .from(chatMembership)
+        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+        .where(
+          and(
+            eq(chatMembership.chatId, chat.id),
+            eq(chatMembership.agentId, human.delegateMention),
+            eq(chatMembership.accessMode, "speaker"),
+            eq(agents.status, "active"),
+          ),
+        )
+        .limit(1);
+      if (!delegate) {
+        throw new BadRequestError(
+          "Your delegate agent is not an active speaker of this chat, so the entity's events could never wake " +
+            "it here. Invite the delegate into this chat (chat invite) — or follow from the chat where it " +
+            "already speaks — then retry.",
         );
       }
 

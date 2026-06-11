@@ -1,6 +1,7 @@
 import type {
   ChatGithubEntity,
   ChatGithubEntityListResponse,
+  DeclaredBoundVia,
   GithubEntityLiveState,
   GithubEntityType,
 } from "@first-tree/shared";
@@ -106,6 +107,32 @@ export function parseEntityReference(raw: string): EntityReference | null {
   return null;
 }
 
+/**
+ * Parse or reject with the canonical usage hint — shared by follow and
+ * unfollow so the teaching text (the de-facto docs for agents) has exactly
+ * one copy.
+ */
+function parseEntityReferenceOrThrow(raw: string): EntityReference {
+  const ref = parseEntityReference(raw);
+  if (!ref) {
+    throw new BadRequestError(
+      `Unrecognized entity reference "${raw}". Pass a GitHub URL ` +
+        `(https://github.com/owner/repo/pull/42), "owner/repo#42", or "owner/repo@<sha>".`,
+    );
+  }
+  return ref;
+}
+
+/**
+ * Escape SQL LIKE metacharacters (`\`, `%`, `_`) in a literal that will be
+ * embedded in a LIKE pattern. GitHub repo names legitimately contain `_`,
+ * which LIKE would otherwise treat as match-any-one-char and over-delete
+ * across sibling repos.
+ */
+function escapeLikeLiteral(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
 /** Mapping-row lifecycle state (`entity_state` column). */
 type EntityState = "open" | "closed" | "merged";
 
@@ -117,6 +144,8 @@ type ResolvedEntity = {
   title: string | null;
   liveState: GithubEntityLiveState | null;
   entityState: EntityState;
+  /** Issue / PR / Discussion number; null for commits. Set where `entityKey` is built. */
+  number: number | null;
 };
 
 type ResolveOutcome =
@@ -146,9 +175,11 @@ async function ghGet(path: string, token: string, fetcher: typeof fetch): Promis
       if (typeof body !== "object" || body === null) return { kind: "unavailable" };
       return { kind: "ok", body: body as Record<string, unknown> };
     }
-    // 403 with an exhausted rate-limit budget is a transient upstream
-    // condition, not an access verdict — surface it as retry-later.
-    if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
+    // 403 from a rate limiter is a transient upstream condition, not an
+    // access verdict — surface it as retry-later. Primary rate limits set
+    // x-ratelimit-remaining: 0; secondary/abuse limits keep a nonzero
+    // budget but carry a retry-after header.
+    if (res.status === 403 && (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.get("retry-after"))) {
       return { kind: "unavailable" };
     }
     if (res.status === 404 || res.status === 410) return { kind: "not-found" };
@@ -209,6 +240,7 @@ async function resolveEntityOnGithub(
         title: message ? (message.split("\n", 1)[0]?.trim() ?? null) : null,
         liveState: null,
         entityState: "open",
+        number: null,
       },
     };
   }
@@ -260,6 +292,7 @@ async function resolveEntityOnGithub(
         title,
         liveState,
         entityState,
+        number,
       },
     };
   }
@@ -274,6 +307,7 @@ async function resolveEntityOnGithub(
       title,
       liveState: rawState === "open" || rawState === "closed" ? rawState : null,
       entityState,
+      number,
     },
   };
 }
@@ -297,6 +331,7 @@ async function resolveDiscussion(
       title: readStr(res.body.title),
       liveState: rawState === "open" || rawState === "closed" ? rawState : null,
       entityState: rawState === "closed" ? "closed" : "open",
+      number,
     },
   };
 }
@@ -312,7 +347,7 @@ export type DeclareFollowParams = {
   organizationId: string;
   humanAgentId: string;
   delegateAgentId: string;
-  boundVia: "agent_declared" | "human_declared";
+  boundVia: DeclaredBoundVia;
   /** Raw entity reference — URL, `owner/repo#N`, or `owner/repo@sha`. */
   entity: string;
   rebind: boolean;
@@ -341,13 +376,7 @@ export async function declareEntityFollow(
   deps: FollowDeps,
   params: DeclareFollowParams,
 ): Promise<DeclareFollowResult> {
-  const ref = parseEntityReference(params.entity);
-  if (!ref) {
-    throw new BadRequestError(
-      `Unrecognized entity reference "${params.entity}". Pass a GitHub URL ` +
-        `(https://github.com/owner/repo/pull/42), "owner/repo#42", or "owner/repo@<sha>".`,
-    );
-  }
+  const ref = parseEntityReferenceOrThrow(params.entity);
 
   const fetcher = deps.fetcher ?? fetch;
   const installation = await findInstallationByOrg(db, params.organizationId);
@@ -388,7 +417,7 @@ export async function declareEntityFollow(
     htmlUrl: entity.htmlUrl,
     title: entity.title,
     state: entity.liveState,
-    number: ref.kind === "numeric" ? Number(entity.entityKey.split("#")[1]) : null,
+    number: entity.number,
   };
 
   const result = await insertMappingIfAbsent(db, {
@@ -416,10 +445,17 @@ export async function declareEntityFollow(
   if (params.rebind) {
     // Move the line: the entity's attention home follows the task. Rewrites
     // `bound_via` to the declared value so a moved `direct` anchor row can't
-    // make the new chat impersonate a github-minted chat's anchor (R13).
-    await db
+    // make the new chat impersonate a github-minted chat's anchor (R13), and
+    // refreshes `boundAt` so the listing dedup's "most recent binding"
+    // ordering reflects the move.
+    const moved = await db
       .update(githubEntityChatMappings)
-      .set({ chatId: params.chatId, boundVia: params.boundVia, entityState: entity.entityState })
+      .set({
+        chatId: params.chatId,
+        boundVia: params.boundVia,
+        entityState: entity.entityState,
+        boundAt: new Date(),
+      })
       .where(
         and(
           eq(githubEntityChatMappings.organizationId, params.organizationId),
@@ -428,7 +464,33 @@ export async function declareEntityFollow(
           eq(githubEntityChatMappings.entityType, entity.entityType),
           eq(githubEntityChatMappings.entityKey, entity.entityKey),
         ),
-      );
+      )
+      .returning({ chatId: githubEntityChatMappings.chatId });
+    if (moved.length === 0) {
+      // The conflicting row vanished between the insert-conflict read and
+      // the UPDATE (concurrent unfollow). Don't report a ghost "rebound" —
+      // fall back to a plain insert so the follow is actually recorded.
+      const reinserted = await insertMappingIfAbsent(db, {
+        organizationId: params.organizationId,
+        humanAgentId: params.humanAgentId,
+        delegateAgentId: params.delegateAgentId,
+        entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl },
+        chatId: params.chatId,
+        boundVia: params.boundVia,
+        entityState: entity.entityState,
+      });
+      if (!reinserted.inserted && reinserted.chatId !== params.chatId) {
+        // Lost yet another race to a third writer — surface the conflict.
+        const [thirdChat] = await db
+          .select({ topic: chats.topic })
+          .from(chats)
+          .where(eq(chats.id, reinserted.chatId))
+          .limit(1);
+        return { outcome: "conflict", conflict: { chatId: reinserted.chatId, topic: thirdChat?.topic ?? null } };
+      }
+      log.info({ chatId: params.chatId, entityKey: entity.entityKey }, "github follow recorded (rebind fallback)");
+      return { outcome: "created", entity: wireEntity };
+    }
     log.info(
       { fromChatId: result.chatId, toChatId: params.chatId, entityKey: entity.entityKey },
       "github follow rebound",
@@ -460,18 +522,15 @@ export async function removeEntityFollow(
   db: Database,
   params: { chatId: string; entity: string },
 ): Promise<{ removed: number }> {
-  const ref = parseEntityReference(params.entity);
-  if (!ref) {
-    throw new BadRequestError(
-      `Unrecognized entity reference "${params.entity}". Pass a GitHub URL ` +
-        `(https://github.com/owner/repo/pull/42), "owner/repo#42", or "owner/repo@<sha>".`,
-    );
-  }
+  const ref = parseEntityReferenceOrThrow(params.entity);
 
   const chatCond = eq(githubEntityChatMappings.chatId, params.chatId);
   let removedRows: Array<{ entityKey: string }>;
   if (ref.kind === "commit") {
-    const prefix = `${ref.owner}/${ref.repo}@${ref.sha}`.toLowerCase();
+    // Prefix match so a short sha unfollows the full-sha row; LIKE
+    // metacharacters in owner/repo (GitHub allows `_`) are escaped so the
+    // pattern can't over-match sibling repos.
+    const prefix = escapeLikeLiteral(`${ref.owner}/${ref.repo}@${ref.sha}`.toLowerCase());
     removedRows = await db
       .delete(githubEntityChatMappings)
       .where(
@@ -484,12 +543,22 @@ export async function removeEntityFollow(
       .returning({ entityKey: githubEntityChatMappings.entityKey });
   } else {
     const key = `${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase();
-    // The short numeric form can't tell issue/PR/discussion apart without an
-    // API call — and unfollow must not depend on GitHub being up. Numbers
-    // are unique across issues+PRs; discussions have their own space, so the
-    // 3-type match can in principle sweep an unrelated discussion sharing
-    // the number. Accepted: "make this chat quiet about #N" is the intent.
-    const types: GithubEntityType[] = ref.explicitType ? [ref.explicitType] : ["issue", "pull_request", "discussion"];
+    // Type matching without a GitHub call (unfollow must not depend on
+    // GitHub being up):
+    //   - Issues and PRs share one numbering space, and follow auto-corrects
+    //     a `/pull/N` URL that actually points at an issue (and vice versa)
+    //     — so an explicit issue/PR reference matches BOTH types, otherwise
+    //     the row created through the auto-corrected follow could never be
+    //     removed with the same reference the caller used to create it.
+    //   - Discussions number independently; an explicit `/discussions/N`
+    //     URL matches only discussions, and only the bare `owner/repo#N`
+    //     form sweeps all three ("make this chat quiet about #N").
+    const types: GithubEntityType[] =
+      ref.explicitType === "discussion"
+        ? ["discussion"]
+        : ref.explicitType !== null
+          ? ["issue", "pull_request"]
+          : ["issue", "pull_request", "discussion"];
     removedRows = await db
       .delete(githubEntityChatMappings)
       .where(

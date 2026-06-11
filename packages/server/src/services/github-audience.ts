@@ -1,4 +1,4 @@
-import type { InvolveReason, NormalizedEvent } from "@first-tree/shared";
+import { type InvolveReason, isDeclaredBoundVia, type NormalizedEvent } from "@first-tree/shared";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -176,7 +176,7 @@ export async function resolveAudience(
   const involvedLogins = new Set(event.involves.map((i) => i.githubLogin.toLowerCase()));
   const keepSubscribedOpened = (row: (typeof subscribedRows)[number]): boolean => {
     if (!isPullRequestOpened) return true;
-    if (row.boundVia === "agent_declared" || row.boundVia === "human_declared") return true;
+    if (isDeclaredBoundVia(row.boundVia)) return true;
     return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
   };
 
