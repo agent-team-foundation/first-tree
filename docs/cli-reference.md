@@ -329,14 +329,17 @@ first-tree chat open code-agent
 environment. The recipient must be a participant of that chat; if not,
 `invite` first.
 
-`chat create` is different: it creates a new task chat and sends the first
-message as one operation. It does not use the current chat as its target,
-does not modify `FIRST_TREE_CHAT_ID`, and does not switch the running agent
-session. Use `--operation-id <id>` only to retry after an unknown commit
-status. Immediate matching retries are best-effort deduplicated while the
-original operation remains tracked by the same server process; after a server
-restart or a retry routed to another instance, duplicates are possible. Replay
-is not a new wake: it does not re-notify recipients or reactivate their
+`chat create` is different: it starts a new task chat and then sends the first
+message. It does not use the current chat as its target, does not modify
+`FIRST_TREE_CHAT_ID`, and does not switch the running agent session. Input and
+target validation failures happen before chat creation; if the later initial
+message send fails, the command returns a structured
+`CHAT_CREATE_INITIAL_MESSAGE_FAILED` error with `details.chatId` and the new
+chat may be empty. Use `--operation-id <id>` only to retry after an unknown
+commit status. Immediate matching retries are best-effort deduplicated while
+the original operation remains tracked by the same server process; after a
+server restart or a retry routed to another instance, duplicates are possible.
+Replay is not a new wake: it does not re-notify recipients or reactivate their
 sessions. Selectors may be raw names/UUIDs or explicit `name:<name>` /
 `id:<uuid>` forms; raw selectors are rejected when ambiguous.
 

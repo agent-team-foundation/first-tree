@@ -1,7 +1,9 @@
-import type { FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createLogger } from "../../observability/index.js";
 
 const log = createLogger("AgentRateLimit");
+
+type RateLimitCheck = ReturnType<FastifyInstance["createRateLimit"]>;
 
 /**
  * Per-agent rate limit on outbound message writes. Keyed by `agent.uuid`
@@ -10,7 +12,8 @@ const log = createLogger("AgentRateLimit");
  *
  * Rationale: agent <-> agent reply loops are the documented failure mode
  * (`mention_only` is the semantic guard; this is the hard ceiling). Create-
- * and-send is also a message-write surface, so it uses the same bucket.
+ * and-send is also a message-write surface, so it uses the same per-agent
+ * ceiling.
  */
 export function agentMessageWriteRateLimit(max: number) {
   return {
@@ -28,4 +31,25 @@ export function agentMessageWriteRateLimit(max: number) {
       },
     },
   };
+}
+
+export async function enforceAgentMessageWriteRateLimit(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  checkRateLimit: RateLimitCheck,
+): Promise<void> {
+  const limit = await checkRateLimit(request);
+  if (limit.isAllowed) return;
+
+  reply.header("x-ratelimit-limit", limit.max);
+  reply.header("x-ratelimit-remaining", limit.remaining);
+  reply.header("x-ratelimit-reset", limit.ttlInSeconds);
+
+  if (!limit.isExceeded) return;
+
+  reply.header("x-ratelimit-remaining", 0);
+  reply.header("retry-after", limit.ttlInSeconds);
+  const error = new Error(`Rate limit exceeded, retry in ${limit.ttlInSeconds} seconds`);
+  (error as Error & { statusCode?: number }).statusCode = limit.isBanned ? 403 : 429;
+  throw error;
 }

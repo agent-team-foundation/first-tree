@@ -15,11 +15,11 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, ForbiddenError, NotFoundError, StructuredAppError } from "../errors.js";
+import { AppError, BadRequestError, ForbiddenError, NotFoundError, StructuredAppError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
-import { runSendMessagePostCommitEffects, sendMessageInTransaction } from "./message.js";
+import { sendMessage } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
@@ -222,6 +222,10 @@ type CreateChatWithInitialMessageServiceResult = CreateChatWithInitialMessageRes
   recipients: string[];
 };
 
+type CreateChatWithInitialMessageOptions = {
+  beforeCreate?: () => void | Promise<void>;
+};
+
 const CHAT_CREATE_PROCESS_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 type ChatCreateProcessDedupeEntry = {
@@ -409,7 +413,7 @@ async function createChatWithInitialMessageOnce(
   senderAgentId: string,
   input: CreateChatWithInitialMessage,
 ): Promise<CreateChatWithInitialMessageServiceResult> {
-  const txResult = await db.transaction(async (tx) => {
+  const prepared = await db.transaction(async (tx) => {
     if (input.to.length === 0) {
       throw chatCreateStructuredError(
         400,
@@ -468,35 +472,54 @@ async function createChatWithInitialMessageOnce(
       metadata: { ...(input.message.metadata ?? {}), mentions: recipientAgentIds },
       source: input.message.source ?? MESSAGE_SOURCES.API,
     };
-    const postCommitPlan = await sendMessageInTransaction(tx, chat.id, senderAgentId, messageData, {
-      normalizeMentionsInContent: true,
-    });
 
     return {
-      postCommitPlan,
-      result: {
-        chat: { id: chat.id },
-        message: { id: postCommitPlan.message.id },
-        operationId: input.operationId,
-        replayed: false,
-        senderAgentId,
-        recipientAgentIds,
-        participantAgentIds: chat.participants.map((participant) => participant.agentId),
-      },
+      chat: { id: chat.id },
+      operationId: input.operationId,
+      senderAgentId,
+      recipientAgentIds,
+      participantAgentIds: chat.participants.map((participant) => participant.agentId),
+      messageData,
     };
   });
 
-  await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
-  return {
-    ...txResult.result,
-    recipients: txResult.postCommitPlan.recipients,
-  };
+  try {
+    const sent = await sendMessage(db, prepared.chat.id, senderAgentId, prepared.messageData, {
+      normalizeMentionsInContent: true,
+    });
+    return {
+      chat: prepared.chat,
+      message: { id: sent.message.id },
+      operationId: prepared.operationId,
+      replayed: false,
+      senderAgentId: prepared.senderAgentId,
+      recipientAgentIds: prepared.recipientAgentIds,
+      participantAgentIds: prepared.participantAgentIds,
+      recipients: sent.recipients,
+    };
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    const statusCode =
+      error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    throw chatCreateStructuredError(
+      statusCode,
+      "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+      "Chat was created, but the initial message could not be sent.",
+      {
+        operationId: input.operationId,
+        chatId: prepared.chat.id,
+        cause,
+        hint: "The new chat may be empty. Inspect the chatId, then retry with a corrected message or send the first message into that chat.",
+      },
+    );
+  }
 }
 
 export async function createChatWithInitialMessage(
   db: Database,
   senderAgentId: string,
   input: CreateChatWithInitialMessage,
+  options: CreateChatWithInitialMessageOptions = {},
 ): Promise<CreateChatWithInitialMessageServiceResult> {
   pruneExpiredChatCreateProcessDedupe();
   const requestHash = createChatRequestHash(input);
@@ -509,7 +532,10 @@ export async function createChatWithInitialMessage(
 
   const entry: ChatCreateProcessDedupeEntry = {
     requestHash,
-    promise: Promise.resolve().then(() => createChatWithInitialMessageOnce(db, senderAgentId, input)),
+    promise: Promise.resolve().then(async () => {
+      await options.beforeCreate?.();
+      return createChatWithInitialMessageOnce(db, senderAgentId, input);
+    }),
   };
   chatCreateProcessDedupe.set(key, entry);
   entry.promise = entry.promise.then(

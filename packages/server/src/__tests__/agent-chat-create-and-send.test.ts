@@ -18,7 +18,7 @@ async function tableCount(app: ReturnType<ReturnType<typeof useTestApp>>, table:
 describe("Agent chat create-and-send API", () => {
   const getApp = useTestApp();
 
-  it("creates a chat and first message atomically with --to recipients and --with context-only participants", async () => {
+  it("creates a chat, then sends the first message with --to recipients and --with context-only participants", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: "create-sender" });
     const to = await createTestAgent(app, { name: "create-to" });
@@ -308,7 +308,7 @@ describe("Agent chat create-and-send API", () => {
     expect(res.json().recipientAgentIds).toEqual([privateTarget.uuid]);
   });
 
-  it("does not leave an empty chat when validation fails after operation reservation", async () => {
+  it("does not leave an empty chat when validation fails before chat creation", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: "partial-sender" });
 
@@ -321,6 +321,46 @@ describe("Agent chat create-and-send API", () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe("CHAT_CREATE_TARGET_NOT_FOUND");
     expect(await tableCount(app, chats)).toBe(0);
+    expect(await tableCount(app, messages)).toBe(0);
+  });
+
+  it("returns a structured partial-failure error if the initial message send fails after chat creation", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: "message-fail-sender" });
+    const target = await createTestAgent(app, { name: "message-fail-target" });
+
+    const res = await sender.request("POST", "/api/v1/agent/chats/create-and-send", {
+      operationId: "op-message-fails",
+      to: [target.agent.name],
+      message: {
+        format: "text",
+        content: "will fail during send",
+        metadata: {
+          documentContext: {
+            kind: "snapshot",
+            docs: [
+              {
+                path: "docs/example.md",
+                content: "hello",
+                size: 5,
+                sha256: "0".repeat(64),
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      code: "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+      details: {
+        operationId: "op-message-fails",
+        cause: "Document snapshot sha256 does not match content",
+      },
+    });
+    expect(typeof res.json().details.chatId).toBe("string");
+    expect(await tableCount(app, chats)).toBe(1);
     expect(await tableCount(app, messages)).toBe(0);
   });
 });
@@ -343,5 +383,44 @@ describe("Agent chat create-and-send rate limit", () => {
     expect((await create(1)).statusCode).toBe(201);
     expect((await create(2)).statusCode).toBe(201);
     expect((await create(3)).statusCode).toBe(429);
+  });
+});
+
+describe("Agent chat create-and-send replay before rate limit", () => {
+  const getApp = useTestApp({ rateLimit: { agentMessageMax: 1 } });
+
+  it("replays the same operation before consuming write quota but still limits new operations", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: `create-replay-rl-${crypto.randomUUID().slice(0, 6)}-s` });
+    const target = await createTestAgent(app, { name: `create-replay-rl-${crypto.randomUUID().slice(0, 6)}-t` });
+    const payload = {
+      operationId: "op-create-replay-before-rl",
+      to: [target.agent.name],
+      message: { format: "text", content: "limited replay" },
+    };
+
+    const first = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json();
+
+    const replay = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({
+      chat: firstBody.chat,
+      message: firstBody.message,
+      operationId: payload.operationId,
+      replayed: true,
+    });
+    expect(await tableCount(app, chats)).toBe(1);
+    expect(await tableCount(app, messages)).toBe(1);
+
+    const newOperation = await sender.request("POST", "/api/v1/agent/chats/create-and-send", {
+      operationId: "op-create-new-after-rl",
+      to: [target.agent.name],
+      message: { format: "text", content: "new operation should be limited" },
+    });
+    expect(newOperation.statusCode).toBe(429);
+    expect(await tableCount(app, chats)).toBe(1);
+    expect(await tableCount(app, messages)).toBe(1);
   });
 });

@@ -118,8 +118,10 @@ Rules:
   not woken by the first message.
 - The sender is added automatically; do not include yourself in `--to` or
   `--with`.
-- The command creates the chat and first message as one operation. It does not
-  create an empty chat.
+- The command creates the chat, then sends the first message. Input and target
+  validation failures happen before chat creation, but a later initial-message
+  send failure can leave an empty chat; the structured error includes
+  `details.chatId` when that happens.
 - It does not use the current chat as its target, does not change
   `FIRST_TREE_CHAT_ID`, and does not switch the running session. Your final text
   still writes to the chat that woke your current turn.

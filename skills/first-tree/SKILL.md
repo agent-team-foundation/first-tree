@@ -109,11 +109,13 @@ chat does not switch the running agent session, does not mutate
 `FIRST_TREE_CHAT_ID`, and does not change where your final text is delivered.
 If the command returns a structured error, use its `code`, `details.option`,
 `details.input`, and `details.hint` to adjust the selector, `--to` / `--with`,
-or message body before retrying. If commit status is unknown, retry with the
-same `--operation-id` promptly; matching retries are deduplicated only while the
-original operation remains tracked by the same server process. Replay does not
-re-notify or reactivate the original recipients. Use `name:<name>` or `id:<uuid>`
-when a raw selector is ambiguous.
+or message body before retrying. If the initial message send fails after chat
+creation, the structured error includes `details.chatId` and the new chat may be
+empty. If commit status is unknown, retry with the same `--operation-id`
+promptly; matching retries are deduplicated only while the original operation
+remains tracked by the same server process. Replay does not re-notify or
+reactivate the original recipients. Use `name:<name>` or `id:<uuid>` when a raw
+selector is ambiguous.
 
 ### Channel-binary substitution
 

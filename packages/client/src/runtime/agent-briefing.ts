@@ -432,7 +432,9 @@ recipient.
 task chat, use \`${bin} chat create --to <name> --message "..."\`. \`--to\`
 is the first-message recipient and wakes that participant; \`--with\` adds a
 context-only participant. Creating a new chat does not switch the current
-session or mutate \`FIRST_TREE_CHAT_ID\`.`;
+session or mutate \`FIRST_TREE_CHAT_ID\`. If the initial message send fails after
+chat creation, the structured error includes \`details.chatId\` and the new chat
+may be empty.`;
 }
 
 function workspaceCollaborationBlock(bin: string): string {
