@@ -1091,15 +1091,12 @@ export function isLikelyGitDiskError(message: string): boolean {
 export function isLikelyTransientNetworkError(message: string): boolean {
   if (!message) return false;
   if (isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message)) return false;
-  if (
-    /SSL certificate problem/i.test(message) ||
-    /server certificate verification failed/i.test(message) ||
-    /certificate verify failed/i.test(message) ||
-    /self.signed certificate/i.test(message) ||
-    /unable to get local issuer certificate/i.test(message) ||
-    /certificate has expired/i.test(message)
-  )
-    return false;
+  // TLS trust failures (cert verify / self-signed / expired CA / etc) are
+  // host-configuration faults — retrying with the same machine state cannot
+  // cure them. Delegated to `isLikelyTlsTrustFailure` so the pattern set
+  // stays single-source; previously this inlined ~6 cert-* regexes that
+  // duplicated and drifted from the dedicated helper.
+  if (isLikelyTlsTrustFailure(message)) return false;
   return (
     /SSL_ERROR_SYSCALL/i.test(message) ||
     /unexpected eof while reading/i.test(message) ||

@@ -28,6 +28,7 @@ import type {
   SessionMessage,
 } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
+import { redactErrorPreview } from "./redact-error-preview.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
 
@@ -1061,8 +1062,12 @@ export class SessionManager {
       // so retry_started can include it too. The web UI renders the encoded
       // payload as text, so any operator looking at a `reasonCode:"unknown"` /
       // `git_unknown` retry can see the underlying err.message without
-      // SSHing to the host — see encodeResilienceMessage's payload schema.
-      entry.lastRetryRawError = errMsg ? errMsg.slice(0, 256) : null;
+      // SSHing to the host. Crucially, run it through `redactErrorPreview`
+      // first: `err.message` may include credentials echoed back by the
+      // failing tool (e.g. `git clone https://user:PAT@github.com/...`),
+      // and this payload leaves the `safe in logs but NOT chat` boundary
+      // — see Classification.message's contract in error-taxonomy.ts.
+      entry.lastRetryRawError = errMsg ? redactErrorPreview(errMsg, 256) : null;
       const delayMs = nextRetryDelayMs(classification.strategy, entry.retryAttempt);
       entry.retryNextAt = Date.now() + delayMs;
       // Drop the active slot now so other chats can use it during the
@@ -1131,7 +1136,12 @@ export class SessionManager {
     // error event), then let caller tear down.
     this.notifySessionState(chatId, "errored");
     try {
-      const preview = errMsg.slice(0, 800);
+      // Same `safe in logs but NOT chat` boundary as the transient `rawError`
+      // path above: the error message can legitimately echo back a git remote
+      // URL with embedded credentials or a token-bearing SDK request, and this
+      // event is rendered into chat-visible UI. Redact before slicing — slicing
+      // first risks leaving a partial-token tail across the truncation point.
+      const preview = redactErrorPreview(errMsg, 800);
       ctx.emitEvent({
         kind: "error",
         payload: {

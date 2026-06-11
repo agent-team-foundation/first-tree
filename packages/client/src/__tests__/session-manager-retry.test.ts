@@ -162,6 +162,55 @@ describe("SessionManager: transient retry on session start", () => {
     await sm.shutdown();
   });
 
+  it("retry_scheduled rawError is REDACTED — credentials in err.message never reach the chat event", async () => {
+    // Regression guard for the Codex P1 finding on PR #975: an
+    // `agentRuntimeConfig.gitRepos[].url` carrying a PAT or basic-auth
+    // pair (the runtime schema is `z.string().min(1)`, not the stricter
+    // org-settings repoUrlSchema) gets echoed back by git verbatim in the
+    // resulting `GitMirrorError` message. Surfacing that into a chat-visible
+    // event would leak the credential. `redactErrorPreview` is the boundary —
+    // this test pins it end-to-end so a future refactor can't drop the
+    // sanitisation call and pass unit tests in isolation.
+    const handler: AgentHandler = {
+      start: vi
+        .fn()
+        .mockRejectedValue(
+          new FakeRateLimit(
+            "git clone https://user:ghp_AbCdEf0123456789abcdef0123456789abcd@github.com/acme/private.git exited with code 128",
+          ),
+        ),
+      resume: vi.fn(),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const events: SessionEvent[] = [];
+    const sm = makeManager({
+      handlers: [handler],
+      onSessionEvent: (_chat, ev) => events.push(ev),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-redact" }));
+
+    const scheduled = events.find(
+      (e): e is Extract<SessionEvent, { kind: "error" }> =>
+        e.kind === "error" &&
+        typeof e.payload.message === "string" &&
+        e.payload.message.startsWith("resilience.session.retry_scheduled:"),
+    );
+    expect(scheduled).toBeDefined();
+    const encoded = scheduled?.payload.message ?? "";
+    // The PAT must not appear anywhere in the chat-visible payload.
+    expect(encoded).not.toContain("ghp_AbCdEf0123456789abcdef0123456789abcd");
+    expect(encoded).not.toContain("user:ghp_");
+    // The redacted form should still leave the repo host/path so an operator
+    // can tell which clone failed.
+    expect(encoded).toContain("github.com/acme/private.git");
+    expect(encoded).toContain("[REDACTED]");
+
+    await sm.shutdown();
+  });
+
   it("user message during retry window triggers an immediate retry", async () => {
     const failing: AgentHandler = {
       start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),
