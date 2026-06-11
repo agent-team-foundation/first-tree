@@ -1,5 +1,5 @@
 import { contextTreeSnapshotSchema } from "@first-tree/shared";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { summarizeContextTreeIo } from "../../services/context-tree-io.js";
@@ -25,49 +25,27 @@ const querySchema = z
   .strict();
 
 export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { orgId: string } }>(
-    "/snapshot",
-    {
-      config: {
-        rateLimit: {
-          max: app.config.rateLimit?.contextTreeSnapshotMax ?? 6,
-          timeWindow: "1 minute",
-          keyGenerator: (request: FastifyRequest): string =>
-            `${request.user?.userId ?? request.ip}:${orgIdParam(request.params) ?? "unknown-org"}`,
-        },
-      },
-    },
-    async (request) => {
-      const query = querySchema.parse(request.query);
-      const scope = await requireOrgMembership(request, app.db);
-      const binding: ContextTreeBinding = await getOrgContextTree(app.db, scope.organizationId);
-      let mintResult: ContextTreeInstallationTokenResult | null = null;
-      if (isGithubRemoteBinding(binding)) {
-        const installation = await findInstallationByOrg(app.db, scope.organizationId);
-        mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
-      }
-      const githubToken = mintResult?.ok ? mintResult.token : undefined;
-      const window = query.window ?? "7d";
-      const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
-      const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
-      const usage = await summarizeContextTreeUsage(
-        app.db,
-        scope.organizationId,
-        contextTreeSnapshotWindowDays(window),
-        { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
-      );
-      const io = await summarizeContextTreeIo(app.db, scope.organizationId, contextTreeSnapshotWindowDays(window), {
-        humanAgentId: scope.humanAgentId,
-        memberId: scope.memberId,
-      });
-      return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
-    },
-  );
-}
-
-function orgIdParam(params: unknown): string | null {
-  if (!params || typeof params !== "object") return null;
-  if (!("orgId" in params)) return null;
-  const orgId = params.orgId;
-  return typeof orgId === "string" ? orgId : null;
+  app.get<{ Params: { orgId: string } }>("/snapshot", async (request) => {
+    const query = querySchema.parse(request.query);
+    const scope = await requireOrgMembership(request, app.db);
+    const binding: ContextTreeBinding = await getOrgContextTree(app.db, scope.organizationId);
+    let mintResult: ContextTreeInstallationTokenResult | null = null;
+    if (isGithubRemoteBinding(binding)) {
+      const installation = await findInstallationByOrg(app.db, scope.organizationId);
+      mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+    }
+    const githubToken = mintResult?.ok ? mintResult.token : undefined;
+    const window = query.window ?? "7d";
+    const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
+    const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
+    const usage = await summarizeContextTreeUsage(app.db, scope.organizationId, contextTreeSnapshotWindowDays(window), {
+      humanAgentId: scope.humanAgentId,
+      memberId: scope.memberId,
+    });
+    const io = await summarizeContextTreeIo(app.db, scope.organizationId, contextTreeSnapshotWindowDays(window), {
+      humanAgentId: scope.humanAgentId,
+      memberId: scope.memberId,
+    });
+    return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
+  });
 }

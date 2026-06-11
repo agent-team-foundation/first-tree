@@ -223,7 +223,7 @@ Mechanical rename rule: drop the `_HUB` segment. Examples:
 | `FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL` | `FIRST_TREE_NOTIFICATION_WEBHOOK_URL` |
 | `FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS` | `FIRST_TREE_GIT_CLONE_TIMEOUT_MS` |
 | `FIRST_TREE_HUB_MAX_RETRY_COUNT` | `FIRST_TREE_MAX_RETRY_COUNT` |
-| `FIRST_TREE_HUB_RATE_LIMIT_*` | `FIRST_TREE_RATE_LIMIT_*` |
+| `FIRST_TREE_HUB_RATE_LIMIT_MAX` | `FIRST_TREE_RATE_LIMIT_MAX` |
 | `FIRST_TREE_HUB_AUTH_*_TOKEN_EXPIRY` | `FIRST_TREE_AUTH_*_TOKEN_EXPIRY` |
 | `FIRST_TREE_HUB_INBOX_*` | `FIRST_TREE_INBOX_*` |
 | `FIRST_TREE_HUB_GITHUB_OAUTH_*` | `FIRST_TREE_GITHUB_OAUTH_*` |
@@ -232,6 +232,10 @@ Mechanical rename rule: drop the `_HUB` segment. Examples:
 | `FIRST_TREE_HUB_GITHUB_API_BASE_URL` | `FIRST_TREE_GITHUB_API_BASE_URL` |
 | `FIRST_TREE_HUB_OTEL_*` | `FIRST_TREE_OTEL_*` |
 | `FIRST_TREE_HUB_LOG_LEVEL` | `FIRST_TREE_LOG_LEVEL` |
+
+Only the global `FIRST_TREE_RATE_LIMIT_MAX` limit is read. Legacy per-route
+rate-limit variables such as login, webhook, agent-message, and Context Tree
+snapshot caps are ignored.
 
 The complete mapping (every renamed env, grouped by surface — server /
 CLI user-facing / CLI internal / build) lives in the design doc:

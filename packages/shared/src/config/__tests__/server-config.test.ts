@@ -86,6 +86,41 @@ describe("server config", () => {
     expect(yaml).toContain("encryptionKey:");
   });
 
+  it("resolves only the global rate-limit max env", async () => {
+    const configDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
+    vi.stubEnv("FIRST_TREE_JWT_SECRET", "operator-jwt-secret");
+    vi.stubEnv("FIRST_TREE_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    vi.stubEnv("FIRST_TREE_RATE_LIMIT_MAX", "1234");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.rateLimit).toEqual({ max: 1234 });
+  });
+
+  it("ignores removed per-route rate-limit env vars", async () => {
+    const configDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
+    vi.stubEnv("FIRST_TREE_JWT_SECRET", "operator-jwt-secret");
+    vi.stubEnv("FIRST_TREE_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    vi.stubEnv("FIRST_TREE_RATE_LIMIT_LOGIN_MAX", "9999");
+    vi.stubEnv("FIRST_TREE_RATE_LIMIT_WEBHOOK_MAX", "9999");
+    vi.stubEnv("FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX", "9999");
+    vi.stubEnv("FIRST_TREE_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX", "9999");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.rateLimit).toBeUndefined();
+  });
+
   it("accepts operator-provided production server secrets without writing generated YAML", async () => {
     const configDir = makeTempConfigDir();
     const jwtSecret = "operator-jwt-secret";
