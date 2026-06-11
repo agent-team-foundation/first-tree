@@ -380,7 +380,7 @@ function initializeGitRepo(paths: RunPaths, contextTreePath: string): void {
 
 export function createRunPaths(packageRoot: string, evalCase: FirstTreeReadEvalCase, startedAt: string): RunPaths {
   const repoRoot = dirname(dirname(packageRoot));
-  const stamp = startedAt.replace(/[-:.]/gu, "").replace("T", "T").replace("Z", "Z");
+  const stamp = startedAt.replace(/[-:.]/gu, "");
   const runRoot = join(packageRoot, ".runs", `${stamp}-${evalCase.id}`);
   const workspacePath = join(runRoot, "workspace");
   const binDir = join(runRoot, "bin");
