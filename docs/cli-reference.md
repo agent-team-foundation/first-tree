@@ -463,9 +463,15 @@ These are mentioned for completeness; operators don't set them in shell rc.
 | Variable | Purpose |
 |---|---|
 | `FIRST_TREE_SERVICE_MODE` | Supervisor → child flag baked into the launchd plist and systemd unit templates. |
-| `FIRST_TREE_COMMAND_VERSION` | CLI build version stamped at package time. |
-| `FIRST_TREE_UPDATE_POLL_INTERVAL_MINUTES` | How often the running daemon polls npm for a newer version. |
-| `FIRST_TREE_UPDATE_REGISTRY_URL` | npm registry override for the update check. |
+
+### CLI / daemon — update behavior
+
+These are client-side update behavior tunables. They do not select a release
+channel; channel identity comes from the installed package / binary
+(`first-tree`, `first-tree-staging`, or `first-tree-dev`).
+
+| Variable | Purpose |
+|---|---|
 | `FIRST_TREE_UPDATE_RESTART_CHECK_INTERVAL_SECONDS` | Frequency of the upgrade-restart watchdog. |
 | `FIRST_TREE_UPDATE_RESTART_QUIET_SECONDS` | Quiet window the upgrade flow waits for before restarting. |
 | `FIRST_TREE_UPDATE_PROMPT_TIMEOUT_SECONDS` | Interactive upgrade prompt timeout. |
@@ -502,6 +508,18 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
+
+**Command update advertisement:**
+
+There is no `FIRST_TREE_UPDATE_CHANNEL`. Published channels have separate npm
+package identities, and the server polls the package selected by
+`FIRST_TREE_CHANNEL`.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_COMMAND_VERSION` | Bootstrap CLI version advertised before the npm-registry poller succeeds. The Docker image stamps this from the Command package version at build time. | image build arg |
+| `FIRST_TREE_UPDATE_POLL_INTERVAL_MINUTES` | How often the server polls npm for the selected channel package's `latest` version. | `60` |
+| `FIRST_TREE_UPDATE_REGISTRY_URL` | npm registry override for the server-side update-version poller. | `https://registry.npmjs.org` |
 
 **Secrets:**
 
