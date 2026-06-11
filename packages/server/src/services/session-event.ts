@@ -46,6 +46,28 @@ type AppendEventOptions = {
   deferSideEffects?: boolean;
 };
 
+const NUL_CHAR = "\u0000";
+
+function stripNulFromJsonbValue(value: unknown): unknown {
+  if (typeof value === "string") return value.replaceAll(NUL_CHAR, "");
+  if (Array.isArray(value)) return value.map(stripNulFromJsonbValue);
+  if (value === null || typeof value !== "object") return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    sanitized[key.replaceAll(NUL_CHAR, "")] = stripNulFromJsonbValue(nested);
+  }
+  return sanitized;
+}
+
+function stringifyJsonbPayload(payload: SessionEvent["payload"]): string {
+  const json = JSON.stringify(stripNulFromJsonbValue(payload));
+  if (json === undefined) {
+    throw new Error("session event payload could not be serialized");
+  }
+  return json;
+}
+
 function rowToEvent(row: {
   id: string;
   agentId: string;
@@ -97,14 +119,10 @@ export async function appendEvent(
       await new Promise((r) => setTimeout(r, Math.random() * RETRY_JITTER_MS));
     }
     const id = uuidv7();
-    // PG JSONB rejects U+0000 outright. Strip the escaped sequence from the
-    // serialized JSON so a binary preview (e.g. ZIP bytes from
-    // `gh api .../actions/runs/<id>/logs` reaching us through a tool stdout)
-    // does not nuke the whole event. The client already replaces obvious
-    // binary previews with a placeholder; this is the last-mile gate for any
-    // path the client sanitizer does not cover (future handlers, other
-    // free-form string fields).
-    const payloadJson = JSON.stringify(validated.payload).replaceAll("\\u0000", "");
+    // PG JSONB rejects U+0000 outright. Strip the actual NUL characters before
+    // serializing so ordinary text containing the literal sequence `\u0000`
+    // (for example source code previews) remains valid and unchanged.
+    const payloadJson = stringifyJsonbPayload(validated.payload);
     const result = await db.execute<{
       id: string;
       agent_id: string;

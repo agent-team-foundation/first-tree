@@ -148,6 +148,33 @@ describe("sessionEventService", () => {
     expect(payload.args.command).toBe("echo ");
   });
 
+  it("preserves literal unicode escape text in tool_call payload strings", async () => {
+    const app = getApp();
+    const a = agentId();
+    const c = chatId();
+    const sourcePreview = 'if (s.includes("\\u0000")) return true;';
+
+    const persisted = await sessionEventService.appendEvent(app.db, a, c, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-source-preview",
+        name: "Bash",
+        args: { command: `git show file.ts | grep '${sourcePreview}'` },
+        status: "ok",
+        durationMs: 5,
+        resultPreview: sourcePreview,
+      },
+    });
+
+    expect(persisted.seq).toBe(1);
+    const payload = persisted.payload as {
+      resultPreview?: string;
+      args: { command: string };
+    };
+    expect(payload.resultPreview).toBe(sourcePreview);
+    expect(payload.args.command).toContain(sourcePreview);
+  });
+
   it("listEvents paginates by seq asc", async () => {
     const app = getApp();
     const a = agentId();
