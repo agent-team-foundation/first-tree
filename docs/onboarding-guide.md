@@ -15,7 +15,7 @@ everything online.
 
 ## Prerequisites
 
-- **Node.js** ≥ 22.16 (24 recommended).
+- **Node.js** ≥ 22 (24 recommended).
 - **The CLI** — `npm install -g first-tree && first-tree --version`.
 - **A connect token** — generated from the web console's *Computers → New
   Connection* dialog. The token's `iss` claim carries the server URL, so

@@ -20,7 +20,7 @@ first-tree --version
 ```
 
 The binary lives at `first-tree`; the short alias `ft` is also installed.
-Requirements: Node.js ≥ 22.16 (24 recommended).
+Requirements: Node.js ≥ 22 (24 recommended).
 
 ## Global flags
 

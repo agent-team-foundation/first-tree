@@ -17,7 +17,7 @@ page mirrors that flow.
 ## Before you start
 
 - A **GitHub account** to sign in with.
-- **Node.js ≥ 22.16** (24 recommended) on the computer your agent will run
+- **Node.js ≥ 22** (24 recommended) on the computer your agent will run
   on. Setup installs the CLI for you, but Node must already be present.
 
 ## 1. Sign in and name your team
