@@ -161,14 +161,14 @@ describe("resolveChatGithubEntity", () => {
 
     await expect(
       resolveChatGithubEntity(
-        { entityType: "commit", entityKey: "owner/repo@abcdef1", boundVia: "agent_created" },
+        { entityType: "commit", entityKey: "owner/repo@abcdef1", boundVia: "agent_declared" },
         null,
         fetcher,
       ),
     ).resolves.toEqual({
       entityType: "commit",
       entityKey: "owner/repo@abcdef1",
-      boundVia: "agent_created",
+      boundVia: "agent_declared",
       htmlUrl: "https://github.com/owner/repo/commit/abcdef1",
       title: null,
       state: null,

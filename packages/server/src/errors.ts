@@ -67,6 +67,29 @@ export class BadRequestError extends AppError {
   }
 }
 
+/**
+ * 422 — the request is well-formed but a precondition the caller cannot fix
+ * by retrying is missing (e.g. following an entity in a repo the org's
+ * GitHub App installation does not cover).
+ */
+export class UnprocessableError extends AppError {
+  constructor(message = "Unprocessable", attrs?: AppErrorAttrs) {
+    super(422, message, attrs);
+    this.name = "UnprocessableError";
+  }
+}
+
+/**
+ * 503 — an upstream dependency (GitHub API) is temporarily unreachable.
+ * The operation was NOT performed; the caller may safely retry later.
+ */
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "Service temporarily unavailable", attrs?: AppErrorAttrs) {
+    super(503, message, attrs);
+    this.name = "ServiceUnavailableError";
+  }
+}
+
 export class GoneError extends AppError {
   constructor(message = "Gone", attrs?: AppErrorAttrs) {
     super(410, message, attrs);

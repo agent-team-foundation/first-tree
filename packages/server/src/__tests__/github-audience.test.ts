@@ -56,7 +56,7 @@ async function seedMapping(
     entityType: "issue" | "pull_request" | "discussion" | "commit";
     entityKey: string;
     chatId: string;
-    boundVia?: "direct" | "fixes_link" | "agent_created" | "human_fallback";
+    boundVia?: "direct" | "fixes_link" | "agent_declared" | "human_declared" | "human_fallback";
   },
 ): Promise<void> {
   await app.db.insert(githubEntityChatMappings).values({
@@ -855,11 +855,12 @@ describe("resolveAudience", () => {
     expect(audience).toEqual([]);
   });
 
-  it("#766: keeps a subscribed pull_request.opened card when the mapping is agent_created (PR confirmation)", async () => {
-    // The agent opened this PR inside the chat (`maybeBindGithubEntityFromToolCall`
-    // wrote an `agent_created` mapping). The `opened` webhook arrives as
-    // `<app>[bot]`; the "opened this" card is the deliberate confirmation that
-    // the PR was created and must survive.
+  it("#766: keeps a subscribed pull_request.opened card when the mapping is declared (PR confirmation)", async () => {
+    // The agent opened this PR inside the chat and followed it in the same
+    // breath (`github follow` wrote an `agent_declared` mapping before the
+    // webhook landed). The `opened` webhook arrives as `<app>[bot]`; the
+    // "opened this" card is the deliberate confirmation that the PR was
+    // created and must survive.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -881,7 +882,7 @@ describe("resolveAudience", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#501",
       chatId,
-      boundVia: "agent_created",
+      boundVia: "agent_declared",
     });
 
     const audience = await resolveAudience(

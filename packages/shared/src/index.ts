@@ -175,10 +175,18 @@ export {
   type ChatGithubEntityListResponse,
   chatGithubEntityListResponseSchema,
   chatGithubEntitySchema,
+  type FollowGithubEntityConflict,
+  type FollowGithubEntityRequest,
+  type FollowGithubEntityResponse,
+  followGithubEntityConflictSchema,
+  followGithubEntityRequestSchema,
+  followGithubEntityResponseSchema,
   type GithubEntityBoundVia,
   type GithubEntityLiveState,
   githubEntityBoundViaSchema,
   githubEntityLiveStateSchema,
+  type UnfollowGithubEntityResponse,
+  unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";
 export {
   CHAT_SOURCES,

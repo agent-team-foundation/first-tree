@@ -1,4 +1,3 @@
-import type { ToolCallEventPayload } from "@first-tree/shared";
 import { chatMetadataSchema } from "@first-tree/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
@@ -10,33 +9,39 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
-import { extractGithubEntity } from "./github-entity-extractor.js";
 
 const log = createLogger("GithubEntityChat");
 
 /**
  * `bound_via` audit values:
- *   - "direct"         — first-touch row created in `resolveTargetChat` step (c)
- *   - "fixes_link"     — secondary row written by the `Fixes #N` linker
- *   - "agent_created"  — proactively written when an agent's tool_call creates
- *                        a PR/Issue, before the corresponding `*.opened` webhook
- *                        arrives. See `maybeBindGithubEntityFromToolCall`.
- *   - "human_fallback" — sibling row written by step (a.5) when an event arrives
- *                        for a `(human, delegate)` pair that has no mapping yet,
- *                        but another delegate under the same `(human, entity)`
- *                        already does. Reuses the existing chat instead of
- *                        minting a fresh one. Surfaces in telemetry so we can
- *                        observe how often the involves→delegate mismatch path
- *                        actually fires in production.
+ *   - "direct"          — first-touch row created in `resolveTargetChat` step (c)
+ *   - "fixes_link"      — secondary row written by the `Fixes #N` linker
+ *   - "agent_declared"  — written by an explicit `github follow` declared by an
+ *                         agent (the only agent-side wiring path — creating a
+ *                         PR/Issue never auto-follows). See
+ *                         `services/github-entity-follow.ts`. Legacy rows
+ *                         written by the retired session-event auto-binder
+ *                         (`agent_created`) were backfilled into this value.
+ *   - "human_declared"  — written by an explicit follow issued by a human
+ *                         (user-scoped route); the delegate side comes from
+ *                         the human's `delegate_mention`.
+ *   - "human_fallback"  — sibling row written by step (a.5) when an event arrives
+ *                         for a `(human, delegate)` pair that has no mapping yet,
+ *                         but another delegate under the same `(human, entity)`
+ *                         already does. Reuses the existing chat instead of
+ *                         minting a fresh one. Surfaces in telemetry so we can
+ *                         observe how often the involves→delegate mismatch path
+ *                         actually fires in production.
  *
- * Routing logic ignores the distinction; this column is purely for audit /
- * future strategy tweaks.
+ * Routing logic ignores the distinction; the column exists for audit and the
+ * narrow `pull_request.opened` carve-out in `github-audience.ts`.
  */
-export type BoundVia = "direct" | "fixes_link" | "agent_created" | "human_fallback";
+export type BoundVia = "direct" | "fixes_link" | "agent_declared" | "human_declared" | "human_fallback";
 
 function asBoundVia(value: string): BoundVia {
   if (value === "fixes_link") return "fixes_link";
-  if (value === "agent_created") return "agent_created";
+  if (value === "agent_declared") return "agent_declared";
+  if (value === "human_declared") return "human_declared";
   if (value === "human_fallback") return "human_fallback";
   return "direct";
 }
@@ -234,7 +239,7 @@ async function lookupMappingByHuman(
   return { chatId: row.chatId };
 }
 
-async function insertMappingIfAbsent(
+export async function insertMappingIfAbsent(
   db: Database,
   params: {
     organizationId: string;
@@ -243,8 +248,10 @@ async function insertMappingIfAbsent(
     entity: GithubEntity;
     chatId: string;
     boundVia: BoundVia;
+    /** Upstream lifecycle state to seed the row with; defaults to "open". */
+    entityState?: "open" | "closed" | "merged";
   },
-): Promise<{ chatId: string; boundVia: BoundVia }> {
+): Promise<{ chatId: string; boundVia: BoundVia; inserted: boolean }> {
   const [inserted] = await db
     .insert(githubEntityChatMappings)
     .values({
@@ -255,6 +262,7 @@ async function insertMappingIfAbsent(
       entityKey: params.entity.key,
       chatId: params.chatId,
       boundVia: params.boundVia,
+      ...(params.entityState ? { entityState: params.entityState } : {}),
     })
     .onConflictDoNothing({
       target: [
@@ -270,7 +278,7 @@ async function insertMappingIfAbsent(
       boundVia: githubEntityChatMappings.boundVia,
     });
   if (inserted) {
-    return { chatId: inserted.chatId, boundVia: asBoundVia(inserted.boundVia) };
+    return { chatId: inserted.chatId, boundVia: asBoundVia(inserted.boundVia), inserted: true };
   }
   // Lost the race — read the winning row.
   const winner = await lookupMapping(
@@ -283,7 +291,7 @@ async function insertMappingIfAbsent(
   if (!winner) {
     throw new Error("Unexpected: mapping insert conflicted but row not visible on re-read");
   }
-  return winner;
+  return { ...winner, inserted: false };
 }
 
 /**
@@ -325,25 +333,28 @@ async function createEntityChat(
 }
 
 /**
- * Pick the (org, human, delegate) tuple to bind a tool_call-driven entity to.
+ * Pick the (org, human, delegate) tuple an agent-driven binding should be
+ * written under. Entry-point agnostic: today's sole caller is the explicit
+ * `github follow` service (`github-entity-follow.ts`); any future agent-side
+ * wiring path reuses the same pairing rules.
  *
- * The reporting agent is the delegate side. The human side is the
+ * The calling agent is the delegate side. The human side is the
  * representative human member of the chat — exactly one row is written so
  * group chats don't fan out into N duplicate cards on the next webhook.
  *
  * Selection order (deterministic across concurrent calls):
- *   1. Active humans whose `delegateMention` already points at the reporter
- *      —— these humans are the natural "owner" of the reporter's work; any
+ *   1. Active humans whose `delegateMention` already points at the caller
+ *      —— these humans are the natural "owner" of the caller's work; any
  *      downstream code that reads `mapping.humanAgentId` (notification
  *      recipient, card signatures, audit) sees a meaningful pairing.
  *   2. Fallback: id-sorted-first among the remaining active humans.
  *
  * Returns null when:
- *   - the reporter isn't a member of the chat
- *   - the reporter is itself a human agent (humans don't emit tool_calls)
+ *   - the caller isn't a member of the chat
+ *   - the caller is itself a human agent (use the user-scoped route instead)
  *   - the chat has no active human member
  */
-async function resolveBindingPair(
+export async function resolveBindingPair(
   db: Database,
   chatId: string,
   reporterAgentId: string,
@@ -421,8 +432,9 @@ async function resolveBindingPair(
  *     chat. We refresh only when the incoming event is for the chat's own
  *     `direct` anchor entity; an event for a linked entity must never
  *     overwrite the topic with a different entity's title. (A chat with no
- *     `direct` row — e.g. one an agent created a PR inside of, bound via
- *     `agent_created` — is not github-minted and is left alone.)
+ *     `direct` row — e.g. one whose entity was wired in by an explicit
+ *     `github follow`, bound via a declared value — is not github-minted
+ *     and is left alone.)
  *   - **Prefix preserved.** `refreshEntityTitle` reuses the prefix already
  *     baked into the stored topic, so a later `review_requested` /
  *     `*_review_comment` event can't drift a `PR …` head into `PR Review …`
@@ -468,59 +480,4 @@ export async function refreshGithubChatTopic(db: Database, chatId: string, entit
       "failed to refresh github chat topic — continuing",
     );
   }
-}
-
-/**
- * Side-effect of a `tool_call` session event: when the agent has just created
- * a PR/Issue via a recognised tool (`gh pr create` / `gh issue create`), pin
- * the resulting entity to the current chat so the upcoming `*.opened` webhook
- * routes back instead of fanning out a new chat.
- *
- * Failures are swallowed — the caller (sessionEventService.appendEvent) must
- * not let mapping bookkeeping break the main tool_call write.
- */
-export async function maybeBindGithubEntityFromToolCall(
-  db: Database,
-  reporterAgentId: string,
-  chatId: string,
-  payload: ToolCallEventPayload,
-): Promise<void> {
-  const entity = extractGithubEntity(payload);
-  if (!entity) return;
-
-  const pair = await resolveBindingPair(db, chatId, reporterAgentId);
-  if (!pair) {
-    log.debug(
-      { chatId, reporterAgentId, entityKey: entity.entityKey },
-      "agent_binding skipped: no eligible (human, delegate) pair",
-    );
-    return;
-  }
-
-  const githubEntity: GithubEntity = {
-    type: entity.entityType,
-    key: entity.entityKey,
-    url: entity.entityUrl,
-  };
-
-  await insertMappingIfAbsent(db, {
-    organizationId: pair.organizationId,
-    humanAgentId: pair.humanAgentId,
-    delegateAgentId: pair.delegateAgentId,
-    entity: githubEntity,
-    chatId,
-    boundVia: "agent_created",
-  });
-
-  log.info(
-    {
-      chatId,
-      reporterAgentId,
-      humanAgentId: pair.humanAgentId,
-      entityType: entity.entityType,
-      entityKey: entity.entityKey,
-      source: entity.source,
-    },
-    "agent_binding inserted",
-  );
 }

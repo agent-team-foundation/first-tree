@@ -7,11 +7,16 @@ import {
   ATTACHMENT_MIME_HEADER,
   type Chat,
   type ChatDetail,
+  type ChatGithubEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type FollowGithubEntityConflict,
+  type FollowGithubEntityResponse,
+  followGithubEntityConflictSchema,
   type Message,
   type RuntimeProvider,
   type SendMessage,
+  type UnfollowGithubEntityResponse,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
@@ -315,6 +320,50 @@ export class FirstTreeHubSDK {
    */
   async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
+  }
+
+  /**
+   * Follow a GitHub entity: wire its webhook event stream into the chat.
+   *
+   * Returns a discriminated result instead of throwing on 409 — the conflict
+   * body ("this line already lives in chat X") is decision input for the
+   * caller, not an error: the CLI relays it with a `--rebind` hint. All
+   * other non-2xx statuses throw `SdkError` as usual (404 entity missing,
+   * 422 no App installation, 503 GitHub unreachable).
+   */
+  async followGithubEntity(
+    chatId: string,
+    body: { entity: string; rebind?: boolean },
+  ): Promise<{ ok: true; result: FollowGithubEntityResponse } | { ok: false; conflict: FollowGithubEntityConflict }> {
+    const response = await this.doFetch(`/api/v1/agent/chats/${chatId}/github-entities`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (response.status === 409) {
+      const parsed = followGithubEntityConflictSchema.safeParse(await response.json());
+      if (parsed.success) return { ok: false, conflict: parsed.data };
+      throw new SdkError(409, "Entity already followed in another chat (malformed conflict body)");
+    }
+    if (!response.ok) {
+      throw await this.toSdkError(response);
+    }
+    return { ok: true, result: (await response.json()) as FollowGithubEntityResponse };
+  }
+
+  /**
+   * Unfollow a GitHub entity: sever every line wired into this chat for it.
+   * Idempotent — `removed: 0` means the chat wasn't following (success).
+   */
+  async unfollowGithubEntity(chatId: string, entity: string): Promise<UnfollowGithubEntityResponse> {
+    return this.requestJson<UnfollowGithubEntityResponse>(
+      `/api/v1/agent/chats/${chatId}/github-entities?entity=${encodeURIComponent(entity)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /** List the GitHub entities currently wired into a chat (live title/state included). */
+  async listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
+    return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
 
   /**

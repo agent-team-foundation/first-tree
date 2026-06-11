@@ -161,10 +161,12 @@ export async function resolveAudience(
   // racing `opened` then sees that mapping and fans out as a subscribed card.
   // Drop those subscribed `opened` targets. Two carve-outs preserve genuinely
   // useful `opened` delivery:
-  //   - `boundVia === "agent_created"`: the mapping exists because the agent
-  //     opened this PR inside the chat (see `maybeBindGithubEntityFromToolCall`),
-  //     so "opened this" is the deliberate PR-creation confirmation, not a
-  //     review-routing echo.
+  //   - declared bindings (`agent_declared` / `human_declared`): the mapping
+  //     was explicitly followed BEFORE the `opened` webhook arrived — the
+  //     canonical case is an agent that just created the PR and followed it
+  //     in the same breath (see `services/github-entity-follow.ts`). The
+  //     "opened this" card is the deliberate creation confirmation / first
+  //     signal of the declared watch, not a review-routing echo.
   //   - the target is explicitly named (mention / assignee) in the `opened`
   //     payload: an intentional, directed signal worth keeping.
   // Scope is intentionally narrow: `pull_request` + `opened` only. `issues`
@@ -174,7 +176,7 @@ export async function resolveAudience(
   const involvedLogins = new Set(event.involves.map((i) => i.githubLogin.toLowerCase()));
   const keepSubscribedOpened = (row: (typeof subscribedRows)[number]): boolean => {
     if (!isPullRequestOpened) return true;
-    if (row.boundVia === "agent_created") return true;
+    if (row.boundVia === "agent_declared" || row.boundVia === "human_declared") return true;
     return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
   };
 

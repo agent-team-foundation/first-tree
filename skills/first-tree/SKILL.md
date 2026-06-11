@@ -147,6 +147,7 @@ map of which commands live where:
 | `daemon …` | workspace | daemon lifecycle (read-only for agents) | "Your Hosting Daemon" above |
 | `agent …` | workspace | agent records — `status`, `session`, `config show` for self-introspection; `create` / `claim` / `bind` are operator actions taken via the web console | `docs/cli-reference.md` |
 | `chat …` | workspace | messaging (`send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
+| `github …` | workspace | GitHub entity attention — `follow` / `unfollow` / `following` an entity's webhook event stream for the current chat | `first-tree-github` |
 | `config …` | workspace | local `client.yaml` (operator-edited) | `docs/cli-reference.md` |
 | `tree verify` | context | Validate a Context Tree's structure | `first-tree-context` |
 | `tree tree` | context | Browse Context Tree nodes as a hierarchy | `first-tree-read` |

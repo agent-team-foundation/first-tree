@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree — GitHub Follow"
+  short_description: "Follow / unfollow a GitHub entity's event stream for the current chat"
+  default_prompt: "Use $first-tree-github to follow or unfollow a GitHub PR / Issue / Discussion / Commit so its webhook events route into (or stop routing into) the current chat."

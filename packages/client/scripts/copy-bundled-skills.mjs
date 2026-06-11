@@ -18,7 +18,14 @@ import { fileURLToPath } from "node:url";
 // To add a skill: drop its directory under repo-root `skills/<name>/`, then
 // add the name here. To retire one: remove it from this list AND delete the
 // directory under repo-root `skills/`.
-const BUNDLED_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
+const BUNDLED_SKILLS = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-read",
+  "first-tree-sync",
+  "first-tree-seed",
+  "first-tree-github",
+];
 
 function findRepoRoot(startDir) {
   let currentDir = resolve(startDir);

@@ -61,6 +61,7 @@ export const TREE_SKILL_NAMES = [
   "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",
+  "first-tree-github",
 ] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
