@@ -104,6 +104,7 @@ vi.mock("../runtime/chat-context.js", () => ({
       chatId: "chat-retry-abort",
       title: "retry abort",
       topic: null,
+      description: null,
       participants: [],
     };
   }),

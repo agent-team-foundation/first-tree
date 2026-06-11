@@ -14,7 +14,7 @@ vi.mock("../cli/output.js", () => ({
 }));
 
 describe("agent config CLI registration (Step 8)", () => {
-  it("registers all 8 subcommands under `config`", () => {
+  it("registers all 9 subcommands under `config`", () => {
     const root = new Command();
     const agent = root.command("agent");
     registerAgentConfigCommands(agent);
@@ -27,11 +27,32 @@ describe("agent config CLI registration (Step 8)", () => {
       "add-repo",
       "append-prompt",
       "dry-run",
+      "prompt",
       "set-env",
       "set-model",
       "set-reasoning-effort",
       "show",
     ]);
+  });
+
+  it("registers `prompt show` (--raw) and `prompt set` (-f/--force); append-prompt stays as deprecated alias", () => {
+    const root = new Command();
+    const agent = root.command("agent");
+    registerAgentConfigCommands(agent);
+    const configCmd = agent.commands.find((c) => c.name() === "config");
+    const promptCmd = configCmd?.commands.find((c) => c.name() === "prompt");
+    expect(promptCmd).toBeDefined();
+
+    const show = promptCmd?.commands.find((c) => c.name() === "show");
+    expect(show?.options.some((o) => o.long === "--raw")).toBe(true);
+
+    const set = promptCmd?.commands.find((c) => c.name() === "set");
+    expect(set?.options.some((o) => o.long === "--file")).toBe(true);
+    expect(set?.options.some((o) => o.long === "--force")).toBe(true);
+
+    const appendPrompt = configCmd?.commands.find((c) => c.name() === "append-prompt");
+    expect(appendPrompt?.description()).toContain("deprecated");
+    expect(appendPrompt?.options.some((o) => o.long === "--force")).toBe(true);
   });
 
   it("set-env requires KEY=VALUE", () => {

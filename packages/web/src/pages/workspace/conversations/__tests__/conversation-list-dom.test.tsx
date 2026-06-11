@@ -56,6 +56,7 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     entityType: overrides.entityType ?? null,
     title: overrides.title,
     topic: overrides.topic ?? overrides.title,
+    description: overrides.description ?? null,
     participants: overrides.participants ?? [
       participant("human-agent-self", "Gandy", "human"),
       participant("agent-1", "Kael"),
@@ -401,5 +402,23 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("No unread conversations.");
     expect(container.textContent).toContain("All caught up.");
     expect(container.textContent).not.toContain("Start with New chat.");
+  });
+
+  it("renders the description as a second row line, and a skeleton when none is set", async () => {
+    const rows = [
+      row({ chatId: "chat-desc", title: "Has summary", description: "reviewing PR 916; CI green; awaiting approval" }),
+      row({ chatId: "chat-nodesc", title: "No summary", description: null }),
+    ];
+    const container = await renderDom(<StatefulList rows={rows} nextCursor={null} />, createClient(rows, null));
+
+    // The description text is rendered for the row that has one.
+    expect(container.textContent).toContain("reviewing PR 916; CI green; awaiting approval");
+
+    // The row without a description shows the skeleton placeholder (an
+    // aria-hidden bar) instead of collapsing — keeps every card equal height.
+    const withDesc = rowButton(container, "Has summary");
+    const withoutDesc = rowButton(container, "No summary");
+    expect(withDesc.querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
+    expect(withoutDesc.querySelector('[data-testid="row-description-skeleton"]')).not.toBeNull();
   });
 });

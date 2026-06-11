@@ -296,6 +296,62 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
 }
 
 /**
+ * Assert the agent counts as the chat's **owner** for metadata writes
+ * (topic / description). Topic and description are chat-level
+ * self-description that the owning side maintains, so the agent-scope
+ * PATCH route gates on ownership rather than mere participation.
+ *
+ * Two ways to qualify:
+ *
+ *  1. The caller's own membership row carries `role == "owner"` — the
+ *     agent that created the chat.
+ *  2. **Delegate relaxation:** the chat has no *agent-type owner who is
+ *     still a speaker*, and the caller is an agent-type speaker. This
+ *     covers the common creation paths for work chats — Web console
+ *     `createMeChat` and GitHub-minted entity chats both write the
+ *     *human* agent as owner and the worker/delegate agent as a member —
+ *     and the lifecycle holes around them: the human owner leaving the
+ *     chat (their row is downgraded to watcher or deleted by
+ *     `leaveAsParticipant`) and an agent owner being removed from its
+ *     own chat. In all of these the worker agents act on the owner's
+ *     behalf, so for chat self-description they count as the owner;
+ *     without this, such chats would have no practical description
+ *     writer at all — Web is read-only for description by design.
+ *
+ * A non-owner agent speaker in an agent-created chat whose creator still
+ * speaks — and any non-participant — is refused. This is the agent route
+ * only; the human/web route stays participation-gated so a managing
+ * human can still rename from the console.
+ */
+export async function assertOwner(db: Database, chatId: string, agentId: string): Promise<void> {
+  // All membership rows (not just speakers): the owner row must be found
+  // even when the owner has been downgraded to a watcher, while the
+  // caller itself is required to be a speaker.
+  const rows = await db
+    .select({
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      accessMode: chatMembership.accessMode,
+      type: agents.type,
+    })
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(eq(chatMembership.chatId, chatId));
+
+  const caller = rows.find((r) => r.agentId === agentId && r.accessMode === "speaker");
+  if (caller) {
+    if (caller.role === "owner") return;
+    const agentOwnerStillSpeaks = rows.some(
+      (r) => r.role === "owner" && r.type === "agent" && r.accessMode === "speaker",
+    );
+    if (!agentOwnerStillSpeaks && caller.type === "agent") return;
+  }
+  throw new ForbiddenError(
+    "Only the chat owner can change a chat's topic or description (worker agents count as the owner when no agent owner is present)",
+  );
+}
+
+/**
  * Non-throwing membership check. Used by callers that need a boolean
  * "is this agent a speaker of this chat?" answer without raising.
  */

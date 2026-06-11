@@ -56,6 +56,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
           chatId: "chat-1",
           title: "ship redesign",
           topic: "ship redesign",
+          description: null,
           participants: [{ name: "alice", displayName: "Alice", type: "human" }],
         },
       }),
@@ -65,35 +66,55 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     // briefing skeleton must appear in this order, with the per-chat
     // `## Current Chat Context` block at the bottom so the prompt cache
     // stays warm across sibling chats.
+    // Runtime-injected sections carry the `(First Tree Managed)` provenance
+    // suffix so an agent reading the assembled file can tell which sections
+    // its prompt config does NOT own (the anti-"copy AGENTS.md back into
+    // config" defense, together with the generated-file banner).
     const expectedOrder = [
       "# Identity",
-      "# Working in First Tree",
+      "# Working in First Tree (First Tree Managed)",
       "## Working Directory",
       "## Worktrees",
       "## Communication",
       "## Workspace Collaboration",
       "## Asking Humans",
-      "## Chat Topic",
+      "## Chat Topic & Description",
       "## CLI Overview",
-      "# Required Reading",
-      "# Context Tree",
+      "# Required Reading (First Tree Managed)",
+      "# Context Tree (First Tree Managed)",
       "## Core Model",
       "## Reading the Tree",
       "## Writing the Tree",
       "## Tree Location",
-      "# Skills",
+      "# Skills (First Tree Managed)",
       "## First Tree Family",
-      "## Current Chat Context",
+      "## Current Chat Context (First Tree Managed, per-chat)",
     ];
     let last = -1;
     for (const header of expectedOrder) {
-      // First section's header sits at offset 0 (no preceding newline),
-      // every subsequent header sits after a `\n\n`. Search either way.
-      const idx =
-        last < 0 && briefing.startsWith(`${header}\n`) ? 0 : briefing.indexOf(`\n${header}\n`, Math.max(last, 0));
+      // The generated-file banner precedes every section, so each header —
+      // including the first — sits after a newline.
+      const idx = briefing.indexOf(`\n${header}\n`, Math.max(last, 0));
       expect(idx, `header "${header}" missing or out of order`).toBeGreaterThan(last);
       last = idx;
     }
+  });
+
+  it("opens with the generated-file banner: marker + edit map for Team / Agent Prompt", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    // Banner must be the very first content so any reader (or any tool that
+    // copies the file) hits the marker before anything else.
+    expect(briefing.startsWith("<!--")).toBe(true);
+    // The literal marker is what the server / CLI write-side guard keys on
+    // (AGENT_BRIEFING_GENERATED_MARKER) — pin it as a string so a rename
+    // breaks this test and forces the guard to be updated in lockstep.
+    expect(briefing).toContain("first-tree:generated");
+    expect(briefing).toContain("NEVER copy this file");
+    // Edit map: where each editable section actually lives, with the
+    // channel-resolved binary name interpolated.
+    expect(briefing).toContain("first-tree agent config prompt show <agent> --raw");
+    expect(briefing).toContain("first-tree agent config prompt set <agent> -f <file>");
+    expect(briefing).toContain("Every other section is First Tree Managed");
   });
 
   it("renders identity as personal-assistant when visibility=private", () => {
@@ -110,7 +131,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     expect(briefing).toContain("# Identity\n\nYou are Aly, an autonomous agent.");
   });
 
-  it("emits `## Agent-Specific Prompt` only when payload.prompt.append is non-empty", () => {
+  it("emits the legacy `## Agent-Specific Prompt` fallback only when prompt.sections is absent and append is non-empty", () => {
     // No payload → block omitted.
     expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("## Agent-Specific Prompt");
 
@@ -127,10 +148,160 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     };
     expect(buildAgentBriefing(makeOpts({ payload: emptyPayload }))).not.toContain("## Agent-Specific Prompt");
 
-    // Real content → block emitted with the trimmed payload text.
+    // Legacy server (no structured sections) with real content → fallback
+    // block emitted with the trimmed payload text. The legacy blob may mix
+    // team and agent content, so it must NOT be presented under the editable
+    // `# Agent Prompt` heading.
     const realPayload = { ...emptyPayload, prompt: { append: "Follow the local implementation plan." } };
     const briefing = buildAgentBriefing(makeOpts({ payload: realPayload }));
     expect(briefing).toContain("## Agent-Specific Prompt\n\nFollow the local implementation plan.");
+    expect(briefing).not.toContain("# Agent Prompt (this agent only — editable)");
+  });
+});
+
+describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prompt sections)", () => {
+  const basePayload = {
+    kind: "claude-code" as const,
+    model: "",
+    prompt: { append: "" },
+    mcpServers: [],
+    env: [],
+    gitRepos: [],
+    resourceSkills: [],
+    reasoningEffort: "" as const,
+  };
+
+  it("renders team sections read-only and the agent fragment editable, under separate provenance headings", () => {
+    const payload = {
+      ...basePayload,
+      prompt: {
+        // Legacy merged blob is still populated by the server for old
+        // clients — when structured sections exist it must be IGNORED, or
+        // team content would render twice.
+        append: "## Team Resource: Review Rules\n\nAlways review twice.",
+        sections: [
+          { scope: "team" as const, name: "Review Rules", body: "Always review twice.", editable: false },
+          { scope: "agent" as const, name: "", body: "Prefer terse replies.", editable: true },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+
+    // Team block: provenance heading + read-only warning + the resource body
+    // under its own `##` name.
+    expect(briefing).toContain("# Team Prompt (team-shared — read-only for agents)");
+    expect(briefing).toContain("## Review Rules\n\nAlways review twice.");
+    expect(briefing).toMatch(/do NOT copy any of this into\nyour per-agent prompt/);
+
+    // Agent block: provenance heading + copy-pasteable round-trip commands
+    // using the CLI-addressable agent name (agentId, not display name).
+    expect(briefing).toContain("# Agent Prompt (this agent only — editable)");
+    expect(briefing).toContain("Prefer terse replies.");
+    expect(briefing).toContain("first-tree agent config prompt show test-agent --raw");
+    expect(briefing).toContain("first-tree agent config prompt set test-agent");
+
+    // Structured sections supersede the legacy single-blob rendering.
+    expect(briefing).not.toContain("## Agent-Specific Prompt");
+
+    // Order: Identity → Team Prompt → Agent Prompt → Working in First Tree.
+    // Anchor on the full heading lines (the banner's edit map also mentions
+    // `# Team Prompt` / `# Agent Prompt` as indented references).
+    const identityIdx = briefing.indexOf("\n# Identity\n");
+    const teamIdx = briefing.indexOf("\n# Team Prompt (team-shared — read-only for agents)\n");
+    const agentIdx = briefing.indexOf("\n# Agent Prompt (this agent only — editable)\n");
+    const workingIdx = briefing.indexOf("\n# Working in First Tree (First Tree Managed)\n");
+    expect(teamIdx).toBeGreaterThan(identityIdx);
+    expect(agentIdx).toBeGreaterThan(teamIdx);
+    expect(workingIdx).toBeGreaterThan(agentIdx);
+  });
+
+  it("omits each provenance heading when no section of that scope has content", () => {
+    // Anchor on the full heading lines — the banner's edit map mentions
+    // `# Team Prompt` / `# Agent Prompt` as indented references, so bare
+    // substring checks would false-positive on every briefing.
+    const teamHeading = "\n# Team Prompt (team-shared — read-only for agents)\n";
+    const agentHeading = "\n# Agent Prompt (this agent only — editable)\n";
+
+    const teamOnly = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "Rules", body: "Body." }] },
+    };
+    const teamOnlyBriefing = buildAgentBriefing(makeOpts({ payload: teamOnly }));
+    expect(teamOnlyBriefing).toContain(teamHeading);
+    expect(teamOnlyBriefing).not.toContain(agentHeading);
+
+    const agentOnly = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "agent" as const, name: "", body: "Mine.", editable: true }] },
+    };
+    const agentOnlyBriefing = buildAgentBriefing(makeOpts({ payload: agentOnly }));
+    expect(agentOnlyBriefing).not.toContain(teamHeading);
+    expect(agentOnlyBriefing).toContain(agentHeading);
+
+    // Whitespace-only bodies count as empty.
+    const blank = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "Rules", body: "  \n " }] },
+    };
+    const blankBriefing = buildAgentBriefing(makeOpts({ payload: blank }));
+    expect(blankBriefing).not.toContain(teamHeading);
+    expect(blankBriefing).not.toContain(agentHeading);
+  });
+
+  it("falls back to a default `## Team prompt` sub-heading when a team section has no name", () => {
+    const payload = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "  ", body: "Unnamed body." }] },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+    expect(briefing).toContain("## Team prompt\n\nUnnamed body.");
+  });
+
+  it("renders non-editable agent-scope sections under # Agent Prompt Overrides, never under the editable heading", () => {
+    // An inline *replacement* of a team prompt projects as scope "agent"
+    // without `editable` — the `prompt show --raw` / `prompt set` round-trip
+    // cannot touch it, so presenting it under "editable" would instruct the
+    // agent to use a flow that cannot edit the content it sees.
+    const payload = {
+      ...basePayload,
+      prompt: {
+        append: "",
+        sections: [
+          { scope: "agent" as const, name: "", body: "My own fragment.", editable: true },
+          { scope: "agent" as const, name: "Tone guide", body: "Agent-specific tone override.", editable: false },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+
+    const agentHeading = "\n# Agent Prompt (this agent only — editable)\n";
+    const overridesHeading = "\n# Agent Prompt Overrides (this agent only — managed via resource bindings)\n";
+    expect(briefing).toContain(agentHeading);
+    expect(briefing).toContain(overridesHeading);
+    expect(briefing).toContain("## Tone guide\n\nAgent-specific tone override.");
+    expect(briefing).toMatch(/NOT editable with `prompt set`/);
+
+    // The override body must live in the overrides section, after the
+    // editable section — not inside it.
+    const agentIdx = briefing.indexOf(agentHeading);
+    const overridesIdx = briefing.indexOf(overridesHeading);
+    const overrideBodyIdx = briefing.indexOf("Agent-specific tone override.");
+    expect(overridesIdx).toBeGreaterThan(agentIdx);
+    expect(overrideBodyIdx).toBeGreaterThan(overridesIdx);
+
+    // Overrides alone (no editable fragment) must not produce the editable
+    // heading — and must not fall back to the legacy single-blob rendering.
+    const overridesOnly = {
+      ...basePayload,
+      prompt: {
+        append: "legacy blob",
+        sections: [{ scope: "agent" as const, name: "Tone guide", body: "Override only.", editable: false }],
+      },
+    };
+    const overridesOnlyBriefing = buildAgentBriefing(makeOpts({ payload: overridesOnly }));
+    expect(overridesOnlyBriefing).not.toContain(agentHeading);
+    expect(overridesOnlyBriefing).toContain(overridesHeading);
+    expect(overridesOnlyBriefing).not.toContain("## Agent-Specific Prompt");
   });
 });
 
@@ -160,7 +331,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/loading them \*\*is\*\* the first step of the[\s\n]+pre-task hygiene/);
     // Briefing↔skill split: minimum mechanics inline, durable rules
     // in full in the skills. Honest about the partial summarisation
-    // (final-text contract is in the briefing's Communication block;
+    // (chat send mechanics are in the briefing's Communication block;
     // write-side gate is in `## Writing the Tree`) — the briefing
     // can't claim "not duplicated" without contradicting itself.
     expect(briefing).toMatch(/minimum\s+mechanics you need to operate at all/);
@@ -269,18 +440,67 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block with final-text contract, silent-turn, Issue #389", () => {
+  it("emits the runtime intro block with output-stream / chat-send full decoupling, transitional mirror fact, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // Final-text contract (load-bearing for the result-sink + agent↔agent
-    // echo-loop prevention path).
-    expect(briefing).toContain("human observers");
-    expect(briefing).toContain("does NOT wake other agents");
+    // Output stream and chat send are two separate channels — the
+    // briefing must never tie agent behavior on one to activity on the
+    // other. yuezengwu 2026-06-10: "chat send 和 output streaming
+    // 完全解耦，不应当有任何互相影响。在系统 message 里记录是过渡状态，
+    // 未来 output streaming 不进入 message" — "完全解耦" is the future
+    // direction; the briefing must be honest that today's runtime still
+    // mirrors the output stream as a transitional system row (the two
+    // channels DO interact today via that mirror).
+    expect(briefing).toContain("Your output stream is your reasoning trace");
+    expect(briefing).toMatch(/separate channel from[\s\n]+`?chat send`?/);
+    expect(briefing).toContain("To reach a teammate");
     expect(briefing).toContain("first-tree chat send <name>");
+    expect(briefing).toContain("only delivery path you should rely on");
 
-    // Silent-turn protocol — pairs with result-sink's empty-output guard.
-    expect(briefing).toContain("Stay silent when you have nothing to add");
-    expect(briefing).toContain("If you have nothing new for the recipient, output nothing");
+    // Coupling guard — the false present-tense claim "the two never
+    // interact" must not appear today (mirror = interaction). The
+    // honest framing is "separate channel" today + "two fully decoupled
+    // channels" as the future direction (see below).
+    expect(briefing).not.toMatch(/never[\s\n]+interact/);
+
+    // Transitional system behavior — the runtime currently mirrors
+    // non-empty final output into chat history as a silent
+    // `agent-final-text` row that does NOT wake other agents. The
+    // briefing acknowledges the fact and names the runtime-retirement
+    // track + the "two fully decoupled channels" future direction, but
+    // issues NO instruction conditioning the agent's output on chat-
+    // send activity (that would re-couple the channels at the agent
+    // layer). The note wraps across template-literal lines, so use
+    // regex matches that tolerate intra-bullet whitespace / newlines.
+    expect(briefing).toMatch(/non-empty[\s\n]+final[\s\n]+output is currently[\s\n]+mirrored/);
+    expect(briefing).toContain("agent-final-text");
+    expect(briefing).toMatch(/does[\s\n]+NOT[\s\n]+wake other agents/);
+    expect(briefing).toMatch(/runtime-retirement[\s\n]+track/);
+    expect(briefing).toMatch(/future direction[\s\n]+is[\s\n]+two fully decoupled[\s\n]+channels/);
+    expect(briefing).toMatch(/not a reach path/);
+
+    // Coupling guard — these phrasings would condition agent output on
+    // chat-send activity. They MUST NOT appear in the briefing under the
+    // full-decoupling principle.
+    //
+    // Note: these are *regression* guards for the specific phrasings the
+    // PR removed (ad40745d's "don't restate ..." / "don't rely on ... for
+    // delivery"). Principle-level enforcement against *any* future
+    // re-coupling phrasing (e.g. "after chat send, keep final output
+    // minimal" / "if you just chat-send-ed, end the turn") is human-review
+    // only; mechanical guards cannot recognise every paraphrase.
+    expect(briefing).not.toMatch(/don't restate/i);
+    expect(briefing).not.toMatch(/don't rely on it for delivery/i);
+
+    // Courtesy-send guard (the brake stays on the *send* side, not the
+    // output side; result-sink's empty-output guard is a runtime safety
+    // belt, not the contract).
+    expect(briefing).toContain("Don't fire a courtesy");
+    expect(briefing).toContain("end the turn without sending");
+    // No bare "output nothing" prescription survives. The transitional
+    // mirror is named in the descriptive sentence, not in an instruction
+    // that suppresses agent output.
+    expect(briefing).not.toMatch(/\boutput nothing\b/);
 
     // Issue #389: pin the anti-double-encode rule.
     expect(briefing).toContain("Content rules (Issue #389)");
@@ -350,16 +570,23 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("## Worktrees");
   });
 
-  it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic, and CLI Overview subsections", () => {
+  it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic & Description, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
-    // New contract: chat send is primary; humans get a plain-reply path and a
-    // structured --request ask path; agents must be woken explicitly.
+    // Chat-send contract: every teammate reach (human plain / human request /
+    // agent) goes through chat send; the courtesy-send guard prevents echo
+    // loops without touching the agent's output stream.
+    expect(briefing).toMatch(/\*\*Reaching a human in this chat\*\*/);
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
-    expect(briefing).toMatch(/Reaching an \*\*agent\*\*/);
+    expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
     expect(briefing).toContain("After an agent handoff, continue only independent work");
     expect(briefing).toContain("do not poll status");
-    expect(briefing).toContain("**Fallback**");
+    expect(briefing).toContain("Don't fire a courtesy");
+    expect(briefing).toContain("reasoning trace");
+    // Fallback block was retired in the chat-send-contract pass — the
+    // contract now is "always chat send for cross-participant", so the
+    // "drop to conservative mode" branch is redundant.
+    expect(briefing).not.toContain("**Fallback**");
 
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("`first-tree` skill");
@@ -370,8 +597,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/chat send <human> --request/);
     expect(briefing).toContain("--question");
 
-    expect(briefing).toContain("## Chat Topic");
+    expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat set-topic");
+    // The combined block documents setting the description through the same
+    // command, and carries the description discipline keys.
+    expect(briefing).toContain("set-topic --description");
+    expect(briefing).toMatch(/name the current task/);
+    expect(briefing).toMatch(/Self-locate/);
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure
     // copy).
@@ -619,7 +851,7 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(briefing).not.toContain("## First Tree Family");
     // And without Team Skills, the bare `# Skills` umbrella is skipped
     // entirely — a header with no body is just visual noise.
-    expect(briefing).not.toMatch(/^# Skills\s*$/m);
+    expect(briefing).not.toMatch(/^# Skills\b/m);
   });
 
   it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {
@@ -662,6 +894,7 @@ describe("buildAgentBriefing — ## Current Chat Context (per-chat tail)", () =>
           chatId: "chat-123",
           title: "ship redesign",
           topic: "ship redesign",
+          description: "implementing the redesign; mockups approved, building components",
           participants: [
             { name: "alice", displayName: "Alice", type: "human" },
             { name: "bob-bot", displayName: "Bob Bot", type: "agent" },

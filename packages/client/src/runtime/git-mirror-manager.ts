@@ -369,10 +369,11 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         return { elapsedMs, usedFallback: true };
       } catch (peerErr) {
         const peerMessage = peerErr instanceof Error ? peerErr.message : String(peerErr);
-        throw new GitMirrorAuthError(
+        throw protocolFallbackFailure(
           `Could not ${opLabel} ${url} over ${direction.fromProtocol.toUpperCase()} or ${direction.toProtocol.toUpperCase()}. ` +
             `${direction.fromProtocol.toUpperCase()} attempt failed: ${truncate(primaryMessage)} ` +
             `${direction.toProtocol.toUpperCase()} retry (${direction.peerBase}) failed: ${truncate(peerMessage)}`,
+          peerMessage,
         );
       }
     }
@@ -1016,6 +1017,28 @@ export function isLikelyTransientNetworkError(message: string): boolean {
     /fetch-pack: unexpected disconnect/i.test(message) ||
     /\bsend-pack:\s+unexpected\s+disconnect\b/i.test(message)
   );
+}
+
+/**
+ * Decide the error shape when the primary protocol failed credential-shaped
+ * AND the peer-protocol `insteadOf` fallback also failed.
+ *
+ * Only the primary side is known to be credential-shaped at this point. When
+ * the peer attempt died for a transient network reason (a DNS / VPN / proxy
+ * outage that outlasted `gitWithNetworkRetry`'s short in-process budget), the
+ * combined failure is NOT evidence that both transports' credentials are
+ * broken — `GitMirrorAuthError` here would let the error taxonomy classify
+ * the session failure as degraded/no-retry and turn a temporary outage into a
+ * terminal chat error. Keep that case a plain (session-retryable)
+ * `GitMirrorError`; reserve `GitMirrorAuthError` for peers that failed
+ * non-transiently.
+ *
+ * Exported for unit testing.
+ */
+export function protocolFallbackFailure(combinedMessage: string, peerMessage: string): GitMirrorError {
+  return isLikelyTransientNetworkError(peerMessage)
+    ? new GitMirrorError(combinedMessage)
+    : new GitMirrorAuthError(combinedMessage);
 }
 
 /**

@@ -399,6 +399,202 @@ describe("agent config command behavior", () => {
     );
   });
 
+  it("`prompt set` replaces the inline fragment exactly like append-prompt", async () => {
+    const promptFile = join(tempDir, "fragment.md");
+    writeFileSync(promptFile, "Prefer small diffs.");
+    await runConfig(["prompt", "set", "kael", "--file", promptFile]);
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "Prefer small diffs.",
+            order: 1,
+          },
+        ],
+      },
+    );
+    expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-uuid", version: 2, append_length: 19 });
+  });
+
+  it("`prompt set` hard-rejects a body carrying the generated-briefing marker (no --force escape)", async () => {
+    const promptFile = join(tempDir, "assembled-agents-md.md");
+    writeFileSync(promptFile, "<!-- first-tree:generated — rebuilt every session -->\n# Identity\n\nYou are kael.");
+
+    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile])).rejects.toMatchObject({
+      code: "ASSEMBLED_BRIEFING",
+      exitCode: 2,
+    });
+    // --force must NOT bypass the conclusive marker tier.
+    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile, "--force"])).rejects.toMatchObject({
+      code: "ASSEMBLED_BRIEFING",
+      exitCode: 2,
+    });
+    // The deprecated alias carries the same guard.
+    await expect(runConfig(["append-prompt", "kael", "--file", promptFile])).rejects.toMatchObject({
+      code: "ASSEMBLED_BRIEFING",
+      exitCode: 2,
+    });
+    expect(fetcherMocks.patchAgentResources).not.toHaveBeenCalled();
+    // The error message must point at the correct round-trip flow.
+    expect(outputMocks.fail).toHaveBeenCalledWith(
+      "ASSEMBLED_BRIEFING",
+      expect.stringContaining("agent config prompt show <agent> --raw"),
+      2,
+    );
+  });
+
+  it("`prompt set` rejects briefing-shaped headings as a heuristic, overridable with --force", async () => {
+    const promptFile = join(tempDir, "heading.md");
+    writeFileSync(promptFile, "# Working in First Tree (First Tree Managed)\n\nPasted section.");
+
+    await expect(runConfig(["prompt", "set", "kael", "--file", promptFile])).rejects.toMatchObject({
+      code: "ASSEMBLED_BRIEFING_HEADING",
+      exitCode: 2,
+    });
+    expect(fetcherMocks.patchAgentResources).not.toHaveBeenCalled();
+
+    await runConfig(["prompt", "set", "kael", "--file", promptFile, "--force"]);
+    expect(fetcherMocks.patchAgentResources).toHaveBeenCalledTimes(1);
+  });
+
+  it("`prompt show --raw` prints the stored fragment verbatim (byte-for-byte) for edit round-trips", async () => {
+    // Intentional leading indentation and trailing blank line: whitespace is
+    // content (e.g. an indented code block) and must survive the round-trip
+    // untouched — no trim, no appended newline.
+    const storedBody = "  indented code block\nPrefer small diffs.\n\n";
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 3,
+      bindings: [
+        {
+          id: "inline-1",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: storedBody,
+          order: 1,
+        },
+        // Inline *replacement* of a team prompt: not owned by `prompt set`,
+        // so it must not leak into the raw export either.
+        {
+          id: "replace-1",
+          type: "prompt",
+          mode: "replace",
+          resourceId: null,
+          replacesResourceId: "team-prompt",
+          inlinePromptBody: "Agent-specific tone override.",
+          order: 2,
+        },
+      ],
+      effective: { version: 3, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      availableTeamResources: [],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runConfig(["prompt", "show", "kael", "--raw"]);
+    expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toBe(storedBody);
+    stdout.mockRestore();
+  });
+
+  it("`prompt show` (no --raw) renders the effective prompt stack with provenance and the round-trip hint", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 3,
+      bindings: [
+        {
+          id: "inline-1",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Prefer small diffs.",
+          order: 2,
+        },
+      ],
+      effective: {
+        version: 3,
+        repos: [],
+        prompts: [
+          {
+            id: "res:team-prompt:enabled",
+            bindingId: null,
+            resourceId: "team-prompt",
+            replacesResourceId: null,
+            type: "prompt",
+            name: "Review rules",
+            scope: "team",
+            source: "team_recommended",
+            mode: "enabled",
+            defaultEnabled: "recommended",
+            payload: { body: "Always review twice." },
+            repo: null,
+            promptBody: "Always review twice.",
+            unavailableReason: null,
+            order: 1,
+          },
+          {
+            id: "binding:inline-1:enabled",
+            bindingId: "inline-1",
+            resourceId: null,
+            replacesResourceId: null,
+            type: "prompt",
+            name: "",
+            scope: "agent",
+            source: "inline_prompt",
+            mode: "enabled",
+            defaultEnabled: null,
+            payload: null,
+            repo: null,
+            promptBody: "Prefer small diffs.",
+            unavailableReason: null,
+            order: 2,
+          },
+          // Inline replacement of a team prompt — agent scope, but managed
+          // via resource bindings, so it must not be called the fragment.
+          {
+            id: "binding:replace-1:enabled",
+            bindingId: "replace-1",
+            resourceId: null,
+            replacesResourceId: "team-prompt-2",
+            type: "prompt",
+            name: "Tone guide",
+            scope: "agent",
+            source: "inline_prompt",
+            mode: "enabled",
+            defaultEnabled: null,
+            payload: null,
+            repo: null,
+            promptBody: "Agent-specific tone override.",
+            unavailableReason: null,
+            order: 3,
+          },
+        ],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runConfig(["prompt", "show", "kael"]);
+    const out = stdout.mock.calls.map((call) => String(call[0])).join("");
+    stdout.mockRestore();
+
+    expect(out).toContain("[team] Review rules");
+    expect(out).toContain("[agent] per-agent fragment");
+    expect(out).toContain('[agent] inline replacement of team prompt "Tone guide" (managed via resource bindings)');
+    expect(out).toContain("Prefer small diffs.");
+    // Round-trip hint: how to edit the only agent-editable source.
+    expect(out).toContain("prompt show <agent> --raw");
+    expect(out).toContain("prompt set <agent> -f");
+    expect(out).toContain("team prompts are managed in Cloud");
+  });
+
   it("shows config and prints dry-run diffs", async () => {
     await runConfig(["show", "kael"]);
     expect(fetcherMocks.printConfig).toHaveBeenCalledWith(config());

@@ -232,6 +232,26 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Refresh token rejected",
     };
   }
+  // GitMirrorAuthError: the source-repo layer already tried BOTH transports
+  // (primary protocol + peer-protocol insteadOf rewrite) and git rejected
+  // each one. Waiting will not mint credentials — a human has to fix the
+  // host's git auth (credential helper, SSH key, known_hosts), so retrying
+  // is pure churn: before this branch existed the error fell through to the
+  // `unknown` transient fallback and session start retried forever without
+  // ever surfacing a readable error. Degraded rather than permanent because
+  // only THIS resource (the chat's source repo) is unusable; the process and
+  // every other agent/chat stay healthy. Matched by class name here, before
+  // the substring heuristics below, because the message embeds raw git
+  // stderr from both attempts which can contain arbitrary text ("server
+  // error", "fetch failed", …) that would misclassify it as transient.
+  if (shape.name === "GitMirrorAuthError") {
+    return {
+      kind: ERROR_KINDS.DEGRADED,
+      strategy: NONE,
+      reasonCode: "git_clone_auth_failed",
+      message: shape.message ?? "Source repo git authentication failed",
+    };
+  }
 
   // -- Anthropic SDK / stream errors ---------------------------------------
   // RateLimitError (429) — name is contributed by the SDK; substrings are

@@ -94,6 +94,7 @@ export const chatSchema = z.object({
   organizationId: z.string(),
   type: z.string(),
   topic: z.string().nullable(),
+  description: z.string().nullable(),
   lifecyclePolicy: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
@@ -137,9 +138,14 @@ export const chatDetailSchema = chatSchema.extend({
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 
-export const updateChatSchema = z.object({
-  topic: z.string().trim().max(500).nullable(),
-});
+export const updateChatSchema = z
+  .object({
+    topic: z.string().trim().max(500).nullable().optional(),
+    description: z.string().trim().max(500).nullable().optional(),
+  })
+  .refine((v) => v.topic !== undefined || v.description !== undefined, {
+    message: "Provide at least one of `topic` or `description`.",
+  });
 export type UpdateChat = z.infer<typeof updateChatSchema>;
 
 /**

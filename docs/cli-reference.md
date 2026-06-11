@@ -206,7 +206,13 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
-├── append-prompt <agent> [-f <file>]               # reads stdin if no file
+├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
+├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
+│                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
+│                                                   #   briefing headings); --force overrides the heading heuristic.
+│                                                   #   Does NOT cover inline replacements of team prompts — those are
+│                                                   #   resource bindings, managed in Cloud → Org Settings → Resources.
+├── append-prompt <agent> [-f <file>]               # deprecated alias of `prompt set`
 ├── add-mcp <agent> --name <id> --transport <t> [--command <c> --args <a>... | --url <u>]
 ├── set-env <agent> KEY=VALUE [--sensitive]
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]
@@ -254,6 +260,10 @@ first-tree chat
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>
+├── set-topic [topic]                                # set/clear topic + description (chat self-description)
+│     --clear                                        #   clear the topic (falls back to auto-derived title)
+│     --description <text> / --clear-description     #   set/clear the running work-state summary
+│     --chat <chatId> / --agent <name>               #   target another chat / the named agent
 └── open <agent-name>                                # interactive REPL
 ```
 
@@ -287,6 +297,18 @@ first-tree chat send code-agent "now we can talk"
 # Browse
 first-tree chat list
 first-tree chat history <chatId>
+
+# Self-description: a short topic label + a longer running work summary,
+# both set through set-topic. Agents read descriptions via `chat list` to
+# self-locate across threads (see the agent briefing's "Chat Topic & Description").
+# Owner-gated: the chat's creator may set topic/description, and when no agent
+# owner is present (human-created chats — Web / GitHub-sourced — or the creator
+# left) every worker agent counts as the owner; a non-owner agent in a chat
+# whose agent creator is still present is refused with 403.
+first-tree chat set-topic "review PR #916"
+first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
+first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"
+first-tree chat set-topic --clear-description
 
 # Interactive
 first-tree chat open code-agent

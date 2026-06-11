@@ -24,6 +24,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? overrides.id,
     topic: overrides.topic ?? null,
+    description: overrides.description ?? null,
     participants: overrides.participants ?? [],
     participantCount: overrides.participantCount ?? 0,
     lastMessageAt: overrides.lastMessageAt,

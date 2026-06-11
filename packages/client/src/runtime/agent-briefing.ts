@@ -1,4 +1,8 @@
-import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
+import {
+  AGENT_BRIEFING_GENERATED_MARKER,
+  type AgentRuntimeConfigPayload,
+  type PromptSection,
+} from "@first-tree/shared";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import type { ChatContext } from "./chat-context.js";
 import { renderChatContextSection } from "./chat-context-section.js";
@@ -27,26 +31,52 @@ export type BuildAgentBriefingOptions = {
  * per-agent file entirely; until that lands it stays here at the bottom
  * so the rest of the briefing remains cacheable.
  *
+ * Every heading carries a provenance tag so a reader (human or agent) can
+ * tell which source owns each section and where to edit it — this is the
+ * defense against the "copied the assembled file back into the per-agent
+ * prompt" failure mode, together with the generated-file banner at the top.
+ *
+ *   0. generated-file banner                   — `first-tree:generated` marker + edit map
  *   1. `# Identity`                            — per-agent
- *   2. `## Agent-Specific Prompt`              — per-agent config (`payload.prompt.append`)
- *   3. `# Working in First Tree`               — mostly static, with subsections:
+ *   2. `# Team Prompt (team-shared — read-only for agents)`
+ *                                              — team prompt resources (`prompt.sections`, scope `team`)
+ *   3. `# Agent Prompt (this agent only — editable)`
+ *                                              — per-agent fragment (`prompt.sections`, scope `agent`,
+ *                                                `editable: true`); legacy servers without sections
+ *                                                fall back to `## Agent-Specific Prompt` carrying
+ *                                                `prompt.append`
+ *   3b. `# Agent Prompt Overrides (this agent only — managed via resource bindings)`
+ *                                              — agent-scope rows `prompt set` does NOT own
+ *                                                (inline replacements of team prompts)
+ *   4. `# Working in First Tree (First Tree Managed)` — mostly static, with subsections:
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · Asking Humans ·
- *        Chat Topic · CLI Overview
- *   4. `# Required Reading`                    — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
- *   5. `# Context Tree`                        — per binding, with subsections:
+ *        Chat Topic & Description · CLI Overview
+ *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
+ *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
- *   6. `# Skills`                              — Team Skills (if any) + First Tree Family
- *   7. `## Current Chat Context`               — per-chat (issue #808 will move it out)
+ *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
+ *   8. `## Current Chat Context (First Tree Managed, per-chat)` — per-chat (issue #808 will move it out)
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const sections: string[] = [];
 
+  sections.push(generatedBannerSection(getCliBinding().binName));
   sections.push(identitySection(opts.identity));
 
-  const agentPrompt = opts.payload?.prompt.append?.trim() ?? "";
-  if (agentPrompt) {
-    sections.push(`## Agent-Specific Prompt\n\n${agentPrompt}`);
+  const promptSections = opts.payload?.prompt.sections ?? [];
+  const teamPromptBlock = teamPromptSection(promptSections);
+  if (teamPromptBlock) sections.push(teamPromptBlock);
+  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, getCliBinding().binName);
+  if (agentPromptBlock) sections.push(agentPromptBlock);
+  const overridesBlock = agentPromptOverridesSection(promptSections);
+  if (overridesBlock) sections.push(overridesBlock);
+  if (!teamPromptBlock && !agentPromptBlock && !overridesBlock) {
+    // Legacy server without structured sections — keep the old single-blob
+    // rendering. The blob may mix team and agent content, so it must NOT be
+    // presented under the editable `# Agent Prompt` heading.
+    const legacyPrompt = opts.payload?.prompt.append?.trim() ?? "";
+    if (legacyPrompt) sections.push(`## Agent-Specific Prompt\n\n${legacyPrompt}`);
   }
 
   sections.push(workingInFirstTreeSection({ agentHome: opts.workspacePath, sourceRepos: opts.sourceRepos }));
@@ -86,6 +116,116 @@ function identitySection(identity: AgentIdentity): string {
   return `# Identity\n\nYou are ${name}, ${kind}.`;
 }
 
+// --- generated-file banner ---------------------------------------------------
+
+/**
+ * Fixed banner at the very top of the briefing. Serves two audiences at
+ * once: a reader (human or agent) opening the file learns it is a generated
+ * artifact and where each editable section actually lives, and the literal
+ * `first-tree:generated` marker (AGENT_BRIEFING_GENERATED_MARKER) lets the
+ * server and CLI reject prompt writes that paste this file back into
+ * config. Content is fully static per channel so the prompt cache stays
+ * warm.
+ */
+function generatedBannerSection(bin: string): string {
+  return `<!-- ======================================================================
+  ${AGENT_BRIEFING_GENERATED_MARKER} — this file is rebuilt by the First Tree runtime at
+  every session start. NEVER copy this file, in whole or in part, back into
+  any prompt configuration.
+
+  Where each section comes from, and where to edit it:
+    # Team Prompt   → team prompt resources (Cloud → Org Settings →
+                      Resources); managed by team admins; read-only here
+    # Agent Prompt  → this agent's own prompt fragment;
+                      read:  ${bin} agent config prompt show <agent> --raw
+                      write: ${bin} agent config prompt set <agent> -f <file>
+    # Agent Prompt Overrides → agent-specific resource bindings that
+                      replace team prompts; managed in Cloud, NOT via
+                      prompt set
+  Every other section is First Tree Managed — injected by the runtime and
+  not editable through any prompt configuration.
+====================================================================== -->`;
+}
+
+// --- # Team Prompt / # Agent Prompt -------------------------------------------
+
+/**
+ * Team-shared prompt resources, rendered under their own provenance-labelled
+ * heading. Before this split, team prompt bodies were nested under
+ * `## Agent-Specific Prompt` — which is exactly what trained agents to copy
+ * team content into their per-agent fragment when asked to edit their own
+ * prompt.
+ */
+function teamPromptSection(promptSections: ReadonlyArray<PromptSection>): string | null {
+  const team = promptSections.filter((section) => section.scope === "team" && section.body.trim().length > 0);
+  if (team.length === 0) return null;
+  const blocks: string[] = [
+    "# Team Prompt (team-shared — read-only for agents)",
+    `*Source: team prompt resources, managed by team admins in Cloud → Org
+Settings → Resources. Shared across agents — do NOT copy any of this into
+your per-agent prompt.*`,
+  ];
+  for (const section of team) {
+    blocks.push(`## ${section.name.trim() || "Team prompt"}\n\n${section.body.trim()}`);
+  }
+  return blocks.join("\n\n");
+}
+
+/** The agent's own editable prompt fragment — the ONLY section a prompt edit should produce. */
+function agentPromptSection(
+  promptSections: ReadonlyArray<PromptSection>,
+  identity: AgentIdentity,
+  bin: string,
+): string | null {
+  // Only rows the `prompt show --raw` / `prompt set` round-trip actually owns
+  // may appear under an "editable" heading — agent-scope rows without
+  // `editable: true` (inline replacements of team prompts) go to
+  // `agentPromptOverridesSection` instead.
+  const own = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable === true && section.body.trim().length > 0,
+  );
+  if (own.length === 0) return null;
+  // agentId is the CLI-addressable name (display names may contain spaces,
+  // which would break the copy-pasteable command examples below).
+  const name = identity.agentId;
+  const blocks: string[] = [
+    "# Agent Prompt (this agent only — editable)",
+    `*Source: this agent's own prompt fragment. Read it raw with
+\`${bin} agent config prompt show ${name} --raw\`; replace it with
+\`${bin} agent config prompt set ${name}\`. This is the ONLY section a
+prompt edit should ever produce.*`,
+  ];
+  for (const section of own) {
+    blocks.push(section.body.trim());
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * Agent-specific prompt rows that `prompt set` does NOT own — inline
+ * replacements of team prompt resources (and any future agent-scoped prompt
+ * resources). They get their own heading so the editable `# Agent Prompt`
+ * section never claims content the `prompt show --raw` / `prompt set`
+ * round-trip cannot touch.
+ */
+function agentPromptOverridesSection(promptSections: ReadonlyArray<PromptSection>): string | null {
+  const overrides = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable !== true && section.body.trim().length > 0,
+  );
+  if (overrides.length === 0) return null;
+  const blocks: string[] = [
+    "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    `*Source: agent-specific resource bindings that replace team prompt
+resources. NOT editable with \`prompt set\` — managed in Cloud → Org
+Settings → Resources. Do NOT copy any of this into your per-agent
+prompt.*`,
+  ];
+  for (const section of overrides) {
+    blocks.push(`## ${section.name.trim() || "Agent prompt override"}\n\n${section.body.trim()}`);
+  }
+  return blocks.join("\n\n");
+}
+
 // --- # Required Reading -----------------------------------------------------
 
 /**
@@ -98,11 +238,11 @@ function identitySection(identity: AgentIdentity): string {
  * skill payloads carry rules that are NOT duplicated here:
  *
  *  - `first-tree` ships the three-principal model, the Communication
- *    Principles in full (final-text contract / decision guide / silent
- *    turn / chat-context-missing fallback / channel-binary substitution),
- *    the Hosting-Daemon mental model and its do-not-stop-yourself
- *    invariant, the CLI Namespace Map, and the mandatory pre-task
- *    hygiene (workspace binding check / tree HEAD freshness / role-fork).
+ *    Principles in full (decision guide / courtesy-send guard /
+ *    channel-binary substitution), the Hosting-Daemon mental model
+ *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
+ *    and the mandatory pre-task hygiene (workspace binding check /
+ *    tree HEAD freshness / role-fork).
  *  - `first-tree-context` ships the Context Tree concept model, the
  *    Source-System Boundary, the authorship read-discipline, the Hard
  *    Rules 1-7 (default to not writing / read before write / smallest
@@ -118,16 +258,16 @@ function identitySection(identity: AgentIdentity): string {
  */
 function requiredReadingSection(contextTreePath: string | null): string | null {
   if (contextTreePath === null) return null;
-  return `# Required Reading
+  return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
 load both skills below — loading them **is** the first step of the
 pre-task hygiene the \`first-tree\` skill itself describes. The
 \`# Working in First Tree\` section above carries the minimum
-mechanics you need to operate at all (final-text contract, chat send,
-working directory, CLI surface); the skills below carry the durable
-rules in full, with the inline briefing only summarising the slices
-needed for those workspace-collab basics.
+mechanics you need to operate at all (chat send, working directory,
+CLI surface); the skills below carry the durable rules in full, with
+the inline briefing only summarising the slices needed for those
+workspace-collab basics.
 
 1. **\`first-tree\`** — what First Tree is, the three-principal model
    (Server / Client / Agent), the Communication Principles in full,
@@ -160,19 +300,28 @@ function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
   const bin = getCliBinding().binName;
   const blocks: string[] = [];
 
-  blocks.push(`# Working in First Tree
+  blocks.push(`# Working in First Tree (First Tree Managed)
 
 You are running inside **First Tree**, a messaging platform for agent teams.
 
 - Messages from other team members arrive as your prompt input. Each message
   has a \`[From: <agent-name>]\` header — that name is what you pass back to
   \`chat send\`.
-- **Your final response text is delivered to the chat for human observers to
-  read. It does NOT wake other agents.** To make another agent take action,
-  run \`${bin} chat send <name>\` explicitly.
-- **Stay silent when you have nothing to add.** Not every message needs a
-  reply. If you have nothing new for the recipient, output nothing and the
-  runtime ends the turn.
+- **Your output stream is your reasoning trace** — think, plan, and narrate
+  there freely as you work. It runs on a separate channel from \`chat send\`.
+  (Transitional system behavior: a non-empty final output is currently
+  mirrored into chat history as a silent \`agent-final-text\` row that does
+  NOT wake other agents. The mirror is on the runtime-retirement track
+  (first-tree#941); the future direction is two fully decoupled channels
+  with no mirror at all. Today the mirror is not a reach path — \`chat
+  send\` is.)
+- **To reach a teammate (human or agent), use \`${bin} chat send <name>\`** —
+  this is the only delivery path you should rely on. Every message you want
+  a teammate to see goes through it.
+- **Don't fire a courtesy \`chat send\`.** Not every wake-up needs one back.
+  If after reasoning there's nothing new for any teammate, end the turn
+  without sending — a courteous "got it" between two agents is how loops
+  start.
 - **Content rules (Issue #389):** pass content as a **raw string** — never
   \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes
   produces a literal \`"@x ...\\n..."\` row that the UI cannot render as
@@ -254,31 +403,29 @@ finished, the operator cleans up with \`git worktree remove\`.`;
 function communicationBlock(bin: string): string {
   return `## Communication
 
-\`chat send\` is your primary tool for reaching teammates; your final text is
-the auto-delivered fallback for plain replies. Decision guide (based on
-participant \`type\` in the Current Chat Context block):
+\`chat send\` is how you reach every teammate — human or agent. Decision
+guide (based on participant \`type\` in the Current Chat Context block):
 
-- Reaching an **agent** to make them act → you MUST \`${bin} chat send <name>\`.
-  They do NOT see your final text as a wake signal.
+- **Reaching a human in this chat** — plain reply / status → \`${bin} chat
+  send <name> "..."\`. Every reply directed at a human in this chat goes
+  through \`chat send\`.
+- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
+  <name> --request --question "..."\` (see \`## Asking Humans\`). This raises
+  a tracked open question (red-dot / open-request count) the plain send
+  does not.
+- **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
+  Agents only act on explicit \`chat send\`.
 - After an agent handoff, continue only independent work. If their reply is the
   only remaining input, end the turn and wait to be woken; do not poll status
   or escalate on delayed replies alone.
-- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
-  <name> --request --question "..."\` (see \`## Asking Humans\`). Don't bury the
-  ask in final text — it has no red-dot and no tracked answer.
-- Plain reply / narration to a **human** → final text is enough; it is
-  auto-delivered to the chat. Do **not** *also* fire a plain \`${bin} chat send\`
-  to the same human — that double-posts. (The bullets above cover when an
-  explicit send is the right call: waking an agent or a \`--request\`.)
+- **Don't fire a courtesy \`chat send\`.** If after reasoning there is nothing
+  new for any teammate, end the turn without sending. Your output stream
+  outside \`chat send\` is your reasoning trace — use it freely; the list
+  above is exhaustive for the *send* side.
 
 Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
-recipient.
-
-**Fallback** (if the Current Chat Context block is missing — context
-injection may have failed): use conservative mode — all cross-agent
-collaboration goes through explicit \`chat send\`; do not rely on final
-text to wake anyone.`;
+recipient.`;
 }
 
 function workspaceCollaborationBlock(bin: string): string {
@@ -305,10 +452,10 @@ function askingHumansBlock(): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — ask with a **structured request** instead of burying the question in
-your final text. A request raises a tracked open question on the human's side
-(red-dot / open-question count) that stays until they answer; final text does
-not.
+answer — ask with a **structured request** instead of folding the question
+into a plain \`chat send\`. A request raises a tracked open question on the
+human's side (red-dot / open-question count) that stays until they answer;
+a plain send does not.
 
 \`\`\`bash
 ${bin} chat send <human> --request \\
@@ -351,41 +498,74 @@ safety-sensitive action, or any change to core data structures or the database.`
 }
 
 function chatTopicBlock(bin: string): string {
-  return `## Chat Topic
+  return `## Chat Topic & Description
 
-The workspace chat list uses each chat's \`topic\` as its label. A good
-topic is a short (≤ 30 chars) phrase that tells a teammate at a glance
-what this chat is about — e.g. "调研 chat rename 方案" or "本周 ship 计划".
+Each chat carries two pieces of self-describing metadata, both set
+through the **same** \`chat set-topic\` command:
 
-The current value is shown in the "Current Chat Context" block at the
-bottom of this briefing as either an explicit \`Topic: <value>\` or the
-sentinel \`Topic: (unset ...)\`.
+- **topic** — a short (≤ 30 chars) label the workspace chat list shows,
+  e.g. "调研 chat rename 方案" or "本周 ship 计划".
+- **description** — a longer running summary of **what this piece of
+  work is and where it currently stands**: the paragraph you (after a
+  context reset) or a teammate reads to reconstruct the thread.
 
-**Two hard rules:**
+Both current values appear in the "Current Chat Context" block at the
+bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
+<value>\` or the sentinel \`(unset ...)\`.
 
-1. **Topic is unset → set one before ending this turn.**
-   When the context block shows \`Topic: (unset ...)\`, run:
+    ${bin} chat set-topic "<short label>"
+    ${bin} chat set-topic --description "<current state>"
+    ${bin} chat set-topic "<label>" --description "<state>"
 
-       ${bin} chat set-topic "<short phrase>"
+**Only the chat's owner maintains these — and you count as the owner in
+two cases:** (a) you created the chat, or (b) no agent owner is present —
+a **human** created it (Web-created and GitHub-minted chats both work
+this way) or the creating agent has since left. There every worker agent
+in the chat counts as the owner and maintains these fields on the
+owner's behalf. Only when **another agent** created the chat and is
+still in it are you not the owner: you are **not** asked to set or
+refresh them, and the command refuses you with a 403 — leave them to
+that agent. Rules 1–2 below are the owner's duty; rules 3–4 apply to
+everyone (reading a description to self-locate needs no ownership).
 
-   The fallback label the workspace would otherwise show ("first 50 chars
-   of the first message" / "alice, bob-bot") is rarely distinctive across
-   many chats — naming the chat is a cheap win.
+**Hard rules:**
 
-2. **Topic is set but no longer matches what this chat is about → update it.**
-   Use judgment: don't churn the topic for minor digressions. Only run
-   \`${bin} chat set-topic "<new phrase>"\` when a teammate scanning the
-   workspace list would be misled by the current value.
+1. **(Owner) Topic unset → set one before ending this turn.** The auto-derived
+   fallback ("first 50 chars of the first message" / "alice, bob-bot")
+   is rarely distinctive — naming the chat is a cheap win.
 
-**Exception: GitHub-sourced topics — leave them alone.**
+   **Once set, treat the topic as a stable anchor — do not rename it
+   casually.** Users and agents locate a specific chat by its topic, so a
+   chat that keeps changing names becomes hard to find again. Rename only
+   when the topic is genuinely wrong or misleading because the chat's
+   subject itself changed — never to track progress or reflect a passing
+   focus. Progress belongs in the description, not the topic.
 
-Topics that look like \`PR repo#307: title\`, \`Issue repo#42\`, \`PR
-Review repo#X: ...\`, \`Discussion repo#X\`, or \`Commit repo@sha\` were
-auto-set by First Tree when the chat was minted from a GitHub event, and
-First Tree keeps them in sync with the upstream PR/issue title.
-Overriding them with your own label loses the repo / entity-id anchor
-that makes the chat list useful. **Do not run \`set-topic\` on a chat
-whose topic already has that shape.**`;
+2. **(Owner) Description unset or stale → write or refresh it before ending
+   this turn.** Unlike the topic, the description is **meant to move with
+   the work** — refresh it freely as the state changes. It is the
+   **present** state, not a log — rewrite it in
+   place (the message history is the log), keep it within ~500
+   characters. It must **name the current task** so anyone scanning
+   \`${bin} chat list\` can tell from the description alone whether this
+   chat is the one their task belongs to — lead with the concrete work
+   ("reviewing PR #X"), not a vague restatement of the topic.
+
+3. **Language follows the session's working language** — Chinese
+   session, Chinese description; English session, English.
+
+4. **Self-locate by reading descriptions.** When you wake unsure where
+   a thread stands, or hold several chats and must choose what to
+   advance, run \`${bin} chat list\` and read each description to
+   reconstruct what you've done / what's in flight, then drill in with
+   \`${bin} chat history <chat>\`. If you own the chat, refresh any
+   description that no longer matches what the thread has actually done.
+
+**Exception: GitHub-sourced topics — leave them alone.** Topics like
+\`PR repo#307: title\`, \`Issue repo#42\`, \`Commit repo@sha\` are
+auto-set and kept in sync by First Tree from the upstream entity;
+overriding the topic loses the repo / entity-id anchor. This applies to
+the **topic only** — the owner still maintains the description.`;
 }
 
 function cliOverviewBlock(bin: string): string {
@@ -418,7 +598,7 @@ workspace ↔ tree binding) runs from the web console or a human terminal
 function contextTreeSection(contextTreePath: string | null): string {
   const blocks: string[] = [];
 
-  blocks.push(`# Context Tree
+  blocks.push(`# Context Tree (First Tree Managed)
 
 ## Core Model
 
@@ -532,7 +712,7 @@ function skillsSection(
   // empty — a bare header without rows is just visual noise.
   if (!teamBlock && !familyBlock) return "";
 
-  const blocks: string[] = ["# Skills"];
+  const blocks: string[] = ["# Skills (First Tree Managed)"];
   if (teamBlock) blocks.push(teamBlock);
   if (familyBlock) blocks.push(familyBlock);
   return blocks.join("\n\n");

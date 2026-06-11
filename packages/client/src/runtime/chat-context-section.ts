@@ -13,19 +13,27 @@ export function renderChatContextSection(chatContext: ChatContext | undefined): 
   if (!chatContext) return null;
 
   const lines: string[] = [];
-  lines.push("## Current Chat Context");
+  lines.push("## Current Chat Context (First Tree Managed, per-chat)");
   lines.push("");
   lines.push(`- Chat ID: ${chatContext.chatId}`);
   // Topic is the raw `chats.topic` column. We render it on every turn —
   // either the explicit value or a sentinel — so the agent can decide
   // whether to set/refresh it without round-tripping through the API. See
-  // the `## Chat Topic` subsection of the unified briefing
+  // the `## Chat Topic & Description` subsection of the unified briefing
   // (`runtime/agent-briefing.ts`) for the two hard rules the agent is
   // expected to follow when it sees `(unset)` here.
   if (chatContext.topic && chatContext.topic.trim().length > 0) {
     lines.push(`- Topic: ${chatContext.topic}`);
   } else {
-    lines.push(`- Topic: (unset — see "Chat Topic" in this briefing)`);
+    lines.push(`- Topic: (unset — see "Chat Topic & Description" in this briefing)`);
+  }
+  // Description is the raw `chats.description` column — a running
+  // "what + current state" summary, rendered every turn (value or
+  // sentinel) so the agent can decide whether to write/refresh it.
+  if (chatContext.description && chatContext.description.trim().length > 0) {
+    lines.push(`- Description: ${chatContext.description}`);
+  } else {
+    lines.push(`- Description: (unset — see "Chat Topic & Description" in this briefing)`);
   }
   // Title is the server-resolved display label (falls back to first-message
   // preview / participant join when topic is null). Only render when it
