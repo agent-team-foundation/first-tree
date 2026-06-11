@@ -1495,4 +1495,47 @@ describe("SessionManager preemption of working sessions (#973)", () => {
 
     await sm.shutdown();
   });
+
+  it("waits for the evicted handler's teardown before resuming the chat on a fresh handler (no two live handlers per chat)", async () => {
+    // PR #982 review finding: eviction fires `handler.shutdown()` without
+    // awaiting it, then proactive recovery redelivers — a fresh handler
+    // must NOT start for that chat until the old one has actually stopped.
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const h = chatHarness();
+    const sm = createSessionManager({
+      handlerFactory: h.factory,
+      concurrency: 5,
+      recoverChat,
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    // chat-a active with an unfinished turn; its handler's shutdown blocks
+    // until we release the gate.
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    const shutdownGate = deferred<void>();
+    const handlerA = h.handlers.get("chat-a");
+    expect(handlerA).toBeDefined();
+    (handlerA?.shutdown as ReturnType<typeof vi.fn>).mockReturnValue(shutdownGate.promise);
+
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    // chat-c trips max_sessions — chat-a (LRU) is evicted while active; its
+    // shutdown is now in flight, and proactive recovery is scheduled.
+    await deliver(sm, mockEntry({ id: 3, chatId: "chat-c", messageId: "msg-c" }));
+    await flushDeferred();
+    expect(recoverChat).toHaveBeenCalledWith("chat-a");
+
+    // The recovery redelivery arrives while the old handler is still
+    // shutting down — the resume must block on the teardown.
+    const redelivery = sm.dispatch(mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    await flushDeferred();
+    expect(h.resumes.filter((r) => r.chatId === "chat-a")).toHaveLength(0);
+
+    // Old handler finishes stopping → the fresh handler may now resume.
+    shutdownGate.resolve(undefined);
+    await redelivery;
+    expect(h.resumes.filter((r) => r.chatId === "chat-a")).toHaveLength(1);
+    expect(h.resumes[0]?.sessionId).toBe("session-chat-a");
+
+    await sm.shutdown();
+  });
 });
