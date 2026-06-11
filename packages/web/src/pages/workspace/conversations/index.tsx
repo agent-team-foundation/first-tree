@@ -24,12 +24,13 @@ import { RowEngagementMenu } from "./row-engagement-menu.js";
  * Redesign (content-first / near-monochrome): the header is a single
  * row — New chat + the primary `All / Unread / Watching` triad + a `⚙`
  * popover that holds the lower-frequency Status / Source controls.
- * Rows carry exactly one signal per line: the title row + time, and a
- * second line that is *either* an attention state *or* the last-message
- * preview *or* (when there's neither) nothing at all. Colour appears only
- * on attention rows (left border + state line), the selected row (green),
- * and the unread dot — never as decoration. Avatars use the desaturated
- * hue companions so a dense rail stays quiet.
+ * Rows are single-line — avatar + title + a right meta cluster (time,
+ * activity dots, or the watching eye) — keeping the rail the density
+ * surface; the chat header is where the description renders in full.
+ * Attention reads from the avatar corner mark, the left border is the
+ * selected affordance only (green), and colour never appears as
+ * decoration. Avatars use the desaturated hue companions so a dense
+ * rail stays quiet.
  */
 
 export const DRAFT_CHAT_ID = "draft" as const;
