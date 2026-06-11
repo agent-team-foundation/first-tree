@@ -62,6 +62,12 @@ function validateFileContent(content: unknown): void {
   );
 }
 
+function validateMessageContent(data: SendMessage): void {
+  if (data.format === "file") {
+    validateFileContent(data.content);
+  }
+}
+
 export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
@@ -164,9 +170,7 @@ export function preflightMessageSendIntent(input: {
   const options = input.options ?? {};
   const { chatId, senderId, senderType, data, participants } = input;
 
-  if (data.format === "file") {
-    validateFileContent(data.content);
-  }
+  validateMessageContent(data);
 
   let effectiveContent: SendMessage["content"] = data.content;
   if (senderType !== "human" && typeof effectiveContent === "string") {
@@ -192,9 +196,11 @@ export function preflightMessageSendIntent(input: {
   }
 
   const explicitMentionsRaw = incomingMeta.mentions;
-  const explicitMentions = Array.isArray(explicitMentionsRaw)
+  const explicitMentionsRawList = Array.isArray(explicitMentionsRaw)
     ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
     : [];
+  const participantsById = new Map(participants.map((p) => [p.agentId, p]));
+  const explicitMentions = explicitMentionsRawList.filter((id) => id === senderId || participantsById.has(id));
 
   const receiverNames = data.receiverNames ?? [];
   const speakersByName = new Map<string, string>();
@@ -219,7 +225,6 @@ export function preflightMessageSendIntent(input: {
   }
 
   const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
-  const participantsById = new Map(participants.map((p) => [p.agentId, p]));
   const mentionTargets = mergedMentions.filter((id) => id !== senderId);
   for (const id of mentionTargets) {
     const participant = participantsById.get(id);
@@ -324,6 +329,7 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
+  validateMessageContent(data);
   return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), () =>
     sendMessageInner(db, chatId, senderId, data, options),
   );
