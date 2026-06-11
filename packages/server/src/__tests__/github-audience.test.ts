@@ -248,6 +248,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        actorAgentId: null,
       },
     ]);
   });
@@ -289,6 +290,7 @@ describe("resolveAudience", () => {
         chatId: null,
         involveReason: "review_requested",
         involveLogin: humanName.toLowerCase(),
+        actorAgentId: null,
       },
     ]);
   });
@@ -540,7 +542,7 @@ describe("resolveAudience", () => {
     expect(audience).toEqual([]);
   });
 
-  it("echo: drops mappings where actor is the human side OR delegate side", async () => {
+  it("echo (#942): keeps mappings where actor is the human side, annotating actorAgentId for notification suppression", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -584,7 +586,11 @@ describe("resolveAudience", () => {
       chatId: chatOther,
     });
 
-    // Actor is the human-side agent → only the other-human row survives.
+    // Actor is the human-side agent of the first mapping. Pre-#942 the
+    // whole row was dropped, which silently killed card delivery to that
+    // chat. Now BOTH rows survive (every mapped chat keeps the public
+    // record); each carries actorAgentId so Stage 3 suppresses only the
+    // actor's own notification.
     const [humanRow] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, human)).limit(1);
     const audience = await resolveAudience(
       app.db,
@@ -597,8 +603,73 @@ describe("resolveAudience", () => {
       }),
       "first-tree",
     );
-    expect(audience).toHaveLength(1);
-    expect(audience[0]?.humanAgentId).toBe(otherHuman);
+    expect(audience).toHaveLength(2);
+    const byHuman = new Map(audience.map((a) => [a.humanAgentId, a]));
+    expect(byHuman.get(human)).toMatchObject({
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId: chatHuman,
+      actorAgentId: human,
+    });
+    expect(byHuman.get(otherHuman)).toMatchObject({
+      delegateAgentId: otherDelegate,
+      kind: "existing",
+      chatId: chatOther,
+      actorAgentId: human,
+    });
+  });
+
+  it("echo (#942): keeps a mapping where actor is the delegate side, annotating actorAgentId", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateName = `dlg-${randomUUID().slice(0, 6)}`;
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: delegateName,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#105",
+      chatId,
+    });
+
+    // Actor resolves to the delegate agent (e.g. the squash-merge run by the
+    // delegate's GitHub identity — the staging case of #942). The mapping
+    // survives with actorAgentId set; Stage 3 then empties the addressing
+    // and the card lands as a recipientless public-record row.
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#105",
+        actorLogin: delegateName,
+        kind: "merged",
+      }),
+      "first-tree",
+    );
+    expect(audience).toEqual([
+      {
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        kind: "existing",
+        chatId,
+        involveReason: null,
+        involveLogin: null,
+        actorAgentId: delegate,
+      },
+    ]);
   });
 
   it("keeps an involved-new row when actor self-mentions (explicit intent, not echo)", async () => {
@@ -645,17 +716,18 @@ describe("resolveAudience", () => {
     });
   });
 
-  it("self-mention in an already-subscribed entity stays silent (existing dropped, new skipped by subscribedKeys)", async () => {
+  it("self-mention in an already-subscribed entity keeps the existing row (no duplicate new row)", async () => {
     // Documents the interaction between two filters when actor self-targets
     // an entity they already subscribe to:
     //   - the `subscribedKeys` short-circuit (resolveAudience) skips adding a
     //     `kind: "new"` row because (human, delegate) is already subscribed
-    //   - the actor-agent echo filter then drops the surviving `kind: "existing"`
-    //     row because the actor is on the human side
-    // Net result: audience is empty. This is *not* the explicit-intent path the
-    // sibling test covers — there's no new row to keep. Locking the behavior
-    // here so a future change that wants to nudge a subscribed delegate via
-    // self-mention has a clear anchor.
+    //   - the actor-agent echo annotation (#942) keeps the surviving
+    //     `kind: "existing"` row, tagging it with actorAgentId
+    // Net result: exactly one target — the card lands in the bound chat and
+    // the subscribed delegate is nudged (it is not the actor), while the
+    // actor's own notification is suppressed downstream. Pre-#942 this
+    // audience was empty (the echo filter dropped the existing row), which
+    // also meant a self-mention could not nudge the subscribed delegate.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -693,7 +765,17 @@ describe("resolveAudience", () => {
       "first-tree",
     );
 
-    expect(audience).toEqual([]);
+    expect(audience).toEqual([
+      {
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        kind: "existing",
+        chatId,
+        involveReason: null,
+        involveLogin: null,
+        actorAgentId: human,
+      },
+    ]);
   });
 
   it("skips an involve whose delegate target is inactive (suspended/deleted)", async () => {

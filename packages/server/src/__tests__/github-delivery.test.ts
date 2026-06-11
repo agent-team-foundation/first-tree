@@ -8,7 +8,7 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import type { AudienceTarget } from "../services/github-audience.js";
+import { type AudienceTarget, resolveAudience } from "../services/github-audience.js";
 import { deliverNormalizedEvent } from "../services/github-delivery.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -117,6 +117,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -186,6 +187,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -250,6 +252,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -304,6 +307,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -372,6 +376,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -416,6 +421,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -451,6 +457,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "review_requested",
       involveLogin: humanName.toLowerCase(),
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -525,6 +532,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null, // forces the runtime guard to throw
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const ok: AudienceTarget = {
       humanAgentId: goodHuman,
@@ -533,6 +541,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: goodChatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -600,6 +609,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -629,5 +639,225 @@ describe("deliverNormalizedEvent", () => {
     // Other group speakers stay silent (history-only) — exactly the
     // mention-only behaviour for unaddressed participants.
     expect(watcherRow?.notify).toBe(false);
+  });
+
+  // #942 — echo suppression moved from the chat-delivery layer to the
+  // notification layer. The card is always written to the mapped chat (the
+  // public record); only the actor's own notification is suppressed.
+  describe("echo suppression (#942)", () => {
+    type Seeded = {
+      orgId: string;
+      human: string;
+      delegate: string;
+      others: string[];
+      chatId: string;
+      entityKey: string;
+      inboxOf: (agentId: string) => Promise<string | undefined>;
+    };
+
+    async function seedBoundGroupChat(app: App, otherCount: number): Promise<Seeded> {
+      const admin = await createTestAdmin(app);
+      const delegate = await seedAgent(app, {
+        orgId: admin.organizationId,
+        memberId: admin.memberId,
+        name: `dlg-${randomUUID().slice(0, 6)}`,
+      });
+      const human = await seedAgent(app, {
+        orgId: admin.organizationId,
+        memberId: admin.memberId,
+        name: `human-${randomUUID().slice(0, 6)}`,
+        delegateMention: delegate,
+      });
+      const others: string[] = [];
+      for (let i = 0; i < otherCount; i++) {
+        others.push(
+          await seedAgent(app, {
+            orgId: admin.organizationId,
+            memberId: admin.memberId,
+            name: `member-${i}-${randomUUID().slice(0, 6)}`,
+          }),
+        );
+      }
+      const chatId = `chat_${randomUUID()}`;
+      const entityKey = `owner/repo#${Math.floor(Math.random() * 100000)}`;
+      await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+      await app.db.insert(chatMembership).values([
+        { chatId, agentId: human, role: "owner" as const, accessMode: "speaker" as const },
+        { chatId, agentId: delegate, role: "member" as const, accessMode: "speaker" as const },
+        ...others.map((agentId) => ({
+          chatId,
+          agentId,
+          role: "member" as const,
+          accessMode: "speaker" as const,
+        })),
+      ]);
+      await app.db.insert(githubEntityChatMappings).values({
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey,
+        chatId,
+        boundVia: "agent_created",
+      });
+      const inboxOf = async (agentId: string): Promise<string | undefined> => {
+        const [row] = await app.db
+          .select({ inboxId: agents.inboxId })
+          .from(agents)
+          .where(eq(agents.uuid, agentId))
+          .limit(1);
+        return row?.inboxId;
+      };
+      return { orgId: admin.organizationId, human, delegate, others, chatId, entityKey, inboxOf };
+    }
+
+    it("actor on the human side: card written, delegate still woken, actor (sender) gets no inbox row", async () => {
+      const app = getApp();
+      const s = await seedBoundGroupChat(app, 2);
+
+      const target: AudienceTarget = {
+        humanAgentId: s.human,
+        delegateAgentId: s.delegate,
+        kind: "existing",
+        chatId: s.chatId,
+        involveReason: null,
+        involveLogin: null,
+        actorAgentId: s.human,
+      };
+      const event = makeEvent({
+        orgId: s.orgId,
+        entityType: "pull_request",
+        entityKey: s.entityKey,
+        rawEventType: "pull_request_review",
+        rawAction: "submitted",
+      });
+      const stats = await deliverNormalizedEvent(app, event, [target]);
+      expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+
+      // Card is the public record — it must land in the chat.
+      const sent = await app.db.select().from(messages).where(eq(messages.chatId, s.chatId));
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.format).toBe("card");
+
+      const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, s.chatId));
+      // Actor (= card sender) is never self-delivered: no inbox row at all.
+      const humanInbox = await s.inboxOf(s.human);
+      expect(rows.filter((r) => r.inboxId === humanInbox)).toHaveLength(0);
+      // The other side of the actor's own audience pair is notified normally.
+      const delegateInbox = await s.inboxOf(s.delegate);
+      expect(rows.find((r) => r.inboxId === delegateInbox)?.notify).toBe(true);
+      // Remaining participants receive the card as silent context.
+      for (const other of s.others) {
+        const otherInbox = await s.inboxOf(other);
+        expect(rows.find((r) => r.inboxId === otherInbox)?.notify).toBe(false);
+      }
+    });
+
+    it("actor on the delegate side: card written recipientless, nobody woken (the staging merge case)", async () => {
+      const app = getApp();
+      const s = await seedBoundGroupChat(app, 2);
+
+      const target: AudienceTarget = {
+        humanAgentId: s.human,
+        delegateAgentId: s.delegate,
+        kind: "existing",
+        chatId: s.chatId,
+        involveReason: null,
+        involveLogin: null,
+        actorAgentId: s.delegate,
+      };
+      const event = makeEvent({
+        orgId: s.orgId,
+        entityType: "pull_request",
+        entityKey: s.entityKey,
+        rawEventType: "pull_request",
+        rawAction: "closed",
+      });
+      const stats = await deliverNormalizedEvent(app, event, [target]);
+      expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+
+      // Card still lands — pre-#942 this entire delivery was suppressed and
+      // the multi-participant chat silently lost the event.
+      const sent = await app.db.select().from(messages).where(eq(messages.chatId, s.chatId));
+      expect(sent).toHaveLength(1);
+
+      // The actor's addressing was emptied → recipientless trusted send:
+      // every fan-out row (including the actor's) is silent context.
+      const notified = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(and(eq(inboxEntries.chatId, s.chatId), eq(inboxEntries.notify, true)));
+      expect(notified).toHaveLength(0);
+      const actorInbox = await s.inboxOf(s.delegate);
+      const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, s.chatId));
+      expect(rows.find((r) => r.inboxId === actorInbox)?.notify).toBe(false);
+    });
+
+    it("actor not in any participant pair (external actor): behaviour unchanged, delegate woken", async () => {
+      const app = getApp();
+      const s = await seedBoundGroupChat(app, 1);
+
+      const target: AudienceTarget = {
+        humanAgentId: s.human,
+        delegateAgentId: s.delegate,
+        kind: "existing",
+        chatId: s.chatId,
+        involveReason: null,
+        involveLogin: null,
+        actorAgentId: null,
+      };
+      const event = makeEvent({
+        orgId: s.orgId,
+        entityType: "pull_request",
+        entityKey: s.entityKey,
+        rawEventType: "pull_request",
+        rawAction: "synchronize",
+      });
+      const stats = await deliverNormalizedEvent(app, event, [target]);
+      expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+
+      const delegateInbox = await s.inboxOf(s.delegate);
+      const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, s.chatId));
+      expect(rows.find((r) => r.inboxId === delegateInbox)?.notify).toBe(true);
+    });
+
+    it("end-to-end (resolveAudience → deliver): actor-on-pair event still reaches the multi-participant chat", async () => {
+      // Replays the #942 staging topology: a 4+-member chat whose ONLY
+      // routing entry is (human, delegate), and the event actor resolves to
+      // one side of that pair. Pre-#942 resolveAudience returned [] and the
+      // chat lost the card entirely.
+      const app = getApp();
+      const s = await seedBoundGroupChat(app, 2);
+      const [delegateRow] = await app.db
+        .select({ name: agents.name })
+        .from(agents)
+        .where(eq(agents.uuid, s.delegate))
+        .limit(1);
+
+      const event: NormalizedEvent = {
+        ...makeEvent({
+          orgId: s.orgId,
+          entityType: "pull_request",
+          entityKey: s.entityKey,
+          rawEventType: "pull_request",
+          rawAction: "closed",
+        }),
+        actor: { githubLogin: delegateRow?.name ?? "", isBot: false },
+        kind: "merged",
+      };
+      const audience = await resolveAudience(app.db, event, "first-tree");
+      expect(audience).toHaveLength(1);
+      expect(audience[0]?.actorAgentId).toBe(s.delegate);
+
+      const stats = await deliverNormalizedEvent(app, event, audience);
+      expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+      const sent = await app.db.select().from(messages).where(eq(messages.chatId, s.chatId));
+      expect(sent).toHaveLength(1);
+      const notified = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(and(eq(inboxEntries.chatId, s.chatId), eq(inboxEntries.notify, true)));
+      expect(notified).toHaveLength(0);
+    });
   });
 });
