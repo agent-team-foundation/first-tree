@@ -123,7 +123,7 @@ import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
-import { computeRequiresMention } from "../../../utils/requires-mention.js";
+import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 
@@ -1327,6 +1327,17 @@ export function ChatView({
     const routedMentions =
       effectiveSendMentions.length === 0 && dockRequest ? [dockRequest.senderId] : effectiveSendMentions;
 
+    // "Chat about this": a plain reply that addresses the agent which asked an
+    // open question directed at me (explicit @mention, or the dock-asker
+    // fallback above) threads under that question (`inReplyTo`) so the
+    // back-and-forth stays scoped to it. Computed BEFORE the image branch —
+    // a captioned image answering a docked question must thread exactly like
+    // a text reply. This does NOT resolve the question — `inReplyTo` is pure
+    // threading; resolution needs an explicit `metadata.resolves`, written by
+    // the dock's clean answer or the asking agent's `chat send
+    // --answer`/`--close`.
+    const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
+
     if (images.length > 0) {
       setUploading(true);
       setUploadError(null);
@@ -1391,7 +1402,9 @@ export function ChatView({
             format: "file",
             content: optimisticContent,
             metadata: imageMetadata ?? {},
-            inReplyTo: null,
+            // Mirror the POST below: a captioned image answering a docked
+            // question threads under it, optimistically too.
+            inReplyTo: threadedRequestId ?? null,
             source: "web",
             createdAt: new Date().toISOString(),
             deliveryStatus: "pending",
@@ -1411,6 +1424,7 @@ export function ChatView({
             attachments: optimisticRefs,
           },
           imageMetadata,
+          threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
         );
         if (batchTempId) {
           replaceOptimisticMessage(batchTempId, saved);
@@ -1461,14 +1475,6 @@ export function ChatView({
       return;
     }
 
-    // "Chat about this": a plain reply that addresses the agent which asked an
-    // open question directed at me (explicit @mention, or the dock-asker
-    // fallback in `routedMentions`) threads under that question (`inReplyTo`)
-    // so the back-and-forth stays scoped to it. This does NOT resolve the
-    // question — `inReplyTo` is pure threading now; resolution needs an
-    // explicit `metadata.resolves`, written by the dock's clean answer or the
-    // asking agent's `chat send --answer`/`--close`.
-    const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
     sendMut.mutate({
       content: text,
       mentions: routedMentions,
@@ -3175,9 +3181,21 @@ export function ChatView({
                             // their draft and tabbed away/back; that would constantly
                             // fight the user when they're trying to write a fresh
                             // empty message without addressing anyone (e.g. paste over).
-                            if (!requiresMention) return;
-                            if (focusPrimedRef.current) return;
-                            if (draft.length > 0 || mentionCandidates.length === 0) return;
+                            // While a question is docked, priming is skipped — the
+                            // asker is the default recipient (same gate that lifts
+                            // `sendBlockedByMentionGate`), so stamping `@` would fight
+                            // the dock contract as the user starts a free-text answer.
+                            if (
+                              !shouldPrimeMentionOnFocus({
+                                requiresMention,
+                                dockActive: dockRequest != null,
+                                alreadyPrimed: focusPrimedRef.current,
+                                draftLength: draft.length,
+                                mentionCandidateCount: mentionCandidates.length,
+                              })
+                            ) {
+                              return;
+                            }
                             focusPrimedRef.current = true;
                             setDraft("@");
                             setCursor(1);

@@ -742,6 +742,8 @@ describe("ChatView", () => {
         attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "preview.png", size: 3 }],
       },
       { mentions: ["agent-2"] },
+      // No live request in this chat → nothing to thread under.
+      undefined,
     );
 
     await act(async () => root.unmount());

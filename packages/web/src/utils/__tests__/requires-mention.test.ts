@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeRequiresMention } from "../requires-mention.js";
+import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../requires-mention.js";
 
 const ME = "me-agent";
 const A = "agent-a";
@@ -51,5 +51,42 @@ describe("computeRequiresMention", () => {
 
   it("handles an empty participant list", () => {
     expect(computeRequiresMention([], ME)).toBe(false);
+  });
+});
+
+describe("shouldPrimeMentionOnFocus", () => {
+  const base = {
+    requiresMention: true,
+    dockActive: false,
+    alreadyPrimed: false,
+    draftLength: 0,
+    mentionCandidateCount: 2,
+  };
+
+  it("primes in a plain group chat with an empty draft", () => {
+    expect(shouldPrimeMentionOnFocus(base)).toBe(true);
+  });
+
+  it("does NOT prime while a question is docked — the asker is the default recipient", () => {
+    // The dock contract: answering or discussing the pinned question needs no
+    // typed @mention (the group-chat/free-text dock case from PR 981's review).
+    // Stamping `@` on focus would fight the user starting a free-text answer.
+    expect(shouldPrimeMentionOnFocus({ ...base, dockActive: true })).toBe(false);
+  });
+
+  it("does NOT prime in a 1-on-1 (no mention required)", () => {
+    expect(shouldPrimeMentionOnFocus({ ...base, requiresMention: false })).toBe(false);
+  });
+
+  it("primes once per chat visit", () => {
+    expect(shouldPrimeMentionOnFocus({ ...base, alreadyPrimed: true })).toBe(false);
+  });
+
+  it("never primes over an existing draft", () => {
+    expect(shouldPrimeMentionOnFocus({ ...base, draftLength: 5 })).toBe(false);
+  });
+
+  it("does not prime with no mention candidates to pick", () => {
+    expect(shouldPrimeMentionOnFocus({ ...base, mentionCandidateCount: 0 })).toBe(false);
   });
 });
