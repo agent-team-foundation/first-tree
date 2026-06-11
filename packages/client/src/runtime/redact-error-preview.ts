@@ -34,12 +34,15 @@ const DEFAULT_MAX_LEN = 256;
  *
  * Pattern coverage (all checked independently):
  *
- *  1. URL-embedded basic auth — `<scheme>://user:pass@host/...` for ANY
+ *  1. URL-embedded userinfo — `<scheme>://<userinfo>@host/...` for ANY
  *     RFC-3986 scheme (https / ssh / git / postgres / mysql / mongodb+srv /
- *     redis / amqp / …). `git clone <url>` echoes the configured URL into
- *     the resulting `GitMirrorError` message, so a PAT-bearing
- *     `remote.origin.url` lands here verbatim — but so does any database
- *     connection string an SDK happens to log on failure.
+ *     redis / amqp / …). Userinfo is redacted as a single blob (`user:pass`,
+ *     `:pass` empty-username form common to redis / postgres, and the bare
+ *     `<token>` single-component form like `https://oauth-token@github.com/x`
+ *     all collapse to `<scheme>://[REDACTED]@host`). `git clone <url>` echoes
+ *     the configured URL into the resulting `GitMirrorError` message, so a
+ *     PAT-bearing `remote.origin.url` lands here verbatim — but so does any
+ *     database connection string an SDK happens to log on failure.
  *  2. Standard token prefixes that are unambiguously credentials:
  *       - GitHub: `ghp_*`, `ghs_*`, `gho_*`, `ghu_*`, `ghr_*` (refresh
  *         token), `github_pat_*`
@@ -64,11 +67,21 @@ export function redactErrorPreview(input: string, maxLen: number = DEFAULT_MAX_L
   if (!input) return input;
   let s = input;
 
-  // 1. URL-embedded basic auth — any RFC-3986 scheme. Keeps host + path so
+  // 1. URL-embedded userinfo — any RFC-3986 scheme. Keeps host + path so
   //    the operator can still tell which resource failed. Bounded scheme
   //    length (1–31 chars after the leading letter) keeps the match cheap
   //    and unambiguous: an arbitrary `word://` is rare outside actual URIs.
-  s = s.replace(/\b([a-z][a-z0-9+.\-]{0,30}:\/\/)([^\s:@/]+):([^\s@/]+)@/gi, "$1[REDACTED]@");
+  //
+  //    Userinfo is matched as a single blob (`[^\s@/]+`) rather than a
+  //    `user:pass` pair so the three real-world forms collapse uniformly:
+  //      a. `user:pass`                — standard
+  //      b. `:pass`                    — empty-username (redis / postgres)
+  //      c. `<token>` (no colon)      — single-component (`https://<PAT>@…`)
+  //    The previous `([^\s:@/]+):([^\s@/]+)` required both halves to be
+  //    non-empty and a colon between them, which let (b) and (c) slip
+  //    through with credentials intact — caught by Codex on PR #975's
+  //    `d30e8926` and now pinned by negative-toContain regression tests.
+  s = s.replace(/\b([a-z][a-z0-9+.\-]{0,30}:\/\/)[^\s@/]+@/gi, "$1[REDACTED]@");
 
   // 2. Vendor-prefixed token shapes. Order matters: longest / most-specific
   //    first so we don't half-redact a `github_pat_…` to a `gh…` shape.
@@ -84,6 +97,14 @@ export function redactErrorPreview(input: string, maxLen: number = DEFAULT_MAX_L
   // OpenAI / Anthropic `sk-…` family. The vendor segment (`-ant-`, `-proj-`,
   // a service codename) is OPTIONAL: the older bare `sk-<longstring>` shape
   // is still in the wild and the new helper should catch it.
+  //
+  // Widening trade-off (intentional, per the over-redact bias): with the
+  // vendor segment optional, prose like `task-sk-something-that-is-long-
+  // enough-prose` ALSO matches and collapses to `task-[REDACTED:sk]`. That
+  // false-positive shape (a `sk-` followed by 20+ chars of `[A-Za-z0-9_-]`
+  // with no whitespace / punctuation) is genuinely rare in ordinary error
+  // logs, so the recall on legacy bare-`sk-` tokens wins. Flagged by
+  // code-reviewer on PR #975 round-2 for documentation purposes.
   s = s.replace(/\bsk-(?:(?:ant|proj|[a-z]{2,12})-)?[A-Za-z0-9_-]{20,}/g, "[REDACTED:sk]");
   s = s.replace(/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "[REDACTED:xox]");
 

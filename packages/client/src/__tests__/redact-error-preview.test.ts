@@ -57,6 +57,45 @@ describe("redactErrorPreview — secret patterns are sanitised", () => {
     expect(redactErrorPreview("redis://default:redis_pwd_99@cache:6379/0")).not.toContain("redis_pwd_99");
   });
 
+  it("scrubs URL userinfo in the empty-username and bare-token forms (PR #975 follow-up gap)", () => {
+    // Codex's round-3 probe on PR #975 d30e8926 caught the previous
+    // `([^\s:@/]+):([^\s@/]+)@` regex requiring BOTH username and password
+    // to be non-empty with a colon between them. Two real-world userinfo
+    // shapes slipped through:
+    //
+    //  (a) Empty username — common in DB connection strings, e.g.
+    //      `redis://:redis_pwd_99@cache:6379/0`
+    //      `postgres://:secret_pg_99@db:5432/main`
+    //  (b) Single-component bare token — common for OAuth-token-in-URL:
+    //      `https://oauth-token-AbCd1234@github.com/owner/repo`
+    //
+    // Both must be redacted. `.not.toContain(<actual credential>)` is the
+    // load-bearing assertion — substring checks on `[REDACTED]` alone
+    // would pass through a "scheme + [REDACTED] + leftover credential"
+    // partial redaction (the same false-confidence mode that hid the
+    // round-2 Authorization Basic leak).
+    const emptyUserRedis = redactErrorPreview("redis connect failed: redis://:redis_pwd_99@cache:6379/0");
+    expect(emptyUserRedis).not.toContain("redis_pwd_99");
+    expect(emptyUserRedis).toContain("redis://[REDACTED]@cache:6379/0");
+
+    const emptyUserPg = redactErrorPreview("dial timeout postgres://:secret_pg_99@db:5432/main");
+    expect(emptyUserPg).not.toContain("secret_pg_99");
+    expect(emptyUserPg).toContain("postgres://[REDACTED]@db:5432/main");
+
+    const bareTokenGitHub = redactErrorPreview(
+      "git fetch failed: https://oauth-token-AbCd1234@github.com/owner/repo.git",
+    );
+    expect(bareTokenGitHub).not.toContain("oauth-token-AbCd1234");
+    expect(bareTokenGitHub).toContain("https://[REDACTED]@github.com/owner/repo.git");
+
+    // Regression guard: the standard `user:pass` form (the round-1 case)
+    // still works through the collapsed single-blob userinfo regex.
+    const standard = redactErrorPreview("https://liu:ghp_AbCdEf0123456789abcdef0123456789abcd@github.com/x.git");
+    expect(standard).not.toContain("ghp_AbCdEf0123456789abcdef0123456789abcd");
+    expect(standard).not.toContain("liu:ghp_");
+    expect(standard).toContain("https://[REDACTED]@github.com/x.git");
+  });
+
   it("scrubs vendor-prefixed tokens that appear bare (not inside a URL)", () => {
     expect(redactErrorPreview("X-GitHub-Token: ghp_AbCdEf0123456789abcdef0123456789abcd")).toMatch(/\[REDACTED:ghp\]/);
     expect(redactErrorPreview("hint: server-to-server token ghs_AbCdEf0123456789abcdef0123456789abcd")).toMatch(
