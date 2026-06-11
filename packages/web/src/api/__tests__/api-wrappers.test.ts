@@ -211,12 +211,20 @@ describe("api wrapper paths", () => {
       cursor: "next",
       filter: "unread",
       engagement: "active",
-      origin: ["manual", "github"],
+      origin: ["manual", "github", "agent"],
       with: ["agent-1", "agent-2"],
       watching: true,
     });
     await meChats.listMeChatSourceCounts({ engagement: "archived" });
     await meChats.createMeChat({ participantIds: ["agent-1"] });
+    await meChats.createMeTaskChat({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: { source: "web", format: "text", content: "start task" },
+    });
     await meChats.markMeChatRead("chat/id");
     await meChats.markMeChatUnread("chat/id");
     await meChats.addMeChatParticipants("chat/id", { participantIds: ["agent-2"] });
@@ -274,8 +282,16 @@ describe("api wrapper paths", () => {
       content: "no route",
     });
     expect(apiMock.get).toHaveBeenCalledWith(
-      "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub&with=agent-1%2Cagent-2&watching=1",
+      "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub%2Cagent&with=agent-1%2Cagent-2&watching=1",
     );
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/chats", {
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: { source: "web", format: "text", content: "start task" },
+    });
     expect(apiMock.get).toHaveBeenCalledWith(
       "/chats/chat%2Fid/docs/preview?agentId=agent%2Fid&path=docs%2Fplan.md&basePath=%2Fworkspace",
     );

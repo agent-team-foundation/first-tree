@@ -1,9 +1,9 @@
 ---
 name: first-tree
-version: 0.7.0
+version: 0.7.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: "Top-level First Tree skill — entry-point router and canonical home for the rules every in-chat agent must follow. Covers what First Tree is (workspace collaboration arm + Context management arm), the three-principal model (Server / Client / Agent), the canonical Communication Principles (who-do-I-talk-to decision guide, courtesy-send guard, channel-binary substitution), what the background daemon does and why you must not stop/restart it from inside yourself, a CLI Namespace Map of which command lives where, and the mandatory pre-task hygiene (binding check, tree HEAD freshness, role classification). Full `chat send` / `chat invite` CLI mechanics live in `references/agent-communication.md`. For task-scoped Context Tree reads use `first-tree-read`; for Context Tree concepts/writes use `first-tree-context`. Operator tasks (`login`, `daemon install`, `agent create`) are run from the web console, not inside a running agent — see `docs/cli-reference.md`."
+description: "Top-level First Tree skill — entry-point router and canonical home for the rules every in-chat agent must follow. Covers what First Tree is (workspace collaboration arm + Context management arm), the three-principal model (Server / Client / Agent), the canonical Communication Principles (who-do-I-talk-to decision guide, task-chat creation, courtesy-send guard, channel-binary substitution), what the background daemon does and why you must not stop/restart it from inside yourself, a CLI Namespace Map of which command lives where, and the mandatory pre-task hygiene (binding check, tree HEAD freshness, role classification). Full `chat create` / `chat send` / `chat invite` CLI mechanics live in `references/agent-communication.md`. For task-scoped Context Tree reads use `first-tree-read`; for Context Tree concepts/writes use `first-tree-context`. Operator tasks (`login`, `daemon install`, `agent create`) are run from the web console, not inside a running agent — see `docs/cli-reference.md`."
 ---
 
 # First Tree — Top-Level Skill
@@ -23,7 +23,7 @@ arms — pick the right one before acting:
 
 | Arm | What it does | Sub-skills |
 |---|---|---|
-| **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
+| **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat create`, `chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
 | **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-read` · `first-tree-context` (write operating guide) · `first-tree-sync` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
@@ -51,7 +51,7 @@ Agents (and with humans in your chat) over the messaging surface.
 These rules govern every in-chat turn — read them once, follow them
 always. They are canonical here so every agent that loads this entry
 skill sees them, even before deciding whether the task is workspace or
-context. The full `chat send` / `chat invite` CLI mechanics live in
+context. The full `chat create` / `chat send` / `chat invite` CLI mechanics live in
 [`references/agent-communication.md`](references/agent-communication.md);
 this section is the *behavior contract*.
 
@@ -65,10 +65,15 @@ prompt:
 | **human** — plain reply / status | `chat send <name> "..."` — every reply directed at a human in this chat goes through `chat send`. |
 | **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot / open-request count). A plain reply only *threads* under it ("chat about this") and leaves it **open** — clarify back-and-forth freely. Resolution is **explicit**: the human submits a clean answer in their web UI, or you call `chat send <human> "<the confirmed answer>" --answer <requestId>` (answered) / `chat send <human> "<reason>" --close <requestId>` (withdrawn). Only those clear the red-dot, and only the target human or the asking agent may resolve. Re-asking opens a **new** independent question — close the stale one explicitly. See `references/agent-communication.md`. |
 | **agent** — make them act | `chat send <name> "..."` — agents only act on explicit `chat send`. |
+| **new task / offshoot** — needs its own conversation boundary | `chat create --to <name> "..."` — creates a new task chat and writes the first message. `--to` recipients are mentioned and woken; `--with` participants are added silently for context. Use this only for real task splits, not courtesy acknowledgements or empty chats. |
 
 After an agent handoff, continue only independent work. If their reply is
 the only remaining input, end the turn and wait to be woken; do not poll
 status or escalate on delayed replies alone.
+
+`chat create` is not idempotent and has no operation id. The CLI does not
+retry create requests. If the result is uncertain, inspect `chat list` or
+the Web UI before trying again.
 
 Your output stream is your reasoning trace — think, plan, and narrate
 there freely as you work. It runs on a separate channel from `chat send`.
@@ -146,7 +151,7 @@ map of which commands live where:
 | `login` / `logout` / `status` / `doctor` / `upgrade` | top-level | machine connect + cross-subsystem checks | `docs/cli-reference.md` (operator) |
 | `daemon …` | workspace | daemon lifecycle (read-only for agents) | "Your Hosting Daemon" above |
 | `agent …` | workspace | agent records — `status`, `session`, `config show` for self-introspection; `create` / `claim` / `bind` are operator actions taken via the web console | `docs/cli-reference.md` |
-| `chat …` | workspace | messaging (`send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
+| `chat …` | workspace | messaging (`create` / `send` / `invite` / `list` / `history` / `open`) — agent's primary surface | `references/agent-communication.md` |
 | `github …` | workspace | GitHub entity attention — `follow` / `unfollow` / `following` an entity's webhook event stream for the current chat | `first-tree-github` |
 | `config …` | workspace | local `client.yaml` (operator-edited) | `docs/cli-reference.md` |
 | `tree verify` | context | Validate a Context Tree's structure | `first-tree-context` |
@@ -241,7 +246,7 @@ produces non-obvious damage.
 
 Once hygiene checks pass, drop into the right sub-skill:
 
-- Talk to another agent / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
+- Talk to another agent / create a task chat / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
 - Read context before acting based on the user's task / path / feature signal → **`first-tree-read`**
 - Write tree updates from a specific source (PR / doc / note) → **`first-tree-context`**
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
@@ -255,5 +260,5 @@ and `docs/onboarding-guide.md`.
 
 ## References
 
-- [`references/agent-communication.md`](references/agent-communication.md) — full `chat send` / `chat invite` CLI mechanics (markdown / stdin / content-formatting / reaching non-members / mention resolution)
+- [`references/agent-communication.md`](references/agent-communication.md) — full `chat create` / `chat send` / `chat invite` CLI mechanics (task chat creation / markdown / stdin / content-formatting / reaching non-members / mention resolution)
 - `scripts/quick_validate.py` — skill frontmatter sanity check (used by `pnpm validate:skill`)

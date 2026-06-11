@@ -3,9 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { uploadImageAttachment } from "../../../api/attachments.js";
-import { type ImageRefContent, readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
+import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
-import { createMeChat } from "../../../api/me-chats.js";
+import { createMeTaskChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
@@ -57,9 +57,8 @@ import { cn } from "../../../lib/utils.js";
  *     carries non-empty `metadata.mentions` and clears the server's
  *     per-message explicit-recipient enforcement check.
  *
- * On send: createMeChat({participantIds: chips ∪ body @s}) → stage each
- * image into IndexedDB → single `sendFileMessageBatch` carrying caption +
- * all attachments. Empty body is allowed when there's ≥1 chip and
+ * On send: upload image attachments first, then create the task chat with one
+ * initial text/file message. Empty body is allowed when there's ≥1 chip and
  * (a non-empty body or ≥1 image).
  */
 
@@ -350,20 +349,10 @@ export function NewChatDraft({
       images: PendingImage[];
       mentions: string[];
     }) => {
-      const created = await createMeChat({ participantIds });
-      const chatId = created.chatId;
       const trimmed = text.trim();
-      // Collapse "N images + optional caption" into a single batched
-      // `format: "file"` message — one bubble, no N+1 split. Pure-text
-      // sends still go through `sendChatMessage` below.
+      const contextParticipantAgentIds = participantIds.filter((id) => !mentions.includes(id));
+
       if (images.length > 0) {
-        // Carry the resolved mentions onto the batched file send so the
-        // single POST clears the server's explicit-recipient enforcement check. 1:1
-        // drafts have `mentions` already auto-injected by handleSend (the
-        // single chip's uuid); group drafts carry the body's `@-mention`
-        // set. The server applies explicit-recipient enforcement to every chat shape now,
-        // so no path can rely on an empty-mentions skip.
-        const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
         const attachments: ImageRefContent[] = [];
         for (const img of images) {
           // Upload bytes to the org attachment store first; the returned id
@@ -387,18 +376,37 @@ export function NewChatDraft({
             size: img.file.size,
           });
         }
-        await sendFileMessageBatch(
-          chatId,
-          {
-            ...(trimmed.length > 0 ? { caption: trimmed } : {}),
-            attachments,
+        const created = await createMeTaskChat({
+          mode: "task",
+          initialRecipientAgentIds: mentions,
+          initialRecipientNames: [],
+          contextParticipantAgentIds,
+          contextParticipantNames: [],
+          initialMessage: {
+            format: "file",
+            content: {
+              ...(trimmed.length > 0 ? { caption: trimmed } : {}),
+              attachments,
+            },
+            source: "web",
           },
-          imageMetadata,
-        );
-      } else if (trimmed.length > 0) {
-        await sendChatMessage(chatId, trimmed, mentions);
+        });
+        return created.chatId;
       }
-      return chatId;
+
+      const created = await createMeTaskChat({
+        mode: "task",
+        initialRecipientAgentIds: mentions,
+        initialRecipientNames: [],
+        contextParticipantAgentIds,
+        contextParticipantNames: [],
+        initialMessage: {
+          format: "text",
+          content: trimmed,
+          source: "web",
+        },
+      });
+      return created.chatId;
     },
     onSuccess: (chatId) => {
       setDraft("");
@@ -441,9 +449,9 @@ export function NewChatDraft({
     // The `bodyMentions → chips` promote effect runs asynchronously
     // (via `useEffect`), so a fast user who types `@bob` and presses
     // Enter immediately can land in `handleSend` before `chips` has
-    // absorbed bob — without this merge, `createMeChat` would create
-    // the chat without bob and bob's `@`-token would silently drop on
-    // the server (no such participant). Compute the union here so the
+    // absorbed bob — without this merge, task creation would create the
+    // chat without bob and bob's `@`-token would silently drop on the
+    // server (no such participant). Compute the union here so the
     // committed audience always reflects what the user just typed.
     const participantIds = Array.from(new Set([...chips, ...bodyMentions]));
     // Explicit-only routing contract (services/message.ts): the server

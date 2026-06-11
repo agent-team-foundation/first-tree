@@ -7,13 +7,14 @@ import {
   type LucideIcon,
   MessageCircle,
   MessagesSquare,
+  Sparkles,
 } from "lucide-react";
 
 /**
  * Per-origin Lucide glyph for the conversation-row leading icon.
  *
- * Phase C collapsed the origin axis to two values (`manual` / `github`)
- * so the filter popover stays simple, but the rail's visual vocabulary
+ * The origin axis stays coarse (`manual` / `github` / `agent`) so the filter
+ * popover stays simple, but the rail's visual vocabulary
  * still wants per-entity icons inside GitHub — a PR row should read
  * differently from an Issue row at a glance. The renderer therefore
  * looks at `(source, entityType)` together: github + a known entityType
@@ -21,7 +22,7 @@ import {
  * a future entity type we haven't mapped yet) falls back to the
  * GitHub-default `Github` mark.
  *
- * Manual chats render `MessagesSquare` as an intentional placeholder so
+ * Manual and agent-created chats render source-level glyphs so
  * every row reserves the same leading-icon slot — without that, the
  * title's left-edge would drift between rows of different sources and
  * the list would look jagged.
@@ -33,6 +34,7 @@ import {
 const SOURCE_ICON_MAP: Record<ChatSource, LucideIcon> = {
   manual: MessagesSquare,
   github: Github,
+  agent: Sparkles,
 };
 
 const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
@@ -45,6 +47,7 @@ const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
 const SOURCE_LABEL_MAP: Record<ChatSource, string> = {
   manual: "Manual chat",
   github: "GitHub",
+  agent: "Agent-created task",
 };
 
 const GITHUB_ENTITY_LABEL_MAP: Record<GithubEntityType, string> = {

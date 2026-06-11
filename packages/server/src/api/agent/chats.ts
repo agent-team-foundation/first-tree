@@ -1,7 +1,8 @@
 import {
   addParticipantSchema,
-  createChatSchema,
+  createTaskChatSchema,
   followGithubEntityRequestSchema,
+  legacyCreateChatSchema,
   paginationQuerySchema,
   updateChatSchema,
 } from "@first-tree/shared";
@@ -20,6 +21,7 @@ import {
   removeEntityFollow,
 } from "../../services/github-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
+import { notifyRecipients } from "../../services/notifier.js";
 import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -35,7 +37,44 @@ function serializeChat(chat: { createdAt: Date; updatedAt: Date; [key: string]: 
 export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.post("/", async (request, reply) => {
     const identity = requireAgent(request);
-    const body = createChatSchema.parse(request.body);
+    const rawBody = request.body;
+    if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
+      const body = createTaskChatSchema.parse(rawBody);
+      const initialRecipientAgentIds = [
+        ...body.initialRecipientAgentIds,
+        ...(await chatService.resolveAgentIdsByNameInOrg(app.db, identity.organizationId, body.initialRecipientNames)),
+      ];
+      const contextParticipantAgentIds = [
+        ...body.contextParticipantAgentIds,
+        ...(await chatService.resolveAgentIdsByNameInOrg(
+          app.db,
+          identity.organizationId,
+          body.contextParticipantNames,
+        )),
+      ];
+      const result = await chatService.createChat(app.db, {
+        mode: "task",
+        initiatorAgentId: identity.uuid,
+        organizationId: identity.organizationId,
+        initialRecipientAgentIds,
+        contextParticipantAgentIds,
+        topic: body.topic ?? null,
+        description: body.description ?? null,
+        initialMessage: body.initialMessage,
+        source: "agent",
+      });
+      notifyRecipients(app.notifier, result.recipients, result.message.id);
+      return reply.status(201).send({
+        chatId: result.chat.id,
+        messageId: result.message.id,
+        topic: result.chat.topic,
+        effectiveSenderId: result.effectiveSenderId,
+        initialRecipientAgentIds: result.initialRecipientAgentIds,
+        contextParticipantAgentIds: result.contextParticipantAgentIds,
+      });
+    }
+
+    const body = legacyCreateChatSchema.parse(rawBody);
     const result = await chatService.createChat(app.db, identity.uuid, body);
     return reply.status(201).send({
       ...serializeChat(result),

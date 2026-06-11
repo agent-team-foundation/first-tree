@@ -1,26 +1,126 @@
 import { randomUUID } from "node:crypto";
-import type { AddParticipant, CreateChat } from "@first-tree/shared";
+import type { AddParticipant, LegacyCreateChat, SendMessage } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
+import { preflightMessageSendIntent, type SendIntentParticipant, sendMessage } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import { leaveAsParticipant } from "./watcher.js";
 
-export async function createChat(db: Database, creatorId: string, data: CreateChat) {
+const SELF_TARGET_EFFECTIVE_SENDER_REASON = "self_target_manager_human" as const;
+
+export type CreateTaskChatInput = {
+  mode: "task";
+  initiatorAgentId: string;
+  organizationId: string;
+  initialRecipientAgentIds: readonly string[];
+  contextParticipantAgentIds: readonly string[];
+  topic?: string | null;
+  description?: string | null;
+  initialMessage: SendMessage;
+  source: "agent" | "manual";
+};
+
+export type CreateLegacyEmptyWebChatInput = {
+  mode: "legacy-empty-web";
+  creatorAgentId: string;
+  organizationId: string;
+  participantAgentIds: readonly string[];
+  topic?: string | null;
+  description?: string | null;
+};
+
+type CreateLegacyEmptyAgentChatInput = {
+  mode: "legacy-empty-agent";
+  creatorAgentId: string;
+  participantAgentIds: readonly string[];
+  topic?: string | null;
+  description?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CreateChatInput = CreateTaskChatInput | CreateLegacyEmptyWebChatInput;
+
+type LegacyCreateChatResult = typeof chats.$inferSelect & { participants: (typeof chatMembership.$inferSelect)[] };
+
+export type CreateTaskChatResult = {
+  chat: typeof chats.$inferSelect;
+  message: typeof messages.$inferSelect;
+  participants: (typeof chatMembership.$inferSelect)[];
+  recipients: string[];
+  effectiveSenderId: string;
+  initialRecipientAgentIds: string[];
+  contextParticipantAgentIds: string[];
+};
+
+type AgentIdentityForCreate = {
+  id: string;
+  name: string | null;
+  displayName: string;
+  organizationId: string;
+  type: string;
+  status: string;
+  visibility: string;
+  managerId: string;
+};
+
+export async function createChat(db: Database, input: CreateTaskChatInput): Promise<CreateTaskChatResult>;
+export async function createChat(db: Database, input: CreateLegacyEmptyWebChatInput): Promise<LegacyCreateChatResult>;
+export async function createChat(
+  db: Database,
+  input: CreateChatInput,
+): Promise<CreateTaskChatResult | LegacyCreateChatResult>;
+export async function createChat(
+  db: Database,
+  creatorId: string,
+  data: LegacyCreateChat,
+): Promise<LegacyCreateChatResult>;
+export async function createChat(
+  db: Database,
+  inputOrCreatorId: CreateChatInput | string,
+  data?: LegacyCreateChat,
+): Promise<CreateTaskChatResult | LegacyCreateChatResult> {
+  if (typeof inputOrCreatorId === "string") {
+    if (!data) {
+      throw new BadRequestError("Legacy chat creation requires a body");
+    }
+    return createLegacyEmptyChat(db, {
+      mode: "legacy-empty-agent",
+      creatorAgentId: inputOrCreatorId,
+      participantAgentIds: data.participantIds,
+      topic: data.topic ?? null,
+      metadata: data.metadata ?? {},
+    });
+  }
+
+  switch (inputOrCreatorId.mode) {
+    case "task":
+      return createTaskChat(db, inputOrCreatorId);
+    case "legacy-empty-web":
+      return createLegacyEmptyChat(db, inputOrCreatorId);
+  }
+}
+
+async function createLegacyEmptyChat(
+  db: Database,
+  input: CreateLegacyEmptyWebChatInput | CreateLegacyEmptyAgentChatInput,
+): Promise<LegacyCreateChatResult> {
   const chatId = randomUUID();
+  const creatorId = input.creatorAgentId;
 
   // Ensure creator is included in participants
-  const allParticipantIds = new Set([creatorId, ...data.participantIds]);
+  const allParticipantIds = new Set([creatorId, ...input.participantAgentIds]);
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
@@ -42,7 +142,10 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   const creator = existingAgents.find((a) => a.id === creatorId);
   if (!creator) throw new Error("Unexpected: creator not in existingAgents");
-  const orgId = creator.organizationId;
+  const orgId = input.mode === "legacy-empty-web" ? input.organizationId : creator.organizationId;
+  if (creator.organizationId !== orgId) {
+    throw new BadRequestError(`Creator agent "${creatorId}" is not in organization "${orgId}"`);
+  }
 
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
@@ -77,9 +180,10 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
       .values({
         id: chatId,
         organizationId: orgId,
-        type: data.type,
-        topic: data.topic ?? null,
-        metadata: data.metadata ?? {},
+        type: "group",
+        topic: input.topic ?? null,
+        description: input.description ?? null,
+        metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
       })
       .returning();
 
@@ -107,6 +211,243 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return { ...chat, participants };
   });
+}
+
+async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise<CreateTaskChatResult> {
+  const initialRecipientAgentIds = [...new Set(input.initialRecipientAgentIds)];
+  if (initialRecipientAgentIds.length === 0) {
+    throw new BadRequestError("Task chat creation requires at least one initial recipient");
+  }
+  if (input.initialMessage.receiverNames && input.initialMessage.receiverNames.length > 0) {
+    throw new BadRequestError(
+      "Task chat creation resolves recipients before message send; receiverNames is not accepted",
+    );
+  }
+  if (input.initialMessage.purpose === "agent-final-text") {
+    throw new BadRequestError("Task chat initial message cannot be agent-final-text");
+  }
+  if (input.initialMessage.inReplyTo !== undefined) {
+    throw new BadRequestError("Task chat initial message cannot be a reply");
+  }
+  if (input.initialMessage.metadata?.resolves !== undefined) {
+    throw new BadRequestError("Task chat initial message cannot resolve a request from another chat");
+  }
+
+  const contextParticipantAgentIds = [...new Set(input.contextParticipantAgentIds)].filter(
+    (id) => !initialRecipientAgentIds.includes(id),
+  );
+  const participantSeed = [
+    ...new Set([input.initiatorAgentId, ...initialRecipientAgentIds, ...contextParticipantAgentIds]),
+  ];
+  const agentRows = await loadAgentsForCreate(db, participantSeed);
+  const byId = new Map(agentRows.map((a) => [a.id, a]));
+  const initiator = byId.get(input.initiatorAgentId);
+  if (!initiator) throw new Error("Unexpected: initiator missing after loadAgentsForCreate");
+
+  let effectiveSenderId = input.initiatorAgentId;
+  let effectiveSenderReason: typeof SELF_TARGET_EFFECTIVE_SENDER_REASON | undefined;
+  if (initiator.type !== "human" && initialRecipientAgentIds.includes(input.initiatorAgentId)) {
+    const managerHumanAgentId = await resolveManagerHumanAgentId(db, initiator.managerId);
+    effectiveSenderId = managerHumanAgentId;
+    effectiveSenderReason = SELF_TARGET_EFFECTIVE_SENDER_REASON;
+    if (!byId.has(managerHumanAgentId)) {
+      const managerRows = await loadAgentsForCreate(db, [managerHumanAgentId]);
+      for (const row of managerRows) byId.set(row.id, row);
+    }
+  }
+
+  const allSpeakerIds = [
+    ...new Set([effectiveSenderId, input.initiatorAgentId, ...initialRecipientAgentIds, ...contextParticipantAgentIds]),
+  ];
+  const missingLoaded = allSpeakerIds.filter((id) => !byId.has(id));
+  if (missingLoaded.length > 0) {
+    const moreRows = await loadAgentsForCreate(db, missingLoaded);
+    for (const row of moreRows) byId.set(row.id, row);
+  }
+  const allSpeakerRows = allSpeakerIds.map((id) => {
+    const row = byId.get(id);
+    if (!row) throw new BadRequestError(`Agents not found: ${id}`);
+    return row;
+  });
+  validateCreateParticipants({
+    organizationId: input.organizationId,
+    caller: initiator,
+    participants: allSpeakerRows,
+    requireActive: true,
+  });
+
+  const effectiveSender = byId.get(effectiveSenderId);
+  if (!effectiveSender) throw new Error("Unexpected: effective sender missing after validation");
+  const provenance =
+    effectiveSenderReason !== undefined
+      ? {
+          initiatedByAgentId: input.initiatorAgentId,
+          effectiveSenderReason,
+        }
+      : {};
+  const chatMetadata = input.source === "agent" ? { source: "agent" as const, ...provenance } : {};
+  const messageMetadata = {
+    ...((input.initialMessage.metadata ?? {}) as Record<string, unknown>),
+    ...provenance,
+    mentions: initialRecipientAgentIds,
+  };
+  const initialMessage: SendMessage = {
+    ...input.initialMessage,
+    metadata: messageMetadata,
+  };
+
+  preflightMessageSendIntent({
+    chatId: "new-task-chat-preflight",
+    senderId: effectiveSenderId,
+    senderType: effectiveSender.type,
+    data: initialMessage,
+    options: { normalizeMentionsInContent: input.source === "agent" },
+    participants: allSpeakerRows.map(toSendIntentParticipant),
+  });
+
+  const chatId = randomUUID();
+  const chat = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(chats)
+      .values({
+        id: chatId,
+        organizationId: input.organizationId,
+        type: "group",
+        topic: input.topic && input.topic.length > 0 ? input.topic : null,
+        description: input.description && input.description.length > 0 ? input.description : null,
+        metadata: chatMetadata,
+      })
+      .returning();
+    if (!inserted) throw new Error("Unexpected: INSERT RETURNING produced no row");
+    await addChatParticipants(
+      tx,
+      chatId,
+      allSpeakerIds.map((agentId) => ({
+        agentId,
+        role: agentId === effectiveSenderId ? ("owner" as const) : ("member" as const),
+      })),
+    );
+    return inserted;
+  });
+  invalidateChatAudience(chatId);
+
+  const { message, recipients } = await sendMessage(db, chatId, effectiveSenderId, initialMessage, {
+    normalizeMentionsInContent: input.source === "agent",
+  });
+  const participants = await db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+
+  return {
+    chat,
+    message,
+    participants,
+    recipients,
+    effectiveSenderId,
+    initialRecipientAgentIds,
+    contextParticipantAgentIds,
+  };
+}
+
+async function loadAgentsForCreate(db: Database, agentIds: readonly string[]): Promise<AgentIdentityForCreate[]> {
+  const distinct = [...new Set(agentIds)];
+  if (distinct.length === 0) return [];
+  const rows = await db
+    .select({
+      id: agents.uuid,
+      name: agents.name,
+      displayName: agents.displayName,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
+    .from(agents)
+    .where(inArray(agents.uuid, distinct));
+  if (rows.length !== distinct.length) {
+    const found = new Set(rows.map((a) => a.id));
+    const missing = distinct.filter((id) => !found.has(id));
+    throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
+  }
+  return rows;
+}
+
+export async function resolveAgentIdsByNameInOrg(
+  db: Database,
+  organizationId: string,
+  names: readonly string[],
+): Promise<string[]> {
+  const distinct = [...new Set(names)];
+  if (distinct.length === 0) return [];
+  const rows = await db
+    .select({ uuid: agents.uuid, name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.organizationId, organizationId), inArray(agents.name, distinct)));
+  const byName = new Map(rows.map((r) => [r.name, r.uuid]));
+  const missing = distinct.filter((name) => !byName.has(name));
+  if (missing.length > 0) {
+    throw new BadRequestError(`Agents not found by name: ${missing.join(", ")}`);
+  }
+  return distinct.map((name) => {
+    const id = byName.get(name);
+    if (!id) throw new Error("Unexpected: missing name after validation");
+    return id;
+  });
+}
+
+async function resolveManagerHumanAgentId(db: Database, memberId: string): Promise<string> {
+  const [row] = await db.select({ agentId: members.agentId }).from(members).where(eq(members.id, memberId)).limit(1);
+  if (!row) {
+    throw new BadRequestError(`Manager member "${memberId}" not found for self-target chat creation`);
+  }
+  return row.agentId;
+}
+
+function validateCreateParticipants(input: {
+  organizationId: string;
+  caller: AgentIdentityForCreate;
+  participants: readonly AgentIdentityForCreate[];
+  requireActive: boolean;
+}): void {
+  const crossOrg = input.participants.filter((a) => a.organizationId !== input.organizationId);
+  if (crossOrg.length > 0) {
+    throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
+  }
+  if (input.caller.organizationId !== input.organizationId) {
+    throw new BadRequestError(`Creator agent "${input.caller.id}" is not in organization "${input.organizationId}"`);
+  }
+  if (input.requireActive) {
+    const inactive = input.participants.filter((a) => a.status !== "active");
+    if (inactive.length > 0) {
+      const first = inactive[0];
+      throw new BadRequestError(
+        `Cannot create task chat with inactive participant "${first?.displayName ?? first?.id}" (${first?.status}).`,
+      );
+    }
+  }
+  const rejectedTargets = rejectedPrivateTargets(
+    { agentId: input.caller.id, memberId: input.caller.managerId },
+    input.participants
+      .filter((a) => a.id !== input.caller.id)
+      .map((a) => ({ uuid: a.id, visibility: a.visibility, managerId: a.managerId })),
+  );
+  if (rejectedTargets.length > 0) {
+    throw new ForbiddenError(
+      `Only the owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
+    );
+  }
+}
+
+function toSendIntentParticipant(row: AgentIdentityForCreate): SendIntentParticipant {
+  return {
+    agentId: row.id,
+    name: row.name,
+    displayName: row.displayName,
+    status: row.status,
+    type: row.type,
+  };
 }
 
 export async function getChat(db: Database, chatId: string) {

@@ -137,6 +137,186 @@ export type SendMessageOptions = {
   allowSystemSender?: boolean;
 };
 
+export type SendIntentParticipant = {
+  agentId: string;
+  name: string | null;
+  displayName: string;
+  status: string;
+  type: string;
+};
+
+export type SendMessagePreflightResult = {
+  content: SendMessage["content"];
+  metadata: Record<string, unknown>;
+  mentionedAgentIds: string[];
+  isAgentFinalText: boolean;
+  forceSilentFanOut: boolean;
+};
+
+export function preflightMessageSendIntent(input: {
+  chatId: string;
+  senderId: string;
+  senderType: string;
+  data: SendMessage;
+  options?: SendMessageOptions;
+  participants: ReadonlyArray<SendIntentParticipant>;
+}): SendMessagePreflightResult {
+  const options = input.options ?? {};
+  const { chatId, senderId, senderType, data, participants } = input;
+
+  if (data.format === "file") {
+    validateFileContent(data.content);
+  }
+
+  let effectiveContent: SendMessage["content"] = data.content;
+  if (senderType !== "human" && typeof effectiveContent === "string") {
+    const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
+    if (unwrapped !== null) {
+      log.warn(
+        { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
+        "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
+      );
+      effectiveContent = unwrapped;
+    }
+  }
+
+  const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
+  validateDocumentContext(incomingMeta, {
+    chatId,
+    participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
+  });
+  if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
+    throw new BadRequestError(
+      'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
+    );
+  }
+
+  const explicitMentionsRaw = incomingMeta.mentions;
+  const explicitMentions = Array.isArray(explicitMentionsRaw)
+    ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
+    : [];
+
+  const receiverNames = data.receiverNames ?? [];
+  const speakersByName = new Map<string, string>();
+  for (const p of participants) {
+    if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
+  }
+  const resolvedFromNames: string[] = [];
+  const unresolvedNames: string[] = [];
+  for (const name of receiverNames) {
+    const id = speakersByName.get(name.toLowerCase());
+    if (id) resolvedFromNames.push(id);
+    else unresolvedNames.push(name);
+  }
+  if (unresolvedNames.length > 0) {
+    const sample = unresolvedNames[0];
+    throw new BadRequestError(
+      `Cannot route to "${sample}" — they are not a participant of this chat. ` +
+        "Add them first:\n" +
+        `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
+        "Then retry your send. Or ask a human in this chat to add them.",
+    );
+  }
+
+  const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
+  const participantsById = new Map(participants.map((p) => [p.agentId, p]));
+  const mentionTargets = mergedMentions.filter((id) => id !== senderId);
+  for (const id of mentionTargets) {
+    const participant = participantsById.get(id);
+    if (!participant) {
+      throw new BadRequestError(`Cannot route to "${id}" — they are not a participant of this chat.`);
+    }
+    if (participant.status !== "active") {
+      const label = participant.displayName || participant.name || id;
+      const recovery =
+        participant.status === "suspended"
+          ? "Reactivate it before sending."
+          : "Deleted agents cannot receive new messages.";
+      throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
+    }
+  }
+  const routedRecipientIds = new Set([
+    ...mentionTargets,
+    ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
+  ]);
+  for (const id of routedRecipientIds) {
+    const participant = participantsById.get(id);
+    if (!participant || participant.status === "active") continue;
+    const label = participant.displayName || participant.name || id;
+    const recovery =
+      participant.status === "suspended"
+        ? "Reactivate it before sending."
+        : "Deleted agents cannot receive new messages.";
+    throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
+  }
+
+  const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
+
+  if (data.format === MESSAGE_FORMATS.REQUEST) {
+    const targetId = mergedMentions[0];
+    if (mergedMentions.length !== 1 || !targetId) {
+      throw new BadRequestError(
+        `A 'request' message must mention exactly one recipient (got ${mergedMentions.length}). ` +
+          "An open question is directed at a single human.",
+      );
+    }
+    const target = participantsById.get(targetId);
+    if (!target || target.type !== "human") {
+      throw new BadRequestError("A 'request' message must be directed at a human member.");
+    }
+  }
+
+  const isAgentFinalText = data.purpose === "agent-final-text";
+  const purposeProfile = isAgentFinalText
+    ? {
+        skipMentionEnforcement: true,
+        forceSilentFanOut: true,
+      }
+    : {
+        skipMentionEnforcement: false,
+        forceSilentFanOut: false,
+      };
+
+  const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
+  if (!skipRecipientEnforcement) {
+    const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
+      (id) => id !== senderId && participantsById.get(id)?.status === "active",
+    );
+    if (mentionTargets.length === 0 && !hasActiveAddressed) {
+      throw new BadRequestError(
+        "Sending a message requires an explicit recipient. " +
+          "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
+          'or set `purpose: "agent-final-text"` for silent history-only sends.',
+      );
+    }
+  }
+
+  let outboundContent = effectiveContent;
+  if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
+    const present = new Set(scanMentionTokens(outboundContent));
+    const missingNames: string[] = [];
+    for (const id of mergedMentions) {
+      if (id === senderId) continue;
+      const p = participants.find((q) => q.agentId === id);
+      if (!p?.name) continue;
+      if (present.has(p.name.toLowerCase())) continue;
+      missingNames.push(p.name);
+    }
+    if (missingNames.length > 0) {
+      const prefix = missingNames.map((n) => `@${n}`).join(" ");
+      outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
+    }
+  }
+
+  return {
+    content: outboundContent,
+    metadata: metadataToStore,
+    mentionedAgentIds: mergedMentions,
+    isAgentFinalText,
+    forceSilentFanOut: purposeProfile.forceSilentFanOut,
+  };
+}
+
 export async function sendMessage(
   db: Database,
   chatId: string,
@@ -184,12 +364,6 @@ async function sendMessageInner(
   data: SendMessage,
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
-  // Fail fast before opening a transaction: `format: "file"` content must be a
-  // valid image ref / batch (the route's schema leaves content unknown).
-  if (data.format === "file") {
-    validateFileContent(data.content);
-  }
-
   const txResult = await db.transaction(async (tx) => {
     // 1. Load participants and sender (inbox + org) in parallel — both are
     //    needed for fan-out + mention enforcement + post-tx session
@@ -224,201 +398,15 @@ async function sendMessageInner(
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
 
-    // 1b. Defensive: unwrap content that was JSON.stringify-ed once before the
-    //     agent passed it to the CLI / API. The bad shape is an outer `"..."`
-    //     wrapper + interior `\n` / `\"` escape sequences; the UI renders it
-    //     as a raw quoted line instead of markdown. See issue #389.
-    //
-    //     Guarded by sender type (human-typed quoted phrases never touched)
-    //     and by a strict structural match (see `maybeUnwrapDoubleEncoded`).
-    //     Non-string content (e.g. structured card payloads) is bypassed.
-    let effectiveContent: SendMessage["content"] = data.content;
-    if (senderRow.type !== "human" && typeof effectiveContent === "string") {
-      const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
-      if (unwrapped !== null) {
-        log.warn(
-          { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
-          "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
-        );
-        effectiveContent = unwrapped;
-      }
-    }
-
-    // 2. Decide the mention set. Two explicit sources contribute:
-    //   - `metadata.mentions: [uuid]` — caller already resolved uuids
-    //     (web composer, agent runtime / result-sink, adapter inbound).
-    //   - `data.receiverNames: [name]` — caller knows the recipient by name
-    //     and wants the server to resolve it against the chat's participant
-    //     list (CLI `chat send <name>`). An unknown name is a 400 with a
-    //     `chat invite` hint — never silently dropped.
-    //
-    // The server does NOT parse `@<name>` tokens out of `content` — see the
-    // file-level "Routing contract" comment above.
-    const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
-    // Server-side bottom-line on `metadata.documentContext`: shape via shared
-    // schema + byte budgets and sha256 calibration. Snapshot content arrives
-    // from a trusted runtime, but server still has to verify so a client bug
-    // can't lodge mismatched hash/size into immutable message history. The
-    // chat scope additionally rejects a cross-agent snapshot key whose owner
-    // is not a speaker participant of this chat (cross-workspace doc preview
-    // provenance check).
-    validateDocumentContext(incomingMeta, {
+    const prepared = preflightMessageSendIntent({
       chatId,
-      participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
+      senderId,
+      senderType: senderRow.type,
+      data,
+      options,
+      participants,
     });
-    const explicitMentionsRaw = incomingMeta.mentions;
-    const explicitMentions = Array.isArray(explicitMentionsRaw)
-      ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
-      : [];
-
-    // Resolve `receiverNames` against the chat's speaker list.
-    const receiverNames = data.receiverNames ?? [];
-    const speakersByName = new Map<string, string>();
-    for (const p of participants) {
-      if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
-    }
-    const resolvedFromNames: string[] = [];
-    const unresolvedNames: string[] = [];
-    for (const name of receiverNames) {
-      const id = speakersByName.get(name.toLowerCase());
-      if (id) resolvedFromNames.push(id);
-      else unresolvedNames.push(name);
-    }
-    if (unresolvedNames.length > 0) {
-      const sample = unresolvedNames[0];
-      throw new BadRequestError(
-        `Cannot route to "${sample}" — they are not a participant of this chat. ` +
-          "Add them first:\n" +
-          `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-          "Then retry your send. Or ask a human in this chat to add them.",
-      );
-    }
-
-    const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
-    const participantsById = new Map(participants.map((p) => [p.agentId, p]));
-    const routedRecipientIds = new Set([
-      ...mergedMentions.filter((id) => id !== senderId),
-      ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
-    ]);
-    for (const id of routedRecipientIds) {
-      const participant = participantsById.get(id);
-      if (!participant || participant.status === "active") continue;
-      const label = participant.displayName || participant.name || id;
-      const recovery =
-        participant.status === "suspended"
-          ? "Reactivate it before sending."
-          : "Deleted agents cannot receive new messages.";
-      throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
-    }
-    const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
-
-    // Open-question contract: a `format=request` message is an "ask" directed
-    // at exactly one human (the sole `metadata.mentions` entry). Enforce here
-    // so the body (`content`) + `metadata.request.question` split and the
-    // open_request_count counter (below) have a single, validated target.
-    if (data.format === MESSAGE_FORMATS.REQUEST) {
-      const targetId = mergedMentions[0];
-      if (mergedMentions.length !== 1 || !targetId) {
-        throw new BadRequestError(
-          `A 'request' message must mention exactly one recipient (got ${mergedMentions.length}). ` +
-            "An open question is directed at a single human.",
-        );
-      }
-      const target = participantsById.get(targetId);
-      if (!target || target.type !== "human") {
-        throw new BadRequestError("A 'request' message must be directed at a human member.");
-      }
-    }
-
-    // Centralise the bypass contract for `purpose` values. Each flag
-    // describes what this purpose means for a downstream decision; adding a
-    // new `purpose` value means defining its profile here once, not hunting
-    // through the call sites below.
-    //
-    // `agent-final-text` profile rationale:
-    //   - skip mention enforcement (final-text is the one legal mentions-
-    //     empty case: a handler-initiated forward of the agent's own response
-    //     for human observers, not a message addressed into the room).
-    //   - force every fan-out row to notify=false (final text lands in
-    //     chat history for human observers but never wakes another
-    //     session). v1 §四 改造 4 (b) bypass channel.
-    const isAgentFinalText = data.purpose === "agent-final-text";
-    const purposeProfile = isAgentFinalText
-      ? {
-          skipMentionEnforcement: true,
-          forceSilentFanOut: true,
-        }
-      : {
-          skipMentionEnforcement: false,
-          forceSilentFanOut: false,
-        };
-
-    // Mention enforcement (explicit-only contract) — DEFAULT ON. Reject the
-    // send when no routing intent is declared — `metadata.mentions`,
-    // `receiverNames`, and `addressedToAgentIds` are the three legal
-    // declarations. The invariant lives here in the write path so every entry
-    // point inherits it; a new send caller cannot silently re-open the
-    // "write to chat history with no recipient" footgun by forgetting a flag.
-    //
-    // Applies to every chat shape (1:1 included): the previous "1:1
-    // implicit wake" bypass was removed when the explicit contract took
-    // its place; web clients now auto-inject the peer's uuid into
-    // `metadata.mentions` for 2-speaker chats so this check passes
-    // transparently.
-    //
-    // Two send shapes legitimately carry no recipient and bypass the guard:
-    //   - `purpose === "agent-final-text"` (via
-    //     `purposeProfile.skipMentionEnforcement`) — silent-by-construction
-    //     final text, never needs to name a recipient.
-    //   - `options.allowRecipientlessSend` — trusted server-internal opt-out
-    //     for system delivery paths whose addressing can legitimately resolve
-    //     to no live speaker (today: github-delivery). See the option's doc.
-    const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
-    if (!skipRecipientEnforcement) {
-      const recipientMentions = mergedMentions.filter((id) => id !== senderId);
-      // A system-routing override (`addressedToAgentIds`) only satisfies the
-      // guard when it resolves to an active, non-sender speaker of this chat.
-      // Counting raw array length instead would let addressing that reaches no
-      // one slip through (`[undefined]`, `[senderId]`, or an id that is not a
-      // live speaker) — the same silent-dead-end the guard exists to prevent.
-      // A trusted system path whose addressing can legitimately resolve to no
-      // speaker (github-delivery) declares `allowRecipientlessSend` to opt out
-      // above rather than lean on that hole.
-      const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
-        (id) => id !== senderId && participantsById.get(id)?.status === "active",
-      );
-      if (recipientMentions.length === 0 && !hasActiveAddressed) {
-        throw new BadRequestError(
-          "Sending a message requires an explicit recipient. " +
-            "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
-            'or set `purpose: "agent-final-text"` for silent history-only sends.',
-        );
-      }
-    }
-
-    // Agent-path content normalisation: if the caller declared mentions
-    // in metadata but didn't write the corresponding `@<name>` in the
-    // text, prepend the missing tokens. This keeps the visible message
-    // in sync with the routing decision — most importantly when an agent
-    // replies in a group. Web composer leaves this off
-    // because the human typed the @ themselves and we don't want server
-    // to silently mutate human-typed content.
-    let outboundContent = effectiveContent;
-    if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
-      const present = new Set(scanMentionTokens(outboundContent));
-      const missingNames: string[] = [];
-      for (const id of mergedMentions) {
-        if (id === senderId) continue;
-        const p = participants.find((q) => q.agentId === id);
-        if (!p?.name) continue;
-        if (present.has(p.name.toLowerCase())) continue;
-        missingNames.push(p.name);
-      }
-      if (missingNames.length > 0) {
-        const prefix = missingNames.map((n) => `@${n}`).join(" ");
-        outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
-      }
-    }
+    const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
 
     // 3. Store the message (with merged metadata + normalised content).
     // UUID v7 per the "UUID v7 as Message ID" architecture rule in
@@ -469,7 +457,7 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify: !purposeProfile.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
+        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {
@@ -517,7 +505,7 @@ async function sendMessageInner(
       // the human-as-sender path out of the new projection branch even
       // if the rest of `agent-final-text` semantics (skipMentionEnforcement,
       // forceSilentFanOut) happen to fire for that caller.
-      bumpForAgentFinalText: isAgentFinalText && senderRow.type !== "human",
+      bumpForAgentFinalText: prepared.isAgentFinalText && senderRow.type !== "human",
     });
 
     // 7. Open-question counter (`chat_user_state.open_request_count`) — see
@@ -547,12 +535,7 @@ async function sendMessageInner(
     // Storing it would both mislead readers and poison the prior-resolution
     // idempotency scan below (which matches on `resolves ->> 'request'`),
     // permanently blocking the legitimate decrement.
-    if (data.metadata?.resolves !== undefined && !requestResolutionSchema.safeParse(data.metadata.resolves).success) {
-      throw new BadRequestError(
-        'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
-      );
-    }
-    const resolution = requestResolutionSchema.safeParse(data.metadata?.resolves);
+    const resolution = requestResolutionSchema.safeParse(metadataToStore.resolves);
     if (resolution.success) {
       const requestId = resolution.data.request;
       // Lock the target request row FIRST so concurrent resolutions of the

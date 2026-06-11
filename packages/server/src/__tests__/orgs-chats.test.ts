@@ -1,6 +1,9 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import { uuidv7 } from "../uuid.js";
@@ -74,6 +77,51 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
     const body = res.json<{ chatId: string }>();
     expect(typeof body.chatId).toBe("string");
     expect(body.chatId.length).toBeGreaterThan(0);
+  });
+
+  it("task mode creates the chat and first Web message through the org route", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `oc-task-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Task Target",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        mode: "task",
+        initialRecipientAgentIds: [target.uuid],
+        initialRecipientNames: [],
+        contextParticipantAgentIds: [],
+        contextParticipantNames: [],
+        topic: "Web task create",
+        initialMessage: { source: "web", format: "text", content: "start from web" },
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ chatId: string; messageId: string; effectiveSenderId: string }>();
+    expect(body.effectiveSenderId).toBe(alice.humanAgentUuid);
+
+    const [chatRow] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(chatRow?.metadata).toEqual({});
+    expect(chatRow?.topic).toBe("Web task create");
+
+    const [messageRow] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(messageRow).toMatchObject({
+      chatId: body.chatId,
+      senderId: alice.humanAgentUuid,
+      source: "web",
+      format: "text",
+      content: "start from web",
+    });
+    expect(messageRow?.metadata).toEqual({ mentions: [target.uuid] });
   });
 
   it("rejects participants from a different org (404 — anti-enumeration, not 400)", async () => {

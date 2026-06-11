@@ -34,12 +34,19 @@ export const githubChatMetadataSchema = z.object({
 });
 export type GithubChatMetadata = z.infer<typeof githubChatMetadataSchema>;
 
+export const agentChatMetadataSchema = z.object({
+  source: z.literal("agent"),
+  initiatedByAgentId: z.string().min(1).optional(),
+  effectiveSenderReason: z.literal("self_target_manager_human").optional(),
+});
+export type AgentChatMetadata = z.infer<typeof agentChatMetadataSchema>;
+
 /**
  * Discriminated union of typed chat-metadata shapes. Currently `github` is
- * the only variant; the union is kept so future writers can add new
- * `source` branches without churning the consumer call sites.
+ * joined by agent-created task chats; future writers should add new `source`
+ * branches here instead of inventing untyped metadata keys.
  */
-export const chatMetadataSchema = z.discriminatedUnion("source", [githubChatMetadataSchema]);
+export const chatMetadataSchema = z.discriminatedUnion("source", [githubChatMetadataSchema, agentChatMetadataSchema]);
 export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
 
 /**
@@ -60,12 +67,14 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
  * render a PR vs Issue glyph even though the filter popover only
  * exposes a single GitHub toggle).
  *
- *  - `manual` — user-created, agent-to-agent, or any chat whose metadata
- *    is absent / empty / unrecognised. The default conversation-list
+ *  - `manual` — user-created or any chat whose metadata is absent / empty /
+ *    unrecognised. The default conversation-list
  *    view. Anything that doesn't cleanly match a known writer falls
  *    here so the default tab can't accidentally hide a chat.
  *  - `github` — projected from `{ source: "github", entityType: ... }`.
  *    Sub-type lives on `MeChatRow.entityType`.
+ *  - `agent` — projected from `{ source: "agent", ... }`; used for task
+ *    chats created by an agent/CLI/dispatcher workflow.
  *
  * The projection itself lives next to the WHERE clause that consumes
  * it (`packages/server/src/services/me-chat.ts::chatSourceSqlExpression`)
@@ -74,6 +83,6 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
  * then extend this enum, then both the SQL CASE and the
  * `sourceFilterSql` switch.
  */
-export const CHAT_SOURCES = ["manual", "github"] as const;
+export const CHAT_SOURCES = ["manual", "github", "agent"] as const;
 export const chatSourceSchema = z.enum(CHAT_SOURCES);
 export type ChatSource = z.infer<typeof chatSourceSchema>;

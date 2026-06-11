@@ -27,6 +27,20 @@ function makeStatusResponse(status: number, body = ""): Response {
   return new Response(body, { status, headers: { "content-type": "text/plain" } });
 }
 
+function makeCreateOkResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      chatId: "chat-created",
+      messageId: "msg-created",
+      topic: null,
+      effectiveSenderId: "agent-1",
+      initialRecipientAgentIds: ["agent-2"],
+      contextParticipantAgentIds: [],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 function makeFetchFailed(): TypeError {
   // Real undici shape: top-level `TypeError("fetch failed")` with `cause`
   // pointing at the underlying socket error. We don't need a real cause
@@ -150,6 +164,41 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
       flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" })),
     ).rejects.toBeInstanceOf(SdkError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry createTaskChat when the result is uncertain", async () => {
+    const http500 = buildFetchMock([makeStatusResponse(500, "maybe created"), makeCreateOkResponse()]);
+    vi.stubGlobal("fetch", http500);
+
+    await expect(
+      flush(
+        makeSdk().createTaskChat({
+          mode: "task",
+          initialRecipientAgentIds: ["agent-2"],
+          initialRecipientNames: [],
+          contextParticipantAgentIds: [],
+          contextParticipantNames: [],
+          initialMessage: { source: "cli", format: "text", content: "start task" },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SdkError);
+    expect(http500).toHaveBeenCalledTimes(1);
+
+    const networkFailure = buildFetchMock([makeFetchFailed(), makeCreateOkResponse()]);
+    vi.stubGlobal("fetch", networkFailure);
+    await expect(
+      flush(
+        makeSdk().createTaskChat({
+          mode: "task",
+          initialRecipientAgentIds: ["agent-2"],
+          initialRecipientNames: [],
+          contextParticipantAgentIds: [],
+          contextParticipantNames: [],
+          initialMessage: { source: "cli", format: "text", content: "start task" },
+        }),
+      ),
+    ).rejects.toThrow(/fetch failed/);
+    expect(networkFailure).toHaveBeenCalledTimes(1);
   });
 
   it("retries on HTTP 500 and succeeds on the second attempt", async () => {
