@@ -29,9 +29,9 @@ agents:
     // Defaults are kept in lock-step with `@first-tree/shared`
     // `agentConfigSchema` — see runtime/config.ts. The shipped CLI goes
     // through that schema; this YAML loader is the legacy back-door.
-    expect(nova?.concurrency).toBe(5);
+    expect(nova?.concurrency).toBe(99);
     expect(nova?.session.idle_timeout).toBe(300);
-    expect(nova?.session.max_sessions).toBe(10);
+    expect(nova?.session.max_sessions).toBe(99);
     expect(nova?.session.working_grace_seconds).toBe(3600);
   });
 

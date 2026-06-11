@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig } from "@first-tree/shared";
+import type { AgentRuntimeConfig, SessionEvent } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
@@ -60,6 +60,7 @@ function createSessionManager(opts: {
   log?: pino.Logger;
   agentConfigCache?: AgentConfigCache;
   recoverChat?: (chatId: string) => Promise<void>;
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -91,6 +92,7 @@ function createSessionManager(opts: {
     log: opts.log ?? silentLogger(),
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     recoverChat: opts.recoverChat,
+    onSessionEvent: opts.onSessionEvent,
     agentConfigCache: opts.agentConfigCache,
   });
 }
@@ -1256,6 +1258,240 @@ describe("SessionManager lazy Context Tree binding", () => {
     await sm.dispatch(mockEntry({ id: 2, chatId: "c-once", messageId: "m2" }));
 
     expect(resolve).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+});
+
+/**
+ * #973 — Concurrency preemption must not silently drop in-progress turns.
+ *
+ * The dangerous path before the fix: `acquireActiveSlot` picked any LRU
+ * active session as the preemption victim and routed it through the same
+ * suspend path as a normal idle pause — which ACKed the consumed in-flight
+ * prefix. For a victim mid-turn the provider turn had not committed, so the
+ * ACK destroyed the only durable redelivery cursor; `evictIfNeeded` later
+ * discarded the suspended session and a quiet chat never produced the
+ * bind/recovery trigger to get its task back.
+ */
+describe("SessionManager preemption of working sessions (#973)", () => {
+  type ChatHarness = {
+    handlers: Map<string, AgentHandler>;
+    ctxs: Map<string, SessionContext>;
+    resumes: Array<{ chatId: string; sessionId: string }>;
+    factory: HandlerFactory;
+  };
+
+  /** Per-chat handler factory that records each chat's handler + ctx. */
+  function chatHarness(): ChatHarness {
+    const handlers = new Map<string, AgentHandler>();
+    const ctxs = new Map<string, SessionContext>();
+    const resumes: Array<{ chatId: string; sessionId: string }> = [];
+    const factory: HandlerFactory = () => {
+      const handler: AgentHandler = createMockHandler({
+        start: vi.fn(async (msg: { chatId: string }, ctx: SessionContext) => {
+          handlers.set(msg.chatId, handler);
+          ctxs.set(msg.chatId, ctx);
+          return `session-${msg.chatId}`;
+        }),
+        resume: vi.fn(async (msg: { chatId: string } | undefined, sessionId: string, ctx: SessionContext) => {
+          const chatId = msg?.chatId ?? ctx.chatId;
+          handlers.set(chatId, handler);
+          ctxs.set(chatId, ctx);
+          resumes.push({ chatId, sessionId });
+          return sessionId || `session-${chatId}`;
+        }),
+      });
+      return handler;
+    };
+    return { handlers, ctxs, resumes, factory };
+  }
+
+  function flushDeferred(): Promise<void> {
+    return new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+  }
+
+  /**
+   * With a `recoverChat` callback configured, the FIRST dispatch for a chat
+   * with no healthy live handler is consumed by the recovery gate (it asks
+   * the server to reset + redeliver); the second dispatch models the
+   * redelivered frame. Same double-dispatch idiom as the LRU-eviction
+   * recovery test above.
+   */
+  async function deliver(sm: SessionManager, entry: ReturnType<typeof mockEntry>): Promise<void> {
+    await sm.dispatch(entry);
+    await sm.dispatch(entry);
+  }
+
+  it("concurrency=1: preempting a working session does NOT ack its in-flight entry and proactively requests chat recovery", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const h = chatHarness();
+    const sm = createSessionManager({ ackEntry, handlerFactory: h.factory, concurrency: 1, recoverChat });
+
+    // chat-a starts a turn and reports working — its entry is consumed by
+    // the provider turn but the turn has NOT completed.
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    const ctxA = h.ctxs.get("chat-a");
+    expect(ctxA).toBeDefined();
+    ctxA?.setRuntimeState("working");
+    ctxA?.markMessagesConsumed({
+      inboxEntryId: 1,
+      id: "msg-a",
+      chatId: "chat-a",
+      senderId: "sender-1",
+      format: "text",
+      content: "x",
+      metadata: {},
+    });
+    recoverChat.mockClear();
+
+    // chat-b's fresh message preempts chat-a (last resort — no idle victim).
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    await flushDeferred();
+
+    expect(h.handlers.get("chat-a")?.suspend).toHaveBeenCalledTimes(1);
+    expect(h.handlers.get("chat-b")?.start).toHaveBeenCalledTimes(1);
+    // The interrupted turn's entry must NOT be acked — it is the only
+    // durable redelivery handle.
+    expect(ackEntry).not.toHaveBeenCalled();
+    // And redelivery must be requested proactively — no new inbound input
+    // on quiet chat-a will ever arrive to trigger it lazily.
+    expect(recoverChat).toHaveBeenCalledWith("chat-a");
+
+    await sm.shutdown();
+  });
+
+  it("recovery-resume traffic queues instead of preempting another working session, and resumes when the slot frees (no livelock)", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const h = chatHarness();
+    const sm = createSessionManager({ ackEntry, handlerFactory: h.factory, concurrency: 1, recoverChat });
+
+    // chat-a working → preempted by chat-b (which then also works).
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    h.ctxs.get("chat-a")?.setRuntimeState("working");
+    recoverChat.mockClear();
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    h.ctxs.get("chat-b")?.setRuntimeState("working");
+    await flushDeferred();
+    expect(recoverChat).toHaveBeenCalledWith("chat-a");
+
+    // The server redelivers chat-a's entry (same id). chat-a is owed a
+    // recovery resume — it must NOT abort chat-b's working turn; it queues.
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    expect(h.handlers.get("chat-b")?.suspend).not.toHaveBeenCalled();
+    expect(h.resumes.filter((r) => r.chatId === "chat-a")).toHaveLength(0);
+
+    // chat-b's turn closes → its slot is yielded to the queue and chat-a
+    // resumes its interrupted turn — with no new inbound input for chat-a.
+    const ctxB = h.ctxs.get("chat-b");
+    ctxB?.markCompleted();
+    ctxB?.setRuntimeState("idle");
+    await vi.waitFor(() => {
+      expect(h.resumes.filter((r) => r.chatId === "chat-a")).toHaveLength(1);
+    });
+    expect(h.resumes[0]?.sessionId).toBe("session-chat-a");
+
+    await sm.shutdown();
+  });
+
+  it("prefers an idle-active victim over an older working session", async () => {
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const h = chatHarness();
+    const sm = createSessionManager({ handlerFactory: h.factory, concurrency: 2, recoverChat });
+
+    // chat-a is OLDER (LRU) and working; chat-b is newer and idle.
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    h.ctxs.get("chat-a")?.setRuntimeState("working");
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    h.ctxs.get("chat-b")?.markCompleted();
+    h.ctxs.get("chat-b")?.setRuntimeState("idle");
+    await flushDeferred();
+    recoverChat.mockClear();
+
+    // chat-c needs a slot: the idle chat-b must be the victim even though
+    // chat-a is least-recently-active.
+    await deliver(sm, mockEntry({ id: 3, chatId: "chat-c", messageId: "msg-c" }));
+    expect(h.handlers.get("chat-b")?.suspend).toHaveBeenCalledTimes(1);
+    expect(h.handlers.get("chat-a")?.suspend).not.toHaveBeenCalled();
+    // Idle victim ⇒ normal suspend semantics ⇒ no recovery needed for it.
+    expect(recoverChat).not.toHaveBeenCalledWith("chat-b");
+
+    await sm.shutdown();
+  });
+
+  it("max_sessions eviction of a suspended session with an unfinished turn proactively requests recovery and leaves no entry stranded", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const h = chatHarness();
+    const sm = createSessionManager({
+      ackEntry,
+      handlerFactory: h.factory,
+      concurrency: 1,
+      recoverChat,
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    // chat-a working → preempt-aborted by chat-b. Its proactive recovery is
+    // requested but the redelivery has not arrived yet.
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    h.ctxs.get("chat-a")?.setRuntimeState("working");
+    recoverChat.mockClear();
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    h.ctxs.get("chat-b")?.setRuntimeState("working");
+    await flushDeferred();
+    expect(recoverChat.mock.calls.filter(([chatId]) => chatId === "chat-a")).toHaveLength(1);
+
+    // chat-c trips max_sessions (2) — suspended chat-a is the eviction
+    // candidate while still owed its recovery resume. Eviction must
+    // re-request recovery rather than waiting for a bind reset that a
+    // quiet chat never triggers.
+    await deliver(sm, mockEntry({ id: 3, chatId: "chat-c", messageId: "msg-c" }));
+    await flushDeferred();
+    expect(recoverChat.mock.calls.filter(([chatId]) => chatId === "chat-a").length).toBeGreaterThanOrEqual(2);
+    // Nothing got acked along the way — the interrupted turn's entry stays
+    // durable on the server.
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("emits explicit limit events when a chat is preempted, queued, or evicted with pending recovery", async () => {
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const events: Array<{ chatId: string; message: string }> = [];
+    const h = chatHarness();
+    const sm = createSessionManager({
+      handlerFactory: h.factory,
+      concurrency: 1,
+      recoverChat,
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+      onSessionEvent: (chatId, event) => {
+        if (event.kind === "error") events.push({ chatId, message: String(event.payload.message) });
+      },
+    });
+    const eventsFor = (chatId: string, prefix: string) =>
+      events.filter((e) => e.chatId === chatId && e.message.startsWith(prefix));
+
+    // chat-a working → preempted mid-turn by chat-b: the victim chat gets an
+    // explicit "preempted, will auto-resume" event instead of going silent.
+    await deliver(sm, mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    h.ctxs.get("chat-a")?.setRuntimeState("working");
+    await deliver(sm, mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" }));
+    h.ctxs.get("chat-b")?.setRuntimeState("working");
+    await flushDeferred();
+    expect(eventsFor("chat-a", "resilience.session.preempted")).toHaveLength(1);
+
+    // chat-a's recovery redelivery cannot take a slot (chat-b is working and
+    // recovery traffic never aborts working turns) — explicit queued event.
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" }));
+    expect(eventsFor("chat-a", "resilience.session.slot_queued")).toHaveLength(1);
+
+    // chat-c trips max_sessions while chat-a is still owed its resume — the
+    // eviction is announced rather than silent.
+    await deliver(sm, mockEntry({ id: 3, chatId: "chat-c", messageId: "msg-c" }));
+    await flushDeferred();
+    expect(eventsFor("chat-a", "resilience.session.evicted_pending_recovery")).toHaveLength(1);
 
     await sm.shutdown();
   });

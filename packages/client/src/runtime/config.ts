@@ -18,7 +18,9 @@ import { z } from "zod";
 const sessionConfigSchema = z
   .object({
     idle_timeout: z.number().int().positive().default(300),
-    max_sessions: z.number().int().positive().default(10),
+    // Effectively-unbounded default (#973) — see the rationale comment in
+    // `packages/shared/src/config/agent-config.ts`; keep in lock-step.
+    max_sessions: z.number().int().positive().default(99),
     /**
      * Upper bound on how long `working` / `blocked` may keep a session
      * alive past `idle_timeout` before force-suspend. See `evictIdle` in
@@ -35,7 +37,8 @@ const agentSlotConfigSchema = z
     agentId: z.string().min(1),
     type: z.string().min(1),
     session: sessionConfigSchema.prefault({}),
-    concurrency: z.number().int().positive().default(5),
+    // Effectively-unbounded default (#973) — see agent-config.ts rationale.
+    concurrency: z.number().int().positive().default(99),
   })
   .passthrough();
 

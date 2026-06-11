@@ -16,10 +16,17 @@ export const agentConfigSchema = defineConfig({
   agentId: field(z.string().min(1)),
   /** Runtime handler type (e.g. "claude-code"). NOT the agent business type. */
   runtime: field(z.string().default("claude-code")),
-  concurrency: field(z.number().int().positive().default(5)),
+  // Effectively-unbounded defaults (#973): hitting either limit interrupts
+  // or queues real work, so the limits exist as resource guardrails an
+  // operator opts INTO by lowering them — not as everyday scheduling. The
+  // idle reaper (`idle_timeout`, 300 s) is what actually bounds steady-state
+  // active provider processes; `concurrency` only caps simultaneous
+  // overlapping turns. When a limit IS hit, the runtime emits an explicit
+  // `resilience.session.*` event instead of limiting silently.
+  concurrency: field(z.number().int().positive().default(99)),
   session: {
     idle_timeout: field(z.number().int().positive().default(300)),
-    max_sessions: field(z.number().int().positive().default(10)),
+    max_sessions: field(z.number().int().positive().default(99)),
     // Upper bound on how long a session may stay `working`/`blocked` past
     // `idle_timeout` before the runtime force-suspends it. Protects long
     // thinking / large message generation from idle eviction while still

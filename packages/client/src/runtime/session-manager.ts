@@ -80,6 +80,23 @@ type PendingMessage = {
 };
 
 /**
+ * Why a session is being suspended. The reason decides what happens to the
+ * chat's in-flight inbox entries (#973):
+ *
+ * - `idle` / `command` / `yield` — the provider turn has closed (or the
+ *   operator explicitly paused the chat). ACK the consumed prefix, clear the
+ *   unconsumed tail for recovery. This is the historical suspend semantics.
+ * - `preempt` — another chat is forcibly taking this session's active slot
+ *   while its provider turn may NOT have committed. ACKing the consumed
+ *   prefix here would discard the only durable redelivery handle for the
+ *   interrupted turn, silently dropping the task (issue #973). Instead the
+ *   whole in-flight queue is cleared for recovery and a proactive
+ *   chat-scoped recovery is scheduled so the turn re-runs without waiting
+ *   for new inbound input.
+ */
+type SuspendReason = "idle" | "command" | "preempt" | "yield";
+
+/**
  * Resolve the directory the runtime reads markdown doc snapshots against —
  * the same dir the handler actually hands the agent as cwd for this chat.
  *
@@ -358,6 +375,15 @@ export class SessionManager {
   private readonly recoveringChats = new Map<string, Promise<void>>();
   private readonly recoveryActivationReady = new Set<string>();
   private readonly requiresInboxRecovery = new Set<string>();
+  /**
+   * Chats whose interrupted turn is owed a recovery resume (preempt-abort or
+   * eviction with unfinished in-flight entries — #973). While a chat is in
+   * this set, its slot acquisition must NOT preempt another chat's working
+   * session: recovery traffic preempting working turns would let two
+   * oversubscribed chats abort each other forever (livelock). The flag is
+   * cleared the moment the chat successfully acquires a slot.
+   */
+  private readonly recoveryResumePending = new Set<string>();
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
@@ -558,7 +584,7 @@ export class SessionManager {
       const session = this.sessions.get(chatId);
       if (session?.status === "active") {
         this.config.log.info({ chatId }, "suspend command received");
-        this.suspendSession(session);
+        this.suspendSession(session, "command");
       }
       return;
     }
@@ -583,6 +609,7 @@ export class SessionManager {
       this.sessionRuntimeStates.delete(chatId);
       this.lastReportedStates.delete(chatId);
       this.currentTrigger.delete(chatId);
+      this.recoveryResumePending.delete(chatId);
 
       for (let i = this.pendingQueue.length - 1; i >= 0; i--) {
         if (this.pendingQueue[i]?.chatId === chatId) this.pendingQueue.splice(i, 1);
@@ -660,6 +687,7 @@ export class SessionManager {
     this.evictedMappings.clear();
     this.lastReportedStates.clear();
     this.sessionRuntimeStates.clear();
+    this.recoveryResumePending.clear();
     this.lastReportedRuntimeState = null;
     this._activeCount = 0;
   }
@@ -759,35 +787,63 @@ export class SessionManager {
   }
 
   private async recoverChatBeforeDispatch(chatId: string, entryId: number, messageId: string): Promise<void> {
-    const existing = this.recoveringChats.get(chatId);
-    if (existing) {
-      await existing;
-      return;
-    }
-    const recoverChat = this.config.recoverChat;
-    if (!recoverChat) {
+    if (!this.config.recoverChat) {
       this.config.log.error(
         { chatId, entryId, messageId },
         "chat requires inbox recovery but no recoverChat callback is configured; deferring dispatch",
       );
       return;
     }
+    await this.beginChatRecovery(chatId, { entryId, messageId });
+  }
+
+  /**
+   * Start (or join) a chat-scoped inbox recovery: ask the server to reset
+   * this chat's delivered-but-unacked rows back to pending and redeliver
+   * them on this connection. Deduplicated per chat — concurrent callers
+   * share one in-flight recovery promise.
+   */
+  private beginChatRecovery(chatId: string, logCtx: Record<string, unknown>): Promise<void> {
+    const existing = this.recoveringChats.get(chatId);
+    if (existing) return existing;
+    const recoverChat = this.config.recoverChat;
+    if (!recoverChat) return Promise.resolve();
 
     let recovery: Promise<void>;
     recovery = recoverChat(chatId)
       .then(() => {
         this.requiresInboxRecovery.delete(chatId);
         this.recoveryActivationReady.add(chatId);
-        this.config.log.debug({ chatId, entryId, messageId }, "chat inbox recovery accepted before dispatch");
+        this.config.log.debug({ chatId, ...logCtx }, "chat inbox recovery accepted");
       })
       .catch((err) => {
-        this.config.log.warn({ chatId, entryId, messageId, err }, "chat inbox recovery failed before dispatch");
+        this.config.log.warn({ chatId, ...logCtx, err }, "chat inbox recovery failed");
       })
       .finally(() => {
         if (this.recoveringChats.get(chatId) === recovery) this.recoveringChats.delete(chatId);
       });
     this.recoveringChats.set(chatId, recovery);
-    await recovery;
+    return recovery;
+  }
+
+  /**
+   * Proactively schedule a chat-scoped recovery for a chat whose in-flight
+   * turn was interrupted (preempt-abort or eviction with unfinished
+   * entries — #973). Unlike `recoverChatBeforeDispatch` this is NOT driven
+   * by inbound input: a quiet chat would otherwise never produce the
+   * trigger and the interrupted task would stay silently dropped. Failure
+   * is non-fatal — the `requiresInboxRecovery` marker stays set, so the
+   * next inbound message or bind reset retries the redelivery.
+   */
+  private scheduleProactiveRecovery(chatId: string, reason: string): void {
+    if (!this.config.recoverChat) {
+      this.config.log.warn(
+        { chatId, reason },
+        "interrupted turn needs proactive inbox recovery but no recoverChat callback is configured; redelivery waits for the next inbound message or bind reset",
+      );
+      return;
+    }
+    void this.beginChatRecovery(chatId, { reason, proactive: true });
   }
 
   private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
@@ -1298,42 +1354,125 @@ export class SessionManager {
 
   /**
    * Try to acquire an active slot. If at concurrency limit:
-   * 1. Suspend the least-recently-active session to free a slot
-   * 2. If no candidates, queue the message
+   * 1. Suspend a victim session to free a slot — idle-active sessions first
+   *    (their turn has closed; suspending them loses nothing), then
+   *    working / blocked sessions as a last resort (#973: their interrupted
+   *    turn is preserved via the preempt-abort suspend path).
+   * 2. If no eligible victim, queue the message.
+   *
+   * A chat in `recoveryResumePending` (resuming an interrupted turn via
+   * recovery redelivery) may only take an idle victim — never abort another
+   * chat's working turn — otherwise two oversubscribed chats preempt each
+   * other's turns forever. Its message queues instead and drains when a
+   * slot frees up.
    *
    * Returns true if slot acquired, false if queued. The in-flight entryId
    * is tracked separately in `inFlightEntries` (populated at dispatch),
    * so the queue doesn't carry inbox metadata.
    */
   private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
-    if (this._activeCount < this.config.concurrency) return true;
-
-    // Find least-recently-active session (excluding the target chat)
-    let oldestActive: SessionEntry | null = null;
-    for (const session of this.sessions.values()) {
-      if (session.status !== "active") continue;
-      if (session.chatId === chatId) continue;
-      if (!oldestActive || session.lastActivity < oldestActive.lastActivity) {
-        oldestActive = session;
-      }
-    }
-
-    if (oldestActive) {
-      this.config.log.info({ chatId: oldestActive.chatId }, "session preempted for concurrency");
-      this.suspendSession(oldestActive);
+    if (this._activeCount < this.config.concurrency) {
+      this.recoveryResumePending.delete(chatId);
       return true;
     }
 
-    // All active sessions are busy — queue. The inbox entry stays in
+    const victim = this.findPreemptionVictim(chatId);
+    if (victim && (!victim.working || !this.recoveryResumePending.has(chatId))) {
+      this.config.log.info(
+        { chatId: victim.entry.chatId, victimWorking: victim.working, forChatId: chatId },
+        "session preempted for concurrency",
+      );
+      this.suspendSession(victim.entry, "preempt");
+      this.recoveryResumePending.delete(chatId);
+      return true;
+    }
+
+    // No eligible victim — queue. The inbox entry stays in
     // `inFlightEntries[chatId]` until the eventual turn finishes.
     this.config.log.info({ chatId }, "concurrency limit reached, queuing");
+    // #973: being limited must be visible, not silent — tell the chat why
+    // nothing is happening yet.
+    this.emitLimitEvent(chatId, "resilience.session.slot_queued", {
+      activeCount: this._activeCount,
+      concurrency: this.config.concurrency,
+      queuedAhead: this.pendingQueue.length,
+    });
     this.pendingQueue.push({ message, chatId });
     return false;
   }
 
-  private suspendSession(entry: SessionEntry): void {
-    this.ackConsumedInFlightForSuspend(entry.chatId);
-    this.clearInFlightForRecovery(entry.chatId, "session_suspended_unconsumed_tail");
+  /**
+   * Surface a concurrency / max_sessions limit event into the chat's
+   * timeline (#973: "being limited must come with an explicit signal").
+   * Uses the same closed-union `error`-kind + tagged-message bridge as the
+   * `resilience.session.retry_*` events — see {@link encodeResilienceMessage}.
+   * Best-effort: a failed emit never blocks scheduling.
+   */
+  private emitLimitEvent(chatId: string, eventName: string, payload: Record<string, unknown>): void {
+    try {
+      this.config.onSessionEvent?.(chatId, {
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: encodeResilienceMessage(eventName, payload),
+        },
+      });
+    } catch (emitErr) {
+      this.config.log.warn({ chatId, eventName, emitErr }, "limit event emit failed");
+    }
+  }
+
+  /**
+   * Pick the session to suspend when the concurrency limit is hit: the
+   * least-recently-active among idle-active sessions first; among
+   * working / blocked sessions only when no idle victim exists. A session
+   * with no recorded runtime state counts as idle — it has not reported a
+   * turn in flight.
+   */
+  private findPreemptionVictim(excludeChatId: string): { entry: SessionEntry; working: boolean } | null {
+    let idleVictim: SessionEntry | null = null;
+    let workingVictim: SessionEntry | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.status !== "active") continue;
+      if (session.chatId === excludeChatId) continue;
+      const state = this.sessionRuntimeStates.get(session.chatId);
+      const working = state === "working" || state === "blocked";
+      if (working) {
+        if (!workingVictim || session.lastActivity < workingVictim.lastActivity) workingVictim = session;
+      } else if (!idleVictim || session.lastActivity < idleVictim.lastActivity) {
+        idleVictim = session;
+      }
+    }
+    if (idleVictim) return { entry: idleVictim, working: false };
+    if (workingVictim) return { entry: workingVictim, working: true };
+    return null;
+  }
+
+  private suspendSession(entry: SessionEntry, reason: SuspendReason): void {
+    const chatId = entry.chatId;
+    if (reason === "preempt" && (this.inFlightEntries.get(chatId)?.length ?? 0) > 0) {
+      // Preempt-abort (#973): the provider turn for the tracked entries has
+      // not committed — ACKing the consumed prefix would remove the durable
+      // redelivery cursor and silently drop the interrupted task. Clear the
+      // WHOLE queue for recovery (server rows stay `delivered`) and
+      // proactively ask the server to reset + redeliver them, so the turn
+      // re-runs without waiting for new inbound input on this chat.
+      this.clearInFlightForRecovery(chatId, "session_preempted_mid_turn");
+      this.recoveryResumePending.add(chatId);
+      // #973: explicit signal in the victim chat's timeline — its turn was
+      // interrupted to free a slot and will auto-resume via redelivery.
+      this.emitLimitEvent(chatId, "resilience.session.preempted", {
+        concurrency: this.config.concurrency,
+        willAutoResume: true,
+      });
+      this.scheduleProactiveRecovery(chatId, "session_preempted_mid_turn");
+    } else {
+      // Turn has closed (idle / yield), or operator intent (command):
+      // historical suspend semantics — commit what the provider consumed,
+      // leave the unconsumed tail for recovery on the next inbound input.
+      this.ackConsumedInFlightForSuspend(chatId);
+      this.clearInFlightForRecovery(chatId, "session_suspended_unconsumed_tail");
+    }
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
@@ -1350,8 +1489,28 @@ export class SessionManager {
     this.persistRegistry();
     this.notifySessionState(entry.chatId, "suspended");
 
-    // Drain pending queue
-    this.drainPendingQueue();
+    // Drain the pending queue — EXCEPT on preemption: a preempt frees the
+    // slot specifically for the chat that requested it (the caller claims it
+    // right after this returns). Draining here would hand that slot to a
+    // queued chat synchronously and over-admit past the concurrency limit.
+    if (reason !== "preempt") this.drainPendingQueue();
+  }
+
+  /**
+   * Suspend a session whose turn has closed so a queued chat can take its
+   * slot (#973). Runs deferred from `setSessionRuntimeState("idle")`;
+   * re-checks every condition because the world may have moved on since
+   * the hook fired: the queue may have drained, a new turn may have
+   * started, or new same-chat input may already be tracked in-flight.
+   */
+  private yieldSlotToPendingQueue(chatId: string): void {
+    if (this.pendingQueue.length === 0) return;
+    const session = this.sessions.get(chatId);
+    if (!session || session.status !== "active") return;
+    if (this.sessionRuntimeStates.get(chatId) !== "idle") return;
+    if ((this.inFlightEntries.get(chatId)?.length ?? 0) > 0) return;
+    this.config.log.info({ chatId }, "turn closed with chats queued for a slot — yielding active slot");
+    this.suspendSession(session, "yield");
   }
 
   private drainPendingQueue(): void {
@@ -1417,6 +1576,22 @@ export class SessionManager {
       // `delivered`; a later chat recovery or bind reset redelivers them
       // against a fresh session.
       this.clearInFlightForRecovery(candidate.key, "session_evicted");
+      // #973: an evicted chat with an unfinished turn (in-flight entries
+      // just cleared above, or a pending recovery marker from an earlier
+      // preempt-abort whose redelivery has not landed yet) must not wait
+      // for a future bind reset that a quiet chat may never trigger —
+      // proactively ask the server to redeliver now. The redelivered
+      // message resumes the chat from `evictedMappings`.
+      if (this.requiresInboxRecovery.has(candidate.key) || this.recoveryResumePending.has(candidate.key)) {
+        this.recoveryResumePending.add(candidate.key);
+        // #973: explicit signal — the chat's session was discarded by the
+        // max_sessions cap while work was still owed; recovery is scheduled.
+        this.emitLimitEvent(candidate.key, "resilience.session.evicted_pending_recovery", {
+          maxSessions: max_sessions,
+          willAutoResume: true,
+        });
+        this.scheduleProactiveRecovery(candidate.key, "session_evicted_unfinished");
+      }
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
@@ -1497,7 +1672,7 @@ export class SessionManager {
         },
         "session idle, suspending",
       );
-      this.suspendSession(session);
+      this.suspendSession(session, "idle");
     }
   }
 
@@ -1761,6 +1936,14 @@ export class SessionManager {
     const session = this.sessions.get(chatId);
     if (!session || session.status !== "active") return;
     this.sessionRuntimeStates.set(chatId, state);
+    // #973: a turn just closed while other chats are queued for a slot —
+    // yield this session's slot instead of holding it idle until the
+    // `idle_timeout` reaper. Deferred so the handler's turn-close path
+    // (forwardResult / markCompleted bookkeeping) finishes first; the
+    // deferred body re-checks every condition.
+    if (state === "idle" && this.pendingQueue.length > 0) {
+      setImmediate(() => this.yieldSlotToPendingQueue(chatId));
+    }
     // Per-chat D-axis report: the authoritative source the server-side
     // composite reads. Fire before recomputing the agent-global aggregate
     // so a single state change drops one frame on each wire (the per-chat
