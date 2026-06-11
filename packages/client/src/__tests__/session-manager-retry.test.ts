@@ -123,6 +123,45 @@ describe("SessionManager: transient retry on session start", () => {
     await sm.shutdown();
   });
 
+  it("retry_scheduled event payload carries the raw err.message for operator diagnosis", async () => {
+    // Surfacing the underlying err.message into the resilience event payload
+    // is the only way the web UI (or an operator tailing the log) can see the
+    // actual cause for a `reasonCode:"unknown"` / `git_unknown` transient. The
+    // reasonCode alone is not actionable on those buckets — see the prod
+    // incident motivating the git-error classification PR.
+    const handler: AgentHandler = {
+      start: vi.fn().mockRejectedValue(new FakeRateLimit("upstream rate limited — please retry shortly")),
+      resume: vi.fn(),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const events: SessionEvent[] = [];
+    const sm = makeManager({
+      handlers: [handler],
+      onSessionEvent: (_chat, ev) => events.push(ev),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-raw-error" }));
+
+    const errorEvents = events.filter((e) => e.kind === "error");
+    expect(errorEvents.length).toBeGreaterThan(0);
+    const scheduled = errorEvents.find(
+      (e) =>
+        typeof e.payload.message === "string" && e.payload.message.startsWith("resilience.session.retry_scheduled:"),
+    );
+    expect(scheduled).toBeDefined();
+    // Encoded payload follows `<eventName>: <JSON>` — parse the JSON tail.
+    const jsonText = (scheduled?.payload.message as string).slice("resilience.session.retry_scheduled:".length).trim();
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    expect(parsed.reasonCode).toBe("claude_rate_limit");
+    expect(parsed.attempt).toBe(1);
+    expect(parsed.phase).toBe("start");
+    expect(parsed.rawError).toBe("upstream rate limited — please retry shortly");
+
+    await sm.shutdown();
+  });
+
   it("user message during retry window triggers an immediate retry", async () => {
     const failing: AgentHandler = {
       start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),

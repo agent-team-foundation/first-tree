@@ -14,8 +14,12 @@ import {
   hashUrl,
   httpsToSshBaseRewrite,
   isLikelyAuthFailure,
+  isLikelyGitDiskError,
   isLikelyHttpsAuthFailure,
+  isLikelyRefNotFound,
+  isLikelyRepoNotFound,
   isLikelySshAuthFailure,
+  isLikelyTlsTrustFailure,
   isLikelyTransientNetworkError,
   protocolFallbackFailure,
   retryOnTransientNetwork,
@@ -670,6 +674,108 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     "error: Could not write config file",
   ])("does NOT match: %s", (msg) => {
     expect(isLikelyTransientNetworkError(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — repo-not-found heuristic (isLikelyRepoNotFound)", () => {
+  it.each([
+    // The verbatim prod failure that motivated this branch — a configured
+    // source repo URL pointing at a 404 GitHub path. Used to fall through to
+    // the `unknown` transient bucket and retry forever.
+    "git clone https://github.com/L42y/BRG.git /Users/super/.first-tree/data/workspaces/agent-xxx/BRG exited with code 128: Cloning into '/Users/super/.first-tree/data/workspaces/agent-xxx/BRG'...\nremote: Repository not found.\nfatal: repository 'https://github.com/L42y/BRG.git/' not found\n",
+    "remote: Repository not found.",
+    "fatal: repository 'https://github.com/foo/bar.git/' not found",
+    "remote: Not Found",
+    "fatal: unable to access 'https://example.com/x.git/': The requested URL returned error: 404",
+    "The project you were looking for could not be found or you don't have permission to view it.",
+  ])("matches repo-not-found: %s", (msg) => {
+    expect(isLikelyRepoNotFound(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    // Credential failures are NOT repo-not-found — different remediation.
+    "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
+    "remote: HTTP Basic: Access denied",
+    // Transient 404 served by a flaky proxy without the upstream's own 404
+    // markers — falls through to the transient path, not permanent.
+    "error: RPC failed; HTTP 404 curl 22",
+    // Missing-ref is a separate predicate.
+    "fatal: couldn't find remote ref refs/heads/missing",
+    // Plain network error.
+    "fatal: unable to access 'https://github.com/x/y/': Could not resolve host: github.com",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyRepoNotFound(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — ref-not-found heuristic (isLikelyRefNotFound)", () => {
+  it.each([
+    "fatal: couldn't find remote ref refs/heads/missing",
+    "fatal: Couldn't find remote ref main",
+    "error: Could not find remote branch develop to clone.",
+    "fatal: Remote branch feature/x not found in upstream origin",
+    "error: pathspec 'v9.9.9' did not match any file(s) known to git",
+    "fatal: invalid reference: refs/remotes/origin/main",
+    // The post-set-head-failure surface for a remote with no default branch.
+    "no matching remote HEAD",
+  ])("matches ref-not-found: %s", (msg) => {
+    expect(isLikelyRefNotFound(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "remote: Repository not found.",
+    "fatal: Authentication failed",
+    "fatal: unable to access 'https://github.com/x/y/': Could not resolve host",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyRefNotFound(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — TLS trust failure heuristic (isLikelyTlsTrustFailure)", () => {
+  it.each([
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: self signed certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: unable to get local issuer certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: certificate has expired",
+    "fatal: unable to access 'https://example.com/x.git/': server certificate verification failed. CAfile: /etc/ssl/certs/ca-certificates.crt CRLfile: none",
+    "fatal: unable to access 'https://example.com/x.git/': error:0A000086:SSL routines::certificate verify failed",
+    "SSL peer certificate or SSH remote key was not OK",
+  ])("matches TLS trust failure: %s", (msg) => {
+    expect(isLikelyTlsTrustFailure(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    // Transient TLS handshake blip — distinct from a trust-store fault.
+    "LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443",
+    "GnuTLS recv error (-110): The TLS connection was non-properly terminated.",
+    "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
+    "remote: Repository not found.",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyTlsTrustFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — git disk error heuristic (isLikelyGitDiskError)", () => {
+  it.each([
+    "fatal: write error: No space left on device",
+    "error: copy-fd: write returned: ENOSPC",
+    "fatal: cannot create directory at 'foo/bar': Read-only file system",
+    "EROFS: read-only file system",
+    "fatal: cannot lock ref 'HEAD': Disk quota exceeded",
+    "EDQUOT: disk quota exceeded",
+  ])("matches disk error: %s", (msg) => {
+    expect(isLikelyGitDiskError(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "fatal: Authentication failed",
+    "remote: Repository not found.",
+    "fatal: unable to access 'https://github.com/x/y/': Could not resolve host",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyGitDiskError(msg)).toBe(false);
   });
 });
 

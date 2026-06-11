@@ -55,6 +55,14 @@ type SessionEntry = {
    * structured logging.
    */
   lastRetryReason: string | null;
+  /**
+   * Truncated raw message from the last transient failure. Surfaced into the
+   * `resilience.session.retry_started` event payload alongside `reasonCode`
+   * so the web UI can show the underlying cause (especially for the
+   * `unknown` / `git_unknown` reasonCodes where the reasonCode alone says
+   * nothing actionable). Cleared on a successful start/resume.
+   */
+  lastRetryRawError: string | null;
   /** Original message used to bootstrap this session, replayed on retry. */
   startMessage: SessionMessage | null;
   /**
@@ -901,6 +909,7 @@ export class SessionManager {
       retryNextAt: null,
       retryTimer: null,
       lastRetryReason: null,
+      lastRetryRawError: null,
       startMessage: message,
       retryFromEvicted: evicted ?? null,
     };
@@ -1048,6 +1057,12 @@ export class SessionManager {
     if (classification.kind === ERROR_KINDS.TRANSIENT) {
       entry.retryAttempt = clampRetryAttempt(entry.retryAttempt + 1);
       entry.lastRetryReason = classification.reasonCode;
+      // Truncate the raw err message to 256 chars and persist it on the entry
+      // so retry_started can include it too. The web UI renders the encoded
+      // payload as text, so any operator looking at a `reasonCode:"unknown"` /
+      // `git_unknown` retry can see the underlying err.message without
+      // SSHing to the host — see encodeResilienceMessage's payload schema.
+      entry.lastRetryRawError = errMsg ? errMsg.slice(0, 256) : null;
       const delayMs = nextRetryDelayMs(classification.strategy, entry.retryAttempt);
       entry.retryNextAt = Date.now() + delayMs;
       // Drop the active slot now so other chats can use it during the
@@ -1094,6 +1109,7 @@ export class SessionManager {
               nextDelayMs: delayMs,
               reasonCode: classification.reasonCode,
               phase,
+              rawError: entry.lastRetryRawError,
             }),
           },
         });
@@ -1159,6 +1175,7 @@ export class SessionManager {
           message: encodeResilienceMessage("resilience.session.retry_started", {
             attempt: entry.retryAttempt,
             reasonCode: entry.lastRetryReason,
+            rawError: entry.lastRetryRawError,
           }),
         },
       });
@@ -1211,6 +1228,7 @@ export class SessionManager {
       entry.retryAttempt = 0;
       entry.retryNextAt = null;
       entry.lastRetryReason = null;
+      entry.lastRetryRawError = null;
       this.config.log.info(
         {
           chatId,

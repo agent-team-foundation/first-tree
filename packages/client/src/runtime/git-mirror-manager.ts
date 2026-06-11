@@ -963,6 +963,117 @@ export function isLikelyAuthFailure(message: string): boolean {
 }
 
 /**
+ * Heuristic for "the remote refused because the repository does not exist /
+ * is no longer accessible to this identity". A pure-configuration fault: a
+ * typo'd URL, a deleted/renamed repo, or a private repo the host's git
+ * identity cannot see — none of which `gitWithNetworkRetry`'s in-process
+ * backoff or the peer-protocol fallback can ever cure. Classified as
+ * `permanent` so session start fails loud and the operator gets a clear
+ * "fix the source repo URL" prompt instead of an endless `unknown`-bucket
+ * retry storm.
+ *
+ * Negative space (intentionally NOT matched): credential failures (covered by
+ * `isLikelyHttpsAuthFailure` / `isLikelySshAuthFailure` and treated as
+ * degraded), missing *refs* in an otherwise-reachable repo (covered by
+ * `isLikelyRefNotFound`), and transient 404s served by a flaky proxy (these
+ * don't carry the `Repository not found` / `remote: Not Found` markers git
+ * emits when the upstream itself reports 404).
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyRepoNotFound(message: string): boolean {
+  if (!message) return false;
+  return (
+    /remote:\s*Repository not found/i.test(message) ||
+    /\bfatal:\s*repository\s+'[^']*'\s+not found/i.test(message) ||
+    /\bremote:\s*Not Found\b/i.test(message) ||
+    /\brequested URL returned error:\s*404\b/i.test(message) ||
+    // GitLab's "The project you were looking for could not be found".
+    /The project you were looking for could not be found/i.test(message)
+  );
+}
+
+/**
+ * Heuristic for "the repository is reachable but the configured branch / tag /
+ * commit does not exist on it". Permanent for the same reason as
+ * `isLikelyRepoNotFound`: only an operator can fix the ref, retrying churns.
+ *
+ * Distinct from `isLikelyRepoNotFound` because the remediation is different —
+ * here the URL is fine, only `ref` (or origin/HEAD when no ref is set) is wrong.
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyRefNotFound(message: string): boolean {
+  if (!message) return false;
+  return (
+    /couldn'?t find remote ref/i.test(message) ||
+    /Could not find remote branch/i.test(message) ||
+    /Remote branch\s+\S+\s+not found in upstream/i.test(message) ||
+    /\bdid not match any file\(s\) known to git\b/i.test(message) ||
+    // git 2.x: `fatal: invalid reference: <name>` from `checkout -B` against
+    // a remote-tracking ref that never showed up after fetch.
+    /\bfatal:\s*invalid reference:\s/i.test(message) ||
+    // `git symbolic-ref refs/remotes/origin/HEAD` / `remote set-head --auto`
+    // failed because the remote has no HEAD — already a GitMirrorError; matched
+    // here for classification.
+    /no\s+matching\s+remote\s+head/i.test(message)
+  );
+}
+
+/**
+ * Heuristic for "TLS verification failed against the configured remote". A
+ * host-level trust-store fault: missing CA bundle, system clock skew past a
+ * cert's notAfter, self-signed cert without explicit `http.sslCAInfo`, or
+ * MITM by a corporate proxy whose root CA isn't installed. Retrying with the
+ * same machine state cannot cure any of these — `permanent` + operator action.
+ *
+ * Mirror of the negative-space cases already excluded from
+ * `isLikelyTransientNetworkError`, lifted to a positive predicate so the
+ * taxonomy can attach a specific `reasonCode` instead of falling through to
+ * `git_unknown`.
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyTlsTrustFailure(message: string): boolean {
+  if (!message) return false;
+  return (
+    /SSL certificate problem/i.test(message) ||
+    /server certificate verification failed/i.test(message) ||
+    /certificate verify failed/i.test(message) ||
+    /self.signed certificate/i.test(message) ||
+    /unable to get local issuer certificate/i.test(message) ||
+    /certificate has expired/i.test(message) ||
+    // libcurl `CURLE_PEER_FAILED_VERIFICATION` and friends sometimes surface
+    // as a bare `SSL peer certificate or SSH remote key was not OK`.
+    /SSL peer certificate or SSH remote key was not OK/i.test(message)
+  );
+}
+
+/**
+ * Heuristic for "local disk failure interrupted the git op" — out-of-space,
+ * read-only mount, or quota exceeded. Degraded rather than permanent: the
+ * runtime as a whole is healthy and other agents whose clones already fit on
+ * disk keep working; only this one source-repo target is unusable until the
+ * operator frees space / fixes the mount.
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyGitDiskError(message: string): boolean {
+  if (!message) return false;
+  return (
+    /\bENOSPC\b/.test(message) ||
+    /\bEROFS\b/.test(message) ||
+    /\bEDQUOT\b/.test(message) ||
+    /no space left on device/i.test(message) ||
+    /Disk quota exceeded/i.test(message) ||
+    /Read-only file system/i.test(message) ||
+    // Pack-write side: git surfaces ENOSPC as `fatal: write error: No space
+    // left on device` during `clone`/`fetch` index-pack.
+    /\bfatal:\s*write error:\s*No space left on device/i.test(message)
+  );
+}
+
+/**
  * Heuristic for transient network-layer failures emitted by `git` over HTTPS or
  * SSH — a brief proxy/VPN hiccup, TLS handshake blip, or peer connection reset
  * mid-fetch. Used by `gitWithNetworkRetry` around `clone` and `fetch`.
