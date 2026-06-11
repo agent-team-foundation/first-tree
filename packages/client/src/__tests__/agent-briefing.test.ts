@@ -140,7 +140,8 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
   // guarantees `first-tree` and `first-tree-context` get loaded on
   // every task — otherwise progressive disclosure (keyword-triggered)
   // can silently skip them and the agent acts without the rules in
-  // those skills (daemon lifecycle, hard write rules, etc.).
+  // those skills (daemon lifecycle, tree concept model, hard write
+  // rules, etc.).
 
   it("emits the # Required Reading section for tree-bound agents with MUST framing and both skill names", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
@@ -184,7 +185,8 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     // communication) it needs to operate at all, then hits the hard
     // mandate to load `first-tree` + `first-tree-context` before any
     // real work. The mandate sits adjacent to `# Context Tree` because
-    // the two skills cover the read/write rules for that section.
+    // those skills cover the shared runtime and tree concept/write
+    // rules for that section.
     const payload = {
       kind: "claude-code" as const,
       model: "",
@@ -251,11 +253,15 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     const contextRow = familyMap.match(/\|\s*`first-tree-context`\s*\|[^\n]*/)?.[0] ?? "";
     expect(contextRow).toContain("unconditional");
     expect(contextRow).toContain("`# Required Reading`");
+    expect(contextRow).toContain("concept model");
+    expect(contextRow).toContain("source-driven tree writes");
+    expect(contextRow).not.toContain("read context before acting");
 
     // On-demand rows must NOT pick up the unconditional label by
     // accident — they're triggered by keyword / task signal.
     const readRow = familyMap.match(/\|\s*`first-tree-read`\s*\|[^\n]*/)?.[0] ?? "";
     expect(readRow).not.toContain("unconditional");
+    expect(readRow).toContain("before acting");
 
     const syncRow = familyMap.match(/\|\s*`first-tree-sync`\s*\|[^\n]*/)?.[0] ?? "";
     expect(syncRow).not.toContain("unconditional");
@@ -468,6 +474,8 @@ describe("buildAgentBriefing — # Context Tree", () => {
 
     // Reading discipline anchors.
     expect(briefing).toContain("root `NODE.md`");
+    expect(briefing).toContain("load `first-tree-read`");
+    expect(briefing).toContain("hierarchy command");
     // Reading the Tree must also point the agent at root `AGENT.md` when
     // present — orgs put mandatory rules there and the de-injection
     // direction would otherwise lose them silently. The check anchors on

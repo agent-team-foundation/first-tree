@@ -103,7 +103,8 @@ function identitySection(identity: AgentIdentity): string {
  *    the Hosting-Daemon mental model and its do-not-stop-yourself
  *    invariant, the CLI Namespace Map, and the mandatory pre-task
  *    hygiene (workspace binding check / tree HEAD freshness / role-fork).
- *  - `first-tree-context` ships the Source-System Boundary, the Hard
+ *  - `first-tree-context` ships the Context Tree concept model, the
+ *    Source-System Boundary, the authorship read-discipline, the Hard
  *    Rules 1-7 (default to not writing / read before write / smallest
  *    correct edit / no diffs / verify gate / ownership through humans /
  *    `decisionLocksCode`), the Double Test, Node Shape, and the
@@ -134,8 +135,8 @@ needed for those workspace-collab basics.
    invariant), the CLI Namespace Map, and the mandatory pre-task
    hygiene (workspace binding check / tree HEAD freshness / role-fork).
 2. **\`first-tree-context\`** — what a Context Tree is, the
-   source-system boundary, how to read the tree before acting, and
-   the Hard Rules + Double Test that govern every tree write.
+   source-system boundary, authorship read-discipline, and the Hard
+   Rules + Double Test that govern every tree write.
 
 These two are unconditional. The remaining First Tree skills
 (\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
@@ -429,7 +430,8 @@ directory; each node is a markdown file with frontmatter (\`owners\`,
 \`soft_links\`) plus the actual content.
 
 For node anatomy, ownership tiers, and soft_link navigation, load
-\`first-tree-context\`.`);
+\`first-tree-context\`. For task-scoped file selection and operational
+read workflow, load \`first-tree-read\`.`);
 
   blocks.push(`## Reading the Tree
 
@@ -438,11 +440,13 @@ ones that look like pure code, CLI, or review work.** An instruction is
 underspecified on its own; in this org the tree supplies the background,
 requirements, and constraints that make acting on it correct.
 
-Always start at the tree's **root \`NODE.md\`** — the team's domain
-directory. **If the root also contains an \`AGENT.md\`, read it too** —
-it carries mandatory rules the org expects every agent to follow before
-acting. From there, follow the index / \`soft_links\` down to the nodes
-your task touches; Read, Grep, or list folders to get there.
+For the operational reader workflow, load \`first-tree-read\` and use
+the hierarchy command it describes to select focused files. At minimum,
+start at the tree's **root \`NODE.md\`** — the team's domain directory.
+**If the root also contains an \`AGENT.md\`, read it too** — it carries
+mandatory rules the org expects every agent to follow before acting.
+From there, follow the index / \`soft_links\` down to the nodes your
+task touches.
 
 Where the tree's requirements or constraints **conflict with the
 instruction, the tree wins** — follow it and surface the conflict.
@@ -555,8 +559,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | Skill | Load when |
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — read context before acting OR write tree updates from a specific PR / doc / note |
-| \`first-tree-read\`    | read relevant Context Tree files for the current repo from task / path / feature signals |
+| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
+| \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
 }

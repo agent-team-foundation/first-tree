@@ -3,17 +3,20 @@ name: first-tree-context
 version: 0.8.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree operating guide. Covers what a Context Tree is, the source-system boundary, how to read the tree before acting, and how to write tree updates from a specific source (PR / doc / note). Load before any task that reads or writes context — including when the user pastes a PR / doc / note and says "reflect this in the tree", "update the tree from this", or "write this decision to the tree".
+description: Context Tree concept and writing guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, and how to write tree updates from a specific source (PR / doc / note). Use `first-tree-read` for task-scoped tree reads before acting; use this skill when the user asks to reflect a PR / doc / note into the tree, update the tree from source material, or write a decision to the tree.
 ---
 
 # First Tree — Context
 
-Read this skill **before** any task that reads or writes the Context
-Tree. It is the operating guide every agent shares: a few principles,
-a small set of hard rules, and the judgment guidelines that turn them
-into correct edits. There is no step-by-step workflow on purpose —
-write is not a five-step procedure, it is a few hard rules plus
-judgment.
+Read this skill when you need the Context Tree concept model or when a
+specific source artifact should be reflected into the tree. It is the
+operating guide for authorship: a few principles, a small set of hard
+rules, and the judgment guidelines that turn source material into
+correct edits.
+
+Use `first-tree-read` for task-scoped tree reads before acting. This
+skill explains the source-system boundary and the read discipline needed
+before writing; it does not own the operational reader workflow.
 
 ## What A Context Tree Is
 
@@ -59,29 +62,22 @@ tree then rots faster than the code and becomes a trap.
 
 ## Reading the Tree
 
-**Read the tree before you act on any instruction** — even ones that
-look like pure code, CLI, or review work. In this org an instruction
-is underspecified on its own; the tree supplies the background,
-requirements, and constraints that make acting on it correct.
+This skill's read discipline is for authorship: before you write a tree
+update, make sure the draft does not contradict existing context. Use
+`first-tree-read` when the task is "read the relevant tree context before
+acting" for a feature, path, bug, owner, or repo area.
 
-How to read:
+Before writing, read:
 
-- Start at the tree's root `NODE.md`. If the root also contains an
-  `AGENTS.md` (the unified per-tree briefing — `CLAUDE.md` is the
-  paired symlink), read that too — it carries org-wide rules every
-  agent must follow before acting.
-- Map the tree's structure with whatever exploration tool fits — `ls`,
-  `Read` on `NODE.md`, or `Grep` for a keyword — then `Read` the
-  specific nodes your task touches.
-- Follow `soft_links` to neighbouring domains; they exist exactly so
-  you don't have to re-derive a cross-domain decision.
-- Read **eagerly, not lazily** — acting before reading is the #1
-  source of advice that conflicts with reality. On scope shift to a
-  new domain, repo, or owner, read those nodes first; in doubt,
-  re-read.
-- Where the tree's requirements or constraints **conflict with the
-  instruction, the tree wins** — follow it and surface the conflict to
-  the user. (Local memory is the opposite: it yields to the instruction.)
+- the target node you expect to edit
+- the parent domain `NODE.md`
+- every `soft_links` neighbour that may constrain the edit
+- ownership-adjacent `members/<id>/NODE.md` files when review scope or
+  ownership affects the edit
+
+You do not need to re-read material already in your working context. The
+contract is "no surprises": the written node must respect the current
+tree model, neighbouring decisions, and source-system boundary.
 
 ## Writing the Tree
 
