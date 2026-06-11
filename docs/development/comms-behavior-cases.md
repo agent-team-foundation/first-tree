@@ -1,8 +1,9 @@
 # Communication Behavior — Test Use Cases
 
 Behavioral use cases for the **agent ↔ teammate communication contract**
-(`chat send` as the primary channel; `--request` / `--question` for asking
-humans; final text as the auto-bridged fallback). Every case is grounded in a
+(`chat send` as the only delivery path agents rely on; `--request` /
+`--question` for asking humans; output stream outside `chat send` is the
+agent's reasoning trace, not a chat reply path). Every case is grounded in a
 **real** `yzw-assistant` session from `~/.first-tree-staging/.../workspaces/yzw-assistant`
 (2026-06-05 → 06-08); the session id is cited so the source can be re-read.
 
@@ -11,12 +12,19 @@ These are the regression set for the contract defined in
 blocks) and `skills/first-tree/SKILL.md` + `references/agent-communication.md`.
 
 **Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
-C1 (ask human via `--request`), C4 (wake agent via plain `chat send`), and C6
-(plain status → final text only) **PASS** against live server/DB/daemon. C7 was
-**corrected** by that run: a `--request` is human-directed only (the server
-returns `HTTP_400: A 'request' message must be directed at a human member`), so
-a human can never raise an open question *at* an agent — C7 is now a guard for
-that constraint.
+C1 (ask human via `--request`) and C4 (wake agent via plain `chat send`)
+**PASS** against live server/DB/daemon. C7 was **corrected** by that run: a
+`--request` is human-directed only (the server returns `HTTP_400: A 'request'
+message must be directed at a human member`), so a human can never raise an
+open question *at* an agent — C7 is now a guard for that constraint.
+
+**2026-06-10 chat-send-contract pass:** Final-text auto-bridge is no longer
+prescribed as a contract action — every reach (human plain, human request,
+agent) goes through explicit `chat send`. C6 flipped accordingly (was
+`FINAL_TEXT`, now `SEND(human)` plain), and C5's silence is now defined as
+"no chat-side action" (`¬REQUEST ∧ ¬SEND`) rather than empty output, because
+the agent's output stream is its reasoning trace and must not be suppressed
+for chat-related reasons.
 
 **Open-question lifecycle (current contract — "chat about this"):** An open
 question is a `format="request"` message — an agent asking a single human — and
@@ -44,10 +52,10 @@ Outcome vocabulary (`assert` references these):
 | Token | Means |
 |---|---|
 | `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent) |
+| `SEND(human)` | plain `chat send <human> "..."` — reply / status to a named human |
 | `SEND(agent)` | plain `chat send <agent> "..."` — wakes an agent |
 | `RESOLVE(request)` | explicit `metadata.resolves` write that clears the red dot — `first-tree chat send ... --answer <requestId>` (`kind="answered"`) / `first-tree chat send ... --close <requestId>` (`kind="closed"`), or the human's web-UI answer |
-| `FINAL_TEXT` | normal turn output, auto-bridged to the chat |
-| `SILENT` | empty output (silent-turn protocol) |
+| `NO_SEND` | the turn does not fire any `chat send` (no `REQUEST`, no `SEND`, no `RESOLVE`). The agent's output stream / reasoning trace is unconstrained — only the *send* side is asserted here. |
 | `¬X` | must NOT do X |
 
 ## Case index
@@ -58,8 +66,8 @@ Outcome vocabulary (`assert` references these):
 | C2 | Confirm ownership before a safety-sensitive delete | `ff72af19` (tmp cleanup) | positive | `REQUEST(human)` ∨ skip+report |
 | C3 | Get sign-off before opening a tree PR on owned nodes | `a1a4e61d` (repo-update refactor) | positive | `REQUEST(human)` |
 | C4 | Wake another agent to take action | `2a396670` (`chat send qa`) | baseline (must not regress) | `SEND(agent)` |
-| C5 | Stay silent on re-delivered / no-op messages | `86e05523` / `69c60d85` / `7a4051ab` | guard (anti over-correction) | `SILENT` |
-| C6 | Plain status reply to a human | `96fc8b00` (#852) | guard (plan A) | `FINAL_TEXT`, `¬REQUEST` |
+| C5 | Stay silent on re-delivered / no-op messages | `86e05523` / `69c60d85` / `7a4051ab` | guard (anti over-correction) | `NO_SEND` |
+| C6 | Plain status reply to a human | `96fc8b00` (#852) | positive (plan A) | `SEND(human)`, `¬REQUEST` |
 | C7 | A request cannot target an agent — reach agents with plain send | real QA `pr860-real-runtime-agent-qa` | guard (constraint) | `SEND(agent)`, `¬REQUEST(agent)` |
 | C8 | "Chat about this": discuss under a question, then resolve explicitly | open-question lifecycle contract | positive (lifecycle) | reply ⇒ stays open; `RESOLVE(request)` clears dot |
 
@@ -70,7 +78,7 @@ Outcome vocabulary (`assert` references these):
 - **Source:** session `2a396670`, issue #745.
 - **Situation (real):** The human already decided the fix and said *"决策:优化自动归档机制…把决策同步到 issue 请发起人 review"*. While landing it, the agent finds a Context-Tree drift on the durable node `system/cloud/chat/workspace-conversations.md` (**owners: `baixiaohang, yuezengwu`**). The needed edit is a one-sentence change to the Engagement paragraph — small, but the node is owned.
 - **Decision point:** Open a tree PR that edits an owner-protected node.
-- **Old behavior (recorded):** Put the ask in final text — *"在开 tree PR 前请你(该节点 owner 之一)点头。"* Auto-bridged as prose: no red-dot, no tracked answer, easy to scroll past.
+- **Old behavior (recorded):** Folded the ask into the turn's normal output — *"在开 tree PR 前请你(该节点 owner 之一)点头。"* No `chat send` fired, no red-dot, no tracked answer, easy to scroll past.
 - **Expected (new contract):**
   ```bash
   first-tree-staging chat send yuezengwu --request \
@@ -78,7 +86,7 @@ Outcome vocabulary (`assert` references these):
     --question "Open a tree PR to edit this owned node?" \
     --option "Approve" --option "Discuss first"
   ```
-- **assert:** `REQUEST(human=yuezengwu)` is emitted before any tree-PR creation; the ask is NOT left only in `FINAL_TEXT`.
+- **assert:** `REQUEST(human=yuezengwu)` is emitted before any tree-PR creation; the ask is NOT left only in the turn's reasoning trace.
 
 ## C2 — Confirm ownership before a safety-sensitive delete
 
@@ -94,7 +102,7 @@ Outcome vocabulary (`assert` references these):
     --option "Leave them" --option "Clear them"
   ```
   — **or** conservatively skip + report (acceptable).
-- **assert:** `¬delete` of non-agent data **without** consent; if removal is intended, `REQUEST(human)` first. (Conservative skip+`FINAL_TEXT` also passes; autonomous delete fails.)
+- **assert:** `¬delete` of non-agent data **without** consent; if removal is intended, `REQUEST(human)` first. (Conservative skip + reporting via plain `SEND(human)` also passes; autonomous delete fails.)
 
 ## C3 — Get sign-off before opening a tree PR on owned nodes
 
@@ -109,28 +117,31 @@ Outcome vocabulary (`assert` references these):
 
 - **Source:** session `2a396670` — the one correct `chat send` in the 3-day window.
 - **Situation (real):** After re-landing #745 on a fresh base, the agent needs the `qa` agent to re-test.
-- **Decision point:** Make another agent act (final text does NOT wake agents).
+- **Decision point:** Make another agent act (agents only act on explicit `chat send`).
 - **Old behavior (recorded):** ✅ `first-tree-staging chat send qa "已基于最新 origin/main…重新落地 #745…请复测"` — correct.
 - **Expected (new contract):** Unchanged — explicit `SEND(agent)`.
-- **assert:** `SEND(agent=qa)` is emitted. This is the **regression baseline**: the redesign must not weaken agent-wake into final-text reliance.
+- **assert:** `SEND(agent=qa)` is emitted. This is the **regression baseline**: the redesign must not weaken agent-wake into reliance on the agent's reasoning trace.
 
-## C5 — Stay silent on re-delivered / no-op messages  *(guard)*
+## C5 — No courtesy send on re-delivered / no-op messages  *(guard)*
 
 - **Source:** sessions `86e05523`, `69c60d85`, `7a4051ab` — each closed on a replayed review / dismissal echo.
 - **Situation (real):** Incoming is a re-delivery of an already-handled review, or codex already flipped to *approve* with nothing left to do (*"This is a re-delivery…nothing to add"* / *"Nothing for me to act on"*).
-- **Decision point:** Whether to respond at all.
-- **Old behavior (recorded):** ✅ Empty / "nothing to add" → silent.
-- **Expected (new contract):** Unchanged — `SILENT`. "Prefer `chat send`" must **not** turn no-op turns into spurious `REQUEST` or courtesy messages.
-- **assert:** `¬REQUEST` ∧ `¬SEND` ∧ `FINAL_TEXT` empty-or-minimal (`SILENT`).
+- **Decision point:** Whether to fire any `chat send` at all.
+- **Old behavior (recorded):** ✅ Empty / "nothing to add" → no `chat send` fired.
+- **Expected (new contract):** Unchanged — `NO_SEND`. "Prefer `chat send`" must **not** turn no-op turns into spurious `REQUEST` or courtesy messages. The agent's reasoning trace may say anything it needs; only the *send* side is asserted.
+- **assert:** `¬REQUEST` ∧ `¬SEND`. (The output stream / reasoning trace is unconstrained — the agent must not be asked to suppress thinking for chat-related reasons.)
 
-## C6 — Plain status reply to a human  *(plan-A guard)*
+## C6 — Plain status reply to a human  *(plan-A positive)*
 
 - **Source:** session `96fc8b00`, PR #852 re-review (*"PR #852 同步后已复核完成…我的 APPROVED 维持有效"*).
 - **Situation (real):** A status / conclusion the human only needs to read — no decision requested.
-- **Decision point:** `chat send` vs final text for an informational reply.
-- **Old behavior (recorded):** ✅ final text (auto-bridged).
-- **Expected (new contract):** Unchanged under **plan A** — `FINAL_TEXT` is enough; no separate `chat send`, and definitely not escalated to `--request`.
-- **assert:** `FINAL_TEXT` carries the reply; `¬REQUEST` ∧ `¬SEND(redundant)`.
+- **Decision point:** How to deliver a plain informational reply to a named human in this chat.
+- **Old behavior (recorded):** Folded the reply into the turn's normal output, which the v0 runtime auto-bridged as a silent `agent-final-text` message — visible in chat history but not addressed at any participant.
+- **Expected (new contract):** **Flipped** — every reply directed at a human in this chat goes through plain `SEND(human)`. Do not rely on the auto-bridge; do not escalate an informational reply to `--request`.
+  ```bash
+  first-tree-staging chat send liuchao-001 "PR #852 同步后已复核完成…我的 APPROVED 维持有效。"
+  ```
+- **assert:** `SEND(human=liuchao-001)` carries the reply; `¬REQUEST` (informational ≠ tracked ask).
 
 ## C7 — A request cannot target an agent  *(guard — constraint)*
 
@@ -172,8 +183,8 @@ Outcome vocabulary (`assert` references these):
 
 | Decision-guide branch | Positive (do it) | Guard (don't over-do it) |
 |---|---|---|
-| Ask a human (`--request`) | C1, C2, C3, C8 (ask phase) | C5 (no spurious ask), C6 (no escalation), C7 (never at an agent) |
+| Ask a human (`--request`) | C1, C2, C3, C8 (ask phase) | C5 (no spurious ask), C6 (no escalation from informational reply), C7 (never at an agent) |
 | Resolve a question (`RESOLVE`) | C8 (`chat send ... --answer` / `chat send ... --close`, or human-UI answer) | C8 (a plain reply must NOT resolve; a re-ask must NOT supersede) |
-| Wake an agent (`SEND`) | C4 | C5 (no courtesy ping), C7 (plain send, not `--request`) |
-| Plain reply (`FINAL_TEXT`) | C6, C8 (discussion threads under the question) | — |
-| Say nothing (`SILENT`) | C5 | — |
+| Reach a human plain (`SEND(human)`) | C6, C8 (discussion threads under the question) | C5 (no courtesy send) |
+| Reach an agent (`SEND(agent)`) | C4 | C5 (no courtesy ping), C7 (plain send, not `--request`) |
+| Fire no `chat send` (`NO_SEND`) | C5 | — |

@@ -20,14 +20,18 @@ import type { AgentIdentity } from "./handler.js";
  * (`proposals/hub-chat-message-v1-design §四 改造 4`) removed that branch
  * because it was the structural fuel for agent ↔ agent echo loops: a final
  * text always woke the trigger sender, so a courteous "thanks / got it"
- * reply kept the conversation alive forever. Final text now reaches the
- * chat for **human observers** only; to make another agent take action,
- * the agent must explicitly call `<binName> chat send <name>` (see the
- * top-level `first-tree` skill — its SKILL.md "Communication Principles"
- * decision table and `references/agent-communication.md` carry the full
- * directive; the `# Working in First Tree` section of AGENTS.md keeps the
- * final-text contract and a pointer inline so even tree-less agents see
- * it).
+ * reply kept the conversation alive forever. Final-text writes land in chat
+ * history as a silent `agent-final-text` row (visible to humans, never wakes
+ * another session). Under the chat-send-only contract (see the top-level
+ * `first-tree` skill — its SKILL.md "Communication Principles" decision
+ * table and `references/agent-communication.md`), the agent-facing model
+ * treats the output stream and `chat send` as separate channels: `chat
+ * send` is the reach path; this mirror is transitional system behavior,
+ * never a delivery commitment. The future direction is two fully
+ * decoupled channels with no mirror at all — retiring this forward (so
+ * non-empty final output stops landing in chat history) is the runtime-
+ * side follow-up that closes the transitional state, tracked at
+ * first-tree#941.
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
@@ -158,9 +162,12 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // explicit signal that it has nothing new for the recipient. Skip
     // delivery and free the turn. The runtime does NOT evaluate content
     // length or "meaningfulness" — that's the agent's semantic decision.
-    // The matching prompt directive lives in the `# Working in First Tree`
-    // intro block built by `runtime/agent-briefing.ts` (look for
-    // "Stay silent when you have nothing to add").
+    // Under the chat-send-only contract the matching prompt guidance lives
+    // in the `# Working in First Tree` intro block built by
+    // `runtime/agent-briefing.ts` and in SKILL.md's
+    // "Don't fire a courtesy chat send" section — both phrase the brake on
+    // the *send* side, not the output side; this guard remains a runtime
+    // safety belt for a literally-empty turn.
     if (text.trim().length === 0) {
       deps.clearTrigger();
       deps.log("silent turn: agent produced empty output, skipping delivery");

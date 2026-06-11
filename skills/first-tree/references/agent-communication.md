@@ -2,8 +2,7 @@
 
 The CLI for an agent talking to another agent (or to a chat). Read this
 after the top-level `first-tree` SKILL.md's Communication Principles
-when you need the full mechanics beyond the Decision guide / Fallback
-table.
+when you need the full mechanics beyond the Decision guide table.
 
 ## Binary name across channels
 
@@ -59,11 +58,8 @@ Pick the mode by what you need back:
 Every `chat send` names a recipient — there is no no-mention send. A group chat
 rejects a message addressed to no one, so pass `<name>` to reach a participant.
 
-Final text (your turn's normal output) is auto-delivered to the chat for
-human observers, so a plain reply to a human should be **just** that final
-text — do not *also* fire a plain `chat send` to the same human, or it
-double-posts. Reach for `chat send` when you need to wake an agent or ask a
-human something tracked (`--request`).
+Reach for `chat send` for every cross-participant message: a plain reply
+to a human, a wake to another agent, or a tracked ask (`--request`).
 
 ### Discuss, then resolve — the open-question lifecycle
 
@@ -141,32 +137,29 @@ participant set applies to both the positional `<name>` argument of
 `chat send` and every `@<name>` token in the message body — there is no
 side-channel flag; non-member agents must be added with `chat invite` first.
 
-## When to use chat send vs. final text vs. nothing
+## When to use chat send
 
 See the SKILL.md Communication Principles' Decision guide table and the
 `## Modes of chat send` table above — short version:
 
-- **Human**, plain reply → final text is enough (auto-delivered); do *not* also
-  fire a plain `chat send` to the same human — it double-posts.
+- **Human**, plain reply / status → `chat send <name> "..."`.
 - **Human**, needs a decision / approval / answer → `chat send <name>
-  --request --question "..."` (tracked ask, not buried in final text). Their
-  reply threads as discussion and leaves the question **open** — a plain reply
-  does **not** resolve it. When you have the confirmed answer (or it is moot),
-  explicitly clear the red dot with `chat send ... --answer <requestId>` /
+  --request --question "..."` (tracked ask, raises a red-dot). Their reply
+  threads as discussion and leaves the question **open** — a plain reply
+  does **not** resolve it. When you have the confirmed answer (or it is
+  moot), explicitly clear the red dot with `chat send ... --answer <requestId>` /
   `chat send ... --close <requestId>`.
-- **Agent** → explicit `chat send <name>` (final text does not wake them).
-  After the handoff, continue only independent work; if their reply is the
-  only remaining input, end the turn and wait to be woken. Do not poll status
-  or escalate on delayed replies alone.
-- No specific target (narration / thinking aloud) → final text only; no
-  send needed.
-- Current Chat Context block missing from prompt → conservative mode, all
-  cross-agent work goes through explicit `chat send`.
+- **Agent** → `chat send <name> "..."`. After the handoff, continue only
+  independent work; if their reply is the only remaining input, end the
+  turn and wait to be woken. Do not poll status or escalate on delayed
+  replies alone.
 
-The runtime's silent-turn protocol (empty output → skip delivery, free the
-turn) is enforced by `packages/client/src/runtime/result-sink.ts`; it
-pairs with the "Stay silent when you have nothing to add" directive in
-the `# Working in First Tree` intro of `AGENTS.md`. Both directions of
-the contract — *say nothing when silent is right* and *always `chat send`
-when you want to wake an agent* — are load-bearing for preventing
-courteous agent↔agent echo loops.
+Your output stream is your reasoning trace — think, plan, narrate there
+freely. The list above is exhaustive for the *send* side: when nothing
+in it applies, finish reasoning and end the turn without firing `chat
+send`. Don't acknowledge with a courtesy send — that's how agent↔agent
+echo loops start.
+
+The runtime's empty-output guard (`packages/client/src/runtime/result-sink.ts`
+skips delivery when an entire turn is literally empty) is a safety belt
+under all of the above, not a directive to produce empty output.
