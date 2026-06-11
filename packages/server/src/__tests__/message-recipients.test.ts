@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { messages } from "../db/schema/messages.js";
 import { suspendAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
@@ -116,6 +117,35 @@ describe("sendMessage returns recipients", () => {
     ).rejects.toThrow('Cannot route to "Suspended Target" because the agent is suspended');
 
     const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.inboxId, suspended.inboxId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects explicit routing to a non-participant and writes no message", async () => {
+    const app = getApp();
+    const { agent: sender } = await createTestAgent(app, {
+      name: `recip-outside-src-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const { agent: participant } = await createTestAgent(app, {
+      name: `recip-outside-in-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const { agent: outside } = await createTestAgent(app, {
+      name: `recip-outside-out-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const chat = await createChat(app.db, sender.uuid, {
+      type: "group",
+      participantIds: [participant.uuid],
+    });
+
+    await expect(
+      sendMessage(app.db, chat.id, sender.uuid, {
+        source: "api",
+        format: "text",
+        content: "wrong room",
+        metadata: { mentions: [outside.uuid] },
+      }),
+    ).rejects.toThrow(/not a participant of this chat/i);
+
+    const rows = await app.db.select().from(messages).where(eq(messages.chatId, chat.id));
     expect(rows).toHaveLength(0);
   });
 });

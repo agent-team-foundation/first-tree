@@ -8,7 +8,6 @@ import {
   type SendMessage,
   scanMentionTokens,
 } from "@first-tree/shared";
-import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -22,6 +21,11 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
+import {
+  assertHasActiveRecipient,
+  explicitRecipientRequiredMessage,
+  resolveMessageRecipientRouting,
+} from "./message-recipient-policy.js";
 
 const log = createLogger("message");
 
@@ -271,45 +275,22 @@ async function sendMessageInner(
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
       : [];
 
-    // Resolve `receiverNames` against the chat's speaker list.
-    const receiverNames = data.receiverNames ?? [];
-    const speakersByName = new Map<string, string>();
-    for (const p of participants) {
-      if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
-    }
-    const resolvedFromNames: string[] = [];
-    const unresolvedNames: string[] = [];
-    for (const name of receiverNames) {
-      const id = speakersByName.get(name.toLowerCase());
-      if (id) resolvedFromNames.push(id);
-      else unresolvedNames.push(name);
-    }
-    if (unresolvedNames.length > 0) {
-      const sample = unresolvedNames[0];
-      throw new BadRequestError(
-        `Cannot route to "${sample}" — they are not a participant of this chat. ` +
-          "Add them first:\n" +
-          `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-          "Then retry your send. Or ask a human in this chat to add them.",
-      );
-    }
-
-    const mergedMentions = [...new Set([...explicitMentions, ...resolvedFromNames])];
-    const participantsById = new Map(participants.map((p) => [p.agentId, p]));
-    const routedRecipientIds = new Set([
-      ...mergedMentions.filter((id) => id !== senderId),
-      ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
-    ]);
-    for (const id of routedRecipientIds) {
-      const participant = participantsById.get(id);
-      if (!participant || participant.status === "active") continue;
-      const label = participant.displayName || participant.name || id;
-      const recovery =
-        participant.status === "suspended"
-          ? "Reactivate it before sending."
-          : "Deleted agents cannot receive new messages.";
-      throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
-    }
+    const routing = resolveMessageRecipientRouting(
+      senderId,
+      participants,
+      {
+        explicitMentions,
+        receiverNames: data.receiverNames ?? [],
+        addressedToAgentIds: options.addressedToAgentIds ?? [],
+      },
+      {
+        // System-routed sends historically ignore non-member addressed ids so
+        // trusted delivery can choose whether an unresolved target is a hard
+        // error (default enforcement) or a declared silent send.
+        allowMissingAddressedToAgentIds: true,
+      },
+    );
+    const { mergedMentions, speakersById: participantsById } = routing;
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
     // Open-question contract: a `format=request` message is an "ask" directed
@@ -375,25 +356,7 @@ async function sendMessageInner(
     //     to no live speaker (today: github-delivery). See the option's doc.
     const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
     if (!skipRecipientEnforcement) {
-      const recipientMentions = mergedMentions.filter((id) => id !== senderId);
-      // A system-routing override (`addressedToAgentIds`) only satisfies the
-      // guard when it resolves to an active, non-sender speaker of this chat.
-      // Counting raw array length instead would let addressing that reaches no
-      // one slip through (`[undefined]`, `[senderId]`, or an id that is not a
-      // live speaker) — the same silent-dead-end the guard exists to prevent.
-      // A trusted system path whose addressing can legitimately resolve to no
-      // speaker (github-delivery) declares `allowRecipientlessSend` to opt out
-      // above rather than lean on that hole.
-      const hasActiveAddressed = (options.addressedToAgentIds ?? []).some(
-        (id) => id !== senderId && participantsById.get(id)?.status === "active",
-      );
-      if (recipientMentions.length === 0 && !hasActiveAddressed) {
-        throw new BadRequestError(
-          "Sending a message requires an explicit recipient. " +
-            "Pass `metadata.mentions: [agentId]` (or `receiverNames: [name]`) to declare routing, " +
-            'or set `purpose: "agent-final-text"` for silent history-only sends.',
-        );
-      }
+      assertHasActiveRecipient(routing, explicitRecipientRequiredMessage());
     }
 
     // Agent-path content normalisation: if the caller declared mentions

@@ -23,6 +23,7 @@ import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
 import { type SendMessageOptions, sendMessage } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
+import { assertHasActiveRecipient, resolveMessageRecipientRouting } from "./message-recipient-policy.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
@@ -72,11 +73,6 @@ type PreparedInitialMessage = {
 type InitialMessageFailureContext = {
   operationId?: string;
   chatId: string;
-};
-
-type InitialMessageParticipant = {
-  id: string;
-  status: string;
 };
 
 const CHAT_CREATE_PROCESS_DEDUPE_TTL_MS = 15 * 60 * 1000;
@@ -431,33 +427,30 @@ function validateResolvedCreateTargets(senderId: string, targets: ReadonlyArray<
 
 function validateMeInitialMessageRecipients(
   senderAgentId: string,
-  participantIds: ReadonlyArray<string>,
-  participants: ReadonlyArray<InitialMessageParticipant>,
+  participants: ReadonlyArray<CreateChatParticipantBaseRow>,
   mentions: ReadonlyArray<string> | undefined,
 ): void {
-  const participantSet = new Set([senderAgentId, ...participantIds]);
-  const participantsById = new Map(participants.map((participant) => [participant.id, participant]));
-  const recipientIds = [...new Set(mentions ?? [])].filter((id) => id !== senderAgentId);
-
-  if (recipientIds.length === 0) {
-    throw new BadRequestError("Starting a chat requires at least one non-self message recipient mention.");
-  }
-
-  for (const recipientId of recipientIds) {
-    if (!participantSet.has(recipientId)) {
-      throw new BadRequestError(`Initial message recipient "${recipientId}" must be a participant of the new chat.`);
-    }
-
-    const participant = participantsById.get(recipientId);
-    if (!participant || participant.status !== AGENT_STATUSES.ACTIVE) {
-      const status = participant?.status ?? "missing";
-      const recovery =
-        status === AGENT_STATUSES.SUSPENDED
-          ? "Reactivate it before starting the chat."
-          : "Choose an active recipient before starting the chat.";
-      throw new BadRequestError(`Cannot route to "${recipientId}" because the agent is ${status}. ${recovery}`);
-    }
-  }
+  const routing = resolveMessageRecipientRouting(
+    senderAgentId,
+    participants.map((participant) => ({
+      agentId: participant.id,
+      status: participant.status,
+      type: participant.type,
+    })),
+    { explicitMentions: mentions ?? [] },
+    {
+      notParticipantMessage: (agentId) =>
+        `Initial message recipient "${agentId}" must be a participant of the new chat.`,
+      inactiveMessage: (speaker) => {
+        const recovery =
+          speaker.status === AGENT_STATUSES.SUSPENDED
+            ? "Reactivate it before starting the chat."
+            : "Choose an active recipient before starting the chat.";
+        return `Cannot route to "${speaker.agentId}" because the agent is ${speaker.status}. ${recovery}`;
+      },
+    },
+  );
+  assertHasActiveRecipient(routing, "Starting a chat requires at least one non-self message recipient mention.");
 }
 
 async function sendPreparedInitialMessage(
@@ -633,7 +626,7 @@ export async function createMeChatWithInitialMessage(
     if (gate.orgId !== organizationId) {
       throw new BadRequestError("Cross-organization chat not allowed");
     }
-    validateMeInitialMessageRecipients(humanAgentId, distinctIds, gate.rows, input.message.metadata?.mentions);
+    validateMeInitialMessageRecipients(humanAgentId, gate.rows, input.message.metadata?.mentions);
 
     const chat = await insertChatWithParticipants(tx, humanAgentId, organizationId, distinctIds, {
       type: "group",

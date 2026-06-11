@@ -358,19 +358,23 @@ describe("mention enforcement + content normalisation", () => {
       expect(result.message.content).toBe(`@${peerB.name} hi`);
     });
 
-    it("ignores mentions that don't resolve to any chat participant", async () => {
+    it("rejects mentions that don't resolve to any chat participant", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
       const ghostUuid = "00000000-0000-0000-0000-000000000000";
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: "report", metadata: { mentions: [ghostUuid, peerA.uuid] } },
-        { normalizeMentionsInContent: true },
-      );
-      expect(result.message.content).toBe(`@${peerA.name} report`);
+      await expect(
+        sendMessage(
+          app.db,
+          chat.id,
+          sender.agent.uuid,
+          { source: "api", format: "text", content: "report", metadata: { mentions: [ghostUuid, peerA.uuid] } },
+          { normalizeMentionsInContent: true },
+        ),
+      ).rejects.toThrow(/not a participant of this chat/i);
+
+      const rows = await app.db.select().from(messages).where(eq(messages.chatId, chat.id));
+      expect(rows).toHaveLength(0);
     });
 
     it("emits just the prefix when content is the empty string", async () => {
