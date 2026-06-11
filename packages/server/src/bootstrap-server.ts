@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createServerConfigSchema, initConfig, type ServerConfig } from "@first-tree/shared/config";
+import {
+  createServerConfigSchema,
+  initConfig,
+  resolveConfigReadonly,
+  type ServerConfig,
+  serverConfigSchema,
+} from "@first-tree/shared/config";
 import { buildApp } from "./app.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import { markReady } from "./bootstrap-state.js";
@@ -21,9 +27,14 @@ export type ServerBootstrapDeps = {
   shutdownTelemetry?: typeof shutdownTelemetry;
 };
 
+export function shouldAutoGenerateServerSecrets(configDir?: string): boolean {
+  const resolved = resolveConfigReadonly({ schema: serverConfigSchema, role: "server", configDir });
+  return resolved.channel === "dev";
+}
+
 async function loadServerConfig(): Promise<ServerConfig> {
   return initConfig({
-    schema: createServerConfigSchema({ autoGenerateSecrets: process.env.NODE_ENV !== "production" }),
+    schema: createServerConfigSchema({ autoGenerateSecrets: shouldAutoGenerateServerSecrets() }),
     role: "server",
   });
 }

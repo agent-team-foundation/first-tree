@@ -1,6 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ServerConfig } from "@first-tree/shared/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startServer } from "../bootstrap-server.js";
+import { shouldAutoGenerateServerSecrets, startServer } from "../bootstrap-server.js";
 import { bootstrapState, markReady, markStage } from "../bootstrap-state.js";
 import { runStage, withTimeout } from "../bootstrap-utils.js";
 import { runMigrations } from "../db/migrate.js";
@@ -16,6 +19,14 @@ function resetBootstrapState(): void {
     delete bootstrapState.stages[key];
   }
   bootstrapState.readyAt = null;
+}
+
+const tempDirs: string[] = [];
+
+function makeTempConfigDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "first-tree-bootstrap-config-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 const baseServerConfig: ServerConfig = {
@@ -46,6 +57,24 @@ const baseServerConfig: ServerConfig = {
 };
 
 describe("server bootstrap", () => {
+  it("allows generated server secrets only for the dev channel", () => {
+    const configDir = makeTempConfigDir();
+
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(true);
+
+    writeFileSync(join(configDir, "server.yaml"), "channel: staging\n");
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(false);
+
+    writeFileSync(join(configDir, "server.yaml"), "channel: prod\n");
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(false);
+
+    vi.stubEnv("FIRST_TREE_CHANNEL", "dev");
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(true);
+
+    vi.stubEnv("FIRST_TREE_CHANNEL", "staging");
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(false);
+  });
+
   it("validates boot config before telemetry and migrations", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const initTelemetryFn = vi.fn(async () => undefined);
@@ -92,6 +121,9 @@ describe("server bootstrap", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     resetBootstrapState();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   describe("withTimeout", () => {
