@@ -812,6 +812,53 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("does not clear a user-typed @ after an earlier focus auto-prime", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-manual-mention",
+        senderId: "agent-1",
+        format: "request",
+        content: "Discuss the deploy.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [{ id: "q1", prompt: "Concerns?", kind: "free", required: true }],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await act(async () => {
+      textarea.dispatchEvent(new FocusEvent("focusin", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForCondition(() => textarea.value === "@", "Expected initial group focus to auto-prime @");
+
+    await setValue(textarea, "");
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
+    });
+    await flush();
+    await waitForText(container, "Awaiting your answer");
+    expect(textarea.value).toBe("");
+
+    await setValue(textarea, "@");
+    await flush();
+    expect(textarea.value).toBe("@");
+
+    await act(async () => root.unmount());
+  });
+
   it("threads docked attachment replies under the live request without a visible @mention", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([

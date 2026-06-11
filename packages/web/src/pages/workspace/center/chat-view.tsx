@@ -972,6 +972,11 @@ export function ChatView({
    * focused the input even once, we don't keep slapping `@` back into an
    * empty draft. Reset when switching chats. */
   const focusPrimedRef = useRef(false);
+  // Current-draft provenance for the single `@` inserted by focus auto-prime.
+  // This is intentionally narrower than `focusPrimedRef`: the latter only
+  // means auto-prime has ever happened in this chat, while this flag means the
+  // current draft is still the untouched auto-prime token.
+  const autoPrimedDraftRef = useRef(false);
   /** Once-per-session set of chatIds we've pre-filled. Set semantics
    * (not a single ref) so revisiting an empty chat we already touched
    * doesn't re-stamp the greeting on top of the user's cleared draft.
@@ -980,6 +985,7 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally chatId-scoped.
   useEffect(() => {
     focusPrimedRef.current = false;
+    autoPrimedDraftRef.current = false;
   }, [chatId]);
 
   // Hydrate timeline from local IndexedDB cache so chat-switches feel
@@ -1578,6 +1584,7 @@ export function ChatView({
   const pickDockOption = (prompt: string, option: string) => {
     if (!dockPayload) return;
     const nextDraft = buildAnswerDraft(dockPayload, { ...dockSelections, [prompt]: option });
+    autoPrimedDraftRef.current = false;
     setDraft(nextDraft);
     setCursor(nextDraft.length);
     requestAnimationFrame(() => {
@@ -1588,9 +1595,10 @@ export function ChatView({
     });
   };
   useEffect(() => {
-    if (!dockRequestId || draft !== "@" || !focusPrimedRef.current) return;
+    if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
     // focus-primed `@`; once the dock appears, the asker is the default route.
+    autoPrimedDraftRef.current = false;
     focusPrimedRef.current = false;
     setDraft("");
     setCursor(0);
@@ -2455,6 +2463,7 @@ export function ChatView({
     candidates: mentionCandidates,
     disabled: sendMut.isPending || uploading,
     onSelect: (update) => {
+      autoPrimedDraftRef.current = false;
       setDraft(update.text);
       setCursor(update.cursor);
       // Defer so React has committed the new value before we move the
@@ -2526,6 +2535,7 @@ export function ChatView({
     mentionedAgent: slashMentionContext,
     disabled: sendMut.isPending || uploading,
     onSelect: (update, picked) => {
+      autoPrimedDraftRef.current = false;
       setDraft(update.text);
       setCursor(update.cursor);
       requestAnimationFrame(() => {
@@ -3173,6 +3183,7 @@ export function ChatView({
                           ref={textareaRef}
                           value={draft}
                           onChange={(e) => {
+                            autoPrimedDraftRef.current = false;
                             setDraft(e.target.value);
                             setCursor(e.target.selectionStart ?? e.target.value.length);
                             // Dismiss a stale upload error (e.g. the "no @mention"
@@ -3210,6 +3221,7 @@ export function ChatView({
                               return;
                             }
                             focusPrimedRef.current = true;
+                            autoPrimedDraftRef.current = true;
                             setDraft("@");
                             setCursor(1);
                             requestAnimationFrame(() => {
@@ -3326,6 +3338,7 @@ export function ChatView({
                               const start = el.selectionStart ?? draft.length;
                               const end = el.selectionEnd ?? start;
                               const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                              autoPrimedDraftRef.current = false;
                               setDraft(next);
                               setCursor(start + 1);
                               requestAnimationFrame(() => {
