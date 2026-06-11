@@ -33,14 +33,13 @@ export default async function setup(): Promise<() => Promise<void>> {
     // mint via dev-callback. Always on for the e2e run — the route 404s
     // unless this env is explicitly set, so it's still off in prod.
     //
-    // Full e2e runs enough HTTP traffic from one loopback client to exceed the
-    // product default 100/minute global cap. A high ceiling keeps the limiter
-    // installed (so its wiring is still exercised) without throttling the test
-    // driver; production defaults remain untouched.
+    // Full e2e can generate concentrated HTTP bursts from one loopback actor.
+    // A high ceiling keeps the limiter installed (so its wiring is still
+    // exercised) without throttling the test driver; production defaults remain
+    // untouched.
     serverExtraEnv: {
       FIRST_TREE_DEV_CALLBACK_ENABLED: "1",
       FIRST_TREE_RATE_LIMIT_MAX: "100000",
-      FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX: "100000",
     },
     clientClaudeCodeExecutable: tuiMode ? FAKE_TUI_BIN : undefined,
     clientExtraEnv: tuiMode ? { ANTHROPIC_API_KEY: "fake-tui-e2e-key" } : undefined,

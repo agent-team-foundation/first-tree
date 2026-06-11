@@ -170,9 +170,10 @@ export async function buildApp(config: Config) {
   const app = Fastify({
     loggerInstance: rootLogger as unknown as FastifyBaseLogger,
     // When deployed behind Cloudflare / reverse proxy, `req.ip` must reflect
-    // the real client IP rather than the proxy — otherwise every IP-keyed
-    // rate-limit key collapses. Operators set FIRST_TREE_TRUST_PROXY=true
-    // when they control the upstream proxy chain.
+    // the real client IP rather than the proxy. The global limiter prefers
+    // agent/user identity, but public unauthenticated traffic still falls back
+    // to IP. Operators set FIRST_TREE_TRUST_PROXY=true when they control the
+    // upstream proxy chain.
     trustProxy: config.trustProxy,
   });
 
@@ -358,9 +359,9 @@ export async function buildApp(config: Config) {
     credentials: true,
   });
 
-  // Rate limiting — global default; overridden per-route where needed.
+  // Rate limiting — single actor-aware global safety cap.
   // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
-  // (memberAuth, agentSelector) so per-route keyGenerators can read
+  // (memberAuth, agentSelector) so the key generator can read
   // `req.user` / `req.agent` populated by those hooks.
   //
   // `errorResponseBuilder` runs during the rate-limit throw path, before
@@ -368,9 +369,14 @@ export async function buildApp(config: Config) {
   // in observability/rate-limit-error-builder.ts so the span-stamping
   // side effect can be unit-tested without booting an app.
   await app.register(rateLimit, {
-    max: config.rateLimit?.max ?? 100,
+    max: config.rateLimit?.max ?? 3000,
     timeWindow: "1 minute",
     hook: "preHandler",
+    keyGenerator: (req) => {
+      if (req.agent?.uuid) return `agent:${req.agent.uuid}`;
+      if (req.user?.userId) return `user:${req.user.userId}`;
+      return `ip:${req.ip}`;
+    },
     errorResponseBuilder: buildRateLimitError,
   });
 

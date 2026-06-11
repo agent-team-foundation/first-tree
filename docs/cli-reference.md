@@ -588,11 +588,11 @@ server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.
 
 | Variable | Default |
 |---|---|
-| `FIRST_TREE_RATE_LIMIT_MAX` | `100` |
-| `FIRST_TREE_RATE_LIMIT_LOGIN_MAX` | `5` |
-| `FIRST_TREE_RATE_LIMIT_WEBHOOK_MAX` | `600` |
-| `FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX` | `30` |
-| `FIRST_TREE_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX` | `6` |
+| `FIRST_TREE_RATE_LIMIT_MAX` | `3000` |
+
+The server applies this as one actor-aware global safety cap per minute. It
+keys by agent id, then user id, then request IP for unauthenticated traffic.
+Old per-route rate-limit env vars are no longer read.
 
 **Inbox / WS / archive sweeper:**
 

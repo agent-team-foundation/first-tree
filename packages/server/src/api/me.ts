@@ -205,28 +205,23 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * the same log stream so a single funnel query covers the full flow.
    * Body shape is enum-validated so the server won't log arbitrary names.
    *
-   * Rate-limited to keep a buggy or hostile authenticated tab from
-   * flooding the log stream. The cap is generous relative to legitimate
-   * funnel traffic (≤ 4 events per onboarding pass).
+   * The global actor-aware rate limiter is the safety cap; the schema keeps
+   * this endpoint to known funnel event names.
    */
-  app.post(
-    "/me/onboarding/events",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
-    async (request, reply) => {
-      const { userId } = requireUser(request);
-      const body = onboardingEventSchema.parse(request.body);
-      // Spread client `attrs` FIRST so the trusted server fields below
-      // (`event`, `userId`) cannot be overwritten by a hostile caller —
-      // `attrs` is a freeform Record<string, primitive> per the schema, so
-      // a client could otherwise send `attrs: { event: "...", userId: "..." }`
-      // and forge funnel attribution (post-merge codex review #248).
-      app.log.info(
-        { ...(body.attrs ?? {}), event: `onboarding.${body.event}`, userId },
-        `onboarding funnel: ${body.event}`,
-      );
-      return reply.status(204).send();
-    },
-  );
+  app.post("/me/onboarding/events", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = onboardingEventSchema.parse(request.body);
+    // Spread client `attrs` FIRST so the trusted server fields below
+    // (`event`, `userId`) cannot be overwritten by a hostile caller —
+    // `attrs` is a freeform Record<string, primitive> per the schema, so
+    // a client could otherwise send `attrs: { event: "...", userId: "..." }`
+    // and forge funnel attribution (post-merge codex review #248).
+    app.log.info(
+      { ...(body.attrs ?? {}), event: `onboarding.${body.event}`, userId },
+      `onboarding funnel: ${body.event}`,
+    );
+    return reply.status(204).send();
+  });
 
   /**
    * GET /me/github/repos — list the caller's accessible GitHub repos. Used
@@ -297,46 +292,41 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * The token now carries only `sub = userId`; the CLI rejoins via
    * `exchangeConnectToken` which probes `members` realtime.
    */
-  const loginMax = app.config.rateLimit?.loginMax ?? 5;
-  app.post(
-    "/me/connect-tokens",
-    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } },
-    async (request) => {
-      const { userId } = requireUser(request);
-      const issuer = resolvePublicUrl(app, request);
-      const { token, expiresIn } = await authService.generateConnectToken(
-        userId,
-        app.config.secrets.jwtSecret,
-        app.config.auth,
-        issuer,
-      );
-      // Channel-aware npm spec + bin name. Web onboarding renders the
-      // returned `bootstrapCommand` / `binName` directly so a fresh-machine
-      // install lands on the right package without web needing to know
-      // about channels.
-      //
-      // Multi-env: each channel is its own npm package, so the spec is
-      // always the bare package name (no `@<dist-tag>` suffix — each
-      // package has exactly one `latest`). dev servers have
-      // `packageName=null`: the bootstrap line skips the `npm install -g`
-      // step entirely because the operator builds from source.
-      const ch = getChannelConfig(app.config.channel);
-      const command = `${ch.binName} login ${token}`;
-      if (ch.packageName === null) {
-        return {
-          token,
-          expiresIn,
-          command,
-          bootstrapCommand: command,
-          npmSpec: null,
-          binName: ch.binName,
-        };
-      }
-      const npmSpec = ch.packageName;
-      const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
-      return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
-    },
-  );
+  app.post("/me/connect-tokens", async (request) => {
+    const { userId } = requireUser(request);
+    const issuer = resolvePublicUrl(app, request);
+    const { token, expiresIn } = await authService.generateConnectToken(
+      userId,
+      app.config.secrets.jwtSecret,
+      app.config.auth,
+      issuer,
+    );
+    // Channel-aware npm spec + bin name. Web onboarding renders the
+    // returned `bootstrapCommand` / `binName` directly so a fresh-machine
+    // install lands on the right package without web needing to know
+    // about channels.
+    //
+    // Multi-env: each channel is its own npm package, so the spec is
+    // always the bare package name (no `@<dist-tag>` suffix — each
+    // package has exactly one `latest`). dev servers have
+    // `packageName=null`: the bootstrap line skips the `npm install -g`
+    // step entirely because the operator builds from source.
+    const ch = getChannelConfig(app.config.channel);
+    const command = `${ch.binName} login ${token}`;
+    if (ch.packageName === null) {
+      return {
+        token,
+        expiresIn,
+        command,
+        bootstrapCommand: command,
+        npmSpec: null,
+        binName: ch.binName,
+      };
+    }
+    const npmSpec = ch.packageName;
+    const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
+    return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
+  });
 
   /**
    * GET /me/managed-agents — cross-org list of every agent the caller
@@ -457,46 +447,42 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post(
-    "/me/organizations/join",
-    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" }, otelRecordBody: true } },
-    async (request, reply) => {
-      const { userId } = requireUser(request);
-      const body = joinByInvitationSchema.parse(request.body);
+  app.post("/me/organizations/join", { config: { otelRecordBody: true } }, async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = joinByInvitationSchema.parse(request.body);
 
-      const inv = await findActiveByToken(app.db, body.token);
-      if (!inv) {
-        return reply.status(404).send({ error: "Invitation not found or no longer valid" });
-      }
+    const inv = await findActiveByToken(app.db, body.token);
+    if (!inv) {
+      return reply.status(404).send({ error: "Invitation not found or no longer valid" });
+    }
 
-      const [u] = await app.db
-        .select({ username: users.username, displayName: users.displayName })
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1);
-      if (!u) throw new NotFoundError("User not found");
+    const [u] = await app.db
+      .select({ username: users.username, displayName: users.displayName })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!u) throw new NotFoundError("User not found");
 
-      const member = await ensureMembership(app.db, {
-        userId,
-        organizationId: inv.organizationId,
-        role: inv.role === "admin" ? "admin" : "member",
-        displayName: u.displayName,
-        username: u.username,
-      });
-      await recordRedemption(app.db, {
-        invitationId: inv.id,
-        userId,
-        ip: request.ip,
-        userAgent: request.headers["user-agent"] ?? null,
-      });
+    const member = await ensureMembership(app.db, {
+      userId,
+      organizationId: inv.organizationId,
+      role: inv.role === "admin" ? "admin" : "member",
+      displayName: u.displayName,
+      username: u.username,
+    });
+    await recordRedemption(app.db, {
+      invitationId: inv.id,
+      userId,
+      ip: request.ip,
+      userAgent: request.headers["user-agent"] ?? null,
+    });
 
-      return reply.status(200).send({
-        organizationId: member.organizationId,
-        memberId: member.id,
-        role: member.role,
-      });
-    },
-  );
+    return reply.status(200).send({
+      organizationId: member.organizationId,
+      memberId: member.id,
+      role: member.role,
+    });
+  });
 
   app.post<{ Params: { memberId: string } }>("/me/memberships/:memberId/leave", async (request, reply) => {
     const { userId } = requireUser(request);
