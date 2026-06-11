@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
-import { clearChatCreateProcessDedupeForTests } from "../services/chat-create-and-send.js";
+import { clearChatCreateProcessDedupeForTests } from "../services/chat.js";
 
 /** Fixed UUID for the default organization used across all tests. */
 // Fixed test fixture UUID — not a real org, recreated before each test

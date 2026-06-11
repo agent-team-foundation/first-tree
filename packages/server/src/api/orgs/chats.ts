@@ -11,8 +11,7 @@ import { chats } from "../../db/schema/chats.js";
 import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
-import { listChatsForMember } from "../../services/chat.js";
-import { createMeChatWithInitialMessage } from "../../services/chat-create-and-send.js";
+import { createMeChatWithInitialMessage, listChatsForMember } from "../../services/chat.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
 

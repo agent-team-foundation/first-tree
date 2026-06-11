@@ -12,7 +12,6 @@ import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
-import * as chatCreateAndSendService from "../../services/chat-create-and-send.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { agentMessageWriteRateLimit, enforceAgentMessageWriteRateLimit } from "./rate-limit.js";
@@ -47,7 +46,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.post("/create-and-send", { config: { otelRecordBody: true } }, async (request, reply) => {
     const identity = requireAgent(request);
     const body = createChatWithInitialMessageSchema.parse(request.body);
-    const result = await chatCreateAndSendService.createChatWithInitialMessage(app.db, identity.uuid, body, {
+    const result = await chatService.createChatWithInitialMessage(app.db, identity.uuid, body, {
       beforeCreate: () => enforceAgentMessageWriteRateLimit(request, reply, checkCreateAndSendRateLimit),
     });
     if (!result.replayed) {
