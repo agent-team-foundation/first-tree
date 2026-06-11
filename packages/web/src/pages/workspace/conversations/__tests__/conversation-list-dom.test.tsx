@@ -64,7 +64,10 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     ],
     participantCount: overrides.participantCount ?? 3,
     lastMessageAt: overrides.lastMessageAt ?? "2026-05-28T11:59:00.000Z",
-    lastMessagePreview: overrides.lastMessagePreview ?? `Preview for ${overrides.title}`,
+    // Honor an explicit `null` (chat with no messages) — `??` would silently
+    // replace it with the derived default and defeat skeleton-path tests.
+    lastMessagePreview:
+      "lastMessagePreview" in overrides ? (overrides.lastMessagePreview ?? null) : `Preview for ${overrides.title}`,
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
     openRequestCount: overrides.openRequestCount ?? 0,
     canReply: overrides.canReply ?? true,
@@ -404,21 +407,29 @@ describe("ConversationList", () => {
     expect(container.textContent).not.toContain("Start with New chat.");
   });
 
-  it("renders the description as a second row line, and a skeleton when none is set", async () => {
+  it("renders the description second line with a last-message fallback, and a skeleton only when neither exists", async () => {
     const rows = [
       row({ chatId: "chat-desc", title: "Has summary", description: "reviewing PR 916; CI green; awaiting approval" }),
-      row({ chatId: "chat-nodesc", title: "No summary", description: null }),
+      row({ chatId: "chat-nodesc", title: "No summary", description: null, lastMessagePreview: "ack — looking now" }),
+      row({ chatId: "chat-empty", title: "Empty chat", description: null, lastMessagePreview: null }),
     ];
     const container = await renderDom(<StatefulList rows={rows} nextCursor={null} />, createClient(rows, null));
 
-    // The description text is rendered for the row that has one.
+    // The description text is rendered for the row that has one — it wins
+    // over the last-message preview.
     expect(container.textContent).toContain("reviewing PR 916; CI green; awaiting approval");
 
-    // The row without a description shows the skeleton placeholder (an
-    // aria-hidden bar) instead of collapsing — keeps every card equal height.
+    // No description → the second line falls back to the last-message
+    // preview (default display, mirroring the title's fallback chain).
+    const withFallback = rowButton(container, "No summary");
+    expect(withFallback.textContent).toContain("ack — looking now");
+    expect(withFallback.querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
+
+    // Only a row with neither description nor preview shows the skeleton
+    // placeholder (an aria-hidden bar) — keeps every card equal height.
     const withDesc = rowButton(container, "Has summary");
-    const withoutDesc = rowButton(container, "No summary");
+    const empty = rowButton(container, "Empty chat");
     expect(withDesc.querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
-    expect(withoutDesc.querySelector('[data-testid="row-description-skeleton"]')).not.toBeNull();
+    expect(empty.querySelector('[data-testid="row-description-skeleton"]')).not.toBeNull();
   });
 });
