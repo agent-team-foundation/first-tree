@@ -200,6 +200,32 @@ describe("chat command behavior", () => {
     await expect(runChat(["set-topic", "Launch"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
   });
 
+  it("sets, clears, and validates chat descriptions; updates both fields together", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["set-topic", "--description", "  reviewing PR #42  ", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "reviewing PR #42" });
+
+    await runChat(["set-topic", "--clear-description"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", { description: null });
+
+    await runChat(["set-topic", "Launch plan", "--description", "drafting steps"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", {
+      topic: "Launch plan",
+      description: "drafting steps",
+    });
+
+    await expect(runChat(["set-topic", "--description", "x", "--clear-description"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["set-topic", "--description", "   "])).rejects.toMatchObject({
+      code: "EMPTY_DESCRIPTION",
+      exitCode: 2,
+    });
+    await expect(runChat(["set-topic"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
+  });
+
   it("opens an interactive chat, polls, sends input, handles send failures, and closes cleanly", async () => {
     const emitter = new EventEmitter() as EventEmitter & { prompt: () => void };
     emitter.prompt = vi.fn();

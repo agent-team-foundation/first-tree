@@ -13,6 +13,7 @@ export const chats = pgTable(
     /** "direct" | "group" */
     type: text("type").notNull().default("direct"),
     topic: text("topic"),
+    description: text("description"),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
     /**
      * Decision-inert column. First Tree keeps a single group-chat model — there is no

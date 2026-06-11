@@ -56,6 +56,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
           chatId: "chat-1",
           title: "ship redesign",
           topic: "ship redesign",
+          description: null,
           participants: [{ name: "alice", displayName: "Alice", type: "human" }],
         },
       }),
@@ -77,7 +78,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Communication",
       "## Workspace Collaboration",
       "## Asking Humans",
-      "## Chat Topic",
+      "## Chat Topic & Description",
       "## CLI Overview",
       "# Required Reading (First Tree Managed)",
       "# Context Tree (First Tree Managed)",
@@ -510,7 +511,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("## Worktrees");
   });
 
-  it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic, and CLI Overview subsections", () => {
+  it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic & Description, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
     // New contract: chat send is primary; humans get a plain-reply path and a
@@ -530,8 +531,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/chat send <human> --request/);
     expect(briefing).toContain("--question");
 
-    expect(briefing).toContain("## Chat Topic");
+    expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat set-topic");
+    // The combined block documents setting the description through the same
+    // command, and carries the description discipline keys.
+    expect(briefing).toContain("set-topic --description");
+    expect(briefing).toMatch(/name the current task/);
+    expect(briefing).toMatch(/Self-locate/);
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure
     // copy).
@@ -818,6 +824,7 @@ describe("buildAgentBriefing — ## Current Chat Context (per-chat tail)", () =>
           chatId: "chat-123",
           title: "ship redesign",
           topic: "ship redesign",
+          description: "implementing the redesign; mockups approved, building components",
           participants: [
             { name: "alice", displayName: "Alice", type: "human" },
             { name: "bob-bot", displayName: "Bob Bot", type: "agent" },

@@ -90,6 +90,7 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? "Launch planning",
     topic: overrides.topic ?? "Release train",
+    description: overrides.description ?? null,
     participants: overrides.participants ?? participants,
     participantCount: overrides.participantCount ?? participants.length,
     lastMessageAt: overrides.lastMessageAt ?? NOW,

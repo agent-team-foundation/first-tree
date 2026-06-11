@@ -96,6 +96,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       chatId: "chat-1",
       title: "Codex routing",
       topic: "Codex routing",
+      description: null,
       participants: [
         { name: "baixiaohang", displayName: "Bai Xiaohang", type: "human" },
         { name: "codex-developer", displayName: "Codex Developer", type: "agent" },

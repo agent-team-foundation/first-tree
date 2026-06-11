@@ -278,6 +278,7 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     entityType: overrides.entityType ?? null,
     title: overrides.title ?? "Launch planning",
     topic: overrides.topic ?? "Launch planning",
+    description: overrides.description ?? null,
     participants: overrides.participants ?? CHAT_PARTICIPANTS,
     participantCount: overrides.participantCount ?? CHAT_PARTICIPANTS.length,
     lastMessageAt: overrides.lastMessageAt ?? NOW,
@@ -306,6 +307,7 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     organizationId: overrides.organizationId ?? "org-1",
     type: overrides.type ?? "group",
     topic: overrides.topic ?? "Launch planning",
+    description: overrides.description ?? null,
     lifecyclePolicy: overrides.lifecyclePolicy ?? null,
     metadata:
       overrides.metadata ??

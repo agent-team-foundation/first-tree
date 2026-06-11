@@ -531,14 +531,20 @@ export function ConversationList({
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
                         className={cn(
-                          "w-full text-left transition-colors flex items-center",
+                          "w-full text-left transition-colors flex items-start",
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          // Single-line rows tuned for desktop-inbox density:
-                          // tightened vertical padding (--sp-2) now that the
-                          // preview subtitle line is gone, so more conversations
-                          // fit per screen without reading as a dense wall.
+                          // Fixed-height two-line cards: title line + a
+                          // description line (the chat's running work summary).
+                          // Height is pinned so every card is equal regardless
+                          // of whether a description is set — the list keeps a
+                          // steady rhythm, scrolling never reflows, and the
+                          // per-screen chat count stays predictable. Rows with
+                          // no description render a skeleton in the second line
+                          // rather than collapsing.
+                          height: 52,
+                          overflow: "hidden",
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
@@ -548,46 +554,84 @@ export function ConversationList({
                           borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--brand)" : "transparent"}`,
                         }}
                       >
-                        <ChatRowAvatar
-                          title={row.title}
-                          type={row.type}
-                          participants={row.participants}
-                          selfAgentId={selfAgentId ?? ""}
-                          unreadCount={row.unreadMentionCount}
-                          failed={failed}
-                          needsYou={row.openRequestCount > 0}
-                          size={26}
-                          muted
-                          badge={false}
-                          statusDot
-                        />
-                        <span
-                          className="truncate text-subtitle"
-                          style={{
-                            color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
-                            fontWeight: hasUnread ? 700 : 500,
-                            flex: 1,
-                            minWidth: 0,
-                          }}
-                        >
-                          {row.title}
+                        <span className="shrink-0" style={{ marginTop: 1 }}>
+                          <ChatRowAvatar
+                            title={row.title}
+                            type={row.type}
+                            participants={row.participants}
+                            selfAgentId={selfAgentId ?? ""}
+                            unreadCount={row.unreadMentionCount}
+                            failed={failed}
+                            needsYou={row.openRequestCount > 0}
+                            size={26}
+                            muted
+                            badge={false}
+                            statusDot
+                          />
                         </span>
-                        {/* Right meta cluster — single line. Hidden on hover so
-                            the row's engagement menu can take the corner. */}
-                        <span
-                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
-                          style={{ gap: 6 }}
-                        >
-                          {isWatching && (
-                            <Eye size={12} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-label="watching" />
-                          )}
-                          {row.busyAgentIds.length > 0 ? (
-                            <ActivityDots />
-                          ) : row.lastMessageAt ? (
-                            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                              {formatRowTime(row.lastMessageAt)}
+                        <span className="flex flex-col min-w-0" style={{ flex: 1, minWidth: 0 }}>
+                          {/* Line 1 — title + right meta cluster. */}
+                          <span className="flex items-center" style={{ gap: 6 }}>
+                            <span
+                              className="truncate text-subtitle"
+                              style={{
+                                color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
+                                fontWeight: hasUnread ? 700 : 500,
+                                flex: 1,
+                                minWidth: 0,
+                              }}
+                            >
+                              {row.title}
                             </span>
-                          ) : null}
+                            {/* Right meta cluster. Hidden on hover so the row's
+                                engagement menu can take the corner. */}
+                            <span
+                              className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                              style={{ gap: 6 }}
+                            >
+                              {isWatching && (
+                                <Eye
+                                  size={12}
+                                  strokeWidth={1.75}
+                                  style={{ color: "var(--fg-4)" }}
+                                  aria-label="watching"
+                                />
+                              )}
+                              {row.busyAgentIds.length > 0 ? (
+                                <ActivityDots />
+                              ) : row.lastMessageAt ? (
+                                <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                                  {formatRowTime(row.lastMessageAt)}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
+                          {/* Line 2 — description (running work summary). Single
+                              line, truncated when long: the list is the density
+                              surface, so it stays equal-height and tidy (the chat
+                              header is the focus surface that shows it in full).
+                              No description → skeleton bar so the card keeps its
+                              height instead of reading as a visual gap. */}
+                          {row.description ? (
+                            <span className="truncate text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
+                              {row.description}
+                            </span>
+                          ) : (
+                            <span
+                              aria-hidden
+                              data-testid="row-description-skeleton"
+                              style={{
+                                display: "block",
+                                height: 7,
+                                width: 128,
+                                maxWidth: "70%",
+                                marginTop: 5,
+                                borderRadius: 3,
+                                background: "linear-gradient(90deg, var(--bg-active), var(--bg-sunken))",
+                                opacity: 0.85,
+                              }}
+                            />
+                          )}
                         </span>
                       </button>
                       <div

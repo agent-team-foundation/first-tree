@@ -336,6 +336,7 @@ export async function listMeChats(
       c.id                  AS chat_id,
       c.type                AS type,
       c.topic               AS topic,
+      c.description         AS description,
       c.parent_chat_id      AS parent_chat_id,
       c.last_message_at     AS last_message_at,
       c.last_message_preview AS last_message_preview,
@@ -378,6 +379,7 @@ export async function listMeChats(
     chat_id: string;
     type: string;
     topic: string | null;
+    description: string | null;
     parent_chat_id: string | null;
     last_message_at: Date | string | null;
     last_message_preview: string | null;
@@ -563,6 +565,7 @@ export async function listMeChats(
       entityType,
       title,
       topic: r.topic,
+      description: r.description,
       participants,
       participantCount: Number(r.participant_count),
       lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,

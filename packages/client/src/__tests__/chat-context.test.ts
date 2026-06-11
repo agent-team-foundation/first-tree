@@ -23,6 +23,7 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
     organizationId: "org-1",
     type: "group",
     topic: "v1 ship",
+    description: null,
     lifecyclePolicy: null,
     metadata: {},
     createdAt: new Date().toISOString(),
@@ -39,7 +40,9 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
 describe("fetchChatContext", () => {
   it("returns a narrow ChatContext with only name/displayName/type for participants", async () => {
     const sdk = {
-      getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),
+      getChatDetail: vi
+        .fn()
+        .mockResolvedValue(mkChatDetail({ description: "reviewing PR #42; CI green, awaiting approve" })),
       listChatParticipants: vi
         .fn()
         .mockResolvedValue([
@@ -54,11 +57,14 @@ describe("fetchChatContext", () => {
       chatId: "chat-1",
       title: "v1 ship",
       topic: "v1 ship",
+      description: "reviewing PR #42; CI green, awaiting approve",
       participants: [
         { name: "alice", displayName: "Alice", type: "human" },
         { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
       ],
     });
+    // detail.description maps straight through to context.description.
+    expect(result.description).toBe("reviewing PR #42; CI green, awaiting approve");
     // Crucial: no internal IDs leak through.
     for (const p of result.participants) {
       // Cast to a permissive bag so we can probe forbidden keys without
@@ -228,6 +234,7 @@ describe("renderChatContextSection", () => {
       chatId: "chat-1",
       title: "ship v1",
       topic: "ship v1",
+      description: "cutting the v1 release; tagging today",
       participants: [
         { name: "alice", displayName: "Alice", type: "human" },
         { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
@@ -238,6 +245,8 @@ describe("renderChatContextSection", () => {
     expect(md).toContain("## Current Chat Context");
     expect(md).toContain("Chat ID: chat-1");
     expect(md).toContain("Topic: ship v1");
+    // Description line renders the raw value when set.
+    expect(md).toContain("Description: cutting the v1 release; tagging today");
     // Title is de-duped when it equals topic — the agent already knows the
     // label from the Topic line.
     expect(md).not.toMatch(/Title \(auto-derived\):/);
@@ -255,6 +264,7 @@ describe("renderChatContextSection", () => {
       chatId: "chat-1",
       title: "alice, bob-bot",
       topic: null,
+      description: null,
       participants: [
         { name: "alice", displayName: "Alice", type: "human" },
         { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
@@ -264,6 +274,8 @@ describe("renderChatContextSection", () => {
     if (!md) return;
     expect(md).toContain("Topic: (unset");
     expect(md).toContain("Title (auto-derived): alice, bob-bot");
+    // Description sentinel when unset.
+    expect(md).toContain("Description: (unset");
   });
 
   it("renders Topic + auto-derived Title when topic is set but distinct from title", () => {
@@ -274,6 +286,7 @@ describe("renderChatContextSection", () => {
       chatId: "chat-1",
       title: "alice, bob-bot",
       topic: "Q2 launch coordination",
+      description: null,
       participants: [{ name: "alice", displayName: "Alice", type: "human" }],
     });
     expect(md).not.toBeNull();
@@ -287,6 +300,7 @@ describe("renderChatContextSection", () => {
       chatId: "chat-1",
       title: "alice + Me PA",
       topic: null,
+      description: null,
       selfOwner: { name: "owner", displayName: "Owner Human" },
       participants: [{ name: "owner", displayName: "Owner Human", type: "human" }],
     });
@@ -301,6 +315,7 @@ describe("renderChatContextSection", () => {
       chatId: "chat-1",
       title: "x",
       topic: "x",
+      description: null,
       participants: [{ name: "a", displayName: "A", type: "agent" }],
     });
     expect(md).not.toBeNull();

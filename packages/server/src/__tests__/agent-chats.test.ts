@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { resolveTargetChat } from "../services/github-entity-chat.js";
+import { createMeChat, leaveMeChat } from "../services/me-chat.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Chats API", () => {
   const getApp = useTestApp();
@@ -114,7 +116,7 @@ describe("Agent Chats API", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  describe("PATCH /chats/:id (set topic)", () => {
+  describe("PATCH /chats/:id (set topic / description)", () => {
     it("updates topic and persists; null clears", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
@@ -139,6 +141,61 @@ describe("Agent Chats API", () => {
       expect(clearRes.json().topic).toBeNull();
     });
 
+    it("updates description and persists; null clears", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `desc-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `desc-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const setRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        description: "reviewing PR #42; CI green; awaiting approval",
+      });
+      expect(setRes.statusCode).toBe(200);
+      expect(setRes.json().description).toBe("reviewing PR #42; CI green; awaiting approval");
+
+      const detailRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
+      expect(detailRes.json().description).toBe("reviewing PR #42; CI green; awaiting approval");
+
+      const clearRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { description: null });
+      expect(clearRes.statusCode).toBe(200);
+      expect(clearRes.json().description).toBeNull();
+    });
+
+    it("updates topic and description together; a single-field update leaves the other untouched", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `both-a1-${uid}` });
+      const { agent: a2 } = await createTestAgent(app, { name: `both-a2-${uid}` });
+
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      const bothRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        topic: "ship plan",
+        description: "drafting the rollout steps",
+      });
+      expect(bothRes.statusCode).toBe(200);
+      expect(bothRes.json().topic).toBe("ship plan");
+      expect(bothRes.json().description).toBe("drafting the rollout steps");
+
+      // Updating only the description must not clobber the existing topic.
+      const descOnlyRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        description: "rollout steps reviewed",
+      });
+      expect(descOnlyRes.statusCode).toBe(200);
+      expect(descOnlyRes.json().topic).toBe("ship plan");
+      expect(descOnlyRes.json().description).toBe("rollout steps reviewed");
+    });
+
     it("rejects non-participants with 403", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
@@ -156,7 +213,117 @@ describe("Agent Chats API", () => {
       expect(res.statusCode).toBe(403);
     });
 
-    it("rejects malformed body (topic missing)", async () => {
+    it("rejects non-owner participants (speakers) with 403 in an agent-created chat", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const a1 = await createTestAgent(app, { name: `topic-owner-${uid}` });
+      const a2 = await createTestAgent(app, { name: `topic-member-${uid}` });
+
+      // a1 (an agent) creates the chat (→ membership role "owner"); a2 joins
+      // as a speaker (role "member"). The chat's owner is agent-type, so the
+      // delegate relaxation does not apply: a2 is a full participant but NOT
+      // the owner.
+      const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.agent.uuid],
+      });
+      const chatId = createRes.json().id;
+
+      // Owner succeeds.
+      const ownerRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "owner set" });
+      expect(ownerRes.statusCode).toBe(200);
+
+      // Non-owner participant is refused even though it can speak in the chat.
+      const memberRes = await a2.request("PATCH", `/api/v1/agent/chats/${chatId}`, { topic: "member tries" });
+      expect(memberRes.statusCode).toBe(403);
+
+      // Topic is unchanged by the rejected write.
+      const detailRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
+      expect(detailRes.json().topic).toBe("owner set");
+    });
+
+    it("lets a worker agent update topic/description in a human-created (Web) chat", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      // Real Web-console creation path: `createMeChat` writes the human agent
+      // as role "owner" and the worker agent as role "member". The delegate
+      // relaxation makes the worker count as the owner for metadata writes.
+      const human = await createTestAgent(app, { name: `web-human-${uid}`, type: "human" });
+      const worker = await createTestAgent(app, { name: `web-worker-${uid}` });
+
+      const { chatId } = await createMeChat(app.db, human.agent.uuid, human.organizationId, {
+        participantIds: [worker.agent.uuid],
+      });
+
+      const res = await worker.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        topic: "worker set",
+        description: "worker keeps the running state fresh",
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().topic).toBe("worker set");
+      expect(res.json().description).toBe("worker keeps the running state fresh");
+    });
+
+    it("keeps the worker agent's write access after the human owner leaves the chat", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const human = await createTestAgent(app, { name: `leave-human-${uid}`, type: "human" });
+      const worker = await createTestAgent(app, { name: `leave-worker-${uid}` });
+
+      const { chatId } = await createMeChat(app.db, human.agent.uuid, human.organizationId, {
+        participantIds: [worker.agent.uuid],
+      });
+
+      // The human owner leaves. `leaveAsParticipant` either downgrades the
+      // owner row to a watcher or deletes it — in both shapes the chat no
+      // longer has an agent-type owner speaker, so the worker must keep its
+      // delegate write access (the gate must not require the owner row to be
+      // a speaker).
+      await leaveMeChat(app.db, chatId, human.agent.uuid);
+
+      const res = await worker.request("PATCH", `/api/v1/agent/chats/${chatId}`, {
+        description: "still maintained after the owner left",
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().description).toBe("still maintained after the owner left");
+    });
+
+    it("lets the delegate agent update topic/description in a GitHub-minted entity chat", async () => {
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      // Real GitHub-webhook creation path: `resolveTargetChat` mints the chat
+      // via `createChat(db, humanAgentId, ...)`, so the human agent is the
+      // owner and the delegate that receives the webhook is a member. The
+      // delegate relaxation makes it count as the owner for metadata writes.
+      const admin = await createTestAdmin(app);
+      const delegate = await createTestAgent(app, { name: `gh-delegate-${uid}` });
+
+      const resolved = await resolveTargetChat(app.db, {
+        organizationId: admin.organizationId,
+        humanAgentId: admin.humanAgentUuid,
+        delegateAgentId: delegate.agent.uuid,
+        entity: {
+          type: "pull_request",
+          key: `owner/repo#${Math.floor(Math.random() * 100000)}`,
+          title: "Owner-gate delegate test",
+          url: "https://github.com/owner/repo/pull/0",
+        },
+        relatedEntities: [],
+        eventType: "pull_request",
+        action: "opened",
+        isMentionMatched: true,
+      });
+      expect(resolved).not.toBeNull();
+      if (!resolved) throw new Error("unreachable");
+
+      const res = await delegate.request("PATCH", `/api/v1/agent/chats/${resolved.chatId}`, {
+        description: "delegate refreshes the running state",
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().description).toBe("delegate refreshes the running state");
+    });
+
+    it("rejects empty body (no topic or description)", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const a1 = await createTestAgent(app, { name: `topic-bad-a1-${uid}` });

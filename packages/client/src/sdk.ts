@@ -318,15 +318,22 @@ export class FirstTreeHubSDK {
   }
 
   /**
-   * Update chat metadata. Currently the only mutable field is `topic` — the
-   * human-readable label rendered by `resolveChatTitle` and shown in the
-   * workspace chat list. Pass `topic: null` to clear it (the title then
-   * falls back to first-message preview / participant names).
+   * Update chat metadata. Mutable fields are `topic` and/or `description`
+   * (pass at least one):
+   * - `topic` — the human-readable label rendered by `resolveChatTitle` and
+   *   shown in the workspace chat list.
+   * - `description` — a running summary of the chat's work + current state,
+   *   surfaced to the agent each turn and via `chat list`.
+   * Pass either field as `null` to clear it (a cleared `topic` makes the title
+   * fall back to first-message preview / participant names).
    *
-   * Auth: caller must be a speaker in the chat (server-side
-   * `assertParticipant` gate).
+   * Auth: caller must count as the chat's owner (server-side `assertOwner`
+   * gate) — either the creator, or any worker agent when no agent owner is
+   * present in the chat (human-created chats — Web / GitHub-minted — and
+   * chats whose creating agent left). A non-owner agent in an agent-created
+   * chat whose creator still speaks is refused with 403.
    */
-  async updateChat(chatId: string, body: { topic: string | null }): Promise<Chat> {
+  async updateChat(chatId: string, body: { topic?: string | null; description?: string | null }): Promise<Chat> {
     return this.requestJson<Chat>(`/api/v1/agent/chats/${chatId}`, {
       method: "PATCH",
       body: JSON.stringify(body),

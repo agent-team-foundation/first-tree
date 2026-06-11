@@ -234,6 +234,15 @@ export const meChatRowSchema = z.object({
   entityType: githubEntityTypeSchema.nullable().default(null),
   title: z.string(),
   topic: z.string().nullable(),
+  /**
+   * Chat-level running work summary (the chat's `description` column).
+   * Rendered as the conversation row's second line so a glance tells you
+   * what each thread is and where it stands; `null` when the owner hasn't
+   * set one (the row shows a skeleton placeholder to keep cards equal
+   * height). `.default(null)` for version skew — a server build predating
+   * this field would otherwise blank the row on a web-ahead deploy.
+   */
+  description: z.string().nullable().default(null),
   participants: z.array(meChatParticipantSchema),
   participantCount: z.number().int(),
   lastMessageAt: z.string().nullable(),
