@@ -60,7 +60,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 
 ## Local prerequisites
 
-- Node ≥ 22.16
+- Node ≥ 22
 - pnpm 10.x
 - Docker (with `docker compose` v2 preferred; v1 `docker-compose` is the
   fallback)
