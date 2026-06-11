@@ -68,6 +68,26 @@ const MUTATING_OR_AMBIGUOUS_TOOLS = new Set([
   "zsh",
 ]);
 
+/**
+ * Codex CLI (and any other runtime that shells out via the user's login shell)
+ * wraps every command it emits as `/bin/<shell> -lc '<inner>'` — observed shells
+ * include `bash` (Linux daemons), `zsh` (macOS daemons), and `sh`. Without
+ * unwrapping, the outer shell basename hits {@link MUTATING_OR_AMBIGUOUS_TOOLS}
+ * below and every codex read of a Context Tree file falls through to
+ * `unsupported_shell_command`, breaking the Context tab's usage dashboard.
+ * Both the client (file-ref extraction at emit time) and the server
+ * (`shellToolCanRead` at record time) call into the same classifier, so this
+ * one shared unwrap fixes both ends with no per-runtime adapter.
+ */
+const SHELL_WRAPPER_BASENAMES = new Set(["sh", "bash", "zsh"]);
+const SHELL_WRAPPER_FLAGS = new Set(["-c", "-lc"]);
+/**
+ * Bound recursion so a pathological `bash -lc 'bash -lc "bash -lc ..."'`
+ * chain (real or adversarial) can't loop. Two levels covers the codex case
+ * with margin and matches the depth a human operator would reasonably write.
+ */
+const MAX_WRAPPER_UNWRAPS = 2;
+
 const SIMPLE_FILE_READ_TOOLS = new Set(["cat", "head", "nl", "tail", "wc"]);
 const HEAD_TAIL_VALUE_OPTIONS = new Set(["-c", "--bytes", "-n", "--lines"]);
 const SED_SCRIPT_OPTIONS = new Set(["-e", "--expression", "-f", "--file"]);
@@ -502,6 +522,10 @@ function classifyLs(tokens: ShellToken[]): ShellIoClassification {
 }
 
 export function classifyShellCommandIo(command: string): ShellIoClassification {
+  return classifyShellCommandIoInternal(command, 0);
+}
+
+function classifyShellCommandIoInternal(command: string, wrapperDepth: number): ShellIoClassification {
   const tokenized = tokenizeSimpleShell(command);
   if (!tokenized.ok) return { supported: false, reason: tokenized.reason };
 
@@ -510,6 +534,26 @@ export function classifyShellCommandIo(command: string): ShellIoClassification {
   if (commandToken.dynamic) return { supported: false, reason: "dynamic_path" };
 
   const commandName = commandBasename(commandToken.value);
+
+  // Unwrap `/bin/<shell> -lc '<inner>'` before the mutating-shell rejection
+  // below — see `SHELL_WRAPPER_BASENAMES`. Two-step shape check: the second
+  // token must be `-c` or `-lc` and the third token must be a non-empty,
+  // statically-known inner command. If any condition fails we fall through to
+  // the normal rejection path (which still safely returns `write_or_mutation`).
+  if (wrapperDepth < MAX_WRAPPER_UNWRAPS && SHELL_WRAPPER_BASENAMES.has(commandName)) {
+    const flagToken = tokenized.tokens[1];
+    const innerToken = tokenized.tokens[2];
+    if (
+      flagToken &&
+      innerToken &&
+      SHELL_WRAPPER_FLAGS.has(flagToken.value) &&
+      innerToken.value.length > 0 &&
+      !innerToken.dynamic
+    ) {
+      return classifyShellCommandIoInternal(innerToken.value, wrapperDepth + 1);
+    }
+  }
+
   if (MUTATING_OR_AMBIGUOUS_TOOLS.has(commandName)) {
     return { supported: false, reason: "write_or_mutation", commandName };
   }

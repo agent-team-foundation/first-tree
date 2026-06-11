@@ -132,4 +132,120 @@ describe("classifyShellCommandIo", () => {
       commandName: "cat",
     });
   });
+
+  // Codex CLI wraps every command in `/bin/<login-shell> -lc '<inner>'` before
+  // it surfaces in the `command_execution` thread item — bash on Linux daemons,
+  // zsh on macOS daemons, sh on minimal images. Without unwrapping these
+  // wrappers, codex's only file-read signal lands in MUTATING_OR_AMBIGUOUS_TOOLS
+  // and the Context tab dashboard sees zero codex usage (see PR description for
+  // the empirical event-payload that drove this fix).
+  describe("unwraps login-shell wrappers (codex /bin/<shell> -lc form)", () => {
+    it("unwraps /bin/zsh -lc 'sed ...' (codex macOS form) to a read", () => {
+      // Real payload pulled from a codex session_events row on macOS.
+      expect(classifyShellCommandIo("/bin/zsh -lc \"sed -n '1,7p' /Users/op/.first-tree/tree/NODE.md\"")).toEqual({
+        supported: true,
+        action: "read",
+        commandName: "sed",
+        pathArgs: [{ raw: "/Users/op/.first-tree/tree/NODE.md", pathKindHint: "file" }],
+      });
+    });
+
+    it("unwraps /bin/bash -lc 'cat ...' (codex Linux form) to a read", () => {
+      expect(classifyShellCommandIo("/bin/bash -lc 'cat /home/op/.first-tree/tree/NODE.md'")).toEqual({
+        supported: true,
+        action: "read",
+        commandName: "cat",
+        pathArgs: [{ raw: "/home/op/.first-tree/tree/NODE.md", pathKindHint: "file" }],
+      });
+    });
+
+    it("unwraps sh -c 'rg --files ...' (minimal image form) to a read", () => {
+      expect(classifyShellCommandIo("sh -c 'rg --files /tree/practices'")).toEqual({
+        supported: true,
+        action: "read",
+        commandName: "rg",
+        pathArgs: [{ raw: "/tree/practices", pathKindHint: "directory" }],
+      });
+    });
+
+    it("preserves the inner-command rejection — wrapped mutating tool still rejected", () => {
+      // The whole point of the wrapper unwrap is that whatever the inner tool
+      // is decides the verdict — not the outer shell. A wrapped `tee` (write)
+      // must remain rejected as a mutation, not silently classified as read.
+      expect(classifyShellCommandIo("/bin/zsh -lc 'tee /tree/NODE.md'")).toEqual({
+        supported: false,
+        reason: "write_or_mutation",
+        commandName: "tee",
+      });
+    });
+
+    it("preserves the inner-command rejection — wrapped pipeline still complex_shell", () => {
+      expect(classifyShellCommandIo("/bin/bash -lc 'cat /tree/NODE.md | head'")).toEqual({
+        supported: false,
+        reason: "complex_shell",
+      });
+    });
+
+    it("preserves the inner-command rejection — wrapped sed -i still mutation", () => {
+      expect(classifyShellCommandIo("/bin/bash -lc \"sed -i 's/a/b/' /tree/NODE.md\"")).toEqual({
+        supported: false,
+        reason: "write_or_mutation",
+        commandName: "sed",
+      });
+    });
+
+    it("rejects a wrapper with no inner command as write_or_mutation (not a read)", () => {
+      // `zsh -lc` with nothing after isn't a "read of a tree file" — fall
+      // through to the standard mutating-shell rejection so we don't silently
+      // promote a malformed wrapper into a phony read.
+      expect(classifyShellCommandIo("/bin/zsh -lc")).toEqual({
+        supported: false,
+        reason: "write_or_mutation",
+        commandName: "zsh",
+      });
+    });
+
+    it("rejects a wrapper whose flag is not -c / -lc", () => {
+      // `bash -x cat foo` is NOT the wrapper pattern — must NOT unwrap and
+      // re-classify; the outer bash invocation can do arbitrary things, so
+      // it stays in the mutating rejection.
+      expect(classifyShellCommandIo("/bin/bash -x cat /tree/NODE.md")).toEqual({
+        supported: false,
+        reason: "write_or_mutation",
+        commandName: "bash",
+      });
+    });
+
+    it("does not unwrap when the inner script is dynamic ($VAR / backticks)", () => {
+      // The inner token came from a double-quoted shell string that included
+      // `$VAR`, so the tokenizer flagged it dynamic. We can't statically know
+      // what the inner command resolves to — fall through to mutation
+      // rejection rather than analyze a string the agent's shell would
+      // re-expand at runtime.
+      expect(classifyShellCommandIo('/bin/zsh -lc "cat $TREE/NODE.md"')).toEqual({
+        supported: false,
+        reason: "write_or_mutation",
+        commandName: "zsh",
+      });
+    });
+
+    it("unwraps a doubly-nested wrapper (bash -lc \"sh -c 'cat ...'\") within the depth budget", () => {
+      expect(classifyShellCommandIo("/bin/bash -lc \"sh -c 'cat /tree/NODE.md'\"")).toEqual({
+        supported: true,
+        action: "read",
+        commandName: "cat",
+        pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "file" }],
+      });
+    });
+
+    it("stops unwrapping past the depth budget (no infinite recursion)", () => {
+      // Three nested wrappers — the budget allows two unwraps, so the third
+      // outer `bash` is treated as a bare mutating shell. The path stops at a
+      // safe rejection rather than recursing forever or unwrapping a
+      // pathological chain.
+      expect(classifyShellCommandIo('/bin/bash -lc "bash -lc \\"bash -lc \'cat /tree/NODE.md\'\\""')).toMatchObject({
+        supported: false,
+      });
+    });
+  });
 });
