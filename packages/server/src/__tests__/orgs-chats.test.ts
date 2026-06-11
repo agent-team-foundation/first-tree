@@ -1,6 +1,8 @@
+import { AGENT_STATUSES } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -52,6 +54,13 @@ async function attachOrg(
 async function tableCount(app: FastifyInstance, table: typeof chats | typeof messages) {
   const [row] = await app.db.select({ count: sql<number>`count(*)::int` }).from(table);
   return row?.count ?? 0;
+}
+
+async function chatAndMessageCounts(app: FastifyInstance) {
+  return {
+    chats: await tableCount(app, chats),
+    messages: await tableCount(app, messages),
+  };
 }
 
 describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)", () => {
@@ -204,6 +213,109 @@ describe("POST /orgs/:orgId/chats/create-and-send", () => {
     expect(message?.source).toBe("web");
     expect(message?.format).toBe("file");
     expect(message?.content).toEqual({ caption: "see image", attachments: [attachment] });
+  });
+
+  it("rejects a missing initial message recipient before creating the chat", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `web-create-missing-recipient-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Missing Recipient",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const initialCounts = await chatAndMessageCounts(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [target.uuid],
+        message: { format: "text", content: "hello without recipient" },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("requires at least one non-self message recipient mention"),
+    });
+    expect(await chatAndMessageCounts(app)).toEqual(initialCounts);
+  });
+
+  it("rejects an initial message recipient outside the new chat participants before creating the chat", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const participant = await createAgent(app.db, {
+      name: `web-create-participant-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Participant",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const mentioned = await createAgent(app.db, {
+      name: `web-create-mentioned-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Mentioned",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const initialCounts = await chatAndMessageCounts(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [participant.uuid],
+        message: {
+          format: "text",
+          content: "hello to outside recipient",
+          metadata: { mentions: [mentioned.uuid] },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("must be a participant of the new chat"),
+    });
+    expect(await chatAndMessageCounts(app)).toEqual(initialCounts);
+  });
+
+  it("rejects an inactive initial message recipient before creating the chat", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `web-create-suspended-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Suspended",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    await app.db.update(agents).set({ status: AGENT_STATUSES.SUSPENDED }).where(eq(agents.uuid, target.uuid));
+    const initialCounts = await chatAndMessageCounts(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [target.uuid],
+        message: {
+          format: "text",
+          content: "hello to suspended recipient",
+          metadata: { mentions: [target.uuid] },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("agent is suspended"),
+    });
+    expect(await chatAndMessageCounts(app)).toEqual(initialCounts);
   });
 
   it("returns structured partial failure and leaves an empty chat if initial send fails after creation", async () => {

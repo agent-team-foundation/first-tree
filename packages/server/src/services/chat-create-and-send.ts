@@ -52,6 +52,11 @@ type InitialMessageFailureContext = {
   chatId: string;
 };
 
+type InitialMessageParticipant = {
+  id: string;
+  status: string;
+};
+
 const CHAT_CREATE_PROCESS_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 type ChatCreateProcessDedupeEntry = {
@@ -243,6 +248,37 @@ function validateResolvedCreateTargets(senderId: string, targets: ReadonlyArray<
   }
 }
 
+function validateMeInitialMessageRecipients(
+  senderAgentId: string,
+  participantIds: ReadonlyArray<string>,
+  participants: ReadonlyArray<InitialMessageParticipant>,
+  mentions: ReadonlyArray<string> | undefined,
+): void {
+  const participantSet = new Set([senderAgentId, ...participantIds]);
+  const participantsById = new Map(participants.map((participant) => [participant.id, participant]));
+  const recipientIds = [...new Set(mentions ?? [])].filter((id) => id !== senderAgentId);
+
+  if (recipientIds.length === 0) {
+    throw new BadRequestError("Starting a chat requires at least one non-self message recipient mention.");
+  }
+
+  for (const recipientId of recipientIds) {
+    if (!participantSet.has(recipientId)) {
+      throw new BadRequestError(`Initial message recipient "${recipientId}" must be a participant of the new chat.`);
+    }
+
+    const participant = participantsById.get(recipientId);
+    if (!participant || participant.status !== AGENT_STATUSES.ACTIVE) {
+      const status = participant?.status ?? "missing";
+      const recovery =
+        status === AGENT_STATUSES.SUSPENDED
+          ? "Reactivate it before starting the chat."
+          : "Choose an active recipient before starting the chat.";
+      throw new BadRequestError(`Cannot route to "${recipientId}" because the agent is ${status}. ${recovery}`);
+    }
+  }
+}
+
 async function sendPreparedInitialMessage(
   db: Database,
   prepared: PreparedInitialMessage,
@@ -416,6 +452,7 @@ export async function createMeChatWithInitialMessage(
     if (gate.orgId !== organizationId) {
       throw new BadRequestError("Cross-organization chat not allowed");
     }
+    validateMeInitialMessageRecipients(humanAgentId, distinctIds, gate.rows, input.message.metadata?.mentions);
 
     const chat = await insertChatWithParticipants(tx, humanAgentId, organizationId, distinctIds, {
       type: "group",
