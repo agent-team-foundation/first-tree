@@ -108,7 +108,7 @@ export function extractEventEntity(eventType: string, payload: unknown): GithubE
       if (number === null) return null;
       return {
         type: "discussion",
-        key: `${repo}#discussion-${number}`,
+        key: `${repo}#${number}`,
         title: readString(disc?.title) ?? undefined,
         url: readString(disc?.html_url) ?? undefined,
       };

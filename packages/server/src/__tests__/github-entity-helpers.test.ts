@@ -72,7 +72,7 @@ describe("extractEventEntity", () => {
     });
     expect(entity).toEqual({
       type: "discussion",
-      key: "owner/repo#discussion-9",
+      key: "owner/repo#9",
       title: "RFC",
       url: "https://github.com/owner/repo/discussions/9",
     });
@@ -214,9 +214,9 @@ describe("formatEntityTitle", () => {
   });
 
   it("renders Discussion title", () => {
-    expect(
-      formatEntityTitle({ type: "discussion", key: "owner/repo#discussion-9", title: "RFC" }, "discussion", "created"),
-    ).toBe("Discussion repo#discussion-9: RFC");
+    expect(formatEntityTitle({ type: "discussion", key: "owner/repo#9", title: "RFC" }, "discussion", "created")).toBe(
+      "Discussion repo#9: RFC",
+    );
   });
 
   it("renders Commit title (no entity title)", () => {
