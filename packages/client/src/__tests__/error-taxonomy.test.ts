@@ -33,6 +33,10 @@ class FakeClientUserMismatchError extends Error {
   override name = "ClientUserMismatchError";
 }
 
+class FakeGitMirrorAuthError extends Error {
+  override name = "GitMirrorAuthError";
+}
+
 function noMessageShape(fields: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ...fields,
@@ -131,6 +135,41 @@ describe("error-taxonomy.classify", () => {
       expect(classify(new Error("fetch failed")).reasonCode).toBe("claude_socket_closed");
       expect(classify(noMessageShape({ name: "APIConnectionError" })).message).toBe("Claude API connection dropped");
       expect(classify(noMessageShape({ code: "ECONNRESET" })).message).toBe("Network error");
+    });
+  });
+
+  describe("git mirror auth failures", () => {
+    it("GitMirrorAuthError → degraded (git_clone_auth_failed), no retry", () => {
+      const c = classify(
+        new FakeGitMirrorAuthError(
+          "Could not clone https://github.com/acme/widget.git over HTTPS or SSH. " +
+            "HTTPS attempt failed: fatal: could not read Username for 'https://github.com': terminal prompts disabled " +
+            "SSH retry (git@github.com:) failed: Host key verification failed.",
+        ),
+        { source: "session" },
+      );
+      expect(c.kind).toBe(ERROR_KINDS.DEGRADED);
+      expect(c.reasonCode).toBe("git_clone_auth_failed");
+      expect(c.strategy.kind).toBe("none");
+    });
+
+    it("class name wins over transient substring heuristics embedded in git stderr", () => {
+      // Raw git stderr in the message can contain text the loose heuristics
+      // would otherwise read as transient ("server error", "fetch failed").
+      const c = classify(
+        new FakeGitMirrorAuthError(
+          "Could not fetch https://example.com/r.git over HTTPS or SSH. " +
+            "HTTPS attempt failed: remote server error SSH retry failed: fetch failed",
+        ),
+      );
+      expect(c.kind).toBe(ERROR_KINDS.DEGRADED);
+      expect(c.reasonCode).toBe("git_clone_auth_failed");
+    });
+
+    it("uses the default message when the shape has none", () => {
+      const c = classify(noMessageShape({ name: "GitMirrorAuthError" }));
+      expect(c.kind).toBe(ERROR_KINDS.DEGRADED);
+      expect(c.message).toBe("Source repo git authentication failed");
     });
   });
 
