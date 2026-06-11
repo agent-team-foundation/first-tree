@@ -49,7 +49,7 @@ export function checkNodeVersion(): CheckResult {
   return {
     label: "Node.js",
     ok,
-    detail: ok ? `v${version}` : `v${version} (requires >= 22.16)`,
+    detail: ok ? `v${version}` : `v${version} (requires >= 22)`,
   };
 }
 
