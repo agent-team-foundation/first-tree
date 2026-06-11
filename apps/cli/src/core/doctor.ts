@@ -44,12 +44,18 @@ function get(obj: Record<string, unknown>, dotPath: string): unknown {
 
 export function checkNodeVersion(): CheckResult {
   const version = process.versions.node;
-  const [major] = version.split(".").map(Number);
-  const ok = major !== undefined && major >= 22;
+  const [major, minor] = version.split(".").map(Number);
+  // Floor of `>=22.13.0` matches engines.node on the published packages
+  // and reflects the real strict-resolver floor — `@inquirer/prompts`
+  // (a direct dep of apps/cli) is the tightest constraint at `^22.13.0`,
+  // so under pnpm / yarn / `engine-strict=true` installs on 22.0-22.12
+  // hard-fail despite engines saying otherwise. Mirror that here so the
+  // doctor is honest about the supported range, not just the major.
+  const ok = major !== undefined && (major >= 23 || (major === 22 && minor !== undefined && minor >= 13));
   return {
     label: "Node.js",
     ok,
-    detail: ok ? `v${version}` : `v${version} (requires >= 22.16)`,
+    detail: ok ? `v${version}` : `v${version} (requires >= 22.13)`,
   };
 }
 

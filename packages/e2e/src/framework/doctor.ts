@@ -54,7 +54,7 @@ export function runDoctor(repoRoot: string): DoctorResult {
     });
   }
 
-  const nodeIssue = checkNodeVersion([22, 16, 0]);
+  const nodeIssue = checkNodeVersion([22, 13, 0]);
   if (nodeIssue) issues.push(nodeIssue);
 
   const serverDist = resolve(repoRoot, "packages/server/dist/index.mjs");
