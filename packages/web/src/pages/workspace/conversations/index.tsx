@@ -531,20 +531,14 @@ export function ConversationList({
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
                         className={cn(
-                          "w-full text-left transition-colors flex items-start",
+                          "w-full text-left transition-colors flex items-center",
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          // Fixed-height two-line cards: title line + a
-                          // description line (the chat's running work summary).
-                          // Height is pinned so every card is equal regardless
-                          // of whether a description is set — the list keeps a
-                          // steady rhythm, scrolling never reflows, and the
-                          // per-screen chat count stays predictable. Rows with
-                          // no description render a skeleton in the second line
-                          // rather than collapsing.
-                          height: 52,
-                          overflow: "hidden",
+                          // Single-line rows tuned for desktop-inbox density:
+                          // tightened vertical padding (--sp-2) now that the
+                          // preview subtitle line is gone, so more conversations
+                          // fit per screen without reading as a dense wall.
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
@@ -554,87 +548,46 @@ export function ConversationList({
                           borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--brand)" : "transparent"}`,
                         }}
                       >
-                        <span className="shrink-0" style={{ marginTop: 1 }}>
-                          <ChatRowAvatar
-                            title={row.title}
-                            type={row.type}
-                            participants={row.participants}
-                            selfAgentId={selfAgentId ?? ""}
-                            unreadCount={row.unreadMentionCount}
-                            failed={failed}
-                            needsYou={row.openRequestCount > 0}
-                            size={26}
-                            muted
-                            badge={false}
-                            statusDot
-                          />
+                        <ChatRowAvatar
+                          title={row.title}
+                          type={row.type}
+                          participants={row.participants}
+                          selfAgentId={selfAgentId ?? ""}
+                          unreadCount={row.unreadMentionCount}
+                          failed={failed}
+                          needsYou={row.openRequestCount > 0}
+                          size={26}
+                          muted
+                          badge={false}
+                          statusDot
+                        />
+                        <span
+                          className="truncate text-subtitle"
+                          style={{
+                            color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
+                            fontWeight: hasUnread ? 700 : 500,
+                            flex: 1,
+                            minWidth: 0,
+                          }}
+                        >
+                          {row.title}
                         </span>
-                        <span className="flex flex-col min-w-0" style={{ flex: 1, minWidth: 0 }}>
-                          {/* Line 1 — title + right meta cluster. */}
-                          <span className="flex items-center" style={{ gap: 6 }}>
-                            <span
-                              className="truncate text-subtitle"
-                              style={{
-                                color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
-                                fontWeight: hasUnread ? 700 : 500,
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              {row.title}
-                            </span>
-                            {/* Right meta cluster. Hidden on hover so the row's
-                                engagement menu can take the corner. */}
-                            <span
-                              className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
-                              style={{ gap: 6 }}
-                            >
-                              {isWatching && (
-                                <Eye
-                                  size={12}
-                                  strokeWidth={1.75}
-                                  style={{ color: "var(--fg-4)" }}
-                                  aria-label="watching"
-                                />
-                              )}
-                              {row.busyAgentIds.length > 0 ? (
-                                <ActivityDots />
-                              ) : row.lastMessageAt ? (
-                                <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                                  {formatRowTime(row.lastMessageAt)}
-                                </span>
-                              ) : null}
-                            </span>
-                          </span>
-                          {/* Line 2 — description (running work summary). Single
-                              line, truncated when long: the list is the density
-                              surface, so it stays equal-height and tidy. Like the
-                              title (topic → first-message → participants), the
-                              line has a default: when no description is set it
-                              falls back to the last-message preview, so the
-                              second line is informative by default instead of an
-                              empty placeholder. Only when neither exists does the
-                              skeleton bar keep the card's height. */}
-                          {(row.description ?? row.lastMessagePreview) ? (
-                            <span className="truncate text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-                              {row.description ?? row.lastMessagePreview}
-                            </span>
-                          ) : (
-                            <span
-                              aria-hidden
-                              data-testid="row-description-skeleton"
-                              style={{
-                                display: "block",
-                                height: 7,
-                                width: 128,
-                                maxWidth: "70%",
-                                marginTop: 5,
-                                borderRadius: 3,
-                                background: "linear-gradient(90deg, var(--bg-active), var(--bg-sunken))",
-                                opacity: 0.85,
-                              }}
-                            />
+                        {/* Right meta cluster — single line. Hidden on hover so
+                            the row's engagement menu can take the corner. */}
+                        <span
+                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                          style={{ gap: 6 }}
+                        >
+                          {isWatching && (
+                            <Eye size={12} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-label="watching" />
                           )}
+                          {row.busyAgentIds.length > 0 ? (
+                            <ActivityDots />
+                          ) : row.lastMessageAt ? (
+                            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                              {formatRowTime(row.lastMessageAt)}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                       <div

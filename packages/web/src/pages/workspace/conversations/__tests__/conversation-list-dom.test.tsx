@@ -407,7 +407,7 @@ describe("ConversationList", () => {
     expect(container.textContent).not.toContain("Start with New chat.");
   });
 
-  it("renders the description second line with a last-message fallback, and a skeleton only when neither exists", async () => {
+  it("renders single-line rows: no description / preview second line, no skeleton", async () => {
     const rows = [
       row({ chatId: "chat-desc", title: "Has summary", description: "reviewing PR 916; CI green; awaiting approval" }),
       row({ chatId: "chat-nodesc", title: "No summary", description: null, lastMessagePreview: "ack — looking now" }),
@@ -415,21 +415,17 @@ describe("ConversationList", () => {
     ];
     const container = await renderDom(<StatefulList rows={rows} nextCursor={null} />, createClient(rows, null));
 
-    // The description text is rendered for the row that has one — it wins
-    // over the last-message preview.
-    expect(container.textContent).toContain("reviewing PR 916; CI green; awaiting approval");
-
-    // No description → the second line falls back to the last-message
-    // preview (default display, mirroring the title's fallback chain).
+    // Rows are title-only: neither the chat description nor the last-message
+    // preview renders in the list (the chat header is the surface that shows
+    // the description in full).
+    expect(container.textContent).not.toContain("reviewing PR 916; CI green; awaiting approval");
     const withFallback = rowButton(container, "No summary");
-    expect(withFallback.textContent).toContain("ack — looking now");
-    expect(withFallback.querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
+    expect(withFallback.textContent).not.toContain("ack — looking now");
 
-    // Only a row with neither description nor preview shows the skeleton
-    // placeholder (an aria-hidden bar) — keeps every card equal height.
-    const withDesc = rowButton(container, "Has summary");
-    const empty = rowButton(container, "Empty chat");
-    expect(withDesc.querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
-    expect(empty.querySelector('[data-testid="row-description-skeleton"]')).not.toBeNull();
+    // No skeleton placeholder either — single-line rows need no second-line
+    // height keeper.
+    for (const title of ["Has summary", "No summary", "Empty chat"]) {
+      expect(rowButton(container, title).querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
+    }
   });
 });
