@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cloud.first-tree.ai"><strong>Open App</strong></a> &middot;
+  <a href="https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=nav-app"><strong>Open App</strong></a> &middot;
   <a href="#get-started"><strong>Get Started</strong></a> &middot;
   <a href="#how-it-works"><strong>How It Works</strong></a> &middot;
   <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &middot;
@@ -24,6 +24,8 @@
 <p align="center">
   English | <a href="README_zh-CN.md">中文</a>
 </p>
+
+> Use this [link](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta) to use first-tree for **free** — the most efficient way to **loopmaxx your engineering work**.
 
 # First-Tree
 
@@ -114,10 +116,11 @@ during, and after execution.
 
 ## Get Started
 
-Open the app at **<https://cloud.first-tree.ai>** (or your own deployment) and
-sign in. Learn more at <https://first-tree.ai>. The guided setup walks you
-through the first run: name your team, connect a computer, create your first
-agent, connect code, and start work.
+Open the app at **[cloud.first-tree.ai](https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-app)**
+(or your own deployment) and sign in. Learn more at
+[first-tree.ai](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-home).
+The guided setup walks you through the first run: name your team, connect a
+computer, create your first agent, connect code, and start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
