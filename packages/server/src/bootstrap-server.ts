@@ -29,7 +29,7 @@ export type ServerBootstrapDeps = {
 
 export function shouldAutoGenerateServerSecrets(configDir?: string): boolean {
   const resolved = resolveConfigReadonly({ schema: serverConfigSchema, role: "server", configDir });
-  return resolved.channel === "dev";
+  return resolved.channel === "dev" && process.env.NODE_ENV !== "production";
 }
 
 async function loadServerConfig(): Promise<ServerConfig> {

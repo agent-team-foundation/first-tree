@@ -75,6 +75,14 @@ describe("server bootstrap", () => {
     expect(shouldAutoGenerateServerSecrets(configDir)).toBe(false);
   });
 
+  it("does not generate server secrets in production even when the channel defaults to dev", () => {
+    const configDir = makeTempConfigDir();
+
+    vi.stubEnv("NODE_ENV", "production");
+
+    expect(shouldAutoGenerateServerSecrets(configDir)).toBe(false);
+  });
+
   it("validates boot config before telemetry and migrations", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const initTelemetryFn = vi.fn(async () => undefined);
