@@ -470,7 +470,7 @@ async function renderDom(
   element: ReactElement,
   seed?: (queryClient: QueryClient) => void,
   route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs/plan.md",
-): Promise<{ container: HTMLElement; root: Root }> {
+): Promise<{ container: HTMLElement; queryClient: QueryClient; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -487,7 +487,7 @@ async function renderDom(
     );
   });
   await flush();
-  return { container, root };
+  return { container, queryClient, root };
 }
 
 async function flush(): Promise<void> {
@@ -549,6 +549,10 @@ function buttonByTitle(container: ParentNode, title: string): HTMLButtonElement 
 
 function buttonByText(container: ParentNode, text: string): HTMLButtonElement | null {
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
+}
+
+function optionByText(container: ParentNode, text: string): HTMLLabelElement | null {
+  return [...container.querySelectorAll("label")].find((label) => label.textContent?.includes(text)) ?? null;
 }
 
 beforeEach(() => {
@@ -744,6 +748,112 @@ describe("ChatView", () => {
       { mentions: ["agent-2"] },
       // No live request in this chat → nothing to thread under.
       undefined,
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("clears a stale auto-primed @ when a request dock arrives late and clean-resolves option answers", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-1",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [
+              {
+                id: "q1",
+                prompt: "Deploy color?",
+                kind: "single",
+                options: ["Blue-green", "Rolling update"],
+                required: true,
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await act(async () => {
+      textarea.dispatchEvent(new FocusEvent("focusin", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForCondition(() => textarea.value === "@", "Expected group focus to prime @ before dock data arrives");
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
+    });
+    await flush();
+    await waitForText(container, "Awaiting your answer");
+    await waitForCondition(() => textarea.value === "", "Expected late request dock to clear auto-primed @");
+
+    await click(optionByText(container, "Blue-green"));
+    expect(textarea.value).toBe("Blue-green");
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected clean option send");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Blue-green", ["agent-1"], {
+      inReplyTo: "req-1",
+      resolves: { request: "req-1", kind: "answered" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("threads docked attachment replies under the live request without a visible @mention", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-file",
+        senderId: "agent-1",
+        format: "request",
+        content: "Attach the rollout screenshot.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Evidence",
+            questions: [{ id: "q1", prompt: "Evidence?", kind: "free", required: true }],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), dockMessages),
+      "/",
+    );
+
+    await waitForText(container, "Awaiting your answer");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await setValue(textarea, "Screenshot evidence attached");
+    const file = new File(["abc"], "evidence.png", { type: "image/png" });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("File input missing");
+    await changeFiles(fileInput, [file]);
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image send");
+    expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+      "chat-1",
+      {
+        caption: "Screenshot evidence attached",
+        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "evidence.png", size: 3 }],
+      },
+      { mentions: ["agent-1"] },
+      { inReplyTo: "req-file" },
     );
 
     await act(async () => root.unmount());

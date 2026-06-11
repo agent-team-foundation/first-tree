@@ -1587,6 +1587,19 @@ export function ChatView({
       el.setSelectionRange(el.value.length, el.value.length);
     });
   };
+  useEffect(() => {
+    if (!dockRequestId || draft !== "@" || !focusPrimedRef.current) return;
+    // Real message data can arrive after an empty group composer already
+    // focus-primed `@`; once the dock appears, the asker is the default route.
+    focusPrimedRef.current = false;
+    setDraft("");
+    setCursor(0);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el || el.value !== "") return;
+      el.setSelectionRange(0, 0);
+    });
+  }, [dockRequestId, draft]);
   // When the dock re-pins to a DIFFERENT request (a newer question arrived,
   // or the current one resolved under us), drop a draft the old dock
   // authored — otherwise a staged clean answer silently retargets and would
