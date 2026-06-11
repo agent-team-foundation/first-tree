@@ -47,6 +47,11 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     expect(cookieNonce).toBeTruthy();
     const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
     expect(verified.next).toBe("/settings/github");
+    // The signed state pins both the org the install binds to AND the
+    // kickoff admin whose (re-checked) authority the callback bind rests
+    // on — the browser's github.com identity at callback time may differ.
+    expect(verified.targetOrganizationId).toBe(admin.organizationId);
+    expect(verified.kickoffUserId).toBe(admin.userId);
   });
 
   it("bakes an allowlisted ?next= into the signed state (onboarding flow)", async () => {

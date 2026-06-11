@@ -186,7 +186,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     expect(row?.hubOrganizationId).not.toBe(admin.organizationId);
   });
 
-  it("403s when the user is not an admin of the target org", async () => {
+  it("refuses the bind (via the SPA error surface) when the user is not an admin of the target org", async () => {
     const app = getApp();
     const githubId = 770_002;
     const login = `targetorg-member-${uuidv7().slice(0, 6)}`;
@@ -227,12 +227,15 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
         headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
       });
-      expect(res.statusCode).toBe(403);
+      // Browser-facing refusal: friendly SPA error page, not raw JSON.
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("error=install-not-admin");
     } finally {
       restore();
     }
 
-    // The install stays unbound — the 403 short-circuits before the bind.
+    // The install stays unbound — the refusal short-circuits before the bind.
     const row = await findInstallationByGithubId(app.db, installationId);
     expect(row?.hubOrganizationId).toBeNull();
   });
@@ -282,6 +285,92 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     expect(row).toBeNull();
   });
 
+  it("binds via the kickoff session's authority when the callback GitHub identity differs", async () => {
+    // The incident class behind this test: an org admin kicks off the
+    // install (admin-gated, so their authority is proven at mint time),
+    // but the browser's github.com session belongs to a DIFFERENT GitHub
+    // identity (second account, recreated account, someone else's First Tree
+    // session in the same browser). GitHub completes the install either
+    // way; the bind must rest on the kickoff session signed into the
+    // state, not on whoever the OAuth code resolves to.
+    const app = getApp();
+    const kickoffGithubId = 770_005;
+    const strangerGithubId = 770_006;
+    const login = `targetorg-kickoff-${uuidv7().slice(0, 6)}`;
+    const installationId = 8_822_005;
+
+    // Kickoff admin: admin of their own org, linked to kickoffGithubId.
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, kickoffGithubId, login);
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/onboarding/connected", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    // The OAuth exchange resolves a stranger identity (never seen before).
+    const restore = stubGithub({
+      githubId: strangerGithubId,
+      login: `${login}-stranger`,
+      installationIds: [installationId],
+    });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      // Install completes: redirect straight to `next` — and WITHOUT a
+      // token fragment, so the stranger identity must not replace the
+      // kickoff admin's browser session.
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("/onboarding/connected");
+      expect(res.headers.location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row?.hubOrganizationId).toBe(admin.organizationId);
+  });
+
+  it("redirects to a friendly error page when the kickoff admin's membership was revoked mid-flight", async () => {
+    const app = getApp();
+    const githubId = 770_007;
+    const login = `targetorg-revoked-${uuidv7().slice(0, 6)}`;
+    const installationId = 8_822_006;
+
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, githubId, login);
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    // Membership revoked between mint and callback: flip role to member.
+    await app.db.update(members).set({ role: "member" }).where(eq(members.userId, admin.userId));
+
+    const restore = stubGithub({ githubId, login, installationIds: [installationId] });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      // Refusal is correct — but it must land on the SPA's friendly error
+      // surface, not a raw JSON body at the API URL.
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("error=install-not-admin");
+      expect(res.headers.location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+
+    // The install stays unbound — the refusal short-circuits the bind.
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
   it("ignores a targetOrganizationId naming an org the user isn't a member of", async () => {
     const app = getApp();
     const githubId = 770_003;
@@ -289,7 +378,9 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     const installationId = 8_822_003;
 
     // Brand-new GitHub user; the callback mints them with no membership in
-    // the default org → `findActiveMembership` returns null → 403.
+    // the default org → `findActiveMembership` returns null → refusal via
+    // the SPA error surface (no kickoffUserId in this legacy-shape state,
+    // so the OAuth identity is the bind authority).
     const defaultOrgId = await resolveDefaultOrgId(app.db);
     await upsertInstallationFromMetadata(app.db, {
       installation: {
@@ -312,7 +403,9 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
         headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
       });
-      expect(res.statusCode).toBe(403);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("error=install-not-admin");
     } finally {
       restore();
     }

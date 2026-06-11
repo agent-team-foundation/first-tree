@@ -36,11 +36,24 @@ type StatePayload = {
    * the plain `/auth/github/start` sign-in flow.
    */
   targetOrganizationId?: string;
+  /**
+   * First Tree user who kicked off the App-install flow (the admin
+   * authenticated by `GET /orgs/:orgId/github-app-installation/install-url`).
+   * The callback rests the install *bind* on this identity — re-checked
+   * live against `members` — instead of whoever the OAuth code resolves
+   * to, because the browser's github.com session can legitimately differ
+   * from the GitHub account linked to the kickoff user (second account,
+   * deleted-and-recreated account, someone else's session in the same
+   * browser). Absent on the plain `/auth/github/start` sign-in flow.
+   */
+  kickoffUserId?: string;
 };
 
 export type SignOAuthStateOptions = {
   /** See `StatePayload.targetOrganizationId`. */
   targetOrganizationId?: string;
+  /** See `StatePayload.kickoffUserId`. */
+  kickoffUserId?: string;
 };
 
 /**
@@ -57,6 +70,9 @@ export async function signOAuthState(
   const claims: StatePayload = { nonce, next };
   if (opts.targetOrganizationId) {
     claims.targetOrganizationId = opts.targetOrganizationId;
+  }
+  if (opts.kickoffUserId) {
+    claims.kickoffUserId = opts.kickoffUserId;
   }
   const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
@@ -80,7 +96,7 @@ export async function verifyOAuthState(
   jwtSecret: string,
   token: string,
   cookieNonce: string | null,
-): Promise<{ next: string; targetOrganizationId?: string }> {
+): Promise<{ next: string; targetOrganizationId?: string; kickoffUserId?: string }> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
   try {
@@ -96,6 +112,9 @@ export async function verifyOAuthState(
   if (payload.targetOrganizationId !== undefined && typeof payload.targetOrganizationId !== "string") {
     throw new Error("OAuth state payload malformed");
   }
+  if (payload.kickoffUserId !== undefined && typeof payload.kickoffUserId !== "string") {
+    throw new Error("OAuth state payload malformed");
+  }
 
   if (!cookieNonce || cookieNonce !== payload.nonce) {
     throw new Error("OAuth state nonce / cookie mismatch");
@@ -104,5 +123,6 @@ export async function verifyOAuthState(
   return {
     next: payload.next,
     ...(payload.targetOrganizationId ? { targetOrganizationId: payload.targetOrganizationId } : {}),
+    ...(payload.kickoffUserId ? { kickoffUserId: payload.kickoffUserId } : {}),
   };
 }

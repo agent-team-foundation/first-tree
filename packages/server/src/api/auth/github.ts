@@ -53,7 +53,15 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
  * in onboarding's "Connect your code" step and Settings → GitHub. After
  * that dialog GitHub redirects back here with `code + state +
- * installation_id`, which the callback verifies and binds.
+ * installation_id`, which the callback verifies and binds. The install
+ * BIND rests on the kickoff session signed into the state
+ * (`kickoffUserId`, re-checked live), not on the identity the OAuth code
+ * resolves to — the browser's github.com session is independent of the
+ * First Tree session, and a mismatch must not strand the install unbound.
+ *
+ * The live `/callback` is a full-page browser navigation, so its error
+ * replies redirect to the SPA error surface
+ * (`/auth/github/complete#error=<code>`) instead of raw JSON.
  *
  * `dev-callback` bypasses GitHub entirely; gated to non-production.
  *
@@ -107,13 +115,21 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     let next: string;
     let targetOrganizationId: string | null = null;
+    let kickoffUserId: string | null = null;
     try {
       const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
       next = verified.next;
       targetOrganizationId = verified.targetOrganizationId ?? null;
+      kickoffUserId = verified.kickoffUserId ?? null;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "OAuth state rejected";
-      return reply.status(401).send({ error: msg });
+      // Browser-facing: the user just navigated here from github.com. A raw
+      // JSON body would strand them on the API URL — most commonly after
+      // taking >10min on GitHub's repo picker (state JWT expiry).
+      app.log.warn(
+        { err, event: "github_oauth.state_rejected" },
+        "github callback state rejected — redirecting to SPA error surface",
+      );
+      return redirectCallbackError(reply, "state-expired");
     }
 
     // Clear the state cookie even on success — it's single-use.
@@ -150,9 +166,8 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       };
       installationId = result.installationId;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "GitHub exchange failed";
       app.log.warn({ err }, "github sign-in code exchange failed");
-      return reply.status(401).send({ error: msg });
+      return redirectCallbackError(reply, "github-exchange-failed", next);
     }
 
     // SECURITY: `installation_id` rides the browser address bar — not a
@@ -206,7 +221,10 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId, targetOrganizationId);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId, targetOrganizationId, {
+      kickoffUserId,
+      browserFacing: true,
+    });
   });
 
   app.get("/dev-callback", async (request, reply) => {
@@ -310,6 +328,31 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+/**
+ * Error codes the SPA's `/auth/github/complete` page renders friendly copy
+ * for. Keep in sync with `packages/web/src/pages/oauth-complete.tsx`.
+ */
+type CallbackErrorCode =
+  | "state-expired"
+  | "github-exchange-failed"
+  | "install-not-admin"
+  | "invite-invalid"
+  | "invite-not-allowed"
+  | "invite-required"
+  | "membership-unresolved";
+
+/**
+ * The live `/callback` route is a full-page browser navigation (GitHub
+ * redirects the user's browser here), so error replies must land the user
+ * back on the SPA — a raw JSON body strands them on the API URL with no
+ * way forward. The error code rides in the fragment like the success
+ * tokens do (never enters Referer headers or server logs).
+ */
+function redirectCallbackError(reply: FastifyReply, code: CallbackErrorCode, next?: string) {
+  const fragment = new URLSearchParams({ error: code, ...(next ? { next } : {}) }).toString();
+  return reply.redirect(`/auth/github/complete#${fragment}`, 302);
+}
+
 async function completeOauthFlow(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -340,7 +383,23 @@ async function completeOauthFlow(
    * path, that org wins regardless. Null on the plain sign-in flow.
    */
   targetOrganizationId: string | null,
+  opts: {
+    /**
+     * First Tree user who kicked off the App-install flow, carried in the
+     * signed state (see `StatePayload.kickoffUserId`). Null on the plain
+     * sign-in flow, legacy states, and `dev-callback`.
+     */
+    kickoffUserId?: string | null;
+    /**
+     * True when the caller is the live browser-navigated `/callback`
+     * route: error replies redirect to the SPA error surface instead of
+     * raw JSON. `dev-callback` keeps JSON errors (curl-able, and the
+     * dev/test suites assert on status codes).
+     */
+    browserFacing?: boolean;
+  } = {},
 ) {
+  const { kickoffUserId = null, browserFacing = false } = opts;
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
@@ -361,9 +420,11 @@ async function completeOauthFlow(
     const token = inviteMatch[1];
     const inv = await findActiveByToken(app.db, token);
     if (!inv) {
+      if (browserFacing) return redirectCallbackError(reply, "invite-invalid");
       return reply.status(404).send({ error: "Invitation not found or no longer valid" });
     }
     if (allowedOrganizationId && inv.organizationId !== allowedOrganizationId) {
+      if (browserFacing) return redirectCallbackError(reply, "invite-not-allowed");
       return reply.status(403).send({ error: "Invitation is not allowed on this server" });
     }
     await ensureMembership(app.db, {
@@ -386,14 +447,65 @@ async function completeOauthFlow(
     // onboarding modal can layer on top.
     next = "/";
   } else if (targetOrganizationId) {
-    // App-install flow: the org was chosen on a Settings page and rode in
-    // the signed state (codex P1-3). Re-check the user is still an active
-    // admin of it — the state JWT outlives a membership revoke, so a stale
-    // token must not bind another team's install to an org the user no
-    // longer administers.
-    const membership = await findActiveMembership(app.db, userId, targetOrganizationId);
-    if (!membership || membership.role !== "admin") {
-      return reply.status(403).send({ error: "Not an admin of the organization this installation targets" });
+    // App-install flow: the org rode in the signed state minted by the
+    // admin-gated `/install-url` (codex P1-3). The bind rests on the
+    // KICKOFF user's authority — re-checked live against `members`,
+    // because the state JWT outlives a membership revoke — and NOT on the
+    // identity the OAuth code resolved to: the browser's github.com
+    // session is independent of the First Tree session, and a mismatch
+    // (second GitHub account, deleted-and-recreated account, someone
+    // else's First Tree session in the same browser) must not strand a
+    // completed install unbound. States minted before `kickoffUserId`
+    // existed (≤10min old at deploy time) fall back to the OAuth identity.
+    const bindAuthorityUserId = kickoffUserId ?? userId;
+    const authority = await findActiveMembership(app.db, bindAuthorityUserId, targetOrganizationId);
+    if (!authority || authority.role !== "admin") {
+      app.log.warn(
+        {
+          event: "github_app.install_callback_admin_check_failed",
+          targetOrganizationId,
+          kickoffUserId,
+          oauthUserId: userId,
+          githubId: profile.githubId,
+          githubLogin: profile.login,
+          installationId,
+        },
+        "install callback: bind authority is not an active admin of the target org — refusing to bind",
+      );
+      if (browserFacing) return redirectCallbackError(reply, "install-not-admin", next);
+      return reply.status(403).send({ error: "Not an admin of the First Tree organization this installation targets" });
+    }
+    if (bindAuthorityUserId !== userId) {
+      // Identity mismatch: complete the install on the kickoff admin's
+      // authority, then bounce straight to `next` WITHOUT issuing tokens —
+      // signing the browser in as the OAuth identity would replace the
+      // kickoff admin's session across every tab. GitHub-side authority is
+      // unchanged: `installationId` is non-null only when the OAuth user
+      // proved they administer the installed account, and the nonce cookie
+      // pins this request to the same browser that minted the kickoff.
+      app.log.warn(
+        {
+          event: "github_app.install_callback_identity_mismatch",
+          targetOrganizationId,
+          kickoffUserId: bindAuthorityUserId,
+          oauthUserId: userId,
+          githubId: profile.githubId,
+          githubLogin: profile.login,
+          installationId,
+        },
+        "install callback: OAuth identity differs from the kickoff session — binding on kickoff authority, skipping sign-in",
+      );
+      if (installationId !== null) {
+        try {
+          await bindInstallationToOrg(app.db, installationId, targetOrganizationId);
+        } catch (err) {
+          app.log.warn(
+            { err, installationId, hubOrganizationId: targetOrganizationId, kickoffUserId: bindAuthorityUserId },
+            "github app install bind-to-org failed on identity-mismatch path — reconcile in Settings",
+          );
+        }
+      }
+      return reply.redirect(next, 302);
     }
     resolved = true;
     resolvedOrganizationId = targetOrganizationId;
@@ -407,6 +519,7 @@ async function completeOauthFlow(
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
       if (allowedOrganizationId) {
+        if (browserFacing) return redirectCallbackError(reply, "invite-required");
         return reply.status(403).send({ error: "This server requires an invitation link to join" });
       }
       const personal = await createPersonalTeam(app.db, {
@@ -494,6 +607,7 @@ async function completeOauthFlow(
   }
 
   if (!resolved) {
+    if (browserFacing) return redirectCallbackError(reply, "membership-unresolved");
     return reply.status(500).send({ error: "Failed to resolve membership" });
   }
 

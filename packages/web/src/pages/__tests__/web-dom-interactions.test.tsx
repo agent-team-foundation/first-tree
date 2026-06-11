@@ -1117,6 +1117,39 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Sign-in did not complete", failure.container);
   });
 
+  it("renders friendly copy for callback error fragments", async () => {
+    const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const replaceState = vi.fn();
+    Object.defineProperty(window, "history", { configurable: true, value: { replaceState } });
+
+    // Expired/consumed state — the most common real-world trigger is the
+    // user spending >10min on GitHub's repo picker.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=state-expired&next=/settings/github",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const expired = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("took too long or was already used", expired.container);
+    const back = expired.container.querySelector<HTMLAnchorElement>("a");
+    expect(back?.getAttribute("href")).toBe("/settings/github");
+    await unmountRoot(expired.root);
+
+    // Install refused: kickoff admin's authority no longer holds.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, hash: "#error=install-not-admin", pathname: "/auth/github/complete" },
+    });
+    const notAdmin = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("admin of the First Tree team", notAdmin.container);
+    // No `next` in the fragment → the way out defaults to the app root.
+    expect(notAdmin.container.querySelector<HTMLAnchorElement>("a")?.getAttribute("href")).toBe("/");
+    await unmountRoot(notAdmin.root);
+  });
+
   it("renders SettingsOnboardingPage resume, hide, disabled, and completed states", async () => {
     const { SettingsOnboardingPage } = await import("../settings/onboarding.js");
 
