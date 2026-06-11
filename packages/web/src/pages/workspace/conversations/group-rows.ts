@@ -144,7 +144,7 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 }
 
 // ---------------------------------------------------------------------------
-// attention pinning (failed + mention)
+// attention pinning (failed + request + mention)
 // ---------------------------------------------------------------------------
 //
 // Chat-granularity predicate — see docs/development/needs-attention-scoping.20260526.md.
@@ -155,7 +155,16 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //         narrows `failedAgentIds` to `agents.manager_id = caller` so a
 //         peer's broken agent never pins my row.
 //
-//   R2. `unreadMentionCount > 0 && chatHasExplicitMentionToMe === true`
+//   R2. `openRequestCount > 0`
+//       — An agent raised a structured question (`format=request`) at me
+//         that I have not answered/closed yet. The counter is
+//         ANSWER-cleared, not read-cleared (`chat_user_state.
+//         open_request_count` only decrements on `--answer` / `--close`
+//         or a clean web-UI answer), so merely opening the chat does NOT
+//         drop the row out of the attention bucket — the asking agent is
+//         still blocked on me until I actually resolve the question.
+//
+//   R3. `unreadMentionCount > 0 && chatHasExplicitMentionToMe === true`
 //       — I have unread, and at least one unread message explicitly
 //         `@<me>`-mentions me (server checks `messages.metadata.mentions`
 //         in the unread window). Distinguishes explicit `@<me>` from the
@@ -163,9 +172,13 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //         dmAutoProjection`), which still bumps `unreadMentionCount` for
 //         the red dot but never writes the recipient into
 //         `metadata.mentions` — so an agent's plain `"ack"` to me in a DM
-//         correctly stays out of attention.
+//         correctly stays out of attention. Read-cleared — which is why
+//         an open request needs its own rule (R2) instead of riding on
+//         this one.
 //
-// Sort priority: `failed > mention`.
+// Sort priority: `failed > request > mention`. An open question outranks a
+// plain mention because the asker is explicitly blocked waiting on the
+// caller; both yield to `failed` (broken agent needs recovery first).
 //
 // This ladder is INTENTIONALLY separate from the shared agent-status
 // `compareMainStatus` (`failed`, `working`, ...). `mention` is a chat-level
@@ -178,7 +191,7 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 // silently degrade the rule to "off" under strict equality (safer
 // direction).
 
-const ATTENTION_PRIORITY = ["failed", "mention"] as const;
+const ATTENTION_PRIORITY = ["failed", "request", "mention"] as const;
 type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
 
 /**
@@ -188,6 +201,11 @@ type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
  */
 export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
   if (r.failedAgentIds.length > 0) return "failed";
+  // `> 0` is skew-safe without an explicit guard: an older server build
+  // that predates `openRequestCount` yields `undefined`, and
+  // `undefined > 0` is `false` — the rule degrades to "off", same safe
+  // direction as the `=== true` boolean checks above.
+  if (r.openRequestCount > 0) return "request";
   if (r.unreadMentionCount > 0 && r.chatHasExplicitMentionToMe === true) {
     return "mention";
   }
