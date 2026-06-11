@@ -365,8 +365,13 @@ export function ConversationList({
           New chat uses the brand-green `cta` Button variant: per DESIGN.md
           ("Neutral primary, green hero"), the CTA hue is reserved for the
           one creation moment per surface — and starting a new conversation
-          is exactly that for the workspace surface. Kept compact (`sm`) so
-          it sits cleanly above a dense conversation list. */}
+          is exactly that for the workspace surface. Sized `xs` (h-7, chip
+          radius) so the colour does the prominence work without the chip
+          itself eating vertical rhythm — keeps it close to the height of
+          the neighbouring `⚙` filter trigger and avoids dominating a
+          dense rail. Label is bumped one tier from xs's default
+          `text-label` to `text-body` so the CTA reads decisively even at
+          the compact height. */}
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         {/* Row 1 — primary action (New chat) + filter entry (⚙). Kept on
             its own line so it never crowds against the filter triad. */}
@@ -374,12 +379,13 @@ export function ConversationList({
           <Button
             type="button"
             variant="cta"
-            size="sm"
+            size="xs"
+            className="text-body"
             onClick={onNewChat}
             aria-current={isDraftActive ? "page" : undefined}
             title="New chat"
           >
-            <Plus size={15} strokeWidth={2} />
+            <Plus size={14} strokeWidth={2} />
             <span>New chat</span>
           </Button>
 
