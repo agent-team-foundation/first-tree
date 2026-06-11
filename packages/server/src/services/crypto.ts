@@ -17,7 +17,11 @@ function parseKey(encoded: string): Buffer {
   if (buf.length === 32) {
     return buf;
   }
-  throw new Error("ADAPTER_ENCRYPTION_KEY must be 32 bytes, encoded as hex (64 chars) or base64url (43 chars)");
+  throw new Error("Encryption key must be 32 bytes, encoded as hex (64 chars) or base64url (43 chars)");
+}
+
+export function assertEncryptionKeyValid(encoded: string): void {
+  parseKey(encoded);
 }
 
 /**

@@ -12,6 +12,23 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
 
+function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
+  return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
+}
+
+function serverSecretFields(autoGenerateSecrets: boolean) {
+  return {
+    jwtSecret: field(
+      z.string().min(1),
+      serverSecretOptions("FIRST_TREE_JWT_SECRET", "random:base64url:32", autoGenerateSecrets),
+    ),
+    encryptionKey: field(
+      z.string().min(1),
+      serverSecretOptions("FIRST_TREE_ENCRYPTION_KEY", "random:hex:32", autoGenerateSecrets),
+    ),
+  };
+}
+
 export const serverConfigSchema = defineConfig({
   /**
    * Which release channel this server speaks to. Single switch that drives
@@ -71,18 +88,7 @@ export const serverConfigSchema = defineConfig({
       { env: "FIRST_TREE_WORKSPACES_ROOT" },
     ),
   },
-  secrets: {
-    jwtSecret: field(z.string(), {
-      env: "FIRST_TREE_JWT_SECRET",
-      auto: "random:base64url:32",
-      secret: true,
-    }),
-    encryptionKey: field(z.string(), {
-      env: "FIRST_TREE_ENCRYPTION_KEY",
-      auto: "random:hex:32",
-      secret: true,
-    }),
-  },
+  secrets: serverSecretFields(true),
   /**
    * JWT lifetimes. All accept the `ms`-style format ("30m", "30d", "12h", …)
    * understood by `jose`'s `setExpirationTime`.
@@ -418,6 +424,24 @@ export const serverConfigSchema = defineConfig({
     }),
   },
 });
+
+export type CreateServerConfigSchemaOptions = {
+  /**
+   * Local development can generate server secrets into server.yaml. Production
+   * must receive stable operator-managed secrets so restarts and replicas keep
+   * decrypting existing data.
+   */
+  autoGenerateSecrets?: boolean;
+};
+
+export function createServerConfigSchema(options: CreateServerConfigSchemaOptions = {}): typeof serverConfigSchema {
+  const autoGenerateSecrets = options.autoGenerateSecrets ?? true;
+  if (autoGenerateSecrets) return serverConfigSchema;
+  return defineConfig({
+    ...serverConfigSchema,
+    secrets: serverSecretFields(false),
+  });
+}
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;
 
