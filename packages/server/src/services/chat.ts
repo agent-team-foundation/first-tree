@@ -537,10 +537,12 @@ export async function createChatWithInitialMessage(
     };
   });
 
-  await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
+  if (!txResult.result.replayed) {
+    await runSendMessagePostCommitEffects(db, txResult.result.chat.id, txResult.postCommitPlan);
+  }
   return {
     ...txResult.result,
-    recipients: txResult.postCommitPlan.recipients,
+    recipients: txResult.result.replayed ? [] : txResult.postCommitPlan.recipients,
   };
 }
 

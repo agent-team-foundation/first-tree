@@ -301,6 +301,8 @@ first-tree chat send code-agent "now we can talk"
 first-tree chat create --to code-agent --message "Please implement the task"
 first-tree chat create --to code-agent --with reviewer-agent --message "Please implement; reviewer has context"
 first-tree chat create --to code-agent --to reviewer-agent --message "Please coordinate this task"
+first-tree chat create --to name:code-agent --with id:<agentUuid> --format markdown --topic "Task handoff" --message "Please start"
+first-tree chat create --agent sender-agent --to code-agent --operation-id <uuid> --message "retry-safe handoff"
 
 # Browse
 first-tree chat list
@@ -332,6 +334,9 @@ message as one operation. It does not use the current chat as its target,
 does not modify `FIRST_TREE_CHAT_ID`, and does not switch the running agent
 session. Use `--operation-id <id>` only to retry after an unknown commit
 status; replay returns the same chat/message instead of creating duplicates.
+Replay is not a new wake: it does not re-notify recipients or reactivate their
+sessions. Selectors may be raw names/UUIDs or explicit `name:<name>` /
+`id:<uuid>` forms; raw selectors are rejected when ambiguous.
 
 ---
 

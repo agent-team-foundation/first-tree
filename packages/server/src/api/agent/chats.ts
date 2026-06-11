@@ -14,6 +14,7 @@ import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { agentMessageWriteRateLimit } from "./rate-limit.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -26,6 +27,8 @@ function serializeChat(chat: { createdAt: Date; updatedAt: Date; [key: string]: 
 }
 
 export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
+  const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
+
   app.post("/", async (request, reply) => {
     const identity = requireAgent(request);
     const body = createChatSchema.parse(request.body);
@@ -39,11 +42,13 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post("/create-and-send", { config: { otelRecordBody: true } }, async (request, reply) => {
+  app.post("/create-and-send", { config: { ...writeRateLimit, otelRecordBody: true } }, async (request, reply) => {
     const identity = requireAgent(request);
     const body = createChatWithInitialMessageSchema.parse(request.body);
     const result = await chatService.createChatWithInitialMessage(app.db, identity.uuid, body);
-    notifyRecipients(app.notifier, result.recipients, result.message.id);
+    if (!result.replayed) {
+      notifyRecipients(app.notifier, result.recipients, result.message.id);
+    }
     return reply.status(result.replayed ? 200 : 201).send({
       chat: result.chat,
       message: result.message,

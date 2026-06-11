@@ -110,7 +110,9 @@ chat does not switch the running agent session, does not mutate
 If the command returns a structured error, use its `code`, `details.option`,
 `details.input`, and `details.hint` to adjust the selector, `--to` / `--with`,
 or message body before retrying. If commit status is unknown, retry with the
-same `--operation-id`.
+same `--operation-id`; replay returns the original chat/message and does not
+re-notify or reactivate the original recipients. Use `name:<name>` or
+`id:<uuid>` when a raw selector is ambiguous.
 
 ### Channel-binary substitution
 

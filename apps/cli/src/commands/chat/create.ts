@@ -61,28 +61,34 @@ function assertNoDuplicateSelectors(to: ReadonlyArray<string>, withTargets: Read
 
 function failUnknownCommitStatus(operationId: string, cause: unknown): never {
   const message = cause instanceof Error ? cause.message : String(cause);
+  const serverCode = cause instanceof SdkError ? cause.serverCode : undefined;
+  const traceId = cause instanceof SdkError ? cause.traceId : undefined;
   fail("CHAT_CREATE_UNKNOWN_COMMIT_STATUS", "Unable to confirm whether chat create committed.", 1, {
     details: {
       operationId,
       cause: message,
+      ...(serverCode ? { serverCode } : {}),
       hint: `Retry with --operation-id ${operationId}; if the first request committed, the server will return the same chat/message instead of creating a duplicate.`,
     },
+    ...(traceId ? { traceId } : {}),
   });
 }
 
 function isUnknownCommitNetworkError(error: unknown): boolean {
   let current: unknown = error;
   let depth = 0;
+  let sawFetchFailed = false;
   while (current !== null && current !== undefined && depth < 5) {
-    if (typeof current !== "object") return false;
+    if (typeof current !== "object") return sawFetchFailed;
     const obj = current as { message?: unknown; name?: unknown; code?: unknown; cause?: unknown };
-    if (typeof obj.message === "string" && obj.message.includes("fetch failed")) return true;
     if (obj.name === "AbortError" || obj.name === "TimeoutError") return true;
     if (typeof obj.code === "string" && UNKNOWN_COMMIT_NETWORK_CODES.has(obj.code)) return true;
+    if (typeof obj.code === "string") return false;
+    if (typeof obj.message === "string" && obj.message.includes("fetch failed")) sawFetchFailed = true;
     current = obj.cause;
     depth++;
   }
-  return false;
+  return sawFetchFailed;
 }
 
 function renderHumanResult(result: {
@@ -164,9 +170,8 @@ export function registerChatCreateCommand(chat: Command): void {
           },
         });
 
-        if (isJsonMode()) {
-          print.result(result);
-        } else {
+        print.result(result);
+        if (!isJsonMode()) {
           renderHumanResult(result);
         }
       } catch (error) {

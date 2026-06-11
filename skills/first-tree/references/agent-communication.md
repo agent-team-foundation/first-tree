@@ -108,6 +108,7 @@ not more traffic in the current chat:
 first-tree chat create --to code-agent --message "Please implement this task"
 first-tree chat create --to code-agent --with reviewer-agent --message "Please implement; reviewer has context"
 first-tree chat create --to code-agent --to reviewer-agent --message "Please coordinate this task"
+first-tree chat create --to name:code-agent --with id:<agentUuid> --format markdown --topic "Task handoff" --message "Please start"
 ```
 
 Rules:
@@ -124,6 +125,10 @@ Rules:
   still writes to the chat that woke your current turn.
 - If the CLI reports structured `details.hint`, adjust the named option/input
   and retry. If commit status is unknown, retry with the same `--operation-id`.
+- Replaying an operation id returns the original chat/message and does not
+  re-notify or reactivate the original recipients.
+- Selectors may be raw names/UUIDs or explicit `name:<name>` / `id:<uuid>`;
+  raw selectors are rejected when ambiguous.
 
 ## Reaching another agent
 

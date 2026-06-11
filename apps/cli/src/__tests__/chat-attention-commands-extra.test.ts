@@ -155,7 +155,7 @@ describe("chat command behavior", () => {
       },
     });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Current session unchanged");
-    expect(outputMocks.success).not.toHaveBeenCalled();
+    expect(outputMocks.success).toHaveBeenCalledWith(expect.objectContaining({ chat: { id: "new-chat" } }));
   });
 
   it("creates a new task chat from stdin and emits JSON mode result", async () => {
@@ -208,7 +208,9 @@ describe("chat command behavior", () => {
 
   it("maps unknown chat create commit status to a retryable operation-id envelope", async () => {
     const sdk = localAgentMocks.createSdk();
-    sdk.createChatWithInitialMessage.mockRejectedValueOnce(new SdkError(502, "bad gateway"));
+    sdk.createChatWithInitialMessage.mockRejectedValueOnce(
+      new SdkError(502, "bad gateway", { serverCode: "UPSTREAM_BAD_GATEWAY", traceId: "trace-502" }),
+    );
 
     await expect(
       runChat(["create", "--to", "code-agent", "--message", "go", "--operation-id", "op-retry"]),
@@ -217,7 +219,10 @@ describe("chat command behavior", () => {
       "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
       "Unable to confirm whether chat create committed.",
       1,
-      expect.objectContaining({ details: expect.objectContaining({ operationId: "op-retry" }) }),
+      expect.objectContaining({
+        details: expect.objectContaining({ operationId: "op-retry", serverCode: "UPSTREAM_BAD_GATEWAY" }),
+        traceId: "trace-502",
+      }),
     );
   });
 
@@ -242,6 +247,23 @@ describe("chat command behavior", () => {
         expect.objectContaining({ details: expect.objectContaining({ operationId }) }),
       );
     }
+  });
+
+  it("does not map fetch failed with a non-retryable cause to unknown commit status", async () => {
+    const sdk = localAgentMocks.createSdk();
+    const error = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    sdk.createChatWithInitialMessage.mockRejectedValueOnce(error);
+
+    await expect(
+      runChat(["create", "--to", "code-agent", "--message", "go", "--operation-id", "op-refused"]),
+    ).rejects.toBe(error);
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(error);
+    expect(outputMocks.fail).not.toHaveBeenCalledWith(
+      "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
+      expect.any(String),
+      expect.any(Number),
+      expect.anything(),
+    );
   });
 
   it("sends messages with metadata, stdin fallback, document context, and validation errors", async () => {

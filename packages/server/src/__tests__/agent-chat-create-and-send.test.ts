@@ -1,6 +1,7 @@
 import { AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
@@ -54,6 +55,12 @@ describe("Agent chat create-and-send API", () => {
       ]),
     );
 
+    const sessionRows = await app.db
+      .select({ agentId: agentChatSessions.agentId, state: agentChatSessions.state })
+      .from(agentChatSessions)
+      .where(eq(agentChatSessions.chatId, body.chat.id));
+    expect(sessionRows).toEqual([{ agentId: to.agent.uuid, state: "active" }]);
+
     const memberships = await app.db
       .select({ agentId: chatMembership.agentId })
       .from(chatMembership)
@@ -103,6 +110,7 @@ describe("Agent chat create-and-send API", () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: "idem-sender" });
     const target = await createTestAgent(app, { name: "idem-target" });
+    const notifySpy = vi.spyOn(app.notifier, "notify");
     const payload = {
       operationId: "op-idem",
       to: [target.agent.name],
@@ -110,18 +118,37 @@ describe("Agent chat create-and-send API", () => {
     };
 
     const first = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
-    const replay = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
+    try {
+      expect(first.statusCode).toBe(201);
+      const firstBody = first.json();
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+      await app.db
+        .update(agentChatSessions)
+        .set({ state: "suspended" })
+        .where(and(eq(agentChatSessions.agentId, target.agent.uuid), eq(agentChatSessions.chatId, firstBody.chat.id)));
+      notifySpy.mockClear();
 
-    expect(first.statusCode).toBe(201);
-    expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toMatchObject({
-      chat: first.json().chat,
-      message: first.json().message,
-      operationId: "op-idem",
-      replayed: true,
-    });
-    expect(await tableCount(app, chats)).toBe(1);
-    expect(await tableCount(app, messages)).toBe(1);
+      const replay = await sender.request("POST", "/api/v1/agent/chats/create-and-send", payload);
+
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toMatchObject({
+        chat: firstBody.chat,
+        message: firstBody.message,
+        operationId: "op-idem",
+        replayed: true,
+      });
+      expect(await tableCount(app, chats)).toBe(1);
+      expect(await tableCount(app, messages)).toBe(1);
+      expect(notifySpy).not.toHaveBeenCalled();
+      const [session] = await app.db
+        .select({ state: agentChatSessions.state })
+        .from(agentChatSessions)
+        .where(and(eq(agentChatSessions.agentId, target.agent.uuid), eq(agentChatSessions.chatId, firstBody.chat.id)))
+        .limit(1);
+      expect(session?.state).toBe("suspended");
+    } finally {
+      notifySpy.mockRestore();
+    }
   });
 
   it("rejects operation id reuse with a different request body", async () => {
@@ -275,5 +302,26 @@ describe("Agent chat create-and-send API", () => {
     expect(res.json().code).toBe("CHAT_CREATE_TARGET_NOT_FOUND");
     expect(await tableCount(app, chats)).toBe(0);
     expect(await tableCount(app, messages)).toBe(0);
+  });
+});
+
+describe("Agent chat create-and-send rate limit", () => {
+  const getApp = useTestApp({ rateLimit: { agentMessageMax: 2 } });
+
+  it("shares the per-agent message write limiter", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: `create-rl-${crypto.randomUUID().slice(0, 6)}-s` });
+    const target = await createTestAgent(app, { name: `create-rl-${crypto.randomUUID().slice(0, 6)}-t` });
+
+    const create = (i: number) =>
+      sender.request("POST", "/api/v1/agent/chats/create-and-send", {
+        operationId: `op-create-rl-${i}`,
+        to: [target.agent.name],
+        message: { format: "text", content: `limited ${i}` },
+      });
+
+    expect((await create(1)).statusCode).toBe(201);
+    expect((await create(2)).statusCode).toBe(201);
+    expect((await create(3)).statusCode).toBe(429);
   });
 });
