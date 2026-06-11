@@ -252,6 +252,55 @@ describe("resolveAudience", () => {
     ]);
   });
 
+  it("returns legacy discussion subscriptions when the event key is canonical numeric", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-a-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateA,
+    });
+    const chatId = await seedChat(app, admin.organizationId, humanA);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: humanA,
+      delegateId: delegateA,
+      entityType: "discussion",
+      entityKey: "owner/repo#discussion-7",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "discussion",
+        entityKey: "owner/repo#7",
+        actorLogin: "outsider",
+        kind: "commented",
+        rawEventType: "discussion_comment",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toEqual([
+      {
+        humanAgentId: humanA,
+        delegateAgentId: delegateA,
+        kind: "existing",
+        chatId,
+        involveReason: null,
+        involveLogin: null,
+      },
+    ]);
+  });
+
   it("adds involved-new rows for fresh @mentions, carrying the InvolveReason", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

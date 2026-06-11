@@ -3,6 +3,7 @@ import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { githubEntityKeyCandidates } from "./github-entity-key.js";
 
 /**
  * Why a delegate-target lookup did or didn't qualify. Hoisted to a discrete
@@ -118,6 +119,7 @@ export async function resolveAudience(
   appSlug: string | null,
 ): Promise<AudienceTarget[]> {
   const organizationId = event.source.organizationId;
+  const entityKeys = githubEntityKeyCandidates(event.entity.type, event.entity.key);
 
   const subscribedRows = await db
     .select({
@@ -134,7 +136,7 @@ export async function resolveAudience(
       and(
         eq(githubEntityChatMappings.organizationId, organizationId),
         eq(githubEntityChatMappings.entityType, event.entity.type),
-        eq(githubEntityChatMappings.entityKey, event.entity.key),
+        inArray(githubEntityChatMappings.entityKey, entityKeys),
       ),
     );
 

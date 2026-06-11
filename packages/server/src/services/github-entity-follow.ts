@@ -5,7 +5,7 @@ import type {
   GithubEntityLiveState,
   GithubEntityType,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
@@ -16,6 +16,7 @@ import type { GithubAppCredentials } from "./github-app.js";
 import { findInstallationByOrg } from "./github-app-installations.js";
 import { mintContextTreeInstallationToken } from "./github-app-token.js";
 import { insertMappingIfAbsent } from "./github-entity-chat.js";
+import { githubEntityDedupKey, githubEntityKeyCandidates, legacyDiscussionEntityKey } from "./github-entity-key.js";
 import { resolveChatGithubEntity } from "./github-entity-live.js";
 
 const log = createLogger("GithubEntityFollow");
@@ -443,6 +444,7 @@ export async function declareEntityFollow(
   }
 
   if (params.rebind) {
+    const entityKeyCandidates = githubEntityKeyCandidates(entity.entityType, entity.entityKey);
     // Move the line: the entity's attention home follows the task. Rewrites
     // `bound_via` to the declared value so a moved `direct` anchor row can't
     // make the new chat impersonate a github-minted chat's anchor (R13), and
@@ -462,7 +464,7 @@ export async function declareEntityFollow(
           eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
           eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
           eq(githubEntityChatMappings.entityType, entity.entityType),
-          eq(githubEntityChatMappings.entityKey, entity.entityKey),
+          inArray(githubEntityChatMappings.entityKey, entityKeyCandidates),
         ),
       )
       .returning({ chatId: githubEntityChatMappings.chatId });
@@ -559,15 +561,17 @@ export async function removeEntityFollow(
         : ref.explicitType !== null
           ? ["issue", "pull_request"]
           : ["issue", "pull_request", "discussion"];
+    const lowerKeys = new Set([key]);
+    if (types.includes("discussion")) {
+      const legacyKey = legacyDiscussionEntityKey(key);
+      if (legacyKey) lowerKeys.add(legacyKey);
+    }
+    const keyConditions = [...lowerKeys].map(
+      (lowerKey) => sql`lower(${githubEntityChatMappings.entityKey}) = ${lowerKey}`,
+    );
     removedRows = await db
       .delete(githubEntityChatMappings)
-      .where(
-        and(
-          chatCond,
-          inArray(githubEntityChatMappings.entityType, types),
-          sql`lower(${githubEntityChatMappings.entityKey}) = ${key}`,
-        ),
-      )
+      .where(and(chatCond, inArray(githubEntityChatMappings.entityType, types), or(...keyConditions)))
       .returning({ entityKey: githubEntityChatMappings.entityKey });
   }
 
@@ -603,7 +607,7 @@ export async function listChatGithubEntities(
 
   const dedup = new Map<string, (typeof rows)[number]>();
   for (const r of rows) {
-    const key = `${r.entityType}::${r.entityKey}`;
+    const key = githubEntityDedupKey(r.entityType, r.entityKey);
     // Rows arrive newest-first so the dedup keeps the most recent binding,
     // which carries the `boundVia` the user actually triggered last.
     if (!dedup.has(key)) dedup.set(key, r);

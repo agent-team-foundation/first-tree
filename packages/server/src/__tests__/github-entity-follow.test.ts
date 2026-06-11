@@ -278,6 +278,43 @@ describe("github-entity-follow", () => {
     expect(rows[0]?.boundVia).toBe("agent_declared");
   });
 
+  it("rebind moves a legacy discussion row instead of inserting a duplicate canonical row", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "discussion",
+      entityKey: "Acme/Api#discussion-42",
+      chatId: s.chatId,
+      boundVia: "direct",
+    });
+    const fetcher = makeFetcher({
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+      "/repos/Acme/Api/discussions/42": () =>
+        json({
+          number: 42,
+          state: "open",
+          title: "RFC",
+          html_url: "https://github.com/Acme/Api/discussions/42",
+        }),
+    });
+
+    const rebound = await declareEntityFollow(app.db, deps(fetcher), {
+      ...followParams(s, "https://github.com/acme/api/discussions/42", true),
+      chatId: newChat,
+    });
+    expect(rebound.outcome).toBe("rebound");
+
+    const rows = await app.db
+      .select({ entityKey: githubEntityChatMappings.entityKey, chatId: githubEntityChatMappings.chatId })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityType, "discussion"));
+    expect(rows).toEqual([{ entityKey: "Acme/Api#discussion-42", chatId: newChat }]);
+  });
+
   it("R11: a merged PR is followable and its terminal state is recorded", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -484,6 +521,24 @@ describe("github-entity-follow", () => {
     });
   });
 
+  it("unfollow removes legacy discussion keys with the same explicit discussion reference", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "discussion",
+      entityKey: "Acme/Api#discussion-42",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+    });
+
+    await expect(
+      removeEntityFollow(app.db, { chatId: s.chatId, entity: "https://github.com/acme/api/discussions/42" }),
+    ).resolves.toEqual({ removed: 1 });
+  });
+
   it("commit unfollow escapes LIKE metacharacters — an underscore repo cannot sweep a sibling", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -579,6 +634,33 @@ describe("github-entity-follow", () => {
     });
     expect(list.items).toHaveLength(1);
     expect(list.items[0]).toMatchObject({ entityKey: "Acme/Api#7", boundVia: "agent_declared" });
+  });
+
+  it("following lists legacy discussion mappings under the canonical numeric key", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "discussion",
+      entityKey: "Acme/Api#discussion-42",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+    });
+
+    const list = await listChatGithubEntities(app.db, deps(prFetcher()), {
+      chatId: s.chatId,
+      organizationId: s.admin.organizationId,
+    });
+
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({
+      entityType: "discussion",
+      entityKey: "Acme/Api#42",
+      htmlUrl: "https://github.com/Acme/Api/discussions/42",
+      number: 42,
+    });
   });
 
   it("unfollow by short commit sha prefix removes the full-sha row", async () => {

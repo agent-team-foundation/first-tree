@@ -20,6 +20,12 @@ describe("github entity live helpers", () => {
       repo: "repo",
       number: 7,
     });
+    expect(__testing.parseEntityKey("discussion", "owner/repo#discussion-9")).toEqual({
+      kind: "numeric",
+      owner: "owner",
+      repo: "repo",
+      number: 9,
+    });
     expect(__testing.parseEntityKey("commit", "owner/repo@abcdef1")).toEqual({
       kind: "sha",
       owner: "owner",
@@ -173,6 +179,27 @@ describe("resolveChatGithubEntity", () => {
       title: null,
       state: null,
       number: null,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("materializes legacy discussion rows as canonical numeric keys", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(
+      resolveChatGithubEntity(
+        { entityType: "discussion", entityKey: "owner/repo#discussion-9", boundVia: "agent_declared" },
+        null,
+        fetcher,
+      ),
+    ).resolves.toEqual({
+      entityType: "discussion",
+      entityKey: "owner/repo#9",
+      boundVia: "agent_declared",
+      htmlUrl: "https://github.com/owner/repo/discussions/9",
+      title: null,
+      state: null,
+      number: 9,
     });
     expect(fetcher).not.toHaveBeenCalled();
   });

@@ -81,13 +81,11 @@ const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
 };
 
 /**
- * `entity.key` arrives as `owner/repo#N` (issue / PR), `owner/repo@<sha>`
- * (commit), or `owner/repo#discussion-N` (discussion — the odd one out:
- * the key carries a `discussion-` infix but the server's surface title
- * uses the bare `disc.number`, see `entitySurfaceTitle` in
- * services/github-normalize.ts). Strip the repo prefix, then collapse the
- * `discussion-` infix so the chip and the surface-title-strip both
- * reference the same `#N` form that appears in the server-rendered title.
+ * `entity.key` arrives canonically as `owner/repo#N` (issue / PR /
+ * discussion) or `owner/repo@<sha>` (commit). Older persisted discussion
+ * cards may still carry `owner/repo#discussion-N`; collapse that legacy
+ * infix so the chip and the surface-title-strip both reference the same
+ * `#N` form that appears in the server-rendered title.
  * Falls back defensively to the segment after the last `/` if neither
  * prefix shape matches (older messages, schema drift).
  */

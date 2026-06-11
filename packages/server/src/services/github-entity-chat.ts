@@ -1,5 +1,5 @@
 import { chatMetadataSchema, type GithubEntityBoundVia, githubEntityBoundViaSchema } from "@first-tree/shared";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle, refreshEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
@@ -9,6 +9,11 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
+import {
+  canonicalizeGithubEntityKey,
+  githubEntityKeyCandidates,
+  githubEntityKeysEquivalent,
+} from "./github-entity-key.js";
 
 const log = createLogger("GithubEntityChat");
 
@@ -107,12 +112,14 @@ export async function resolveTargetChat(
     organizationId,
     humanAgentId,
     delegateAgentId,
-    entity,
-    relatedEntities,
+    entity: rawEntity,
+    relatedEntities: rawRelatedEntities,
     eventType,
     action,
     isMentionMatched,
   } = params;
+  const entity = normalizeGithubEntity(rawEntity);
+  const relatedEntities = rawRelatedEntities.map(normalizeGithubEntity);
 
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
@@ -193,6 +200,8 @@ async function lookupMapping(
   delegateAgentId: string,
   entity: GithubEntity,
 ): Promise<{ chatId: string; boundVia: BoundVia } | null> {
+  const candidateKeys = githubEntityKeyCandidates(entity.type, entity.key);
+  const canonicalKey = canonicalizeGithubEntityKey(entity.type, entity.key);
   const [row] = await db
     .select({ chatId: githubEntityChatMappings.chatId, boundVia: githubEntityChatMappings.boundVia })
     .from(githubEntityChatMappings)
@@ -202,9 +211,10 @@ async function lookupMapping(
         eq(githubEntityChatMappings.humanAgentId, humanAgentId),
         eq(githubEntityChatMappings.delegateAgentId, delegateAgentId),
         eq(githubEntityChatMappings.entityType, entity.type),
-        eq(githubEntityChatMappings.entityKey, entity.key),
+        inArray(githubEntityChatMappings.entityKey, candidateKeys),
       ),
     )
+    .orderBy(desc(sql`${githubEntityChatMappings.entityKey} = ${canonicalKey}`))
     .limit(1);
   if (!row) return null;
   return { chatId: row.chatId, boundVia: asBoundVia(row.boundVia) };
@@ -225,6 +235,8 @@ async function lookupMappingByHuman(
   humanAgentId: string,
   entity: GithubEntity,
 ): Promise<{ chatId: string } | null> {
+  const candidateKeys = githubEntityKeyCandidates(entity.type, entity.key);
+  const canonicalKey = canonicalizeGithubEntityKey(entity.type, entity.key);
   const [row] = await db
     .select({ chatId: githubEntityChatMappings.chatId })
     .from(githubEntityChatMappings)
@@ -233,10 +245,14 @@ async function lookupMappingByHuman(
         eq(githubEntityChatMappings.organizationId, organizationId),
         eq(githubEntityChatMappings.humanAgentId, humanAgentId),
         eq(githubEntityChatMappings.entityType, entity.type),
-        eq(githubEntityChatMappings.entityKey, entity.key),
+        inArray(githubEntityChatMappings.entityKey, candidateKeys),
       ),
     )
-    .orderBy(desc(sql`${githubEntityChatMappings.entityState} = 'open'`), asc(githubEntityChatMappings.boundAt))
+    .orderBy(
+      desc(sql`${githubEntityChatMappings.entityKey} = ${canonicalKey}`),
+      desc(sql`${githubEntityChatMappings.entityState} = 'open'`),
+      asc(githubEntityChatMappings.boundAt),
+    )
     .limit(1);
   if (!row) return null;
   return { chatId: row.chatId };
@@ -255,14 +271,20 @@ export async function insertMappingIfAbsent(
     entityState?: "open" | "closed" | "merged";
   },
 ): Promise<{ chatId: string; boundVia: BoundVia; inserted: boolean }> {
+  const entity = normalizeGithubEntity(params.entity);
+  const existing = await lookupMapping(db, params.organizationId, params.humanAgentId, params.delegateAgentId, entity);
+  if (existing) {
+    return { ...existing, inserted: false };
+  }
+
   const [inserted] = await db
     .insert(githubEntityChatMappings)
     .values({
       organizationId: params.organizationId,
       humanAgentId: params.humanAgentId,
       delegateAgentId: params.delegateAgentId,
-      entityType: params.entity.type,
-      entityKey: params.entity.key,
+      entityType: entity.type,
+      entityKey: entity.key,
       chatId: params.chatId,
       boundVia: params.boundVia,
       ...(params.entityState ? { entityState: params.entityState } : {}),
@@ -284,13 +306,7 @@ export async function insertMappingIfAbsent(
     return { chatId: inserted.chatId, boundVia: asBoundVia(inserted.boundVia), inserted: true };
   }
   // Lost the race — read the winning row.
-  const winner = await lookupMapping(
-    db,
-    params.organizationId,
-    params.humanAgentId,
-    params.delegateAgentId,
-    params.entity,
-  );
+  const winner = await lookupMapping(db, params.organizationId, params.humanAgentId, params.delegateAgentId, entity);
   if (!winner) {
     throw new Error("Unexpected: mapping insert conflicted but row not visible on re-read");
   }
@@ -451,6 +467,7 @@ export async function resolveBindingPair(
  */
 export async function refreshGithubChatTopic(db: Database, chatId: string, entity: GithubEntity): Promise<void> {
   if (!entity.title || entity.title.length === 0) return;
+  const normalizedEntity = normalizeGithubEntity(entity);
 
   try {
     const [anchor] = await db
@@ -462,12 +479,17 @@ export async function refreshGithubChatTopic(db: Database, chatId: string, entit
       .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.boundVia, "direct")))
       .limit(1);
     if (!anchor) return;
-    if (anchor.entityType !== entity.type || anchor.entityKey !== entity.key) return;
+    if (
+      anchor.entityType !== normalizedEntity.type ||
+      !githubEntityKeysEquivalent(normalizedEntity.type, anchor.entityKey, normalizedEntity.key)
+    ) {
+      return;
+    }
 
     const [row] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     if (!row || !row.topic) return;
 
-    const nextTopic = refreshEntityTitle(row.topic, entity);
+    const nextTopic = refreshEntityTitle(row.topic, normalizedEntity);
     if (!nextTopic || nextTopic === row.topic) return;
 
     await db.update(chats).set({ topic: nextTopic, updatedAt: new Date() }).where(eq(chats.id, chatId));
@@ -476,11 +498,16 @@ export async function refreshGithubChatTopic(db: Database, chatId: string, entit
     log.warn(
       {
         chatId,
-        entityType: entity.type,
-        entityKey: entity.key,
+        entityType: normalizedEntity.type,
+        entityKey: normalizedEntity.key,
         errorMessage: err instanceof Error ? err.message : String(err),
       },
       "failed to refresh github chat topic — continuing",
     );
   }
+}
+
+function normalizeGithubEntity(entity: GithubEntity): GithubEntity {
+  const key = canonicalizeGithubEntityKey(entity.type, entity.key);
+  return key === entity.key ? entity : { ...entity, key };
 }
