@@ -152,6 +152,11 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
+  // Preserve the public sendMessage fail-fast contract for callers/tests that
+  // validate payload shape without needing a real DB transaction.
+  if (data.format === "file") {
+    validateFileContent(data.content);
+  }
   return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), async () => {
     const txResult = await db.transaction((tx) => sendMessageInTransaction(tx, chatId, senderId, data, options));
     await runSendMessagePostCommitEffects(db, chatId, txResult);
