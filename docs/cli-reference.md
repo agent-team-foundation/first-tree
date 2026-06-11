@@ -505,10 +505,10 @@ and are not used by the CLI. They are listed here for ops reference.
 
 **Secrets:**
 
-| Variable | Purpose |
-|---|---|
-| `FIRST_TREE_JWT_SECRET` | JWT signing key. |
-| `FIRST_TREE_ENCRYPTION_KEY` | Adapter credential encryption key. |
+| Variable | Purpose | Production |
+|---|---|---|
+| `FIRST_TREE_JWT_SECRET` | JWT signing key. Local development auto-generates a value when omitted. | Required |
+| `FIRST_TREE_ENCRYPTION_KEY` | AES-256-GCM key for encrypted server-side secrets. Must be 32 bytes encoded as 64-char hex or base64url. Local development auto-generates a value when omitted. | Required |
 
 **Auth lifetimes:**
 

@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import { assertEncryptionKeyValid } from "./services/crypto.js";
 
 /**
  * Boot-time configuration sanity checks. Called from `buildApp` (and thus
@@ -7,8 +8,26 @@ import type { Config } from "./config.js";
  * Throws on misconfiguration; never returns a value.
  */
 export function assertBootConfigValid(config: Config): void {
+  assertSecretsValid(config);
   assertProductionRequiresPublicUrl(config);
   assertGithubAppConfigComplete(config);
+}
+
+function assertSecretsValid(config: Config): void {
+  const missing = [
+    config.secrets.jwtSecret.trim().length === 0 ? "FIRST_TREE_JWT_SECRET" : undefined,
+    config.secrets.encryptionKey.trim().length === 0 ? "FIRST_TREE_ENCRYPTION_KEY" : undefined,
+  ].filter((value): value is string => value !== undefined);
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required server secret env vars: ${missing.join(", ")}.`);
+  }
+
+  try {
+    assertEncryptionKeyValid(config.secrets.encryptionKey);
+  } catch {
+    throw new Error("FIRST_TREE_ENCRYPTION_KEY must be 32 bytes, encoded as hex (64 chars) or base64url (43 chars).");
+  }
 }
 
 function assertProductionRequiresPublicUrl(config: Config): void {

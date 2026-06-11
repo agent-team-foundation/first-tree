@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
@@ -42,6 +42,10 @@ const baseConfig: Config = {
 async function safeClose(app: FastifyInstance | undefined) {
   if (app) await app.close();
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("buildApp — token-lifetime config validation", () => {
   it("rejects a malformed refresh token expiry", async () => {
@@ -90,6 +94,61 @@ describe("buildApp — token-lifetime config validation", () => {
       await expect(async () => {
         app = await buildApp(cfg);
       }).rejects.toThrow(/access=30m, refresh=bogus, connect=10m/);
+    } finally {
+      await safeClose(app);
+    }
+  });
+});
+
+describe("buildApp — server secret validation", () => {
+  const productionServer = { ...baseConfig.server, publicUrl: "https://first-tree.example" };
+
+  it("rejects a blank JWT secret before startup", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cfg: Config = {
+      ...baseConfig,
+      server: productionServer,
+      secrets: { ...baseConfig.secrets, jwtSecret: "" },
+    };
+    let app: FastifyInstance | undefined;
+    try {
+      await expect(async () => {
+        app = await buildApp(cfg);
+      }).rejects.toThrow(/FIRST_TREE_JWT_SECRET/);
+    } finally {
+      await safeClose(app);
+    }
+  });
+
+  it("rejects a blank encryption key before startup", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cfg: Config = {
+      ...baseConfig,
+      server: productionServer,
+      secrets: { ...baseConfig.secrets, encryptionKey: "" },
+    };
+    let app: FastifyInstance | undefined;
+    try {
+      await expect(async () => {
+        app = await buildApp(cfg);
+      }).rejects.toThrow(/FIRST_TREE_ENCRYPTION_KEY/);
+    } finally {
+      await safeClose(app);
+    }
+  });
+
+  it("rejects an encryption key with an unsupported encoding before startup", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cfg: Config = {
+      ...baseConfig,
+      server: productionServer,
+      secrets: { ...baseConfig.secrets, encryptionKey: "short" },
+    };
+    let app: FastifyInstance | undefined;
+    try {
+      await expect(async () => {
+        app = await buildApp(cfg);
+      }).rejects.toThrow(/FIRST_TREE_ENCRYPTION_KEY must be 32 bytes/);
     } finally {
       await safeClose(app);
     }

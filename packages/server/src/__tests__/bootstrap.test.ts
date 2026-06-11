@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import type { ServerConfig } from "@first-tree/shared/config";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { startServer } from "../bootstrap-server.js";
 import { bootstrapState, markReady, markStage } from "../bootstrap-state.js";
 import { runStage, withTimeout } from "../bootstrap-utils.js";
 import { runMigrations } from "../db/migrate.js";
@@ -16,7 +18,61 @@ function resetBootstrapState(): void {
   bootstrapState.readyAt = null;
 }
 
+const baseServerConfig: ServerConfig = {
+  channel: "dev",
+  database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
+  server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },
+  workspace: { root: "/tmp/first-tree-test-workspaces" },
+  secrets: {
+    jwtSecret: "test-jwt-secret-key-for-vitest",
+    encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  },
+  auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
+  trustProxy: false,
+  observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
+  runtime: {
+    pollingIntervalSeconds: 5,
+    presenceCleanupSeconds: 60,
+    archiveSweepIntervalSeconds: 0,
+    archiveMappedIdleSeconds: 60 * 60,
+    archiveUnmappedIdleSeconds: 12 * 60 * 60,
+    notificationWebhookUrl: undefined,
+  },
+  update: {
+    commandVersion: "test.version",
+    pollIntervalMinutes: 1440,
+    registryUrl: "https://localhost.invalid",
+  },
+};
+
 describe("server bootstrap", () => {
+  it("validates boot config before telemetry and migrations", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const markReadyFn = vi.fn();
+    const shutdownTelemetryFn = vi.fn(async () => undefined);
+
+    await expect(
+      startServer({
+        initServerConfig: async () => ({
+          ...baseServerConfig,
+          secrets: { ...baseServerConfig.secrets, encryptionKey: "short" },
+        }),
+        randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        markReady: markReadyFn,
+        shutdownTelemetry: shutdownTelemetryFn,
+      }),
+    ).rejects.toThrow(/FIRST_TREE_ENCRYPTION_KEY must be 32 bytes/);
+
+    expect(initTelemetryFn).not.toHaveBeenCalled();
+    expect(runMigrationsFn).not.toHaveBeenCalled();
+    expect(markReadyFn).not.toHaveBeenCalled();
+    expect(shutdownTelemetryFn).not.toHaveBeenCalled();
+  });
+
   it("runMigrations resolves the drizzle folder and applies migrations idempotently", async () => {
     const databaseUrl = process.env.DATABASE_URL;
     expect(databaseUrl, "DATABASE_URL must be set by global setup").toBeTruthy();
@@ -34,6 +90,7 @@ describe("server bootstrap", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     resetBootstrapState();
   });
 
