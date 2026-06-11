@@ -6,6 +6,7 @@ import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
+import { Button } from "../../../components/ui/button.js";
 import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
@@ -356,35 +357,37 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header — a single ghost-button row: New chat (primary ink) on the
-          left, the All / Unread / Watching triad pushed right, and the `⚙`
-          popover (Scope / Origin / Group) at the far right. The optional
-          chip row (active origin / participants) sits below. */}
+      {/* Header — New chat (brand-green CTA) on the left, the All / Unread /
+          Watching triad pushed right, and the `⚙` popover (Scope / Origin /
+          Group) at the far right. The optional chip row (active origin /
+          participants) sits below.
+
+          New chat uses the brand-green `cta` Button variant: per DESIGN.md
+          ("Neutral primary, green hero"), the CTA hue is reserved for the
+          one creation moment per surface — and starting a new conversation
+          is exactly that for the workspace surface. Sized `xs` (h-7, chip
+          radius) so the colour does the prominence work without the chip
+          itself eating vertical rhythm — keeps it close to the height of
+          the neighbouring `⚙` filter trigger and avoids dominating a
+          dense rail. Label is bumped one tier from xs's default
+          `text-label` to `text-body` so the CTA reads decisively even at
+          the compact height. */}
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         {/* Row 1 — primary action (New chat) + filter entry (⚙). Kept on
             its own line so it never crowds against the filter triad. */}
         <div className="flex items-center" style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3)" }}>
-          <button
+          <Button
             type="button"
+            variant="cta"
+            size="xs"
+            className="text-body"
             onClick={onNewChat}
             aria-current={isDraftActive ? "page" : undefined}
-            className={cn(
-              "inline-flex items-center text-label font-medium cursor-pointer transition-colors",
-              !isDraftActive && "hover:bg-[var(--bg-active)]",
-            )}
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              border: 0,
-              borderRadius: 4,
-              background: isDraftActive ? "var(--bg-active)" : "transparent",
-              color: "var(--primary)",
-            }}
             title="New chat"
           >
-            <Plus size={15} strokeWidth={2} />
+            <Plus size={14} strokeWidth={2} />
             <span>New chat</span>
-          </button>
+          </Button>
 
           <span style={{ marginLeft: "auto" }} />
 
@@ -531,20 +534,14 @@ export function ConversationList({
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
                         className={cn(
-                          "w-full text-left transition-colors flex items-start",
+                          "w-full text-left transition-colors flex items-center",
                           "hover:bg-[var(--bg-hover)]",
                         )}
                         style={{
-                          // Fixed-height two-line cards: title line + a
-                          // description line (the chat's running work summary).
-                          // Height is pinned so every card is equal regardless
-                          // of whether a description is set — the list keeps a
-                          // steady rhythm, scrolling never reflows, and the
-                          // per-screen chat count stays predictable. Rows with
-                          // no description render a skeleton in the second line
-                          // rather than collapsing.
-                          height: 52,
-                          overflow: "hidden",
+                          // Single-line rows tuned for desktop-inbox density:
+                          // tightened vertical padding (--sp-2) now that the
+                          // preview subtitle line is gone, so more conversations
+                          // fit per screen without reading as a dense wall.
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2)",
                           background: isSelected ? "var(--brand-bg)" : "transparent",
@@ -554,87 +551,46 @@ export function ConversationList({
                           borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--brand)" : "transparent"}`,
                         }}
                       >
-                        <span className="shrink-0" style={{ marginTop: 1 }}>
-                          <ChatRowAvatar
-                            title={row.title}
-                            type={row.type}
-                            participants={row.participants}
-                            selfAgentId={selfAgentId ?? ""}
-                            unreadCount={row.unreadMentionCount}
-                            failed={failed}
-                            needsYou={row.openRequestCount > 0}
-                            size={26}
-                            muted
-                            badge={false}
-                            statusDot
-                          />
+                        <ChatRowAvatar
+                          title={row.title}
+                          type={row.type}
+                          participants={row.participants}
+                          selfAgentId={selfAgentId ?? ""}
+                          unreadCount={row.unreadMentionCount}
+                          failed={failed}
+                          needsYou={row.openRequestCount > 0}
+                          size={26}
+                          muted
+                          badge={false}
+                          statusDot
+                        />
+                        <span
+                          className="truncate text-subtitle"
+                          style={{
+                            color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
+                            fontWeight: hasUnread ? 700 : 500,
+                            flex: 1,
+                            minWidth: 0,
+                          }}
+                        >
+                          {row.title}
                         </span>
-                        <span className="flex flex-col min-w-0" style={{ flex: 1, minWidth: 0 }}>
-                          {/* Line 1 — title + right meta cluster. */}
-                          <span className="flex items-center" style={{ gap: 6 }}>
-                            <span
-                              className="truncate text-subtitle"
-                              style={{
-                                color: hasUnread || isSelected ? "var(--fg)" : "var(--fg-2)",
-                                fontWeight: hasUnread ? 700 : 500,
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              {row.title}
-                            </span>
-                            {/* Right meta cluster. Hidden on hover so the row's
-                                engagement menu can take the corner. */}
-                            <span
-                              className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
-                              style={{ gap: 6 }}
-                            >
-                              {isWatching && (
-                                <Eye
-                                  size={12}
-                                  strokeWidth={1.75}
-                                  style={{ color: "var(--fg-4)" }}
-                                  aria-label="watching"
-                                />
-                              )}
-                              {row.busyAgentIds.length > 0 ? (
-                                <ActivityDots />
-                              ) : row.lastMessageAt ? (
-                                <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                                  {formatRowTime(row.lastMessageAt)}
-                                </span>
-                              ) : null}
-                            </span>
-                          </span>
-                          {/* Line 2 — description (running work summary). Single
-                              line, truncated when long: the list is the density
-                              surface, so it stays equal-height and tidy. Like the
-                              title (topic → first-message → participants), the
-                              line has a default: when no description is set it
-                              falls back to the last-message preview, so the
-                              second line is informative by default instead of an
-                              empty placeholder. Only when neither exists does the
-                              skeleton bar keep the card's height. */}
-                          {(row.description ?? row.lastMessagePreview) ? (
-                            <span className="truncate text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-                              {row.description ?? row.lastMessagePreview}
-                            </span>
-                          ) : (
-                            <span
-                              aria-hidden
-                              data-testid="row-description-skeleton"
-                              style={{
-                                display: "block",
-                                height: 7,
-                                width: 128,
-                                maxWidth: "70%",
-                                marginTop: 5,
-                                borderRadius: 3,
-                                background: "linear-gradient(90deg, var(--bg-active), var(--bg-sunken))",
-                                opacity: 0.85,
-                              }}
-                            />
+                        {/* Right meta cluster — single line. Hidden on hover so
+                            the row's engagement menu can take the corner. */}
+                        <span
+                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                          style={{ gap: 6 }}
+                        >
+                          {isWatching && (
+                            <Eye size={12} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-label="watching" />
                           )}
+                          {row.busyAgentIds.length > 0 ? (
+                            <ActivityDots />
+                          ) : row.lastMessageAt ? (
+                            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                              {formatRowTime(row.lastMessageAt)}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                       <div
