@@ -253,10 +253,19 @@ export function refreshEntityTitle(storedTopic: string, entity: GithubEntity): s
     entity.type === "pull_request"
       ? [`PR Review ${shortKey}`, `PR ${shortKey}`]
       : [`${baseTypePrefix(entity.type)} ${shortKey}`];
+  // Discussion chats minted before the key canonicalisation carry the
+  // legacy `repo#discussion-N` head in their stored topic. Accept it so
+  // those chats' titles keep refreshing — and rewrite to the canonical
+  // head below so the topic converges with the backfilled mapping key.
+  const legacyHeads =
+    entity.type === "discussion"
+      ? [`${baseTypePrefix(entity.type)} ${shortKey.replace(/#(\d+)$/, "#discussion-$1")}`]
+      : [];
   // Longest first so "PR Review repo#7" is matched before "PR repo#7".
-  const head = heads
+  const matched = [...heads, ...legacyHeads]
     .sort((a, b) => b.length - a.length)
     .find((h) => storedTopic === h || storedTopic.startsWith(`${h}: `));
-  if (!head) return null;
+  if (!matched) return null;
+  const head = legacyHeads.includes(matched) ? (heads[0] ?? matched) : matched;
   return `${head}: ${entity.title}`;
 }

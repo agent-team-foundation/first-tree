@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractEventEntity, formatEntityTitle, parseFixesRefs } from "../api/webhooks/github-entity.js";
+import {
+  extractEventEntity,
+  formatEntityTitle,
+  parseFixesRefs,
+  refreshEntityTitle,
+} from "../api/webhooks/github-entity.js";
 
 describe("extractEventEntity", () => {
   it("derives issue entity from issues event", () => {
@@ -233,5 +238,41 @@ describe("formatEntityTitle", () => {
     // Defensive — entity keys are always `owner/repo...` in practice, but the
     // helper shouldn't choke if a future caller drops the slash.
     expect(formatEntityTitle({ type: "issue", key: "repo#42" }, "issues", "opened")).toBe("Issue repo#42");
+  });
+});
+
+describe("refreshEntityTitle", () => {
+  it("refreshes a canonical discussion head", () => {
+    expect(
+      refreshEntityTitle("Discussion repo#9: Old title", { type: "discussion", key: "owner/repo#9", title: "New" }),
+    ).toBe("Discussion repo#9: New");
+  });
+
+  it("accepts the legacy discussion head and rewrites it to the canonical form", () => {
+    // Chats minted before the discussion key canonicalisation carry
+    // `repo#discussion-N` in their stored topic; their titles must keep
+    // refreshing, converging on the canonical head.
+    expect(
+      refreshEntityTitle("Discussion repo#discussion-9: Old title", {
+        type: "discussion",
+        key: "owner/repo#9",
+        title: "New",
+      }),
+    ).toBe("Discussion repo#9: New");
+  });
+
+  it("never applies the legacy-discussion head to issues sharing the number", () => {
+    expect(
+      refreshEntityTitle("Issue repo#discussion-9: Old", { type: "issue", key: "owner/repo#9", title: "New" }),
+    ).toBeNull();
+  });
+
+  it("preserves the PR Review prefix and leaves custom topics alone", () => {
+    expect(
+      refreshEntityTitle("PR Review repo#307: old", { type: "pull_request", key: "owner/repo#307", title: "new" }),
+    ).toBe("PR Review repo#307: new");
+    expect(
+      refreshEntityTitle("my custom name", { type: "pull_request", key: "owner/repo#307", title: "new" }),
+    ).toBeNull();
   });
 });
