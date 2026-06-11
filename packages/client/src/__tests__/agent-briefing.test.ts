@@ -65,9 +65,13 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     // briefing skeleton must appear in this order, with the per-chat
     // `## Current Chat Context` block at the bottom so the prompt cache
     // stays warm across sibling chats.
+    // Runtime-injected sections carry the `(First Tree Managed)` provenance
+    // suffix so an agent reading the assembled file can tell which sections
+    // its prompt config does NOT own (the anti-"copy AGENTS.md back into
+    // config" defense, together with the generated-file banner).
     const expectedOrder = [
       "# Identity",
-      "# Working in First Tree",
+      "# Working in First Tree (First Tree Managed)",
       "## Working Directory",
       "## Worktrees",
       "## Communication",
@@ -75,25 +79,41 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Asking Humans",
       "## Chat Topic",
       "## CLI Overview",
-      "# Required Reading",
-      "# Context Tree",
+      "# Required Reading (First Tree Managed)",
+      "# Context Tree (First Tree Managed)",
       "## Core Model",
       "## Reading the Tree",
       "## Writing the Tree",
       "## Tree Location",
-      "# Skills",
+      "# Skills (First Tree Managed)",
       "## First Tree Family",
-      "## Current Chat Context",
+      "## Current Chat Context (First Tree Managed, per-chat)",
     ];
     let last = -1;
     for (const header of expectedOrder) {
-      // First section's header sits at offset 0 (no preceding newline),
-      // every subsequent header sits after a `\n\n`. Search either way.
-      const idx =
-        last < 0 && briefing.startsWith(`${header}\n`) ? 0 : briefing.indexOf(`\n${header}\n`, Math.max(last, 0));
+      // The generated-file banner precedes every section, so each header —
+      // including the first — sits after a newline.
+      const idx = briefing.indexOf(`\n${header}\n`, Math.max(last, 0));
       expect(idx, `header "${header}" missing or out of order`).toBeGreaterThan(last);
       last = idx;
     }
+  });
+
+  it("opens with the generated-file banner: marker + edit map for Team / Agent Prompt", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    // Banner must be the very first content so any reader (or any tool that
+    // copies the file) hits the marker before anything else.
+    expect(briefing.startsWith("<!--")).toBe(true);
+    // The literal marker is what the server / CLI write-side guard keys on
+    // (AGENT_BRIEFING_GENERATED_MARKER) — pin it as a string so a rename
+    // breaks this test and forces the guard to be updated in lockstep.
+    expect(briefing).toContain("first-tree:generated");
+    expect(briefing).toContain("NEVER copy this file");
+    // Edit map: where each editable section actually lives, with the
+    // channel-resolved binary name interpolated.
+    expect(briefing).toContain("first-tree agent config prompt show <agent> --raw");
+    expect(briefing).toContain("first-tree agent config prompt set <agent> -f <file>");
+    expect(briefing).toContain("Every other section is First Tree Managed");
   });
 
   it("renders identity as personal-assistant when visibility=private", () => {
@@ -110,7 +130,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     expect(briefing).toContain("# Identity\n\nYou are Aly, an autonomous agent.");
   });
 
-  it("emits `## Agent-Specific Prompt` only when payload.prompt.append is non-empty", () => {
+  it("emits the legacy `## Agent-Specific Prompt` fallback only when prompt.sections is absent and append is non-empty", () => {
     // No payload → block omitted.
     expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("## Agent-Specific Prompt");
 
@@ -127,10 +147,160 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
     };
     expect(buildAgentBriefing(makeOpts({ payload: emptyPayload }))).not.toContain("## Agent-Specific Prompt");
 
-    // Real content → block emitted with the trimmed payload text.
+    // Legacy server (no structured sections) with real content → fallback
+    // block emitted with the trimmed payload text. The legacy blob may mix
+    // team and agent content, so it must NOT be presented under the editable
+    // `# Agent Prompt` heading.
     const realPayload = { ...emptyPayload, prompt: { append: "Follow the local implementation plan." } };
     const briefing = buildAgentBriefing(makeOpts({ payload: realPayload }));
     expect(briefing).toContain("## Agent-Specific Prompt\n\nFollow the local implementation plan.");
+    expect(briefing).not.toContain("# Agent Prompt (this agent only — editable)");
+  });
+});
+
+describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prompt sections)", () => {
+  const basePayload = {
+    kind: "claude-code" as const,
+    model: "",
+    prompt: { append: "" },
+    mcpServers: [],
+    env: [],
+    gitRepos: [],
+    resourceSkills: [],
+    reasoningEffort: "" as const,
+  };
+
+  it("renders team sections read-only and the agent fragment editable, under separate provenance headings", () => {
+    const payload = {
+      ...basePayload,
+      prompt: {
+        // Legacy merged blob is still populated by the server for old
+        // clients — when structured sections exist it must be IGNORED, or
+        // team content would render twice.
+        append: "## Team Resource: Review Rules\n\nAlways review twice.",
+        sections: [
+          { scope: "team" as const, name: "Review Rules", body: "Always review twice.", editable: false },
+          { scope: "agent" as const, name: "", body: "Prefer terse replies.", editable: true },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+
+    // Team block: provenance heading + read-only warning + the resource body
+    // under its own `##` name.
+    expect(briefing).toContain("# Team Prompt (team-shared — read-only for agents)");
+    expect(briefing).toContain("## Review Rules\n\nAlways review twice.");
+    expect(briefing).toMatch(/do NOT copy any of this into\nyour per-agent prompt/);
+
+    // Agent block: provenance heading + copy-pasteable round-trip commands
+    // using the CLI-addressable agent name (agentId, not display name).
+    expect(briefing).toContain("# Agent Prompt (this agent only — editable)");
+    expect(briefing).toContain("Prefer terse replies.");
+    expect(briefing).toContain("first-tree agent config prompt show test-agent --raw");
+    expect(briefing).toContain("first-tree agent config prompt set test-agent");
+
+    // Structured sections supersede the legacy single-blob rendering.
+    expect(briefing).not.toContain("## Agent-Specific Prompt");
+
+    // Order: Identity → Team Prompt → Agent Prompt → Working in First Tree.
+    // Anchor on the full heading lines (the banner's edit map also mentions
+    // `# Team Prompt` / `# Agent Prompt` as indented references).
+    const identityIdx = briefing.indexOf("\n# Identity\n");
+    const teamIdx = briefing.indexOf("\n# Team Prompt (team-shared — read-only for agents)\n");
+    const agentIdx = briefing.indexOf("\n# Agent Prompt (this agent only — editable)\n");
+    const workingIdx = briefing.indexOf("\n# Working in First Tree (First Tree Managed)\n");
+    expect(teamIdx).toBeGreaterThan(identityIdx);
+    expect(agentIdx).toBeGreaterThan(teamIdx);
+    expect(workingIdx).toBeGreaterThan(agentIdx);
+  });
+
+  it("omits each provenance heading when no section of that scope has content", () => {
+    // Anchor on the full heading lines — the banner's edit map mentions
+    // `# Team Prompt` / `# Agent Prompt` as indented references, so bare
+    // substring checks would false-positive on every briefing.
+    const teamHeading = "\n# Team Prompt (team-shared — read-only for agents)\n";
+    const agentHeading = "\n# Agent Prompt (this agent only — editable)\n";
+
+    const teamOnly = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "Rules", body: "Body." }] },
+    };
+    const teamOnlyBriefing = buildAgentBriefing(makeOpts({ payload: teamOnly }));
+    expect(teamOnlyBriefing).toContain(teamHeading);
+    expect(teamOnlyBriefing).not.toContain(agentHeading);
+
+    const agentOnly = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "agent" as const, name: "", body: "Mine.", editable: true }] },
+    };
+    const agentOnlyBriefing = buildAgentBriefing(makeOpts({ payload: agentOnly }));
+    expect(agentOnlyBriefing).not.toContain(teamHeading);
+    expect(agentOnlyBriefing).toContain(agentHeading);
+
+    // Whitespace-only bodies count as empty.
+    const blank = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "Rules", body: "  \n " }] },
+    };
+    const blankBriefing = buildAgentBriefing(makeOpts({ payload: blank }));
+    expect(blankBriefing).not.toContain(teamHeading);
+    expect(blankBriefing).not.toContain(agentHeading);
+  });
+
+  it("falls back to a default `## Team prompt` sub-heading when a team section has no name", () => {
+    const payload = {
+      ...basePayload,
+      prompt: { append: "", sections: [{ scope: "team" as const, name: "  ", body: "Unnamed body." }] },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+    expect(briefing).toContain("## Team prompt\n\nUnnamed body.");
+  });
+
+  it("renders non-editable agent-scope sections under # Agent Prompt Overrides, never under the editable heading", () => {
+    // An inline *replacement* of a team prompt projects as scope "agent"
+    // without `editable` — the `prompt show --raw` / `prompt set` round-trip
+    // cannot touch it, so presenting it under "editable" would instruct the
+    // agent to use a flow that cannot edit the content it sees.
+    const payload = {
+      ...basePayload,
+      prompt: {
+        append: "",
+        sections: [
+          { scope: "agent" as const, name: "", body: "My own fragment.", editable: true },
+          { scope: "agent" as const, name: "Tone guide", body: "Agent-specific tone override.", editable: false },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(makeOpts({ payload }));
+
+    const agentHeading = "\n# Agent Prompt (this agent only — editable)\n";
+    const overridesHeading = "\n# Agent Prompt Overrides (this agent only — managed via resource bindings)\n";
+    expect(briefing).toContain(agentHeading);
+    expect(briefing).toContain(overridesHeading);
+    expect(briefing).toContain("## Tone guide\n\nAgent-specific tone override.");
+    expect(briefing).toMatch(/NOT editable with `prompt set`/);
+
+    // The override body must live in the overrides section, after the
+    // editable section — not inside it.
+    const agentIdx = briefing.indexOf(agentHeading);
+    const overridesIdx = briefing.indexOf(overridesHeading);
+    const overrideBodyIdx = briefing.indexOf("Agent-specific tone override.");
+    expect(overridesIdx).toBeGreaterThan(agentIdx);
+    expect(overrideBodyIdx).toBeGreaterThan(overridesIdx);
+
+    // Overrides alone (no editable fragment) must not produce the editable
+    // heading — and must not fall back to the legacy single-blob rendering.
+    const overridesOnly = {
+      ...basePayload,
+      prompt: {
+        append: "legacy blob",
+        sections: [{ scope: "agent" as const, name: "Tone guide", body: "Override only.", editable: false }],
+      },
+    };
+    const overridesOnlyBriefing = buildAgentBriefing(makeOpts({ payload: overridesOnly }));
+    expect(overridesOnlyBriefing).not.toContain(agentHeading);
+    expect(overridesOnlyBriefing).toContain(overridesHeading);
+    expect(overridesOnlyBriefing).not.toContain("## Agent-Specific Prompt");
   });
 });
 
@@ -605,7 +775,7 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(briefing).not.toContain("## First Tree Family");
     // And without Team Skills, the bare `# Skills` umbrella is skipped
     // entirely — a header with no body is just visual noise.
-    expect(briefing).not.toMatch(/^# Skills\s*$/m);
+    expect(briefing).not.toMatch(/^# Skills\b/m);
   });
 
   it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {

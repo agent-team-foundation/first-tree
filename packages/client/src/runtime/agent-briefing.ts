@@ -1,4 +1,8 @@
-import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
+import {
+  AGENT_BRIEFING_GENERATED_MARKER,
+  type AgentRuntimeConfigPayload,
+  type PromptSection,
+} from "@first-tree/shared";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import type { ChatContext } from "./chat-context.js";
 import { renderChatContextSection } from "./chat-context-section.js";
@@ -27,26 +31,52 @@ export type BuildAgentBriefingOptions = {
  * per-agent file entirely; until that lands it stays here at the bottom
  * so the rest of the briefing remains cacheable.
  *
+ * Every heading carries a provenance tag so a reader (human or agent) can
+ * tell which source owns each section and where to edit it — this is the
+ * defense against the "copied the assembled file back into the per-agent
+ * prompt" failure mode, together with the generated-file banner at the top.
+ *
+ *   0. generated-file banner                   — `first-tree:generated` marker + edit map
  *   1. `# Identity`                            — per-agent
- *   2. `## Agent-Specific Prompt`              — per-agent config (`payload.prompt.append`)
- *   3. `# Working in First Tree`               — mostly static, with subsections:
+ *   2. `# Team Prompt (team-shared — read-only for agents)`
+ *                                              — team prompt resources (`prompt.sections`, scope `team`)
+ *   3. `# Agent Prompt (this agent only — editable)`
+ *                                              — per-agent fragment (`prompt.sections`, scope `agent`,
+ *                                                `editable: true`); legacy servers without sections
+ *                                                fall back to `## Agent-Specific Prompt` carrying
+ *                                                `prompt.append`
+ *   3b. `# Agent Prompt Overrides (this agent only — managed via resource bindings)`
+ *                                              — agent-scope rows `prompt set` does NOT own
+ *                                                (inline replacements of team prompts)
+ *   4. `# Working in First Tree (First Tree Managed)` — mostly static, with subsections:
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · Asking Humans ·
  *        Chat Topic · CLI Overview
- *   4. `# Required Reading`                    — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
- *   5. `# Context Tree`                        — per binding, with subsections:
+ *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
+ *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
- *   6. `# Skills`                              — Team Skills (if any) + First Tree Family
- *   7. `## Current Chat Context`               — per-chat (issue #808 will move it out)
+ *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
+ *   8. `## Current Chat Context (First Tree Managed, per-chat)` — per-chat (issue #808 will move it out)
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const sections: string[] = [];
 
+  sections.push(generatedBannerSection(getCliBinding().binName));
   sections.push(identitySection(opts.identity));
 
-  const agentPrompt = opts.payload?.prompt.append?.trim() ?? "";
-  if (agentPrompt) {
-    sections.push(`## Agent-Specific Prompt\n\n${agentPrompt}`);
+  const promptSections = opts.payload?.prompt.sections ?? [];
+  const teamPromptBlock = teamPromptSection(promptSections);
+  if (teamPromptBlock) sections.push(teamPromptBlock);
+  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, getCliBinding().binName);
+  if (agentPromptBlock) sections.push(agentPromptBlock);
+  const overridesBlock = agentPromptOverridesSection(promptSections);
+  if (overridesBlock) sections.push(overridesBlock);
+  if (!teamPromptBlock && !agentPromptBlock && !overridesBlock) {
+    // Legacy server without structured sections — keep the old single-blob
+    // rendering. The blob may mix team and agent content, so it must NOT be
+    // presented under the editable `# Agent Prompt` heading.
+    const legacyPrompt = opts.payload?.prompt.append?.trim() ?? "";
+    if (legacyPrompt) sections.push(`## Agent-Specific Prompt\n\n${legacyPrompt}`);
   }
 
   sections.push(workingInFirstTreeSection({ agentHome: opts.workspacePath, sourceRepos: opts.sourceRepos }));
@@ -86,6 +116,116 @@ function identitySection(identity: AgentIdentity): string {
   return `# Identity\n\nYou are ${name}, ${kind}.`;
 }
 
+// --- generated-file banner ---------------------------------------------------
+
+/**
+ * Fixed banner at the very top of the briefing. Serves two audiences at
+ * once: a reader (human or agent) opening the file learns it is a generated
+ * artifact and where each editable section actually lives, and the literal
+ * `first-tree:generated` marker (AGENT_BRIEFING_GENERATED_MARKER) lets the
+ * server and CLI reject prompt writes that paste this file back into
+ * config. Content is fully static per channel so the prompt cache stays
+ * warm.
+ */
+function generatedBannerSection(bin: string): string {
+  return `<!-- ======================================================================
+  ${AGENT_BRIEFING_GENERATED_MARKER} — this file is rebuilt by the First Tree runtime at
+  every session start. NEVER copy this file, in whole or in part, back into
+  any prompt configuration.
+
+  Where each section comes from, and where to edit it:
+    # Team Prompt   → team prompt resources (Cloud → Org Settings →
+                      Resources); managed by team admins; read-only here
+    # Agent Prompt  → this agent's own prompt fragment;
+                      read:  ${bin} agent config prompt show <agent> --raw
+                      write: ${bin} agent config prompt set <agent> -f <file>
+    # Agent Prompt Overrides → agent-specific resource bindings that
+                      replace team prompts; managed in Cloud, NOT via
+                      prompt set
+  Every other section is First Tree Managed — injected by the runtime and
+  not editable through any prompt configuration.
+====================================================================== -->`;
+}
+
+// --- # Team Prompt / # Agent Prompt -------------------------------------------
+
+/**
+ * Team-shared prompt resources, rendered under their own provenance-labelled
+ * heading. Before this split, team prompt bodies were nested under
+ * `## Agent-Specific Prompt` — which is exactly what trained agents to copy
+ * team content into their per-agent fragment when asked to edit their own
+ * prompt.
+ */
+function teamPromptSection(promptSections: ReadonlyArray<PromptSection>): string | null {
+  const team = promptSections.filter((section) => section.scope === "team" && section.body.trim().length > 0);
+  if (team.length === 0) return null;
+  const blocks: string[] = [
+    "# Team Prompt (team-shared — read-only for agents)",
+    `*Source: team prompt resources, managed by team admins in Cloud → Org
+Settings → Resources. Shared across agents — do NOT copy any of this into
+your per-agent prompt.*`,
+  ];
+  for (const section of team) {
+    blocks.push(`## ${section.name.trim() || "Team prompt"}\n\n${section.body.trim()}`);
+  }
+  return blocks.join("\n\n");
+}
+
+/** The agent's own editable prompt fragment — the ONLY section a prompt edit should produce. */
+function agentPromptSection(
+  promptSections: ReadonlyArray<PromptSection>,
+  identity: AgentIdentity,
+  bin: string,
+): string | null {
+  // Only rows the `prompt show --raw` / `prompt set` round-trip actually owns
+  // may appear under an "editable" heading — agent-scope rows without
+  // `editable: true` (inline replacements of team prompts) go to
+  // `agentPromptOverridesSection` instead.
+  const own = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable === true && section.body.trim().length > 0,
+  );
+  if (own.length === 0) return null;
+  // agentId is the CLI-addressable name (display names may contain spaces,
+  // which would break the copy-pasteable command examples below).
+  const name = identity.agentId;
+  const blocks: string[] = [
+    "# Agent Prompt (this agent only — editable)",
+    `*Source: this agent's own prompt fragment. Read it raw with
+\`${bin} agent config prompt show ${name} --raw\`; replace it with
+\`${bin} agent config prompt set ${name}\`. This is the ONLY section a
+prompt edit should ever produce.*`,
+  ];
+  for (const section of own) {
+    blocks.push(section.body.trim());
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * Agent-specific prompt rows that `prompt set` does NOT own — inline
+ * replacements of team prompt resources (and any future agent-scoped prompt
+ * resources). They get their own heading so the editable `# Agent Prompt`
+ * section never claims content the `prompt show --raw` / `prompt set`
+ * round-trip cannot touch.
+ */
+function agentPromptOverridesSection(promptSections: ReadonlyArray<PromptSection>): string | null {
+  const overrides = promptSections.filter(
+    (section) => section.scope === "agent" && section.editable !== true && section.body.trim().length > 0,
+  );
+  if (overrides.length === 0) return null;
+  const blocks: string[] = [
+    "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    `*Source: agent-specific resource bindings that replace team prompt
+resources. NOT editable with \`prompt set\` — managed in Cloud → Org
+Settings → Resources. Do NOT copy any of this into your per-agent
+prompt.*`,
+  ];
+  for (const section of overrides) {
+    blocks.push(`## ${section.name.trim() || "Agent prompt override"}\n\n${section.body.trim()}`);
+  }
+  return blocks.join("\n\n");
+}
+
 // --- # Required Reading -----------------------------------------------------
 
 /**
@@ -117,7 +257,7 @@ function identitySection(identity: AgentIdentity): string {
  */
 function requiredReadingSection(contextTreePath: string | null): string | null {
   if (contextTreePath === null) return null;
-  return `# Required Reading
+  return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
 load both skills below — loading them **is** the first step of the
@@ -159,7 +299,7 @@ function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
   const bin = getCliBinding().binName;
   const blocks: string[] = [];
 
-  blocks.push(`# Working in First Tree
+  blocks.push(`# Working in First Tree (First Tree Managed)
 
 You are running inside **First Tree**, a messaging platform for agent teams.
 
@@ -417,7 +557,7 @@ workspace ↔ tree binding) runs from the web console or a human terminal
 function contextTreeSection(contextTreePath: string | null): string {
   const blocks: string[] = [];
 
-  blocks.push(`# Context Tree
+  blocks.push(`# Context Tree (First Tree Managed)
 
 ## Core Model
 
@@ -528,7 +668,7 @@ function skillsSection(
   // empty — a bare header without rows is just visual noise.
   if (!teamBlock && !familyBlock) return "";
 
-  const blocks: string[] = ["# Skills"];
+  const blocks: string[] = ["# Skills (First Tree Managed)"];
   if (teamBlock) blocks.push(teamBlock);
   if (familyBlock) blocks.push(familyBlock);
   return blocks.join("\n\n");
