@@ -1190,6 +1190,7 @@ describe("page SSR smoke coverage", () => {
     const { ConnectStuckPanel } = await import("../../components/connect-stuck-panel.js");
     const { CommandBox, FlowNote, RepoPicker, StatusRow, WorkingState } = await import("../onboarding/flow-ui.js");
     const { InstallGuide, ShowMeHow, TerminalGuide } = await import("../onboarding/guides.js");
+    const { GithubConnectedPage } = await import("../onboarding/github-connected.js");
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
@@ -1223,7 +1224,14 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Heads up");
     expect(html).toContain("gandy-macbook connected");
     expect(html).toContain("Install Node.js");
-    expect(html).toContain("Choose your projects");
+    expect(html).toContain("Pick repos");
+
+    // The install-popup landing page (auto-closes the script-opened tab; the
+    // effect is a no-op under SSR). Confirms it renders + carries role=status.
+    const connectedHtml = renderPage(<GithubConnectedPage />);
+    expect(connectedHtml).toContain("Connected");
+    expect(connectedHtml).toContain("close this tab");
+    expect(connectedHtml).toContain('role="status"');
 
     expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
       "What should we call your team?",
@@ -1237,13 +1245,13 @@ describe("page SSR smoke coverage", () => {
     );
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "creating" }),
-    ).toContain("Setting up your agent");
+    ).toContain("Bringing your agent online");
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
-    ).toContain("longer than expected");
-    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Which projects");
+    ).toContain("online yet");
+    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Pick repos");
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
-      "Use your team&#x27;s Context Tree",
+      "Your agent&#x27;s ready to get to work",
     );
     expect(
       await renderOnboardingStep(<StepKickoff />, {
@@ -1252,14 +1260,14 @@ describe("page SSR smoke coverage", () => {
         treeMode: "new",
         treeUrl: "",
       }),
-    ).toContain("Start your agent");
+    ).toContain("No repo connected");
     expect(
       await renderOnboardingStep(<StepKickoff />, {
         path: "invitee",
         activeStep: "kickoff",
         selectedRepoUrls: [],
       }),
-    ).toContain("Your team is ready");
+    ).toContain("Your agent&#x27;s ready to go");
   });
 
   it("renders invite, GitHub App, settings, and layout surfaces", async () => {

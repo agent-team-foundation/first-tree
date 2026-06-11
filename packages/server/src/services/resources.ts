@@ -7,10 +7,12 @@ import {
   deriveRepoLocalPath,
   type EffectiveAgentResources,
   type EffectiveResourceRow,
+  findAssembledBriefingFingerprint,
   type GitRepo,
   type NoSecretMcpServer,
   noSecretMcpServerSchema,
   PROMPT_APPEND_MAX_LENGTH,
+  type PromptSection,
   promptResourcePayloadSchema,
   type RepoResourcePayload,
   type ResourceImpactPreview,
@@ -475,8 +477,8 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         continue;
       }
 
+      const replacedResource = binding.replacesResourceId ? byId.get(binding.replacesResourceId) : null;
       if (binding.mode === "replace") {
-        const replacedResource = binding.replacesResourceId ? byId.get(binding.replacesResourceId) : null;
         if (replacedResource) {
           bucket(binding.type).push(
             emptyRow({
@@ -502,7 +504,10 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         bindingId: binding.id,
         resource: resource ?? null,
         type: binding.type,
-        name: resource?.name ?? "Inline prompt",
+        // An inline *replacement* keeps the replaced team prompt's name so
+        // downstream consumers (sections projection, CLI) can say which team
+        // slot the agent-specific body stands in for.
+        name: resource?.name ?? replacedResource?.name ?? "Inline prompt",
         source: resourceSource(resource ?? null, !!inlinePrompt),
         mode: "enabled",
         order: binding.order,
@@ -600,7 +605,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
   }
 
   function renderPromptRow(name: string, source: EffectiveResourceRow["source"], body: string): string {
-    const title = source === "inline_prompt" ? "Agent Resource: inline prompt" : `Team Resource: ${name}`;
+    const title = source === "inline_prompt" ? "Agent Prompt (this agent only)" : `Team Prompt: ${name}`;
     return `\n\n## ${title}\n\n${body.trim()}\n`;
   }
 
@@ -611,6 +616,38 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       .map((row) => renderPromptRow(row.name, row.source, row.promptBody ?? ""))
       .join("")
       .trim();
+  }
+
+  function promptSectionScope(source: EffectiveResourceRow["source"]): PromptSection["scope"] {
+    return source === "inline_prompt" || source === "agent_extra" ? "agent" : "team";
+  }
+
+  /**
+   * Structured projection of the effective prompt stack. `append` (above)
+   * stays as the legacy merged string for older clients; new clients render
+   * these sections under provenance-labelled briefing headings (`# Team
+   * Prompt` / `# Agent Prompt`) so team-shared content is never presented
+   * as part of the agent's own editable prompt.
+   *
+   * `editable` is true only for the standalone inline fragment — the one row
+   * `agent config prompt set` owns. Inline *replacements* of team prompts
+   * (and any agent-scoped prompt resources) are agent-specific but managed
+   * via resource bindings; labelling them editable would instruct an agent
+   * to use a flow that cannot touch them.
+   */
+  function runtimePromptSections(rows: EffectiveResourceRow[]): PromptSection[] {
+    return rows
+      .filter((row) => row.mode === "enabled" && row.promptBody)
+      .sort((a, b) => a.order - b.order)
+      .map((row) => {
+        const editable = row.source === "inline_prompt" && !row.replacesResourceId;
+        return {
+          scope: promptSectionScope(row.source),
+          name: editable ? "" : row.name,
+          body: (row.promptBody ?? "").trim(),
+          editable,
+        };
+      });
   }
 
   function runtimeSkills(rows: EffectiveResourceRow[]): RuntimeResourceSkill[] {
@@ -645,12 +682,41 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           .filter((row) => row.mode === "enabled" && row.repo)
           .map((row) => row.repo)
           .filter((repo): repo is GitRepo => repo !== null),
-        prompt: { ...config.payload.prompt, append: resolvedPrompt },
+        prompt: {
+          ...config.payload.prompt,
+          append: resolvedPrompt,
+          sections: runtimePromptSections(effective.prompts),
+        },
         mcpServers:
           effective.mcp.length === 0 && config.payload.mcpServers.length > 0 ? config.payload.mcpServers : resolvedMcp,
         resourceSkills: runtimeSkills(effective.skills),
       },
     };
+  }
+
+  /**
+   * Reject inline prompt bodies that are copies of the generated agent
+   * briefing (AGENTS.md). The briefing's banner carries the literal
+   * `first-tree:generated` marker — its presence in a prompt write means the
+   * caller pasted the assembled file (team-shared + runtime-injected
+   * content) instead of the per-agent fragment. Only the conclusive marker
+   * tier is enforced here; heading heuristics stay CLI-side where `--force`
+   * can override them.
+   */
+  function validateInlinePromptBodies(bindings: readonly AgentResourceBindingInput[]): void {
+    for (const binding of bindings) {
+      if (binding.type !== "prompt" || !binding.inlinePromptBody) continue;
+      const fingerprint = findAssembledBriefingFingerprint(binding.inlinePromptBody);
+      if (fingerprint?.kind !== "generated-marker") continue;
+      throw new BadRequestError(
+        `Inline prompt body contains the generated-briefing marker "${fingerprint.match}" — ` +
+          "this looks like a copy of the assembled AGENTS.md, which mixes team-shared and " +
+          "runtime-injected content into the per-agent prompt. Fetch the editable fragment with " +
+          "`agent config prompt show <agent> --raw`, edit that, and write it back with " +
+          "`agent config prompt set <agent>`.",
+        { code: "assembled_briefing_in_prompt" },
+      );
+    }
   }
 
   function validateInputRepoLocalPaths(bindings: readonly AgentResourceBindingInput[]): void {
@@ -946,6 +1012,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
     async replaceAgentResources(agentId, input, actorId) {
       const agent = await loadAgent(agentId);
       validateInputRepoLocalPaths(input.bindings);
+      validateInlinePromptBodies(input.bindings);
       await db.transaction(async (tx) => {
         const targetDb = tx as unknown as Database;
         const [updatedConfig] = await targetDb

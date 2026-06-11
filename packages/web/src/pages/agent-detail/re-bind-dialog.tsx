@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
+import { OptionCard } from "../../components/ui/option-card.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 
 const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
@@ -152,33 +153,24 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
             <div className="space-y-2">
               {PROVIDER_ORDER.map((provider) => {
                 const entry = selectedCapabilities?.[provider] ?? null;
-                const enabled = !!entry && entry.state !== "missing";
+                // A provider with no/missing SDK stays SELECTABLE — picking it
+                // surfaces the "override capability check" force checkbox below —
+                // so it's never `disabled`, only described as missing in the caption.
                 const checked = selectedProvider === provider;
                 return (
-                  <label
+                  <OptionCard
                     key={provider}
-                    className={
-                      checked
-                        ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-primary bg-primary/5 p-3 cursor-pointer"
-                        : enabled
-                          ? "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 cursor-pointer hover:bg-accent/30"
-                          : "flex items-start gap-3 rounded-[var(--radius-panel)] border border-border p-3 opacity-60"
-                    }
+                    name="rebind-runtime"
+                    checked={checked}
+                    onSelect={() => setSelectedProvider(provider)}
                   >
-                    <input
-                      type="radio"
-                      name="rebind-runtime"
-                      checked={checked}
-                      onChange={() => setSelectedProvider(provider)}
-                      className="mt-1"
-                    />
                     <div>
                       <div className="text-body font-medium">{PROVIDER_LABEL[provider]}</div>
                       <div className="text-caption" style={{ color: "var(--fg-3)" }}>
                         {capabilityCaption(entry, provider)}
                       </div>
                     </div>
-                  </label>
+                  </OptionCard>
                 );
               })}
             </div>

@@ -481,7 +481,7 @@ function AgentDetailPageView() {
 
   return (
     <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
-      <div style={{ padding: "var(--sp-4) 0 var(--sp-3)" }}>
+      <div style={{ padding: "var(--sp-4) 0 var(--sp-4)" }}>
         {/* Inner content sits in the same centered rail as the tabs + tab content,
             so the switcher and title row align with everything below. */}
         <div
@@ -496,14 +496,19 @@ function AgentDetailPageView() {
           {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
               (and back to Team) without losing the agent context. Leaving via it is
               leave-guarded. */}
-          <div style={{ marginBottom: "var(--sp-2)" }}>
+          {/* sp-3 gap to the title row: the switcher is demoted nav above the
+              page's primary identity, so it sits a touch apart rather than crowding
+              the title (part of the 16/12 top rhythm). */}
+          <div style={{ marginBottom: "var(--sp-3)" }}>
             <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={guardedNavigate} />
           </div>
           <div className="flex w-full items-center gap-2">
+            {/* Primary identity avatar — the largest on the page (switcher nav 28,
+                sticky context bar 20), so the title row clearly owns "which agent". */}
             <Avatar
               src={agent.avatarImageUrl}
               name={agent.displayName}
-              size={28}
+              size={36}
               colorToken={agent.avatarColorToken}
               seed={agent.uuid}
             />
@@ -569,7 +574,7 @@ function AgentDetailPageView() {
           flexDirection: "column",
           gap: "var(--sp-5)",
           width: "100%",
-          // One uniform rail across every tab (no per-tab 52↔70 jump), centered
+          // One uniform rail across every tab (no per-tab width jump), centered
           // to match the context / team / settings pages.
           maxWidth: "var(--agent-detail-rail)",
           marginLeft: "auto",
@@ -794,7 +799,7 @@ function TabsNav({
         <div
           className="flex items-end"
           style={{
-            gap: 2,
+            gap: "var(--sp-0_5)",
             width: "100%",
             maxWidth: "var(--agent-detail-rail)",
             marginLeft: "auto",

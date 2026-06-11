@@ -13,7 +13,7 @@ export function renderChatContextSection(chatContext: ChatContext | undefined): 
   if (!chatContext) return null;
 
   const lines: string[] = [];
-  lines.push("## Current Chat Context");
+  lines.push("## Current Chat Context (First Tree Managed, per-chat)");
   lines.push("");
   lines.push(`- Chat ID: ${chatContext.chatId}`);
   // Topic is the raw `chats.topic` column. We render it on every turn —

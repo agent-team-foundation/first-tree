@@ -1,13 +1,15 @@
-import type { AgentVisibility } from "@first-tree/shared";
+import type { AgentVisibility, ResourceRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import type { GithubRepo } from "../api/github.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
+import { BuildTreeShell } from "./onboarding/build-tree-shell.js";
 import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeMode } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
+import { BuildTreeAgentPanel } from "./onboarding/steps/build-tree-agent-panel.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
@@ -100,7 +102,12 @@ const NOOP = (): void => {};
 const ASYNC_NOOP = async (): Promise<void> => {};
 
 // ── Computer-connection fixtures (drive the connect-computer + create-agent steps) ──
-const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "ready", ComputerConnection> = {
+// `selectedRuntime` / `setSelectedRuntime` are made interactive per-scenario in
+// WizardScenarioView (state-backed), so the runtime pills actually switch.
+const COMPUTER: Record<
+  "waiting" | "tokenError" | "detecting" | "noRuntime" | "ready" | "readyMulti",
+  ComputerConnection
+> = {
   waiting: {
     connectedClient: null,
     capabilitiesLoaded: false,
@@ -141,10 +148,22 @@ const COMPUTER: Record<"waiting" | "tokenError" | "detecting" | "noRuntime" | "r
     tokenError: null,
     retry: NOOP,
   },
+  // Exactly one runtime → the step renders a confirmation line (no picker).
   ready: {
     connectedClient: HOST,
     capabilitiesLoaded: true,
     okRuntimes: ["claude-code"],
+    selectedRuntime: "claude-code",
+    setSelectedRuntime: NOOP,
+    cliCommand: SAMPLE_CLI,
+    tokenError: null,
+    retry: NOOP,
+  },
+  // Multiple runtimes → the step renders the single-select runtime list.
+  readyMulti: {
+    connectedClient: HOST,
+    capabilitiesLoaded: true,
+    okRuntimes: ["claude-code", "codex", "claude-code-tui"],
     selectedRuntime: "claude-code",
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
@@ -175,15 +194,24 @@ type NetProfile = {
   repos?: RepoOutcome;
   /** GET /orgs/:id/github-app-installation — 200 vs 404 */
   installed?: boolean;
+  /** When true, the installation query never resolves (stays loading) — used to
+      hold the post-click "Waiting for GitHub…" state without it flipping to stuck. */
+  installPending?: boolean;
   /** GET /orgs/:id/github-app-installation/exists */
   installExists?: boolean;
   /** GET /orgs/:id/settings/context_tree → { repo } */
   contextTree?: string | null | "pending";
-  /** GET /orgs/:id/settings/source_repos → { repos: [{ url }] } */
+  /**
+   * Team-recommended repos the invitee inherits. Served as ResourceRow[] from
+   * GET /orgs/:id/resources (what listTeamResourcesForOrg actually calls since
+   * the Resources Phase 1 refactor); InviteeKickoff filters to
+   * type==="repo" && defaultEnabled==="recommended" — non-empty picks the
+   * "works with your team's repos" ready copy, empty the intro copy.
+   */
   sourceRepos?: string[];
   /**
    * GET /orgs/:id/github-app-installation/install-url — when set, the install
-   * URL mint fails with this status, so clicking "Install First Tree on GitHub"
+   * URL mint fails with this status, so clicking "Install on GitHub"
    * surfaces the matching installError state (503 → not_configured, 403 →
    * not_admin, else → generic). Omit it and the call falls through (real
    * fetch), so only the error scenarios opt in.
@@ -210,6 +238,26 @@ function reposResponse(outcome: RepoOutcome | undefined): Promise<Response> | Re
   return jsonResponse({ repos: outcome ?? [] });
 }
 
+/** A team-recommended repo resource, matching what GET /orgs/:id/resources returns. */
+function teamRepoResource(url: string, i: number): ResourceRow {
+  return {
+    id: `res-${i}`,
+    organizationId: ORG_ID,
+    type: "repo",
+    scope: "team",
+    ownerAgentId: null,
+    name: url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, ""),
+    repoCanonicalKey: null,
+    defaultEnabled: "recommended",
+    status: "active",
+    payload: { url },
+    createdBy: "preview",
+    updatedBy: "preview",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
 /** Map a request path (with `/api/v1` prefix) to a canned response, or null to fall through. */
 function handleNet(rawUrl: string): Promise<Response> | Response | null {
   const idx = rawUrl.indexOf("/api/v1");
@@ -225,6 +273,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === "/me/github/repos") return reposResponse(activeNet.repos);
   if (p === `/orgs/${ORG_ID}/github-app-installation/repositories`) return reposResponse(activeNet.repos);
   if (p === `/orgs/${ORG_ID}/github-app-installation`) {
+    if (activeNet.installPending) return new Promise<Response>(() => {});
     return activeNet.installed
       ? jsonResponse({ installed: true })
       : statusResponse(404, "No GitHub App installation is bound to this team");
@@ -241,8 +290,40 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
     return jsonResponse({ repo: activeNet.contextTree ?? null });
   }
-  if (p === `/orgs/${ORG_ID}/settings/source_repos`) {
-    return jsonResponse({ repos: (activeNet.sourceRepos ?? []).map((url) => ({ url })) });
+  if (p === `/orgs/${ORG_ID}/resources`) {
+    return jsonResponse((activeNet.sourceRepos ?? []).map((url, i) => teamRepoResource(url, i)));
+  }
+  // Build-tree recovery agent picker. uuid v7 is time-ordered, so the larger
+  // string is the "newest" the panel defaults to.
+  if (p === "/me/managed-agents") {
+    return jsonResponse([
+      {
+        uuid: "01920000-0000-7000-8000-00000000000b",
+        name: "gandy-assistant",
+        displayName: "Gandy's assistant",
+        type: "agent",
+        organizationId: ORG_ID,
+        inboxId: "inbox-1",
+        visibility: "organization",
+        runtimeProvider: "claude-code",
+        status: "active",
+        clientId: HOST.id,
+        avatarImageUrl: null,
+      },
+      {
+        uuid: "01920000-0000-7000-8000-00000000000a",
+        name: "codex-reviewer",
+        displayName: "Codex reviewer",
+        type: "agent",
+        organizationId: ORG_ID,
+        inboxId: "inbox-2",
+        visibility: "organization",
+        runtimeProvider: "codex",
+        status: "active",
+        clientId: HOST.id,
+        avatarImageUrl: null,
+      },
+    ]);
   }
   return null;
 }
@@ -279,6 +360,12 @@ type WizardSpec = {
   step: StepId;
   flow?: Partial<OnboardingFlowValue>;
   net?: NetProfile;
+  /**
+   * Render under the standalone build-tree recovery chrome (`BuildTreeShell`)
+   * instead of the onboarding shell — the recovery surface reuses the same step
+   * components, only the chrome differs.
+   */
+  shell?: "build-tree";
   /** Override the rendered body (used for transient working states). */
   body?: ReactNode;
   /**
@@ -287,6 +374,13 @@ type WizardSpec = {
    * component's short delay). Mirrors the per-tab key StepConnectCode sets.
    */
   seedInstallAttempt?: boolean;
+  /**
+   * Render connect-computer in its "stuck" state (help auto-opens, label flips
+   * to "Taking a while?"). The real state is gated on a 75s internal timer
+   * (STUCK_AFTER_MS) that fixtures can't force, so the preview seeds it directly
+   * via StepConnectComputer's `initialStuck` prop.
+   */
+  connectStuck?: boolean;
 };
 
 // Per-tab marker StepConnectCode reads to detect "came back without an install"
@@ -336,10 +430,24 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-cc-ready",
-    label: "Connected · ready",
+    label: "Connected · ready (1 runtime)",
     group: "2 · Connect computer",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.ready } },
+  },
+  {
+    id: "admin-cc-ready-multi",
+    label: "Connected · ready (multiple runtimes)",
+    group: "2 · Connect computer",
+    role: "admin",
+    wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
+  },
+  {
+    id: "admin-cc-stuck",
+    label: "Waiting · stuck (Need help)",
+    group: "2 · Connect computer",
+    role: "admin",
+    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
   },
 
   {
@@ -373,6 +481,13 @@ const SCENARIOS: Scenario[] = [
       flow: { computer: COMPUTER.ready, agentPhase: "idle", agentError: "Couldn't create your agent" },
     },
   },
+  {
+    id: "admin-ca-computer-lost",
+    label: "Form · computer disconnected",
+    group: "3 · Create agent",
+    role: "admin",
+    wizard: { step: "create-agent", flow: { computer: COMPUTER.waiting, agentPhase: "idle" } },
+  },
 
   {
     id: "admin-code-notinstalled",
@@ -383,14 +498,14 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-code-err-notconfigured",
-    label: "Install error · not configured (click Install)",
+    label: "Install error · can't connect · 503 (click Install)",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
   },
   {
     id: "admin-code-err-notadmin",
-    label: "Install error · not a team admin (click Install)",
+    label: "Install error · can't connect · 403 (click Install)",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 403 } },
@@ -403,6 +518,16 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 500 } },
   },
   {
+    id: "admin-code-waiting",
+    label: "Waiting for GitHub (after click)",
+    group: "4 · Connect code",
+    role: "admin",
+    // installPending keeps the install query loading so it holds "Waiting for
+    // GitHub…" without the 5s stuck timer firing; seedInstallAttempt marks the
+    // click so the status shows (pre-click there's nothing to wait for).
+    wizard: { step: "connect-code", net: { installPending: true }, seedInstallAttempt: true },
+  },
+  {
     id: "admin-code-stuck",
     label: "Came back without install (stuck → Need help)",
     group: "4 · Connect code",
@@ -411,28 +536,28 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-code-loading",
-    label: "Loading projects",
+    label: "Loading repos",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: "pending" } },
   },
   {
     id: "admin-code-norepos",
-    label: "No projects",
+    label: "No repos",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: [] } },
   },
   {
-    id: "admin-code-scope",
-    label: "Scope missing",
+    id: "admin-code-loadfailed",
+    label: "Load failed",
     group: "4 · Connect code",
     role: "admin",
-    wizard: { step: "connect-code", net: { installed: true, repos: "scope" } },
+    wizard: { step: "connect-code", net: { installed: true, repos: "neterror" } },
   },
   {
     id: "admin-code-repos",
-    label: "Pick projects",
+    label: "Pick repos",
     group: "4 · Connect code",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: REPOS } },
@@ -440,7 +565,7 @@ const SCENARIOS: Scenario[] = [
 
   {
     id: "admin-ko-noproject",
-    label: "No project",
+    label: "No repo",
     group: "5 · Kickoff",
     role: "admin",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [] } },
@@ -460,17 +585,6 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
   },
   {
-    id: "admin-ko-invalid",
-    label: "Existing · invalid URL",
-    group: "5 · Kickoff",
-    role: "admin",
-    wizard: {
-      step: "kickoff",
-      flow: { selectedRepoUrls: [REPO_WEB], treeMode: "existing", treeUrl: "ftp://not-a-link", treeAutoInitDone: true },
-      net: { contextTree: null },
-    },
-  },
-  {
     id: "admin-ko-checking",
     label: "Checking team setup",
     group: "5 · Kickoff",
@@ -486,6 +600,40 @@ const SCENARIOS: Scenario[] = [
       step: "kickoff",
       flow: { selectedRepoUrls: [REPO_WEB] },
       body: <WorkingState label={COPY.kickoff.starting} />,
+    },
+  },
+
+  // ── BUILD TREE (recovery) ───────────────────────────────────────────────
+  // The standalone "build your Context Tree" surface for an admin who completed
+  // onboarding without connecting code. Reuses connect-code + kickoff under
+  // BuildTreeShell; step 1 requires a repo, the agent picker lives on step 2.
+  {
+    id: "admin-bt-connect",
+    label: "Connect code (repo required)",
+    group: "6 · Build tree (recovery)",
+    role: "admin",
+    wizard: {
+      step: "connect-code",
+      shell: "build-tree",
+      net: { installed: true, repos: REPOS },
+      // `recovery` → no skip / continue-without-a-repo; Continue is disabled
+      // until a repo is selected.
+      body: <StepConnectCode recovery />,
+    },
+  },
+  {
+    id: "admin-bt-build",
+    label: "Build + pick agent (kickoff)",
+    group: "6 · Build tree (recovery)",
+    role: "admin",
+    wizard: {
+      step: "kickoff",
+      shell: "build-tree",
+      flow: { selectedRepoUrls: [REPO_WEB, REPO_API], treeMode: "new" },
+      net: { contextTree: null },
+      // `recovery` → no per-step heading (the shell's constant title carries it).
+      // The agent picker lives on THIS step, above the CTA.
+      body: <StepKickoff recovery agentPicker={<BuildTreeAgentPanel />} />,
     },
   },
 
@@ -623,10 +771,24 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "inv-cc-ready",
-    label: "Connected · ready",
+    label: "Connected · ready (1 runtime)",
     group: "2 · Connect computer",
     role: "invitee",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.ready } },
+  },
+  {
+    id: "inv-cc-ready-multi",
+    label: "Connected · ready (multiple runtimes)",
+    group: "2 · Connect computer",
+    role: "invitee",
+    wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
+  },
+  {
+    id: "inv-cc-stuck",
+    label: "Waiting · stuck (Need help)",
+    group: "2 · Connect computer",
+    role: "invitee",
+    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
   },
 
   {
@@ -660,6 +822,13 @@ const SCENARIOS: Scenario[] = [
       flow: { computer: COMPUTER.ready, agentPhase: "idle", agentError: "Couldn't create your agent" },
     },
   },
+  {
+    id: "inv-ca-computer-lost",
+    label: "Form · computer disconnected",
+    group: "3 · Create agent",
+    role: "invitee",
+    wizard: { step: "create-agent", flow: { computer: COMPUTER.waiting, agentPhase: "idle" } },
+  },
 
   {
     id: "inv-ko-waiting",
@@ -676,49 +845,18 @@ const SCENARIOS: Scenario[] = [
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: false } },
   },
   {
-    id: "inv-ko-confirm",
-    label: "Confirm team projects",
+    id: "inv-ko-ready",
+    label: "Ready · team has repos",
     group: "4 · Kickoff (start work)",
     role: "invitee",
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [REPO_WEB, REPO_API] } },
   },
   {
-    id: "inv-ko-picker",
-    label: "Picker · pick own",
+    id: "inv-ko-ready-norepos",
+    label: "Ready · no team repos (intro)",
     group: "4 · Kickoff (start work)",
     role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: REPOS } },
-  },
-  {
-    id: "inv-ko-picker-empty",
-    label: "Picker · no projects",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: [] } },
-  },
-  {
-    id: "inv-ko-picker-loading",
-    label: "Picker · loading",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "pending" } },
-  },
-  {
-    id: "inv-ko-picker-scope",
-    label: "Picker · scope missing",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "scope" } },
-  },
-  {
-    id: "inv-ko-picker-neterr",
-    label: "Picker · network error",
-    group: "4 · Kickoff (start work)",
-    role: "invitee",
-    wizard: {
-      step: "kickoff",
-      net: { contextTree: TREE_URL, installExists: true, sourceRepos: [], repos: "neterror" },
-    },
+    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [] } },
   },
   {
     id: "inv-ko-starting",
@@ -772,14 +910,14 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
   };
 }
 
-function StepBody({ step }: { step: StepId }): ReactNode {
+function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean }): ReactNode {
   switch (step) {
     case "team":
       return <StepTeam />;
     case "connect-code":
       return <StepConnectCode />;
     case "connect-computer":
-      return <StepConnectComputer />;
+      return <StepConnectComputer initialStuck={connectStuck} />;
     case "create-agent":
       return <StepCreateAgent />;
     case "kickoff":
@@ -804,14 +942,18 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   const [treeMode, setTreeMode] = useState<TreeMode>(init.treeMode ?? "new");
   const [treeUrl, setTreeUrl] = useState<string>(init.treeUrl ?? "");
   const [treeAutoInitDone, setTreeAutoInitDone] = useState<boolean>(init.treeAutoInitDone ?? false);
+  // Back the injected computer's runtime selection with local state so the
+  // single-select runtime pills actually switch when clicked.
+  const [selectedRuntime, setSelectedRuntime] = useState<string | null>(init.computer?.selectedRuntime ?? null);
 
   const queryClient = useMemo(
     () => new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } }),
     [],
   );
 
+  const base = baseFlow(path);
   const flow: OnboardingFlowValue = {
-    ...baseFlow(path),
+    ...base,
     ...init,
     path,
     sequence,
@@ -829,12 +971,17 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
     setTreeUrl,
     treeAutoInitDone,
     markTreeAutoInitDone: () => setTreeAutoInitDone(true),
+    // Override the injected computer's runtime selection with the stateful
+    // pair so clicking a runtime pill re-renders with the new choice.
+    computer: init.computer ? { ...init.computer, selectedRuntime, setSelectedRuntime } : base.computer,
   };
+
+  const Shell = spec.shell === "build-tree" ? BuildTreeShell : OnboardingShell;
 
   return (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={flow}>
-        <OnboardingShell>{spec.body ?? <StepBody step={spec.step} />}</OnboardingShell>
+        <Shell>{spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />}</Shell>
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );

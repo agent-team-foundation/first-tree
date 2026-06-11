@@ -97,8 +97,27 @@ export function printConfig(cfg: AgentRuntimeConfig): void {
   process.stdout.write(`Version: ${cfg.version} (updated ${cfg.updatedAt} by ${cfg.updatedBy})\n`);
   process.stdout.write(`\nModel:    ${cfg.payload.model || "(unset)"}\n`);
   process.stdout.write(`Reasoning effort: ${cfg.payload.reasoningEffort || "(unset — inherits local effortLevel)"}\n`);
-  process.stdout.write(`Prompt append: ${cfg.payload.prompt.append ? "(set)" : "(empty)"}\n`);
-  if (cfg.payload.prompt.append) process.stdout.write(`  > ${cfg.payload.prompt.append.replace(/\n/g, "\n  > ")}\n`);
+  const promptSections = cfg.payload.prompt.sections ?? [];
+  if (promptSections.length > 0) {
+    process.stdout.write(`Effective prompt stack (${promptSections.length} section(s); resolved team + agent):\n`);
+    for (const section of promptSections) {
+      // Agent scope splits on `editable`: only the standalone fragment is the
+      // thing `prompt set` owns; the rest are resource-binding overrides.
+      const label =
+        section.scope === "agent"
+          ? section.editable === true
+            ? "per-agent fragment"
+            : `${section.name || "agent prompt override"} (override; managed via resource bindings)`
+          : section.name || "team prompt";
+      process.stdout.write(`  - [${section.scope}] ${label} (${section.body.length} chars)\n`);
+    }
+    process.stdout.write(
+      "  (read/write the per-agent fragment with `agent config prompt show --raw` / `prompt set`)\n",
+    );
+  } else {
+    process.stdout.write(`Prompt append: ${cfg.payload.prompt.append ? "(set)" : "(empty)"}\n`);
+    if (cfg.payload.prompt.append) process.stdout.write(`  > ${cfg.payload.prompt.append.replace(/\n/g, "\n  > ")}\n`);
+  }
   process.stdout.write(`\nMCP servers (${cfg.payload.mcpServers.length}):\n`);
   for (const s of cfg.payload.mcpServers) {
     process.stdout.write(`  - ${s.name} [${s.transport}]\n`);

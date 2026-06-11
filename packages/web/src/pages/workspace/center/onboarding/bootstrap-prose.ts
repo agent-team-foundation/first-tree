@@ -8,25 +8,33 @@
  * tree URL) and defer the mechanics, so they don't drift as the CLI / skills
  * evolve.
  *
- * Two paths:
- *   - existing tree (buildBindBootstrap): the frontend has already best-effort
- *     PUT the URL into the org's `context_tree` settings before sending, so the
- *     message doesn't ask the agent to record it in First Tree again. The
- *     tree is already populated, so `first-tree-seed` does not apply — the
- *     agent uses `first-tree-context` for any further writes.
- *   - new tree (buildCreateBootstrap): today, the Cloud-side `runKickoff` path
- *     does NOT provision the tree repo, write the org's `context_tree`
- *     setting, or bind the workspace before sending the kickoff message
- *     (`step-kickoff.tsx` passes `contextTreeUrl: null`). The message
- *     therefore must NOT name `$first-tree-seed`: that skill's self-check
- *     hard-requires those preconditions and would refuse on every new-tree
- *     onboarding. Instead, the prose states the user's goal in plain
- *     language; the agent uses its full skill set (`first-tree-context` for
- *     writes, plus general tooling) to bind + host + record + draft. When
- *     Cloud gains a real provisioning step (creates the tree repo, writes
- *     `context_tree`, writes `workspace.json`) BEFORE sending kickoff, a
- *     future PR will switch this prose to name `$first-tree-seed` and drop
- *     the bind/host/record-URL instructions. See PR 899 (baixiaohang's r3 review).
+ * Both paths now assume Cloud has provisioned + bound the tree BEFORE the
+ * kickoff message is sent: `runKickoff` creates the tree repo + writes the
+ * org's `context_tree` setting (new-tree, via the initializer), and the
+ * runtime writes `<workspace>/.first-tree/workspace.json` once the agent's
+ * session resolves the binding. That precondition is what lets the prose name
+ * skills directly instead of asking the agent to self-provision.
+ *
+ * Three paths:
+ *   - existing tree (buildBindBootstrap): the team's tree already exists and is
+ *     populated, and the binding (workspace.json) is written automatically by
+ *     the runtime — so the agent is NOT asked to bind or open a PR back to the
+ *     source. `first-tree-seed` does not apply to a populated tree; the agent
+ *     reads the tree and uses `first-tree-context` for any further writes. Sent
+ *     for the admin who just connected repos to an already-existing team tree.
+ *   - new tree (buildCreateBootstrap): Cloud has already created the empty tree
+ *     repo, written `context_tree`, and (on this session) the runtime writes
+ *     `workspace.json`, so the new-tree self-check preconditions for
+ *     `first-tree-seed` hold. The prose names `first-tree-seed` directly and
+ *     asks the agent to seed the already-bound, still-empty tree with real
+ *     content drawn from the source repos — it no longer asks the agent to
+ *     create the GitHub repo or record its URL (Cloud owns both).
+ *   - invitee joining a set-up team (buildInviteeBootstrap): the team's tree and
+ *     repos already exist and the agent inherits them automatically (recommended
+ *     team resources), so the invitee never connected anything. The prose is in a
+ *     joining-teammate voice — get oriented by reading the tree, then introduce
+ *     yourself — NOT the admin's "my repos are now connected, reflect them into
+ *     the tree" (a brand-new teammate shouldn't open with tree writes).
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
@@ -45,11 +53,11 @@ export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: strin
   const sourceLines = formatSourceList(sourceUrls);
   const single = sourceUrls.length === 1;
   const opener = single
-    ? "Set up First Tree for my source repo, binding it to our team's existing Context Tree."
-    : "Set up First Tree for my source repos, binding them to our team's existing Context Tree.";
+    ? "My source repo is now connected to our team's existing Context Tree."
+    : "My source repos are now connected to our team's existing Context Tree.";
   const skillLine = single
-    ? "Use your First Tree skills to bind the repo to that existing tree, then open a PR back to the source with the binding. Show me the diff before it's pushed, and walk me through the PR."
-    : "Use your First Tree skills to bind every repo to that existing tree, then open a PR back to each source with its binding. Show me the diffs before they're pushed, and walk me through each PR.";
+    ? "Read the tree first to get oriented — start at its root NODE.md. If this repo introduces decisions, ownership, or context worth recording, use the first-tree-context skill to reflect them into the tree — show me the diff and walk me through any PR before it's pushed."
+    : "Read the tree first to get oriented — start at its root NODE.md. If these repos introduce decisions, ownership, or context worth recording, use the first-tree-context skill to reflect them into the tree — show me the diffs and walk me through any PRs before they're pushed.";
   return [
     opener,
     "",
@@ -66,24 +74,42 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
   const sourceLines = formatSourceList(sourceUrls);
   const single = sourceUrls.length === 1;
   const opener = single
-    ? "Set up First Tree for my source repo and create a brand-new Context Tree for it."
-    : "Set up First Tree for my source repos and create one shared Context Tree they all bind to.";
-  const goalLine = single
-    ? "Bind the repo to the new Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repo, not placeholders. Host the new tree as its own GitHub repo under the same owner as the source."
-    : "Bind every repo to the one new shared Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repos, not placeholders. Host the new tree as its own GitHub repo under the owner the sources share (ask me which owner if they don't share one).";
+    ? "My team's Context Tree is set up and bound to my source repo — now seed it with real starting content."
+    : "My team's Context Tree is set up and bound to my source repos — now seed it with real starting content.";
+  const skillLine = single
+    ? "Use the first-tree-seed skill: read the bound source repo, then draft the tree's initial structure and starting content from what's actually in it — not placeholders."
+    : "Use the first-tree-seed skill: read every bound source repo, then draft the tree's initial structure and starting content from what's actually in them — not placeholders.";
   const walkthrough = single
-    ? "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and the PR."
-    : "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and each PR.";
+    ? "Show me the diff before anything is pushed, and walk me through each PR as it opens."
+    : "Show me the diffs before anything is pushed, and walk me through each PR as it opens.";
   return [
     opener,
     "",
     ...sourceLines,
     "",
-    goalLine,
-    "",
-    "Once the tree repo is up on GitHub, record its URL in First Tree with the First Tree CLI so future teammates' agents can find it.",
+    skillLine,
     "",
     walkthrough,
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
+/**
+ * Invitee joining a team that's already set up. The agent already inherits the
+ * team's repos + Context Tree (recommended team resources + the runtime's
+ * workspace.json), so the invitee never connected anything and is NOT asked to
+ * reflect decisions into the tree on its first message. Instead: read the tree
+ * to get oriented, then introduce yourself — the right tone for a brand-new
+ * teammate's first hello.
+ */
+export function buildInviteeBootstrap(treeUrl: string): string {
+  return [
+    "I've just joined the team and you're my agent. The team already has its repos connected and a shared Context Tree.",
+    "",
+    `Team Context Tree: ${treeUrl}`,
+    "",
+    "Read the tree first to get oriented — start at its root NODE.md — so you understand how the team works and what it's building. Then introduce yourself to me: what can you help with, and what's a good first thing for us to try?",
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");

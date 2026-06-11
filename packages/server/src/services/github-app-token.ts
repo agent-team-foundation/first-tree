@@ -1,6 +1,12 @@
 import type { ContextTreeSnapshot } from "@first-tree/shared";
 import { type ContextTreeBinding, isGithubRemoteBinding } from "./context-tree-snapshot.js";
-import { createAppJwt, GithubAppApiError, type GithubAppCredentials, mintInstallationToken } from "./github-app.js";
+import {
+  createAppJwt,
+  GithubAppApiError,
+  type GithubAppCredentials,
+  type InstallationToken,
+  mintInstallationToken,
+} from "./github-app.js";
 import type { InstallationRow } from "./github-app-installations.js";
 
 /**
@@ -14,7 +20,12 @@ import type { InstallationRow } from "./github-app-installations.js";
  *                 pick a user-facing remediation message.
  */
 export type ContextTreeInstallationTokenResult =
-  | { ok: true; token: string }
+  | {
+      ok: true;
+      token: string;
+      permissions: InstallationToken["permissions"];
+      repositorySelection: InstallationToken["repositorySelection"];
+    }
   | { ok: false; reason: "no-app-config" | "no-installation" | "suspended" | "mint-failed"; detail?: string };
 
 export type MintContextTreeInstallationTokenOptions = {
@@ -59,7 +70,12 @@ export async function mintContextTreeInstallationToken(
       privateKeyPem: appCredentials.privateKeyPem,
     });
     const minted = await mintInstallationToken(appJwt, installation.installationId, { fetcher: options.fetcher });
-    return { ok: true, token: minted.token };
+    return {
+      ok: true,
+      token: minted.token,
+      permissions: minted.permissions,
+      repositorySelection: minted.repositorySelection,
+    };
   } catch (error) {
     const detail =
       error instanceof GithubAppApiError

@@ -6,6 +6,7 @@ import {
   type UpdateAgent,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
+import { Check } from "lucide-react";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { deleteAgentAvatar, listAgents, uploadAgentAvatar } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
@@ -373,47 +374,51 @@ function Swatch({
   background: string;
   isAuto?: boolean;
 }) {
-  const size = 32;
+  // Selection follows the OptionCard rule: the border stays the same faint
+  // hairline in both states; selection is signalled by a filled neutral marker,
+  // never a heavier/darker border. The marker is a small check BADGE in the
+  // corner (not a centered glyph) so the "Auto" swatch keeps its centered "A"
+  // identity even when it's the selected colour.
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
       title={label}
+      className="relative inline-flex items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
       style={{
-        position: "relative",
-        width: size,
-        height: size,
-        borderRadius: "50%",
+        width: "var(--sp-8)",
+        height: "var(--sp-8)",
+        borderRadius: "var(--radius-full)",
         background,
-        border: selected ? "var(--hairline-bold) solid var(--fg)" : "var(--hairline) solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         cursor: "pointer",
         padding: 0,
-        outline: "none",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
       }}
     >
-      {isAuto && (
-        <span
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 4,
-            borderRadius: "50%",
-            background: "var(--bg-raised)",
-            color: "var(--fg-3)",
-            fontSize: 10,
-            fontWeight: 600,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
+      {isAuto ? (
+        <span aria-hidden className="text-eyebrow" style={{ color: "var(--fg-on-vivid)" }}>
           A
         </span>
-      )}
+      ) : null}
+      {selected ? (
+        <span
+          aria-hidden
+          className="absolute inline-flex items-center justify-center"
+          style={{
+            right: -2,
+            bottom: -2,
+            width: "var(--sp-3_5)",
+            height: "var(--sp-3_5)",
+            borderRadius: "var(--radius-full)",
+            background: "var(--fg)",
+            color: "var(--bg-raised)",
+            border: "var(--hairline) solid var(--bg-raised)",
+          }}
+        >
+          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+        </span>
+      ) : null}
     </button>
   );
 }

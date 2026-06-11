@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chatUserState } from "../db/schema/chat-user-state.js";
+import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { listMeChats } from "../services/me-chat.js";
@@ -14,11 +15,20 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  *     `metadata.mentions` entry) — enforced at the service layer.
  *   - `chat_user_state.open_request_count` is the answer-cleared counter
  *     behind the `needs_you` red-dot:
- *       +1  a FRESH request (format=request, no inReplyTo) → target human.
- *       -1  the target's FIRST reply (a message with inReplyTo=question);
- *           idempotent and floored at zero.
- *   - A reply that is itself a new request takes NEITHER path (has inReplyTo
- *     ⇒ no +1; sender is the asking agent, not the human target ⇒ no -1).
+ *       +1  a FRESH request (format=request) → target human.
+ *       -1  an EXPLICIT resolution: a message carrying
+ *           `metadata.resolves = {request, kind}` pointed at the question,
+ *           from the target (answered) or the asking agent (answered/closed).
+ *           Idempotent and floored at zero.
+ *   - `inReplyTo` is pure threading and NEVER resolves: a "chat about this"
+ *     discussion reply leaves the question open. Re-asking (a new
+ *     `format=request`) opens a second independent question (+1) — it does
+ *     not auto-supersede the one it threads under.
+ *   - An invalid `resolves` target FAILS LOUD: the whole send is rejected
+ *     (tx rollback, no message row) when the request id is missing from this
+ *     chat, points at a non-request message, or the sender is neither the
+ *     target nor the asker. Re-resolving an already-resolved question stays
+ *     a soft success (idempotent counter).
  *
  * No lifecycle state is stored on the message — these tests pin the counter,
  * which is the only persisted signal.
@@ -100,7 +110,7 @@ describe("open-question (format=request) + open_request_count", () => {
     ).rejects.toThrow(/human/i);
   });
 
-  it("the target's first reply (inReplyTo=question) decrements the count; further replies are no-ops", async () => {
+  it("an explicit answer resolution decrements the count; further resolutions are no-ops", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -113,7 +123,8 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // First answer from the target → -1.
+    // The target answers explicitly (metadata.resolves) → -1. `inReplyTo` is
+    // set for threading but is NOT what drives the decrement.
     await sendMessage(
       app.db,
       chat.id,
@@ -121,15 +132,16 @@ describe("open-question (format=request) + open_request_count", () => {
       {
         source: "web",
         format: "text",
-        content: "Let's do 5%.",
+        content: "5% or 20%? → 5%",
         inReplyTo: question.id,
+        metadata: { resolves: { request: question.id, kind: "answered" } },
       },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
 
-    // A second reply to the SAME question must NOT decrement again (idempotent,
-    // floored at zero).
+    // A second resolution of the SAME question must NOT decrement again
+    // (idempotent, floored at zero).
     await sendMessage(
       app.db,
       chat.id,
@@ -137,15 +149,51 @@ describe("open-question (format=request) + open_request_count", () => {
       {
         source: "web",
         format: "text",
-        content: "...actually still 5%.",
-        inReplyTo: question.id,
+        content: "5% or 20%? → still 5%",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
       },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
-  it("a normal reply NOT pointing at the question does not change the count", async () => {
+  it("a threaded discussion reply (inReplyTo set, no resolves) does NOT change the count", async () => {
+    // The core "chat about this" guarantee: the human and asking agent can go
+    // back and forth threaded under the question without resolving it.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Human threads a clarifying question onto the request — no resolves.
+    const { message: disc } = await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      { source: "web", format: "text", content: "what's the rollback window?", inReplyTo: question.id },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Asking agent replies into the discussion line — still no resolves.
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      { source: "api", format: "text", content: "seconds — old env stays warm", inReplyTo: disc.id },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+  });
+
+  it("a plain reply with neither inReplyTo nor resolves does not change the count", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -158,26 +206,19 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // Human chats without inReplyTo — not an answer to the question.
     await sendMessage(
       app.db,
       chat.id,
       human.uuid,
-      {
-        source: "web",
-        format: "text",
-        content: "give me a sec",
-      },
+      { source: "web", format: "text", content: "give me a sec" },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
   });
 
-  it("a replacement request (asker re-asks) nets zero — supersede old, open new", async () => {
-    // The asking agent re-asks by replying to its own question with a new
-    // request. The new request +1s the target AND supersedes (resolves) the
-    // parent it replies to (-1), so for the same target the count nets zero —
-    // staying at one open question (now the new one).
+  it("re-asking (a new format=request) opens a SECOND independent question (+1, no auto-supersede)", async () => {
+    // Under the explicit-resolution model a new request never auto-closes the
+    // one it threads under — superseding is now an explicit `chat send --close`.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -198,11 +239,11 @@ describe("open-question (format=request) + open_request_count", () => {
       metadata: { mentions: [human.uuid], request: { question: "5%, 10%, or 20%?" } },
     });
 
-    // Still exactly 1 — new request +1, parent superseded -1, net zero.
-    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+    // Two independent open questions now.
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(2);
   });
 
-  it("the asker's plain-text reply to its own request actively closes it (clears the target's count)", async () => {
+  it("the asking agent closes via an explicit resolves(closed) (clears the target's count)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -215,8 +256,7 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // The ASKER (not the target) replies to its own request with a plain text
-    // message → active close/withdraw → the target's count clears.
+    // The ASKER explicitly closes (chat send --close) → resolves(closed) → -1.
     await sendMessage(
       app.db,
       chat.id,
@@ -224,14 +264,14 @@ describe("open-question (format=request) + open_request_count", () => {
       {
         source: "api",
         format: "text",
-        content: "Never mind — resolved this offline, closing.",
-        inReplyTo: question.id,
+        content: "Never mind — resolved this offline.",
+        metadata: { resolves: { request: question.id, kind: "closed", reason: "resolved offline" } },
       },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
 
-    // A second close (or any later reply) is a no-op — floored at zero.
+    // A second close is a no-op — floored at zero.
     await sendMessage(
       app.db,
       chat.id,
@@ -240,19 +280,309 @@ describe("open-question (format=request) + open_request_count", () => {
         source: "api",
         format: "text",
         content: "(still closed)",
-        inReplyTo: question.id,
+        metadata: { resolves: { request: question.id, kind: "closed" } },
       },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
-  it("a request-shaped reply to an already-resolved request opens a fresh count (+1)", async () => {
-    // Review #3: a threaded follow-up question must be independently countable.
-    // Raise → target answers (count 0) → asker asks a NEW request replying to
-    // the resolved one → it's a new open question, so count must be 1 again
-    // (the new request +1; the supersede of the already-resolved parent is a
-    // no-op, not a double -1).
+  it("a resolves from neither the target nor the asker is REJECTED (unauthorized, fail loud)", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, other, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // `other` (an unrelated participant) tries to resolve — must fail loud.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        other.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "I'll close this",
+          metadata: { resolves: { request: question.id, kind: "closed" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/target or the asking agent/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // The rejected send must not leave a message in history (tx rollback).
+    const stray = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, other.uuid)));
+    expect(stray).toHaveLength(0);
+  });
+
+  it("a resolves pointed at a nonexistent message id is REJECTED and writes nothing", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Stale/bogus id (the QA `--answer <missing id>` shape) — fail loud.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "STALE_ANSWER_SHOULD_FAIL",
+          inReplyTo: "00000000-0000-0000-0000-000000000000",
+          metadata: { resolves: { request: "00000000-0000-0000-0000-000000000000", kind: "answered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/no such message/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Rollback: no dangling resolution message in history.
+    const stale = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), sql`${messages.metadata} -> 'resolves' ->> 'kind' IS NOT NULL`));
+    expect(stale).toHaveLength(0);
+  });
+
+  it("a resolves pointed at a message in ANOTHER chat is REJECTED", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+    const otherChat = await createChat(app.db, asker.agent.uuid, {
+      type: "group",
+      participantIds: [human.uuid],
+    });
+
+    const { message: question } = await sendMessage(app.db, otherChat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+
+    // Real request id, wrong chat — must not resolve across chats.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "cross-chat resolve",
+          metadata: { resolves: { request: question.id, kind: "answered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/no such message/i);
+    expect(await openReqCount(app, otherChat.id, human.uuid)).toBe(1);
+  });
+
+  it("a resolves pointed at a non-request message is REJECTED", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: plain } = await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      { source: "api", format: "text", content: "just a remark" },
+      { allowRecipientlessSend: true },
+    );
+
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "closing a non-question",
+          metadata: { resolves: { request: plain.id, kind: "closed" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/not a tracked request/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a MALFORMED metadata.resolves is REJECTED outright (never stored as inert metadata)", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Authorized sender, valid request id, but bogus `kind` — must fail loud,
+    // not land as ordinary metadata (which would poison the priors scan).
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "resolving with a typo'd kind",
+          metadata: { resolves: { request: question.id, kind: "anwsered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/malformed "metadata.resolves"/i);
+    // Missing `kind` entirely — same rejection.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "resolving with no kind",
+          metadata: { resolves: { request: question.id } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/malformed "metadata.resolves"/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Rollback: neither malformed send left a message row.
+    const stray = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), sql`${messages.metadata} ? 'resolves'`));
+    expect(stray).toHaveLength(0);
+
+    // The legitimate resolution still works and clears the count.
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "confirmed: 5%",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a malformed legacy resolves row (pre-validation) does NOT block a later legitimate resolution", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // A pre-validation row from an AUTHORIZED sender with a malformed kind:
+    // matches the priors scan on `resolves ->> 'request'` + sender, but is
+    // not a schema-valid resolution — it must not count as a "prior".
+    await app.db.insert(messages).values({
+      id: crypto.randomUUID(),
+      chatId: chat.id,
+      senderId: asker.agent.uuid,
+      format: "text",
+      content: "legacy malformed resolve",
+      metadata: { resolves: { request: question.id, kind: "anwsered" } },
+      source: "api",
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      asker.agent.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "confirmed: 5%",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a stray unauthorized resolves row (legacy, pre-gate) does NOT block a later legitimate resolution", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, other, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Unauthorized resolves are rejected at send nowadays, but rows written
+    // before that gate existed can still be present. Simulate one with a
+    // direct insert: it must not count as a "prior" that blocks the real
+    // resolution — otherwise the red dot could never clear.
+    await app.db.insert(messages).values({
+      id: crypto.randomUUID(),
+      chatId: chat.id,
+      senderId: other.uuid,
+      format: "text",
+      content: "not my question, but here",
+      metadata: { resolves: { request: question.id, kind: "answered" } },
+      source: "api",
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // The target's legitimate answer still decrements to 0.
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "5% → yes",
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a NEW request after an answered one opens a fresh count (+1)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -267,7 +597,13 @@ describe("open-question (format=request) + open_request_count", () => {
       app.db,
       chat.id,
       human.uuid,
-      { source: "web", format: "text", content: "5%", inReplyTo: q1.id },
+      {
+        source: "web",
+        format: "text",
+        content: "5%",
+        inReplyTo: q1.id,
+        metadata: { resolves: { request: q1.id, kind: "answered" } },
+      },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
@@ -350,7 +686,7 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
     });
     expect(listAfterRaise.rows.find((r) => r.chatId === chat.id)?.openRequestCount).toBe(1);
 
-    // Human answers (reply threaded to the question) → counter clears.
+    // Human answers explicitly (metadata.resolves) → counter clears.
     await sendMessage(
       app.db,
       chat.id,
@@ -358,8 +694,9 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
       {
         source: "web",
         format: "text",
-        content: "yes, ship it",
+        content: "ship today? → yes, ship it",
         inReplyTo: question.id,
+        metadata: { resolves: { request: question.id, kind: "answered" } },
       },
       { allowRecipientlessSend: true },
     );

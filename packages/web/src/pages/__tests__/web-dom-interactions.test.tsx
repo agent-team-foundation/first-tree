@@ -618,6 +618,7 @@ beforeEach(() => {
       visibility: "organization",
       runtimeProvider: "claude-code",
       clientId: "client-1",
+      status: "active",
       avatarImageUrl: null,
     },
   ]);
@@ -1331,22 +1332,27 @@ describe("web DOM interaction coverage", () => {
       configurable: true,
       value: { ...window.location, assign, href: "http://localhost/onboarding" },
     });
+    // connect-code opens the install in a new tab (popup) and fills its location
+    // once the URL is minted; stub window.open to capture that.
+    const installTab = { location: { href: "" }, close: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
 
     const disconnected = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install First Tree on GitHub", disconnected.container);
+    await waitForText("Install on GitHub", disconnected.container);
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install First Tree on GitHub"),
+        button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding");
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
     expect(sessionStorage.getItem("onboarding:connect-code:install-attempt")).toBeTruthy();
-    expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    expect(installTab.location.href).toBe("https://github.com/apps/first-tree/installations/new");
 
     // Skip is one click now — a legitimate, recoverable choice goes straight
     // through with no confirm gate (the old "Skip connecting code?" panel +
     // Keep-connecting / Skip-anyway was confirmshaming and was removed).
-    expect(disconnected.container.textContent).toContain("You can connect code anytime from Settings.");
+    expect(disconnected.container.textContent).toContain("connect anytime from Settings.");
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -1375,8 +1381,15 @@ describe("web DOM interaction coverage", () => {
       setSelectedRepoUrls,
       goNext: vi.fn(),
     });
-    await waitForText("Which projects should your agent work on?", connected.container);
+    await waitForText("Which repos should your agent work on?", connected.container);
     await waitForText("acme/web", connected.container);
+    // 0 repos picked but the list is pickable → friction: the consequence line
+    // shows and the strong primary "Continue" is absent (only the quiet
+    // "Continue without a repo" link remains; never disabled).
+    await waitForText("Pick a repo so your agent can build your team's Context Tree", connected.container);
+    expect([...connected.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Continue")).toBe(
+      false,
+    );
     await click(
       [...connected.container.querySelectorAll("label")].find((label) => label.textContent?.includes("acme/web")) ??
         null,
@@ -1384,7 +1397,7 @@ describe("web DOM interaction coverage", () => {
     expect(setSelectedRepoUrls).toHaveBeenCalledWith(["https://github.com/acme/web.git"]);
     await click(
       [...connected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a project"),
+        button.textContent?.includes("Continue without a repo"),
       ) ?? null,
     );
     expect(connected.flow.goNext).toHaveBeenCalled();
@@ -1403,14 +1416,17 @@ describe("web DOM interaction coverage", () => {
       createdAt: NOW,
       updatedAt: NOW,
     });
-    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
-    const scopeMissing = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Reconnect GitHub with project access", scopeMissing.container);
-    await unmountRoot(scopeMissing.root);
+    // A 403 from the org repo endpoint is `requireOrgAdmin` ("not an org
+    // admin"), not a GitHub-scope problem (the repos come from the App
+    // installation token, not the caller's OAuth). It folds into the same
+    // honest load-failed message — there's no "reconnect GitHub" recovery.
+    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "admin required"));
+    const adminForbidden = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Couldn't load your team's repos", adminForbidden.container);
+    await unmountRoot(adminForbidden.root);
 
-    // A non-403 failure from the org repo endpoint (502 upstream / 503
-    // no_installation|suspended) must show an honest load-failed message, not
-    // fall through to the empty "no projects" state.
+    // A 502 (upstream) / 503 (no_installation|suspended) failure shows the same
+    // honest load-failed message, not the empty "no projects" state.
     githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
       installationId: 42,
       accountLogin: "acme",
@@ -1426,30 +1442,93 @@ describe("web DOM interaction coverage", () => {
     });
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
     const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Couldn't load your team's projects", loadFailed.container);
+    await waitForText("Couldn't load your team's repos", loadFailed.container);
     await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install First Tree on GitHub", notConfigured.container);
+    await waitForText("Install on GitHub", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install First Tree on GitHub"),
+        button.textContent?.includes("Install on GitHub"),
       ) ?? null,
     );
-    await waitForText("Code connection isn't set up here yet.", notConfigured.container);
+    await waitForText("Couldn't connect a repo here right now", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without connecting code"),
+        button.textContent?.includes("Continue without a repo"),
       ) ?? null,
     );
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
   });
 
-  it("drives StepKickoff admin and invitee start flows", async () => {
-    const { ApiError } = await import("../../api/client.js");
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+  it("falls back to a full-page redirect when the install popup is blocked", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    // A fresh attempt: clear any marker a prior test left so the CTA is enabled.
+    sessionStorage.removeItem("onboarding:connect-code:install-attempt");
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, assign, href: "http://localhost/onboarding" },
+    });
+    // Popup blocked → window.open returns null → we must fall back to a
+    // full-page redirect rather than silently dropping the install.
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    githubAppMocks.getGithubAppInstallUrl.mockClear();
 
+    const blocked = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Install on GitHub", blocked.container);
+    await click(
+      [...blocked.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Install on GitHub"),
+      ) ?? null,
+    );
+    // Blocked path redirects THIS tab, so it must come back to the wizard
+    // (/onboarding) — not the popup auto-close page, which would strand it.
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding");
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    expect(assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
+    await unmountRoot(blocked.root);
+  });
+
+  it("locks the Install CTA after launch and re-enables only via Start over", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    sessionStorage.removeItem("onboarding:connect-code:install-attempt");
+    const installTab = { location: { href: "" }, close: vi.fn() };
+    vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
+    githubAppMocks.getGithubAppInstallUrl.mockClear();
+
+    const view = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
+    await waitForText("Install on GitHub", view.container);
+    const installBtn = (): HTMLButtonElement | null =>
+      [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        b.textContent?.includes("Install on GitHub"),
+      ) ?? null;
+
+    await click(installBtn());
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledTimes(1);
+    // The original tab stays mounted and polls; the CTA must lock so a second
+    // click can't re-mint and clobber the in-flight attempt's state nonce.
+    expect(installBtn()?.disabled).toBe(true);
+    await click(installBtn());
+    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledTimes(1);
+
+    // Retry is explicit + user-initiated, never a timed auto-unlock.
+    await click(
+      [...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start over")) ?? null,
+    );
+    expect(installBtn()?.disabled).toBe(false);
+    await unmountRoot(view.root);
+  });
+
+  it("drives StepKickoff admin and invitee start flows", async () => {
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const findButton = (container: ParentNode, text: string): HTMLButtonElement | null =>
+      ([...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ??
+        null) as HTMLButtonElement | null;
+
+    // Admin · silently detects an existing team tree → switches the first task to
+    // "read it" (no fork, no URL input). The heading is agent + outcome.
     const setTreeMode = vi.fn();
     const setTreeUrl = vi.fn();
     const markTreeAutoInitDone = vi.fn();
@@ -1463,23 +1542,23 @@ describe("web DOM interaction coverage", () => {
       setTreeUrl,
       markTreeAutoInitDone,
     });
-    await waitForText("Start your Context Tree", adminAutoDetect.container);
+    await waitForText("Your agent's ready to get to work", adminAutoDetect.container);
     expect(markTreeAutoInitDone).toHaveBeenCalled();
     expect(setTreeMode).toHaveBeenCalledWith("existing");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
     await unmountRoot(adminAutoDetect.root);
 
+    // Admin · existing tree → Start reads it: bind bootstrap (names the tree),
+    // caches the repo + tree setting, enters the chat. (New-tree provisioning is
+    // covered by provision-tree.test.ts.)
     const adminExisting = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeMode: "existing",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Use your team's Context Tree", adminExisting.container);
-    await click(
-      [...adminExisting.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Start")) ??
-        null,
-    );
+    await waitForText("Your agent's ready to get to work", adminExisting.container);
+    await click(findButton(adminExisting.container, "Start"));
     await waitForText("Starting your agent", adminExisting.container);
     expect(agentApiMocks.listManagedAgents).toHaveBeenCalled();
     expect(chatApiMocks.createAgentChat).toHaveBeenCalledWith("agent-1");
@@ -1500,30 +1579,7 @@ describe("web DOM interaction coverage", () => {
     expect(adminExisting.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminExisting.root);
 
-    const setTreeModeNew = vi.fn();
-    const setTreeUrlNew = vi.fn();
-    const adminNew = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
-      selectedRepoUrls: ["https://github.com/acme/web.git"],
-      treeMode: "existing",
-      treeUrl: "git@github.com:acme/context-tree.git",
-      setTreeMode: setTreeModeNew,
-      setTreeUrl: setTreeUrlNew,
-    });
-    await waitForText("That doesn't look like a web link", adminNew.container);
-    const startButton = [...adminNew.container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Start"),
-    );
-    expect(startButton?.hasAttribute("disabled")).toBe(true);
-    await click(
-      [...adminNew.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Create new instead"),
-      ) ?? null,
-    );
-    expect(setTreeUrlNew).toHaveBeenCalledWith("");
-    expect(setTreeModeNew).toHaveBeenCalledWith("new");
-    await unmountRoot(adminNew.root);
-
+    // Admin · no repo → honestly just "meet your agent" (intro), no provisioning.
     chatApiMocks.sendChatMessage.mockRejectedValueOnce(new Error("message failed"));
     const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
@@ -1531,77 +1587,49 @@ describe("web DOM interaction coverage", () => {
       treeMode: "new",
       treeUrl: "",
     });
-    await waitForText("Start your agent", adminNoProject.container);
-    await click(
-      [...adminNoProject.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Meet your agent"),
-      ) ?? null,
-    );
+    await waitForText("No repo connected", adminNoProject.container);
+    await click(findButton(adminNoProject.container, "Meet your agent"));
     expect(chatApiMocks.createAgentChat).toHaveBeenLastCalledWith("agent-1");
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
+    // Invitee · waiting (no team tree yet) → "Meet your agent" now lands in a real
+    // chat (runKickoff → completeAndEnterChat), not finishLater.
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
-    const inviteeWaiting = await renderOnboardingDom(<StepKickoff />, {
-      path: "invitee",
-      activeStep: "kickoff",
-    });
+    const inviteeWaiting = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
     await waitForText("Waiting for your team to set up", inviteeWaiting.container);
-    await click(
-      [...inviteeWaiting.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Meet your agent"),
-      ) ?? null,
-    );
-    expect(inviteeWaiting.flow.finishLater).toHaveBeenCalled();
+    await click(findButton(inviteeWaiting.container, "Meet your agent"));
+    await waitForText("Starting your agent", inviteeWaiting.container);
+    expect(inviteeWaiting.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeWaiting.root);
 
+    // Invitee · no installation (tree set, GitHub not connected) → hold + the same
+    // "meet your agent" bailout. No share-link/Copy affordance anymore.
     githubAppMocks.getGithubAppInstallationExists.mockResolvedValueOnce(false);
-    const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, {
-      path: "invitee",
-      activeStep: "kickoff",
-    });
-    await waitForText("your team's code isn't connected yet", inviteeNoInstall.container);
-    await click(
-      [...inviteeNoInstall.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Copy"),
-      ) ?? null,
-    );
-    expect(navigator.clipboard.writeText).toHaveBeenCalled();
+    const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
+    await waitForText("your team's repo isn't connected yet", inviteeNoInstall.container);
+    await click(findButton(inviteeNoInstall.container, "Meet your agent"));
+    expect(inviteeNoInstall.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoInstall.root);
 
-    const inviteeConfirm = await renderOnboardingDom(<StepKickoff />, {
-      path: "invitee",
-      activeStep: "kickoff",
-    });
-    await waitForText("Your team is ready", inviteeConfirm.container);
-    await click(
-      [...inviteeConfirm.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a project"),
-      ) ?? null,
+    // Invitee · ready (tree + install) → a single launch, no repo selection. The
+    // agent already inherits the team's recommended repos.
+    const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
+    await waitForText("Your agent's ready to go", inviteeReady.container);
+    await click(findButton(inviteeReady.container, "Start working"));
+    // Pin the invitee bootstrap (a swap back to buildBindBootstrap would still
+    // send a string — assert the joining-teammate voice).
+    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith(
+      "chat-onboarding",
+      expect.stringContaining("just joined the team"),
+      ["agent-1"],
     );
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-onboarding", expect.any(String), ["agent-1"]);
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
       "tree_chat_started",
       expect.objectContaining({ joinPath: "invite" }),
     );
-    await unmountRoot(inviteeConfirm.root);
-
-    resourceMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]);
-    githubMocks.listGithubRepos.mockRejectedValueOnce(new ApiError(403, "scope missing"));
-    const inviteePickerScope = await renderOnboardingDom(<StepKickoff />, {
-      path: "invitee",
-      activeStep: "kickoff",
-    });
-    await waitForText("Reconnect GitHub with project access", inviteePickerScope.container);
-    await unmountRoot(inviteePickerScope.root);
-
-    resourceMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]);
-    githubMocks.listGithubRepos.mockRejectedValueOnce(new Error("network"));
-    const inviteePickerNetwork = await renderOnboardingDom(<StepKickoff />, {
-      path: "invitee",
-      activeStep: "kickoff",
-    });
-    await waitForText("Couldn't load your projects", inviteePickerNetwork.container);
+    expect(inviteeReady.flow.completeAndEnterChat).toHaveBeenCalled();
+    await unmountRoot(inviteeReady.root);
   });
 
   it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {

@@ -13,6 +13,8 @@ interface SendOptions {
   question?: string;
   option?: string[];
   replyTo?: string;
+  answer?: string;
+  close?: string;
 }
 
 /** Commander collector for a repeatable flag (`--option a --option b`). */
@@ -27,7 +29,7 @@ export function registerChatSendCommand(chat: Command): void {
       "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
         "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
         "first). A message must name a recipient — there is no no-mention send. Use --request to ask a human an " +
-        "open question, --reply-to to answer one.",
+        "open question, and --answer/--close to resolve a question you asked.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -39,7 +41,20 @@ export function registerChatSendCommand(chat: Command): void {
     )
     .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
-    .option("--reply-to <messageId>", "Answer/thread this message — sets inReplyTo (clears the asker's red dot)")
+    .option(
+      "--answer <requestId>",
+      "Resolve an open question you asked: mark it answered and clear the human's red dot. The message body is " +
+        "the confirmed answer. Threads under the question.",
+    )
+    .option(
+      "--close <requestId>",
+      "Withdraw an open question you asked: mark it closed and clear the human's red dot. The message body is the " +
+        "reason. Re-asking opens a NEW question — it never auto-supersedes, so close the stale one explicitly.",
+    )
+    .option(
+      "--reply-to <messageId>",
+      "Thread a reply under a message — sets inReplyTo (pure threading; does NOT resolve a question)",
+    )
     .action(async (name: string | undefined, message: string | undefined, options: SendOptions) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
@@ -119,6 +134,26 @@ export function registerChatSendCommand(chat: Command): void {
           };
         }
 
+        // --answer / --close fold open-question resolution into `send`: they
+        // attach `metadata.resolves` (the explicit signal the server's red-dot
+        // −1 keys off) and thread the reply under the question. `inReplyTo`
+        // alone never resolves anything — it is pure threading now.
+        const resolveId = options.answer ?? options.close;
+        if (resolveId !== undefined) {
+          if (isRequest) {
+            fail("RESOLVE_WITH_REQUEST", "--answer/--close cannot be combined with --request.", 2);
+          }
+          if (options.answer && options.close) {
+            fail("RESOLVE_AMBIGUOUS", "Pass only one of --answer / --close.", 2);
+          }
+          const kind = options.answer ? "answered" : "closed";
+          metadata = {
+            ...(metadata ?? {}),
+            // For a withdrawal the body doubles as the human-readable reason.
+            resolves: { request: resolveId, kind, ...(kind === "closed" && content ? { reason: content } : {}) },
+          };
+        }
+
         const sdk = createSdk(options.agent);
 
         // L3: snapshot any `.md` this message references, exactly like the
@@ -129,6 +164,10 @@ export function registerChatSendCommand(chat: Command): void {
           ? { ...(metadata ?? {}), documentContext: captured.documentContext }
           : metadata;
 
+        // `--reply-to` threads explicitly; `--answer`/`--close` thread under the
+        // question they resolve. Either way `inReplyTo` is pure threading.
+        const inReplyTo = options.replyTo ?? resolveId;
+
         const result = await sdk.sendMessage(chatId, {
           format,
           content: captured.content,
@@ -138,9 +177,7 @@ export function registerChatSendCommand(chat: Command): void {
           // adds it to mentions; an unknown name fails with a `chat invite`
           // hint.
           ...(target ? { receiverNames: [target] } : {}),
-          // Answer/thread a prior message; the server's open-question counter
-          // decrements off exactly this when the target answers a request.
-          ...(options.replyTo ? { inReplyTo: options.replyTo } : {}),
+          ...(inReplyTo ? { inReplyTo } : {}),
         });
         success(result);
       } catch (error) {

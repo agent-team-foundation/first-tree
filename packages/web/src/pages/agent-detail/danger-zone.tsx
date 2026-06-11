@@ -134,7 +134,7 @@ export function DangerZone(props: DangerZoneProps) {
 function DangerActionRow({ label, description, action }: { label: string; description: ReactNode; action: ReactNode }) {
   return (
     <div
-      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[8.25rem_minmax(0,1fr)_auto] md:items-center md:gap-4"
+      className="grid grid-cols-1 gap-2 text-body md:grid-cols-[var(--agent-detail-label-col)_minmax(0,1fr)_auto] md:items-center md:gap-4"
       style={{
         padding: "var(--sp-3) 0",
         borderBottom: "var(--hairline) solid var(--border-faint)",

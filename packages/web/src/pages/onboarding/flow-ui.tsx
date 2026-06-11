@@ -14,9 +14,13 @@ import { cn } from "../../lib/utils.js";
 export function StepHeading({ title, why }: { title: string; why?: string | null }) {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
-      <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        {title}
-      </h1>
+      {/* Skip the h1 on an empty title — the build-tree recovery surface
+          supplies its own constant title and suppresses the per-step one. */}
+      {title ? (
+        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          {title}
+        </h1>
+      ) : null}
       {why ? (
         <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {why}
@@ -77,15 +81,23 @@ export function FlowHint({
       role={role}
       style={{ gap: "var(--sp-1_5)", margin: 0, color: "var(--fg-3)" }}
     >
-      <Icon
-        className="h-3.5 w-3.5"
+      {/* Box the icon to the text's line-height and center it, so the glyph
+          lines up with the FIRST line of the hint — keeps single- AND
+          multi-line hints aligned (a fixed marginTop only worked for one). */}
+      <span
         style={{
+          display: "inline-flex",
+          alignItems: "center",
+          height: "calc(var(--text-label) * var(--text-label--line-height))",
           flexShrink: 0,
-          marginTop: "var(--sp-0_5)",
-          color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)",
         }}
-        aria-hidden="true"
-      />
+      >
+        <Icon
+          className="h-3.5 w-3.5"
+          style={{ color: tone === "error" ? "var(--fg-error-strong)" : "var(--fg-4)" }}
+          aria-hidden="true"
+        />
+      </span>
       <span style={{ minWidth: 0 }}>{children}</span>
     </p>
   );

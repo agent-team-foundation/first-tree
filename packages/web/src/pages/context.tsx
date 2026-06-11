@@ -6,14 +6,16 @@ import type {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, Network, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowRight, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
+import { COPY } from "./onboarding/copy.js";
 
 const CONTEXT_WINDOW = "7d";
 // Live-feed refetch cadence. The usage feed inside the snapshot is what wants
@@ -23,9 +25,10 @@ const CONTEXT_WINDOW = "7d";
 const CONTEXT_REFETCH_MS = 20_000;
 
 export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
-  const { organizationId } = useAuth();
+  const { organizationId, role } = useAuth();
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const preview = previewSnapshot !== undefined;
+  const isAdmin = role === "admin";
 
   const query = useQuery({
     queryKey: ["context-tree-snapshot", organizationId, CONTEXT_WINDOW, preview],
@@ -67,7 +70,11 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         ) : null}
         {snapshot && (preview || !query.isLoading) ? (
           snapshot.snapshotStatus === "unavailable" ? (
-            <UnavailableState snapshot={snapshot} />
+            <UnavailableState
+              snapshot={snapshot}
+              isAdmin={isAdmin}
+              canInitialize={!preview && isAdmin && !snapshot.repo}
+            />
           ) : (
             <>
               <ContextStatusNote snapshot={snapshot} />
@@ -446,11 +453,26 @@ function ErrorState({ message }: { message: string }) {
   );
 }
 
-function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const title = snapshot.repo ? "Context Tree sync unavailable" : "Connect Context Tree";
+function UnavailableState({
+  snapshot,
+  isAdmin,
+  canInitialize,
+}: {
+  snapshot: ContextTreeSnapshot;
+  isAdmin: boolean;
+  canInitialize: boolean;
+}) {
+  const navigate = useNavigate();
+  const title = snapshot.repo
+    ? "Context Tree sync unavailable"
+    : isAdmin
+      ? COPY.buildTree.bannerTitle
+      : "Connect Context Tree";
   const detail = snapshot.repo
     ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
-    : "Connect a Context Tree repo to show the team knowledge agents can use.";
+    : isAdmin
+      ? COPY.buildTree.bannerBody
+      : "Ask an admin to initialize this team's Context Tree.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
@@ -466,6 +488,19 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
             {syncDetail ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
                 {syncDetail}
+              </div>
+            ) : null}
+            {canInitialize ? (
+              <div style={{ marginTop: "var(--sp-2)" }}>
+                {/* A quiet link, not a CTA button — routes into the build-tree
+                    flow (connect code -> build -> seed). /build-tree self-gates,
+                    so a non-eligible click just bounces back to the workspace.
+                    The low-level "create an empty private repo" config lives in
+                    Settings -> Context tree. */}
+                <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
+                  <span>{COPY.buildTree.buildCta}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
               </div>
             ) : null}
             {snapshot.repo || snapshot.branch ? (

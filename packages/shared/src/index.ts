@@ -1,5 +1,11 @@
 // Schemas
 
+// -- Assembled-briefing copy guard (shared by server validation and CLI prompt writes) --
+export {
+  AGENT_BRIEFING_GENERATED_MARKER,
+  type BriefingFingerprint,
+  findAssembledBriefingFingerprint,
+} from "./agent-briefing-guard.js";
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -86,10 +92,12 @@ export {
   type DryRunAgentRuntimeConfig,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
+  deriveRepoShortLabel,
   dryRunAgentRuntimeConfigSchema,
   ENV_REDACTED_PLACEHOLDER,
   type EnvEntry,
   envEntrySchema,
+  formatRepoCoordinate,
   type GitRepo,
   getRepoLocalPathSafetyError,
   gitRepoSchema,
@@ -102,7 +110,11 @@ export {
   mcpServerSchema,
   PROMPT_APPEND_MAX_LENGTH,
   type PromptConfig,
+  type PromptSection,
+  type PromptSectionScope,
   promptConfigSchema,
+  promptSectionSchema,
+  promptSectionScopeSchema,
   type RuntimeResourceSkill,
   runtimeResourceSkillSchema,
   type UpdateAgentRuntimeConfig,
@@ -282,6 +294,10 @@ export {
   contextTreeUpdateSchema,
   contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
+  type InitializeContextTreeRequest,
+  type InitializeContextTreeResponse,
+  initializeContextTreeRequestSchema,
+  initializeContextTreeResponseSchema,
 } from "./schemas/context-tree.js";
 export {
   GITHUB_ACCOUNT_TYPES,
@@ -478,6 +494,8 @@ export {
   type PrecedingMessage,
   participantModeSchema,
   precedingMessageSchema,
+  type RequestResolution,
+  requestResolutionSchema,
   type SendMessage,
   sendMessageSchema,
 } from "./schemas/message.js";

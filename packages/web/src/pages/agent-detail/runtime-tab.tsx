@@ -1,16 +1,16 @@
+import { deriveRepoLocalPath, formatRepoCoordinate } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo } from "react";
 import { Navigate } from "react-router";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { useAuth } from "../../auth/auth-context.js";
-import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { ResourceTypeSection, useAgentResources } from "./capability-section.js";
 import { EnvSection } from "./env-section.js";
-import { ConfigRow } from "./flat-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ModelSection } from "./model-section.js";
 import { ReasoningEffortSection } from "./reasoning-effort-section.js";
+import { ResourceRowView } from "./resource-row.js";
 import { RuntimeSection } from "./runtime-section.js";
 import { sectionAnchorId } from "./save-bar.js";
 import { titleWithSemantics } from "./save-semantics.js";
@@ -124,10 +124,11 @@ export function RuntimeTab() {
         ) : null}
       </div>
 
-      {/* Context tree — read-only, org-level. Part of the agent's runtime
-          environment (injected at startup) but managed in Settings, not here. */}
+      {/* Context tree — read-only, org-level. Injected into the workspace at
+          startup, so it's shown here for visibility, but it's configured by an
+          admin in Settings (never per-agent), so the row has no actions. */}
       <div style={{ marginTop: "var(--sp-8)" }}>
-        <ContextTreeRow onManage={() => ctx.guardedNavigate("/settings/context")} />
+        <ContextTreeRow />
       </div>
 
       {/* Environment variables (draft — stages into the SaveBar). */}
@@ -149,13 +150,13 @@ export function RuntimeTab() {
 }
 
 /**
- * Read-only view of the org-level Context tree binding. The tree is injected
- * into every agent's workspace at startup, so it's genuinely part of this
- * agent's runtime environment — but it's an org-wide setting, not per-agent and
- * not editable here. This row only displays it (no inputs, not part of the
- * SaveBar) and links out to Settings → Context tree for changes.
+ * Read-only view of the org-level Context tree binding, rendered on the shared
+ * `ResourceRow` so it reads identically to the repo/skill/MCP rows. The tree is
+ * injected into every agent's workspace at startup (hence its presence here),
+ * but it's an org-wide setting an admin configures in Settings — never
+ * per-agent — so the row carries no actions and links nowhere.
  */
-function ContextTreeRow({ onManage }: { onManage: () => void }): ReactNode {
+function ContextTreeRow(): ReactNode {
   const { organizationId } = useAuth();
   const query = useQuery({
     queryKey: ["org-context-tree", organizationId],
@@ -163,32 +164,25 @@ function ContextTreeRow({ onManage }: { onManage: () => void }): ReactNode {
     enabled: !!organizationId,
   });
 
-  let value: ReactNode;
-  let description: ReactNode = "Injected into this agent's workspace at startup.";
+  let row: ReactNode;
   if (!organizationId || query.isLoading) {
-    value = <span style={{ color: "var(--fg-4)" }}>Loading…</span>;
+    row = <ResourceRowView name={null} source="" emptyPeek="Loading…" />;
   } else if (query.error) {
     // Quiet failure — never crash the tab over an optional, read-only row.
-    value = <span style={{ color: "var(--fg-4)" }}>Couldn't load context tree.</span>;
-    description = null;
+    row = <ResourceRowView name={null} source="" emptyPeek="Couldn't load context tree." />;
   } else if (!query.data?.repo) {
-    value = <span style={{ color: "var(--fg-3)" }}>No context tree configured</span>;
+    row = <ResourceRowView name={null} source="" emptyPeek="Not configured" />;
   } else {
-    value = `${query.data.repo}@${query.data.branch ?? "main"}`;
+    const repo = query.data.repo;
+    row = (
+      <ResourceRowView
+        name={deriveRepoLocalPath(repo)}
+        source=""
+        peek={formatRepoCoordinate({ url: repo, ref: query.data.branch })}
+        monoPeek
+      />
+    );
   }
 
-  return (
-    <Section title="Workspace context" description="Read-only — the team's Context tree, managed in Settings.">
-      <ConfigRow
-        label="Context tree"
-        value={value}
-        description={description}
-        action={
-          <Button size="xs" variant="ghost" onClick={onManage} title="Open the org Context tree setting">
-            Manage in Settings → Context tree
-          </Button>
-        }
-      />
-    </Section>
-  );
+  return <Section title="Context tree">{row}</Section>;
 }

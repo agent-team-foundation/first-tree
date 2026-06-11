@@ -38,11 +38,14 @@ export const messages = pgTable(
      * Original message ID; threads replies in the same chat. Maintained
      * field (NOT decision-inert — unlike `replyToInbox`/`replyToChat`).
      * Consumers: loop-detector reply-chain guard C4, client dispatcher /
-     * inbox / chat-list projections, and — as of the open-question feature —
-     * the "answer" signal: a reply whose `inReplyTo` points at a
-     * `format='request'` message directed at the replier decrements that
-     * human's `chat_user_state.open_request_count`. (Keep decision per
-     * issue #754: do NOT remove this column.)
+     * inbox / chat-list projections, and conversation threading for the
+     * open-question "chat about this" discussion line.
+     *
+     * Pure threading: `inReplyTo` does NOT change a `format='request'`
+     * question's lifecycle. A question is answered/closed only by an
+     * explicit `metadata.resolves` signal (see shared `requestResolutionSchema`),
+     * which is what decrements `chat_user_state.open_request_count`. (Keep
+     * decision per issue #754: do NOT remove this column.)
      */
     inReplyTo: text("in_reply_to"),
     /**

@@ -12,11 +12,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const contextApiMocks = vi.hoisted(() => ({
   getContextTreeSnapshot: vi.fn(),
+  initializeContextTree: vi.fn(),
 }));
 
 const authMock = vi.hoisted(() => ({
   value: {
     organizationId: "org-1" as string | null,
+    role: "member" as "admin" | "member" | null,
   },
 }));
 
@@ -55,16 +57,11 @@ async function renderDom(
     root.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
+          {/* Outside Routes so it keeps tracking the location after a navigate
+              away from "/" (e.g. the "Build Context Tree" link → /build-tree). */}
+          <LocationProbe />
           <Routes>
-            <Route
-              path="/"
-              element={
-                <>
-                  <LocationProbe />
-                  {element}
-                </>
-              }
-            />
+            <Route path="/" element={element} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -79,16 +76,9 @@ async function rerender(root: Root, queryClient: QueryClient, element: ReactElem
     root.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
+          <LocationProbe />
           <Routes>
-            <Route
-              path="/"
-              element={
-                <>
-                  <LocationProbe />
-                  {element}
-                </>
-              }
-            />
+            <Route path="/" element={element} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -157,8 +147,15 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.useRealTimers();
-  authMock.value = { organizationId: "org-1" };
+  authMock.value = { organizationId: "org-1", role: "member" };
   contextApiMocks.getContextTreeSnapshot.mockReset();
+  contextApiMocks.initializeContextTree.mockReset();
+  contextApiMocks.initializeContextTree.mockResolvedValue({
+    repo: "https://github.com/acme/acme-context-tree.git",
+    htmlUrl: "https://github.com/acme/acme-context-tree",
+    branch: "main",
+    nodePath: "NODE.md",
+  });
 });
 
 afterEach(() => {
@@ -277,8 +274,36 @@ describe("ContextPage DOM behavior", () => {
       />,
     );
     expect(disconnected.container.textContent).toContain("Connect Context Tree");
-    expect(disconnected.container.textContent).toContain("Connect a Context Tree repo");
+    expect(disconnected.container.textContent).toContain("Ask an admin to initialize");
+    expect(buttonByText(disconnected.container, "Create private GitHub repo")).toBeNull();
     await act(async () => disconnected.root.unmount());
+  });
+
+  it("offers a Build Context Tree link (not the raw initializer) to a no-tree admin", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    const { ContextPage } = await import("../context.js");
+    const unavailable = snapshot({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+      contextStatus: { label: "Not configured", detail: null, severity: "warning" },
+    });
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailable);
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Connect your code & build your Context Tree");
+    // The low-level "create an empty private repo" button is gone (it lived in
+    // Settings → Context tree, now also a link); the Context page no longer
+    // initializes the tree in place.
+    expect(container.textContent).not.toContain("Create private GitHub repo");
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
+
+    // Clicking the link routes into the build-tree flow.
+    await click(buttonByText(container, "Connect your code & build your Context Tree"));
+    const location = container.querySelector('[data-testid="location"]');
+    expect(location?.textContent).toBe("/build-tree");
+
+    await act(async () => root.unmount());
   });
 
   it("loads and errors through the live query path", async () => {
@@ -303,7 +328,7 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(failed.container, "Snapshot unavailable");
     await act(async () => failed.root.unmount());
 
-    authMock.value = { organizationId: null };
+    authMock.value = { organizationId: null, role: null };
     const noOrg = await renderDom(<ContextPage />);
     // No org → query disabled, no snapshot. The page renders only its
     // PageHeader chrome (always present, like every other tab) — no live

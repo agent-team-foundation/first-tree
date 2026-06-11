@@ -5,6 +5,7 @@ import {
   getStepSequence,
   INVITEE_STEPS,
   inferInitialStepIndex,
+  needsTreeSetup,
   resolveInviteeKickoffState,
   resolveOnboardingPath,
   resolveStepProgress,
@@ -59,6 +60,15 @@ describe("getStepSequence", () => {
   it("admin: connect-code comes after create-agent (defer the GitHub ask past the first win)", () => {
     expect(ADMIN_STEPS.indexOf("connect-code")).toBeGreaterThan(ADMIN_STEPS.indexOf("create-agent"));
     expect(ADMIN_STEPS.indexOf("connect-code")).toBeLessThan(ADMIN_STEPS.indexOf("kickoff"));
+  });
+  it("admin: connect-code is immediately followed by kickoff", () => {
+    // The build-tree recovery surface (build-tree-page.tsx) renders ONLY these
+    // two steps as an adjacent pair: it pins to connect-code, and connect-code's
+    // Continue (goNext) must land directly on kickoff. If a step is ever inserted
+    // between them, BuildTreeBody's switch hits `default` and renders a blank
+    // page — so pin this adjacency here, where the sequence invariants live.
+    const seq = getStepSequence("admin");
+    expect(seq[seq.indexOf("connect-code") + 1]).toBe("kickoff");
   });
 });
 
@@ -137,29 +147,17 @@ describe("shouldEnterOnboarding", () => {
 
 describe("resolveInviteeKickoffState", () => {
   it("waits when the team has no knowledge link yet (admin not done)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false, teamRepoCount: 0 })).toBe("waiting");
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true, teamRepoCount: 3 })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true })).toBe("waiting");
   });
   it("waiting wins over no-installation when the tree is also missing (fix the bigger blocker first)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false, teamRepoCount: 3 })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("waiting");
   });
-  it("stops at no-installation when the tree is set but the App was never installed (would 403 in picker)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false, teamRepoCount: 0 })).toBe(
-      "no-installation",
-    );
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false, teamRepoCount: 3 })).toBe(
-      "no-installation",
-    );
+  it("stops at no-installation when the tree is set but the App was never installed (agent would 403)", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false })).toBe("no-installation");
   });
-  it("confirms from the team's projects when link + install + projects all exist", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true, teamRepoCount: 2 })).toBe(
-      "confirm",
-    );
-  });
-  it("lets the invitee pick when the team has link + install but listed no projects", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true, teamRepoCount: 0 })).toBe(
-      "picker",
-    );
+  it("is ready to launch once the tree is set and the App is installed (no repo selection)", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true })).toBe("ready");
   });
 });
 
@@ -190,5 +188,30 @@ describe("shouldLeaveOnboarding", () => {
     expect(
       shouldLeaveOnboarding({ ...base, meLoaded: false, onboardingStep: "completed", currentOrgReady: true }),
     ).toBe(false);
+  });
+});
+
+describe("needsTreeSetup", () => {
+  const base = {
+    meLoaded: true,
+    onboardingCompletedAt: "2026-06-10T00:00:00Z",
+    role: "admin",
+    hasTreeBinding: false,
+  };
+  it("offers recovery to a completed admin whose org has no tree (the skip-the-code-step state)", () => {
+    expect(needsTreeSetup(base)).toBe(true);
+  });
+  it("does not offer once the org already has a tree binding", () => {
+    expect(needsTreeSetup({ ...base, hasTreeBinding: true })).toBe(false);
+  });
+  it("excludes members — they never own the team tree", () => {
+    expect(needsTreeSetup({ ...base, role: "member" })).toBe(false);
+    expect(needsTreeSetup({ ...base, role: null })).toBe(false);
+  });
+  it("does not offer to a user still in onboarding (no terminal flag yet)", () => {
+    expect(needsTreeSetup({ ...base, onboardingCompletedAt: null })).toBe(false);
+  });
+  it("waits for /me before deciding", () => {
+    expect(needsTreeSetup({ ...base, meLoaded: false })).toBe(false);
   });
 });

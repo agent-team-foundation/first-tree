@@ -4,11 +4,12 @@ import {
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
+  requestResolutionSchema,
   type SendMessage,
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -520,19 +521,18 @@ async function sendMessageInner(
     });
 
     // 7. Open-question counter (`chat_user_state.open_request_count`) — see
-    //    proposals/group-chat-unified-send §D1. TWO INDEPENDENT effects (a
-    //    single message can trigger both):
+    //    proposals/group-chat-unified-send §D1. TWO INDEPENDENT effects:
     //      +1 — ANY `format=request` opens a question for its single human
-    //           target, including a request-shaped reply (the new request
-    //           stands on its own and is independently answerable).
-    //      -1 — a reply that RESOLVES the parent request: the target answers
-    //           it, OR the asking agent replies to its own request (a
-    //           non-request reply withdraws it; a request-shaped reply
-    //           supersedes it). Idempotent — only the first resolving reply
-    //           decrements; `GREATEST(0, …)` floors at zero.
-    //    A request-shaped reply by the author thus does both: +1 the new
-    //    question and -1 (supersede) the parent → nets zero when both target
-    //    the same human; +1 only when the parent was already resolved/closed.
+    //           target. (A request-shaped reply also +1's — it is a new,
+    //           independently-answerable question; it does NOT auto-close the
+    //           one it replies to. Superseding is now an explicit close.)
+    //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
+    //           pointed at a prior open question (the human's clean answer, or
+    //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
+    //           no longer resolves anything — it is pure threading, so a
+    //           "chat about this" discussion can thread under the question
+    //           without clearing the red dot. Idempotent — only the first
+    //           resolution decrements; `GREATEST(0, …)` floors at zero.
     const requestTarget = mergedMentions[0];
     if (data.format === MESSAGE_FORMATS.REQUEST && requestTarget) {
       await tx.execute(sql`
@@ -542,44 +542,85 @@ async function sendMessageInner(
         DO UPDATE SET open_request_count = chat_user_state.open_request_count + 1
       `);
     }
-    if (data.inReplyTo) {
-      // Lock the parent request row FIRST so concurrent resolving replies to
-      // the SAME request serialise — otherwise two answers/closes could both
-      // observe `alreadyResolved=false` under READ COMMITTED and each
-      // decrement the same row (double-decrement).
+    // ANY presence of the reserved `resolves` key must parse — a malformed
+    // shape (e.g. bogus `kind`) is rejected, not stored as inert metadata.
+    // Storing it would both mislead readers and poison the prior-resolution
+    // idempotency scan below (which matches on `resolves ->> 'request'`),
+    // permanently blocking the legitimate decrement.
+    if (data.metadata?.resolves !== undefined && !requestResolutionSchema.safeParse(data.metadata.resolves).success) {
+      throw new BadRequestError(
+        'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
+      );
+    }
+    const resolution = requestResolutionSchema.safeParse(data.metadata?.resolves);
+    if (resolution.success) {
+      const requestId = resolution.data.request;
+      // Lock the target request row FIRST so concurrent resolutions of the
+      // SAME question serialise — otherwise two could both observe no prior
+      // resolution under READ COMMITTED and each decrement (double-decrement).
       const [parent] = await tx
         .select({ format: messages.format, metadata: messages.metadata, senderId: messages.senderId })
         .from(messages)
-        .where(and(eq(messages.id, data.inReplyTo), eq(messages.chatId, chatId)))
+        .where(and(eq(messages.id, requestId), eq(messages.chatId, chatId)))
         .for("update")
         .limit(1);
-      const parentMentions = Array.isArray(parent?.metadata?.mentions) ? parent.metadata.mentions : [];
+      // FAIL LOUD on an invalid resolution target. Throwing here rolls back
+      // the whole transaction (including the message INSERT above), so no
+      // misleading "answered"/"closed" message with a dangling
+      // `metadata.resolves.request` / `inReplyTo` ever lands in history.
+      if (!parent) {
+        throw new BadRequestError(
+          `Cannot resolve "${requestId}": no such message in this chat. Pass the id of the open question you asked.`,
+        );
+      }
+      const parentMentions = Array.isArray(parent.metadata?.mentions) ? parent.metadata.mentions : [];
       const target =
-        parent?.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
-      if (typeof target === "string") {
-        // Resolving = the target answers (sender === target) OR the asking
-        // agent replies to its own request (any format — withdraw or supersede).
-        const isAnswer = senderId === target;
-        const isAuthorReply = senderId === parent?.senderId;
-        if (isAnswer || isAuthorReply) {
-          // Idempotency: only the FIRST resolving reply decrements (exclude the
-          // row we just inserted). Serialised by the parent FOR UPDATE lock; a
-          // prior resolving reply is one from the target or the asking author.
-          const priors = await tx
-            .select({ senderId: messages.senderId })
-            .from(messages)
-            .where(
-              and(eq(messages.chatId, chatId), eq(messages.inReplyTo, data.inReplyTo), ne(messages.id, messageId)),
-            );
-          const alreadyResolved = priors.some((p) => p.senderId === target || p.senderId === parent?.senderId);
-          if (!alreadyResolved) {
-            await tx.execute(sql`
-              UPDATE chat_user_state
-                 SET open_request_count = GREATEST(0, open_request_count - 1)
-               WHERE chat_id = ${chatId} AND agent_id = ${target}
-            `);
-          }
-        }
+        parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
+      if (typeof target !== "string") {
+        throw new BadRequestError(
+          `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
+        );
+      }
+      // Only the target (a direct answer) or the asking agent (answer/close
+      // after judging the discussion) may resolve a question.
+      if (senderId !== target && senderId !== parent.senderId) {
+        throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
+      }
+      // Idempotency: only the FIRST resolution decrements (exclude the row we
+      // just inserted). A prior resolution is any other message in this chat
+      // whose `metadata.resolves.request` points at the same question — but
+      // ONLY from an authorized resolver (the target or the asker). Without
+      // the sender scope, any participant could pre-write a stray
+      // `metadata.resolves` for this question (which itself never decrements,
+      // being unauthorized) and have it count as a "prior", permanently
+      // blocking the legitimate resolution from clearing the red dot.
+      // (Unauthorized resolves are rejected above nowadays, but rows written
+      // before that gate existed may still be present — keep the scope.)
+      // A re-resolve of an already-resolved question stays a soft success:
+      // it threads as a confirmation and simply skips the decrement, so the
+      // human-answers-while-agent-closes race never errors either side.
+      const resolvers = [target, parent.senderId];
+      const priors = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.chatId, chatId),
+            ne(messages.id, messageId),
+            sql`${messages.metadata} -> 'resolves' ->> 'request' = ${requestId}`,
+            // Only schema-valid resolution rows count as a "prior" — a
+            // malformed legacy row (pre-validation `kind`) must not block
+            // the legitimate resolution from clearing the red dot.
+            sql`${messages.metadata} -> 'resolves' ->> 'kind' IN ('answered', 'closed')`,
+            inArray(messages.senderId, resolvers),
+          ),
+        );
+      if (priors.length === 0) {
+        await tx.execute(sql`
+          UPDATE chat_user_state
+             SET open_request_count = GREATEST(0, open_request_count - 1)
+           WHERE chat_id = ${chatId} AND agent_id = ${target}
+        `);
       }
     }
 

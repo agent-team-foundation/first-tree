@@ -12,12 +12,17 @@ import {
 } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
+import { listChatMessages } from "../api/chats.js";
 import { getMeDoc } from "../api/me-docs.js";
 import { docPreviewPathFromHref } from "../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../lib/safe-href.js";
 import { useAgentSlugToIdMap } from "../lib/use-agent-name-map.js";
 import { cn } from "../lib/utils.js";
-import { type DocSnapshotEntry, docSnapshotQueryKey } from "../pages/workspace/center/chat-view.js";
+import {
+  type DocSnapshotEntry,
+  docSnapshotQueryKey,
+  documentSnapshotMapFromMetadata,
+} from "../pages/workspace/center/chat-view.js";
 import { Button } from "./ui/button.js";
 import { Markdown } from "./ui/markdown.js";
 
@@ -102,14 +107,28 @@ function useIsMobileDocPreview(): boolean {
  *     without rendering two competing rails on a narrow viewport.
  *
  * Data source priority:
- *   - Inline snapshot via React Query cache (PR 415). chat-view seeds the
- *     whole message's `docs[]` when the user clicks any `.md` link, so
+ *   - Seeded inline snapshot via React Query cache (PR 415). chat-view seeds
+ *     the whole message's `docs[]` when the user clicks any `.md` link, so
  *     opening the drawer is a synchronous cache read with no network
  *     round-trip — load-bearing on the cloud topology where the server
  *     cannot read the local agent workspace.
- *   - Falls back to `GET /me/docs/preview` (path variant) when no inline
- *     snapshot is attached. Useful for single-host deployments where the
- *     server can still read workspace files directly.
+ *   - Recovery from the message's own `metadata.documentContext` when the
+ *     seeded entry is gone. That seeded entry has NO observer (read via
+ *     `getQueryData`, never `useQuery`), so React Query garbage-collects it
+ *     after the default gcTime (~5 min). The next re-render — e.g. the
+ *     messages refetch `sendMut.onSettled` triggers when the user sends a new
+ *     message — would otherwise drop straight to the path endpoint below and,
+ *     on the cloud topology, 404 with "Document not found". The snapshot bytes
+ *     are immutable and still live in the message row, so re-derive them from
+ *     the messages cache. This also makes the preview survive a full page
+ *     reload (the messages refetch restores the metadata).
+ *     Recovery is deferred-to, not gated-around: the path endpoint still runs
+ *     once recovery settles without a hit, so it is held off only during the
+ *     brief recovery window, never disabled for `docMsg`-tagged messages.
+ *   - Falls back to `GET /me/docs/preview` (path variant) for legacy
+ *     `kind: "path"` messages AND for in-preview links to docs that were never
+ *     snapshotted — both only resolve on single-host deployments where the
+ *     server can read workspace files directly.
  *
  * Slot semantics — the drawer is rendered by chat-view in the same right
  * slot as `<ChatRightSidebar>`. chat-view enforces mutual exclusion so the
@@ -126,14 +145,48 @@ export function DocPreviewDrawer() {
   const docBasePath = searchParams.get("docBase") ?? undefined;
   const docMsgId = searchParams.get("docMsg");
   const hasDocRef = Boolean(docChatId && docAgentId && docPath);
-  // Inline snapshot takes precedence: when the chat-view click handler tagged
-  // the URL with `docMsg`, it also seeded the React Query cache under
-  // `docSnapshotQueryKey` so we can render the markdown straight from
-  // memory without hitting the legacy path-based endpoint.
-  const inlineSnapshot =
+  // Inline snapshot takes precedence over the path-based endpoint. Two layers:
+  //   1. Seeded cache: the chat-view click handler stashes the whole message's
+  //      docs[] under `docSnapshotQueryKey`, so the first open is a
+  //      synchronous, network-free read.
+  //   2. Recovery from the message's `metadata.documentContext`: the seeded
+  //      entry has no observer and is GC'd after ~5 min, after which a
+  //      re-render (e.g. the post-send messages refetch) would otherwise fall
+  //      through to a path endpoint that 404s on the cloud topology. The bytes
+  //      are immutable and still in the message row, so re-derive them. See
+  //      the component docblock for the full failure trace.
+  const seededSnapshot =
     docMsgId && docChatId && docPath
       ? queryClient.getQueryData<DocSnapshotEntry>(docSnapshotQueryKey(docChatId, docMsgId, docPath))
       : undefined;
+  // Reactively observe the chat's messages so recovery re-runs when they
+  // hydrate. A plain `getQueryData` peek is non-reactive: on a cold deep-link
+  // reload the messages cache is empty on first render, so a peek would
+  // memoise `undefined` and never recompute once ChatView's fetch lands —
+  // re-introducing the cloud 404 this path exists to prevent. Sharing
+  // ChatView's exact query key makes this a free cache read whenever the chat
+  // is already open; on a reload it fetches the window once.
+  const recoveryEnabled = Boolean(docChatId && docMsgId && docPath && !seededSnapshot);
+  const recoveryMessages = useQuery({
+    queryKey: ["chat-messages", docChatId],
+    queryFn: () => listChatMessages(docChatId ?? "", { limit: 50 }),
+    enabled: recoveryEnabled,
+  });
+  const recoveredSnapshot = useMemo<DocSnapshotEntry | undefined>(() => {
+    if (seededSnapshot || !docMsgId || !docPath) return undefined;
+    const message = recoveryMessages.data?.items.find((item) => item.id === docMsgId);
+    if (!message) return undefined;
+    return documentSnapshotMapFromMetadata(message.metadata)?.get(docPath);
+  }, [seededSnapshot, docMsgId, docPath, recoveryMessages.data]);
+  const inlineSnapshot = seededSnapshot ?? recoveredSnapshot;
+  // Only DEFER the path endpoint while the messages window is still loading for
+  // a snapshot-origin doc — long enough for the common GC / reload recovery to
+  // land without a wasted, soon-to-404 round-trip. Once recovery settles
+  // without a hit (e.g. an in-preview link to a doc that was never one of this
+  // message's snapshots), the path endpoint runs as the legacy single-host
+  // fallback exactly as before. We do NOT gate it out wholesale on `docMsg`:
+  // that would strand in-preview links to non-snapshotted docs on single-host.
+  const awaitingRecovery = recoveryEnabled && !recoveredSnapshot && recoveryMessages.isLoading;
   const isMobile = useIsMobileDocPreview();
   const [drawerWidth, setDrawerWidth] = useState<number>(() =>
     clampDrawerWidth(loadPersistedWidth() ?? defaultDrawerWidth()),
@@ -221,9 +274,11 @@ export function DocPreviewDrawer() {
         path: apiPath,
       }),
     // Skip the network round-trip when we already have an inline snapshot
-    // pre-staged in the React Query cache — see chat-view click handler. Also
-    // skip for a cross key whose owner couldn't be resolved (fail closed).
-    enabled: hasDocRef && !inlineSnapshot && Boolean(fallbackAgentId),
+    // (seeded or recovered), when a cross key's owner couldn't be resolved
+    // (fail closed), or while metadata recovery is still in flight — see
+    // `awaitingRecovery`, which holds this off just long enough for the common
+    // GC / reload recovery to win instead of racing a doomed cloud 404.
+    enabled: hasDocRef && !inlineSnapshot && Boolean(fallbackAgentId) && !awaitingRecovery,
   });
   const resolvedDocPath = inlineSnapshot?.path ?? previewQuery.data?.ref.path ?? docPath;
   const displayDocPath = inlineSnapshot?.path ?? previewQuery.data?.path ?? docPath;
@@ -409,6 +464,11 @@ export function DocPreviewDrawer() {
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {inlineSnapshot ? (
           <Markdown components={markdownComponents}>{inlineSnapshot.content}</Markdown>
+        ) : awaitingRecovery ? (
+          <div className="flex h-full items-center justify-center text-body text-fg-2">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            Loading preview
+          </div>
         ) : (
           <>
             {previewQuery.isLoading ? (

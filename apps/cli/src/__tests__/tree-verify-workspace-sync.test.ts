@@ -95,6 +95,27 @@ function writeValidTree(root: string): void {
   });
 }
 
+function writeValidW1Tree(root: string): void {
+  writeFileSync(join(root, ".git"), "gitdir: /tmp/tree\n");
+  writeFileSync(join(root, "NODE.md"), ["---", "title: Root", "owners: [team]", "---", "", "# Root", ""].join("\n"));
+  mkdirSync(join(root, "members", "gandy"), { recursive: true });
+  writeFileSync(
+    join(root, "members", "gandy", "NODE.md"),
+    [
+      "---",
+      "title: Gandy",
+      "owners: [gandy]",
+      "type: human",
+      "role: Engineer",
+      "domains: [platform]",
+      "---",
+      "",
+      "# Gandy",
+      "",
+    ].join("\n"),
+  );
+}
+
 function makeGitRepo(root: string): void {
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, ".git"), "gitdir: /tmp/mock\n");
@@ -134,6 +155,23 @@ describe("tree verify command", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("accepts a W1 clean tree checkout without pre-W1 runtime metadata", async () => {
+    const root = makeTempDir("ft-tree-verify-w1-clean-");
+    writeValidW1Tree(root);
+    const { verifyCommand } = await import("../commands/tree/verify.js");
+
+    verifyCommand.action(context(commandWithOptions({ treePath: root }), false));
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("[PASS] framework version");
+    expect(output).toContain("[PASS] tree state");
+    expect(output).toContain("All checks passed");
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("reports missing files, invalid frontmatter, validator errors, and unchecked progress", async () => {
     const root = makeTempDir("ft-tree-verify-fail-");
     mkdirSync(join(root, ".first-tree"), { recursive: true });
@@ -149,11 +187,8 @@ describe("tree verify command", () => {
       .mocked(console.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("[FAIL] framework version");
-    expect(output).toContain("[FAIL] tree state");
-    expect(output).toContain(
-      "Managed tree identity is missing — expected .first-tree/tree.json (or a legacy AGENTS.md / CLAUDE.md identity block).",
-    );
+    expect(output).toContain("[PASS] framework version");
+    expect(output).toContain("[PASS] tree state");
     expect(output).toContain("Root NODE.md is missing owners");
     expect(output).toContain("Unchecked progress item: Decide owner");
     expect(output).toContain("Some checks failed");

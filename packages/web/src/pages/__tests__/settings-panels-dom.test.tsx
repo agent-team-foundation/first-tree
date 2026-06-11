@@ -4,7 +4,7 @@ import type { Organization, OrgContextTreeOutput, OrgSourceReposOutput } from "@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +30,10 @@ const settingsMocks = vi.hoisted(() => ({
   putSourceReposSetting: vi.fn(),
 }));
 
+const contextApiMocks = vi.hoisted(() => ({
+  initializeContextTree: vi.fn(),
+}));
+
 const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
 }));
@@ -41,6 +45,8 @@ vi.mock("../../auth/auth-context.js", () => ({
 vi.mock("../../api/organizations.js", () => orgMocks);
 
 vi.mock("../../api/org-settings.js", () => settingsMocks);
+
+vi.mock("../../api/context-tree.js", () => contextApiMocks);
 
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
@@ -119,15 +125,35 @@ async function renderDom(
   return { container, root };
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
+}
+
 async function renderPanel(element: ReactElement): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<QueryClientProvider client={createClient()}>{element}</QueryClientProvider>);
+    root.render(
+      <MemoryRouter>
+        <QueryClientProvider client={createClient()}>
+          <LocationProbe />
+          {element}
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
   });
   await flush();
   return { container, root };
+}
+
+async function click(element: Element | null): Promise<void> {
+  if (!element) throw new Error("Expected element to click");
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  });
+  await flush();
 }
 
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
@@ -179,6 +205,12 @@ beforeEach(() => {
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
   );
+  contextApiMocks.initializeContextTree.mockResolvedValue({
+    repo: "https://github.com/acme/acme-context-tree.git",
+    htmlUrl: "https://github.com/acme/acme-context-tree",
+    branch: "main",
+    nodePath: "NODE.md",
+  });
   settingsMocks.getSourceReposSetting.mockResolvedValue(sourceRepos());
   settingsMocks.putSourceReposSetting.mockImplementation(async (_id: string, body: Partial<OrgSourceReposOutput>) =>
     sourceRepos(body),
@@ -275,6 +307,25 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
+  it("links a no-tree admin into the build-tree flow (no in-place repo creation)", async () => {
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Connect your code & build your Context Tree");
+    // No raw "create private repo" button, and the panel no longer initializes
+    // the tree in place — that's the /build-tree flow's job now.
+    expect(container.textContent).not.toContain("Create private GitHub repo");
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
+
+    await click(
+      [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Connect your code")) ?? null,
+    );
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/build-tree");
+
+    await act(async () => root.unmount());
+  });
+
   it("renders the context tree binding read-only for members", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
@@ -287,6 +338,16 @@ describe("settings panels", () => {
     }
     // No Save affordance for members.
     expect(container.querySelector('button[type="submit"]')).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("shows admin-required copy for members when no context tree repo is configured", async () => {
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    authMock.value = { ...authMock.value, role: "member" };
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Ask an admin to initialize");
+    expect(container.textContent).not.toContain("Create private GitHub repo");
     await act(async () => root.unmount());
   });
 });

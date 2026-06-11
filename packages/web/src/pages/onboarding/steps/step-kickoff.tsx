@@ -1,31 +1,26 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
-import { ApiError } from "../../../api/client.js";
-import { listGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
 import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
-import { Input } from "../../../components/ui/input.js";
-import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
+import {
+  buildBindBootstrap,
+  buildCreateBootstrap,
+  buildInviteeBootstrap,
+} from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { CommandBox, FlowHint, RepoPicker, SelectableRow, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
+import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
+import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree, repoLabel } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
-
-function repoLabel(url: string): string {
-  return url
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^git@[^:]+:/, "")
-    .replace(/\.git$/, "");
-}
 
 function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
   return resources
@@ -40,29 +35,52 @@ function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamRe
 /** Shared "create the chat + send the first task + finish" sequence. */
 async function runKickoff(args: {
   bootstrap: string;
-  gitRepoUrls: string[];
   orgWrites: { organizationId: string; sourceRepos: string[]; contextTreeUrl: string | null } | null;
   treeMode: "new" | "existing";
+  /** The selected org — scopes agent resolution so the seed never lands on an
+   *  agent from a different org (notably the build-tree recovery surface). */
+  organizationId: string | null;
   joinPath?: "invite";
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
-  const agent = await resolveOnboardingAgent();
+  const agent = await resolveOnboardingAgent(args.organizationId);
 
-  // Org-level writes are a convenience cache for future teammates — never
-  // let them block the user's first chat.
+  // New-tree mode: provision the team's Context Tree repo + org binding BEFORE
+  // sending the kickoff message, so the agent's session resolves the binding
+  // (contextTreePath becomes non-null) and `first-tree-seed`'s preconditions
+  // hold. Only fires when there are repos to seed from — the no-project path
+  // has no `orgWrites` and nothing to seed. `provisionNewTree` treats an
+  // already-provisioned tree (a retry after a later step failed, or a
+  // detect→create race) as success and re-throws every real failure (e.g. the
+  // GitHub App installation isn't an org with repo-admin) so the user sees an
+  // actionable error and can retry — nothing is half-created (no chat yet).
+  if (args.treeMode === "new" && args.orgWrites?.organizationId) {
+    await provisionNewTree(args.orgWrites.organizationId);
+  }
+
+  // Org-level writes. The context-tree-URL cache is best-effort. Source-repo
+  // resources are best-effort for an EXISTING tree (a convenience cache for
+  // future teammates), but REQUIRED for a NEW tree — they're the only path by
+  // which the selected repos reach the agent's gitRepos / on-disk sources /
+  // workspace.json that `first-tree-seed` needs, so a dropped write must
+  // surface as a retryable error rather than an empty/incomplete seed.
   if (args.orgWrites) {
     const orgWrites = args.orgWrites;
     if (orgWrites.sourceRepos.length > 0) {
-      await Promise.allSettled(
-        orgWrites.sourceRepos.map((url) =>
-          createTeamResourceForOrg(orgWrites.organizationId, {
-            type: "repo",
-            name: repoLabel(url),
-            defaultEnabled: "recommended",
-            payload: { url },
-          }),
-        ),
-      );
+      if (args.treeMode === "new") {
+        await ensureSourceReposRegistered(orgWrites.organizationId, orgWrites.sourceRepos);
+      } else {
+        await Promise.allSettled(
+          orgWrites.sourceRepos.map((url) =>
+            createTeamResourceForOrg(orgWrites.organizationId, {
+              type: "repo",
+              name: repoLabel(url),
+              defaultEnabled: "recommended",
+              payload: { url },
+            }),
+          ),
+        );
+      }
     }
     if (orgWrites.contextTreeUrl) {
       await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});
@@ -90,14 +108,43 @@ async function runKickoff(args: {
   await args.complete(chat.id);
 }
 
-export function StepKickoff() {
+/**
+ * `recovery` (set ONLY by the standalone /build-tree surface) suppresses the
+ * per-step heading — the recovery shell supplies the constant "Build your team's
+ * Context Tree" title. `agentPicker` is an optional slot rendered just above the
+ * CTA — the recovery surface passes its "which agent builds the tree?" control
+ * here, so the choice sits with the build action. Onboarding renders
+ * `<StepKickoff />` with neither prop — unchanged. (The existing-tree fork was
+ * already removed for everyone in PR 943, so there's no extra path to hide here.)
+ */
+export function StepKickoff({
+  recovery,
+  agentPicker,
+  buildDisabled,
+}: {
+  recovery?: boolean;
+  agentPicker?: ReactNode;
+  buildDisabled?: boolean;
+} = {}) {
   const { path } = useOnboardingFlow();
-  return path === "admin" ? <AdminKickoff /> : <InviteeKickoff />;
+  return path === "admin" ? (
+    <AdminKickoff recovery={recovery} agentPicker={agentPicker} buildDisabled={buildDisabled} />
+  ) : (
+    <InviteeKickoff />
+  );
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────
 
-function AdminKickoff() {
+function AdminKickoff({
+  recovery,
+  agentPicker,
+  buildDisabled,
+}: {
+  recovery?: boolean;
+  agentPicker?: ReactNode;
+  buildDisabled?: boolean;
+}) {
   const {
     organizationId,
     selectedRepoUrls,
@@ -108,15 +155,21 @@ function AdminKickoff() {
     treeAutoInitDone,
     markTreeAutoInitDone,
     completeAndEnterChat,
+    goTo,
+    sequence,
   } = useOnboardingFlow();
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
   const hasRepos = selectedRepoUrls.length > 0;
+  const repoCount = selectedRepoUrls.length;
 
-  // Auto-detect an existing team Context Tree so a re-run / second admin /
-  // CLI-bound tree doesn't default to creating a duplicate. retry:false so a
-  // "no tree yet" miss falls through to the new-tree path fast.
+  // Silently detect an existing team Context Tree (a re-run / second admin /
+  // CLI-bound tree). There is no "paste your tree URL" path anymore — a team's
+  // tree is always one we provision — so detection only switches the agent's
+  // first task from "seed a new tree" to "read the existing one"; it never asks
+  // the user to choose. retry:false so a "no tree yet" miss falls through fast.
   const treeSettingQuery = useQuery({
     queryKey: ["onboarding", "context-tree", organizationId],
     queryFn: () => getContextTreeSetting(organizationId ?? ""),
@@ -125,20 +178,16 @@ function AdminKickoff() {
   });
   const detectedTreeUrl = treeSettingQuery.data?.repo ?? null;
   useEffect(() => {
-    // One-shot: when an existing tree first arrives, default to "use existing"
-    // with the URL pre-filled. After that the user can toggle freely — the
-    // done-flag lives in the provider, so re-entering this step (e.g. via the
-    // rail) won't re-fire and clobber a "Create new instead" choice.
+    // One-shot: when an existing tree is detected, switch to the "read it"
+    // bootstrap silently. The done-flag lives in the provider so re-entering
+    // this step won't re-fire.
     if (treeAutoInitDone || !detectedTreeUrl) return;
     markTreeAutoInitDone();
     setTreeUrl(detectedTreeUrl);
     setTreeMode("existing");
   }, [detectedTreeUrl, setTreeUrl, setTreeMode, treeAutoInitDone, markTreeAutoInitDone]);
-  const autoDetected = treeMode === "existing" && !!detectedTreeUrl && treeUrl === detectedTreeUrl;
 
-  const trimmedTreeUrl = treeUrl.trim();
-  const urlInvalid = treeMode === "existing" && trimmedTreeUrl.length > 0 && !/^https:\/\//.test(trimmedTreeUrl);
-  const canStart = phase === "form" && (!hasRepos || treeMode === "new" || (trimmedTreeUrl.length > 0 && !urlInvalid));
+  const canStart = phase === "form";
 
   const handleStart = async (): Promise<void> => {
     setError(null);
@@ -147,45 +196,56 @@ function AdminKickoff() {
       if (!hasRepos) {
         await runKickoff({
           bootstrap: NO_REPO_BOOTSTRAP,
-          gitRepoUrls: [],
           orgWrites: null,
           treeMode: "new",
+          organizationId,
           complete: completeAndEnterChat,
         });
         return;
       }
       const useExisting = treeMode === "existing";
+      const detectedUrl = treeUrl.trim();
       const bootstrap = useExisting
-        ? buildBindBootstrap(selectedRepoUrls, trimmedTreeUrl)
+        ? buildBindBootstrap(selectedRepoUrls, detectedUrl)
         : buildCreateBootstrap(selectedRepoUrls);
       await runKickoff({
         bootstrap,
-        gitRepoUrls: selectedRepoUrls,
         orgWrites: organizationId
           ? {
               organizationId,
               sourceRepos: selectedRepoUrls,
-              contextTreeUrl: useExisting ? trimmedTreeUrl : null,
+              contextTreeUrl: useExisting ? detectedUrl : null,
             }
           : null,
         treeMode: useExisting ? "existing" : "new",
+        organizationId,
         complete: completeAndEnterChat,
       });
+      // The kickoff just provisioned/confirmed the team's tree binding
+      // server-side. Drop the cached org `context_tree` setting so the recovery
+      // gate (useNeedsTreeSetup) and the Settings/Context surfaces read the
+      // fresh binding on next mount instead of re-offering "build your tree" for
+      // a tree that now exists. (`removeQueries`, not `invalidate`, so a stale
+      // value can't flash before the refetch resolves.)
+      if (organizationId) {
+        queryClient.removeQueries({ queryKey: ["org-setting", organizationId, "context_tree"] });
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
     }
   };
 
   if (phase === "starting") return <StartingState />;
 
-  // C — no project connected: agent just introduces itself.
+  // No repo connected — nothing to seed a tree from, so this is honestly just
+  // "meet your agent". A quiet affordance points back to connect-code (the only
+  // way to give the team a Context Tree), not a silent "do it later in Settings".
   if (!hasRepos) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-        <StepHeading title={COPY.kickoff.noProjectTitle} />
-        <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-          <FlowHint>{COPY.kickoff.noProjectBody}</FlowHint>
+        <StepHeading title={COPY.kickoff.noProjectTitle} why={COPY.kickoff.noProjectBody} />
+        <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
           {error && (
             <FlowHint tone="error" role="alert">
               {error}
@@ -197,82 +257,48 @@ function AdminKickoff() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
+          {/* Standalone affordance back to connect-code (where they can pick a
+              repo, then Continue returns here with one). A persistent underline
+              makes it read as a clickable link, not a heading. */}
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto self-start p-0 text-label underline underline-offset-2"
+            onClick={() => goTo(sequence.indexOf("connect-code"))}
+          >
+            {COPY.kickoff.connectRepoAffordance}
+          </Button>
         </div>
       </div>
     );
   }
 
-  // Wait for the existing-tree probe so we don't flash "new" then jump to A.
+  // Wait for the existing-tree probe so we don't flash "new" then flip to "read".
   if (treeSettingQuery.isLoading) {
-    return (
-      <p className="text-label" style={{ color: "var(--fg-4)" }}>
-        Checking your team's setup…
-      </p>
-    );
+    return <StatusRow state="waiting" label="Checking your team's setup…" />;
   }
 
   const isExisting = treeMode === "existing";
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      {/* Recovery suppresses the per-step heading — its shell supplies the
+          constant "Build your team's Context Tree" title. */}
       <StepHeading
-        title={isExisting ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
-        why={isExisting ? COPY.kickoff.existingWhy : COPY.kickoff.newWhy}
+        title={recovery ? "" : isExisting ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
+        why={isExisting ? COPY.kickoff.existingWhy(repoCount) : COPY.kickoff.newWhy(repoCount)}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-        {isExisting ? (
-          // A (auto-detected, pre-filled) or B′ (manually "I already have one").
-          <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-            <label htmlFor="onboarding-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
-              {COPY.kickoff.existingUrlLabel}
-            </label>
-            <Input
-              id="onboarding-tree-url"
-              value={treeUrl}
-              onChange={(e) => setTreeUrl(e.target.value)}
-              placeholder="https://github.com/your-team/context-tree"
-              className="mono"
-            />
-            {autoDetected ? (
-              <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-                {COPY.kickoff.autoDetectedNote}
-              </p>
-            ) : null}
-            {urlInvalid && (
-              <FlowHint tone="error" role="alert">
-                {COPY.kickoff.invalidUrl}
-              </FlowHint>
-            )}
-            <Button
-              type="button"
-              variant="link"
-              className="h-auto p-0 text-label self-start"
-              onClick={() => {
-                setTreeUrl("");
-                setTreeMode("new");
-              }}
-            >
-              {COPY.kickoff.createInstead}
-            </Button>
-          </div>
-        ) : (
-          // B (new tree, default): quiet secondary link to the existing path.
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto p-0 text-label self-start"
-            onClick={() => setTreeMode("existing")}
-          >
-            {COPY.kickoff.haveExisting}
-          </Button>
-        )}
+        {/* Recovery's "which agent builds the tree?" control sits here, right
+            above the CTA. Undefined (renders nothing) in onboarding. */}
+        {agentPicker}
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
         <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-            <span>{COPY.kickoff.startBuilding}</span>
+          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart || buildDisabled}>
+            <span>{isExisting ? COPY.kickoff.startExisting : COPY.kickoff.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -285,10 +311,10 @@ function AdminKickoff() {
 
 function InviteeKickoff() {
   const { organizationId } = useOnboardingFlow();
-  // Fetch tree config, source repos, and installation existence together.
-  // The installation bit drives the new "no-installation" sub-state, which
-  // catches "admin set up the tree but never connected GitHub" before the
-  // invitee sails into the picker and hits a 403 on the first git op.
+  // Fetch tree config, team repos, and installation existence together.
+  // The installation bit drives the "no-installation" sub-state, which catches
+  // "admin set up the tree but never connected GitHub" before the invitee
+  // launches and the agent hits a 403 on its first git op.
   //
   // We use the dedicated /github-app-installation/exists endpoint here
   // (returns `{ exists: boolean }`, member-readable) rather than the full
@@ -346,11 +372,7 @@ function InviteeKickoff() {
   });
 
   if (teamQuery.isLoading) {
-    return (
-      <p className="text-label" style={{ color: "var(--fg-4)" }}>
-        Checking what your team has set up…
-      </p>
-    );
+    return <StatusRow state="waiting" label="Checking what your team has set up…" />;
   }
 
   // Read failure → waiting; the query keeps polling so a transient blip
@@ -360,79 +382,52 @@ function InviteeKickoff() {
   }
 
   const { treeUrl, teamRepoUrls, hasInstallation } = teamQuery.data;
-  const state = resolveInviteeKickoffState({
-    treeUrl,
-    hasInstallation,
-    teamRepoCount: teamRepoUrls.length,
-  });
+  const state = resolveInviteeKickoffState({ treeUrl, hasInstallation });
 
   switch (state) {
     case "waiting":
       return <InviteeWaiting />;
     case "no-installation":
       return <InviteeNoInstallation />;
-    case "confirm":
-      return <InviteeConfirm treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />;
-    case "picker":
-      return <InviteePicker treeUrl={treeUrl} />;
+    case "ready":
+      return <InviteeReady treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />;
   }
 }
 
 /**
- * Read-only display of the team's Context Tree URL, shown at the top of
- * the invitee's confirm/picker sub-states so they know where their agent's
- * work will land. Info transparency — invitee inherits this, can't change it.
+ * Invitee · ready to launch. The team has a Context Tree and a GitHub
+ * connection, so there's nothing left to set up — and nothing to pick: the
+ * agent already inherits the team's `recommended` repo resources automatically
+ * (they're enabled for every org agent). This mirrors the admin finale as a
+ * pure launch. The kickoff message names the team's repos when there are any,
+ * otherwise it's an intro; either way the agent enters a real chat. `orgWrites`
+ * stays null — an invitee never mutates team config.
  */
-function TreeUrlDisplay({ treeUrl }: { treeUrl: string }) {
-  return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-      <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-        {COPY.kickoff.treeLabel}
-      </p>
-      <p
-        className="text-label mono"
-        title={treeUrl}
-        style={{
-          margin: 0,
-          color: "var(--fg-2)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {repoLabel(treeUrl)}
-      </p>
-    </div>
-  );
-}
-
-function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls: string[] }) {
-  const { completeAndEnterChat } = useOnboardingFlow();
-  const [chosen, setChosen] = useState<string[]>(teamRepoUrls);
-  const [phase, setPhase] = useState<"form" | "starting">("form");
+function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls: string[] }) {
+  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const toggle = (url: string): void =>
-    setChosen((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
+  const hasRepos = teamRepoUrls.length > 0;
 
-  const handleStart = async (selectedRepos: string[]): Promise<void> => {
+  const handleStart = async (): Promise<void> => {
     setError(null);
     setPhase("starting");
     try {
-      // Empty selection ⇒ intro-only bootstrap (matches admin's no-project
-      // path), so deselecting all isn't a dead end.
-      const bootstrap = selectedRepos.length > 0 ? buildBindBootstrap(selectedRepos, treeUrl) : NO_REPO_BOOTSTRAP;
+      // The agent already inherits the team's repos; a joining teammate's first
+      // message is "read the tree to get oriented, then introduce yourself" —
+      // not the admin's "reflect these repos into the tree".
       await runKickoff({
-        bootstrap,
-        gitRepoUrls: selectedRepos,
-        orgWrites: null, // never mutate team config as an invitee
+        bootstrap: buildInviteeBootstrap(treeUrl),
+        orgWrites: null,
         treeMode: "existing",
+        organizationId,
         joinPath: "invite",
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
-      setPhase("form");
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
+      setPhase("idle");
     }
   };
 
@@ -440,31 +435,20 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.invitee.confirmTitle} why={COPY.invitee.confirmBody} />
+      <StepHeading
+        title={COPY.kickoff.inviteeReadyTitle}
+        why={hasRepos ? COPY.kickoff.inviteeReadyWithRepos : COPY.kickoff.inviteeReadyNoRepos}
+      />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <TreeUrlDisplay treeUrl={treeUrl} />
-        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          {teamRepoUrls.map((url) => (
-            <SelectableRow key={url} checked={chosen.includes(url)} onToggle={() => toggle(url)}>
-              <span className="font-medium">{repoLabel(url)}</span>
-            </SelectableRow>
-          ))}
-        </div>
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
-        {/* Primary is never disabled by deselect-all; the bailout link
-            preserves the "continue with intro only" path so users can't
-            soft-lock themselves. */}
-        <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-          <Button type="button" variant="cta" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
+        <div className="flex">
+          <Button type="button" variant="cta" onClick={() => void handleStart()}>
             <span>{COPY.kickoff.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
-          </Button>
-          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
-            {COPY.kickoff.inviteeContinueNoProject}
           </Button>
         </div>
       </div>
@@ -472,93 +456,60 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
   );
 }
 
-function InviteePicker({ treeUrl }: { treeUrl: string }) {
-  const { completeAndEnterChat } = useOnboardingFlow();
-  const [selected, setSelected] = useState<string[]>([]);
-  const [phase, setPhase] = useState<"form" | "starting">("form");
+/**
+ * Shared body for the two "team isn't ready yet" sub-states: `waiting` (admin
+ * hasn't created the Context Tree) and `no-installation` (tree exists but no
+ * GitHub App is connected). Both are blocked on the admin and both poll +
+ * advance on their own the moment the admin finishes — so the only thing the
+ * invitee can DO here is not wait: meet their agent now.
+ *
+ * "Meet your agent" runs an intro-only kickoff (`runKickoff` with no repo → an
+ * agent that introduces itself, repos connectable later from Settings), the same
+ * launch the `ready` state uses. Routing it through `completeAndEnterChat` — not
+ * `finishLater` — means the button lands the user in a real chat WITH the agent,
+ * instead of dropping them into an empty workspace. The two states differ only
+ * in copy, so they share this body; split them again if their actions diverge.
+ */
+function InviteeBlocked({ title, why, status }: { title: string; why: string; status: string }) {
+  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
-  const reposQuery = useQuery({ queryKey: ["onboarding", "github-repos"], queryFn: listGithubRepos });
 
-  const toggle = (url: string): void =>
-    setSelected((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
-
-  const handleStart = async (selectedRepos: string[]): Promise<void> => {
+  const handleMeet = async (): Promise<void> => {
     setError(null);
     setPhase("starting");
     try {
-      const bootstrap = selectedRepos.length > 0 ? buildBindBootstrap(selectedRepos, treeUrl) : NO_REPO_BOOTSTRAP;
       await runKickoff({
-        bootstrap,
-        gitRepoUrls: selectedRepos,
-        orgWrites: null,
+        bootstrap: NO_REPO_BOOTSTRAP,
+        orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
+        organizationId,
         joinPath: "invite",
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : COPY.errors.chatFailed);
-      setPhase("form");
+      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
+      setPhase("idle");
     }
   };
 
   if (phase === "starting") return <StartingState />;
 
-  // Three failure shapes are folded into one "no list" branch in the
-  // legacy code; split them so the recovery action matches the cause.
-  const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
-  const networkErr = !!reposQuery.error && !scopeMissing;
-  const empty = !reposQuery.error && (reposQuery.data?.length ?? 0) === 0;
-  const hasRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
-
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.kickoff.inviteePickerTitle} why={COPY.kickoff.inviteePickerWhy} />
+      {/* Heading carries the screen; the pulsing StatusRow is the "still
+          watching, will advance on its own" signal. */}
+      <StepHeading title={title} why={why} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <TreeUrlDisplay treeUrl={treeUrl} />
-        {reposQuery.isLoading ? (
-          <p className="text-label" style={{ color: "var(--fg-4)" }}>
-            Loading your projects…
-          </p>
-        ) : scopeMissing ? (
-          <FlowHint>
-            {COPY.kickoff.inviteePickerScopeMissing}{" "}
-            <a
-              href="/api/v1/auth/github/start?next=/onboarding"
-              className="font-medium"
-              style={{ color: "var(--primary)" }}
-            >
-              {COPY.connectCode.reconnect}
-            </a>
-          </FlowHint>
-        ) : networkErr ? (
-          <FlowHint tone="error" role="alert">
-            {COPY.kickoff.inviteePickerNetworkError}
-          </FlowHint>
-        ) : empty ? (
-          <FlowHint>{COPY.kickoff.inviteePickerEmpty}</FlowHint>
-        ) : (
-          <RepoPicker repos={reposQuery.data ?? []} selected={selected} onToggle={toggle} fill />
-        )}
+        <StatusRow state="waiting" label={status} />
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
-        <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
-          <Button
-            type="button"
-            variant="cta"
-            onClick={() => void handleStart(selected)}
-            disabled={!hasRepos || selected.length === 0}
-          >
-            <span>{COPY.kickoff.startWorking}</span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-          {/* Always visible — covers empty, scope-missing, network, AND
-              "I just don't want to pick one right now". No path is a
-              dead end. */}
-          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void handleStart([])}>
-            {COPY.kickoff.inviteeContinueNoProject}
+        <div className="flex">
+          <Button type="button" variant="outline" onClick={() => void handleMeet()}>
+            {COPY.invitee.startAnyway}
           </Button>
         </div>
       </div>
@@ -567,73 +518,22 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
 }
 
 function InviteeWaiting() {
-  const { finishLater } = useOnboardingFlow();
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      {/* The heading (title + why) carries this blocked screen; the body text
-          moved into the why so it's properly weighted, not a lone light line.
-          The pulsing StatusRow carries the "still alive / watching" signal. */}
-      <StepHeading title={COPY.invitee.waitingTitle} why={COPY.invitee.waitingBody} />
-      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        {/* Visible polling so the user trusts the page is alive — the
-            previous "no status" state had users wondering if it was
-            stuck. */}
-        <StatusRow state="waiting" label={COPY.invitee.waitingStatus} />
-        <div className="flex">
-          <Button type="button" variant="outline" onClick={() => void finishLater()}>
-            {COPY.invitee.startAnyway}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <InviteeBlocked
+      title={COPY.invitee.waitingTitle}
+      why={COPY.invitee.waitingBody}
+      status={COPY.invitee.waitingStatus}
+    />
   );
 }
 
-/**
- * NEW sub-state: admin set a tree URL but never connected the GitHub App,
- * so the org has no installation row. Without one, the agent's first git
- * operation will 403 with no useful signal. We surface that here and offer
- * a "remind your admin" copy-link + a bailout to keep the user moving.
- *
- * Why this link IS safe to share (unlike connect-code's install URL): we
- * copy `window.location.href`, the onboarding page URL itself, with no
- * cookie-bound state JWT. Whoever opens it just lands on first-tree as
- * themselves; if they're the admin, they see their own onboarding /
- * Settings → GitHub and can finish the install. It's a reminder URL, not
- * an authorization handoff.
- */
 function InviteeNoInstallation() {
-  const { finishLater } = useOnboardingFlow();
-  const [pageUrl, setPageUrl] = useState<string>("");
-
-  useEffect(() => {
-    if (typeof window !== "undefined") setPageUrl(window.location.href);
-  }, []);
-
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      {/* Heading (title + why) carries the screen; the body moved into the why.
-          Pulse = liveness; the share-link block below is the real action. */}
-      <StepHeading title={COPY.invitee.noInstallTitle} why={COPY.invitee.noInstallBody} />
-      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <StatusRow state="waiting" label={COPY.invitee.noInstallStatus} />
-
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          <p className="text-label" style={{ margin: 0, color: "var(--fg-2)" }}>
-            {COPY.invitee.noInstallShareIntro}
-          </p>
-          {/* Reuses the connect-computer CommandBox so the copy affordance is
-              identical everywhere; here the "command" is the shareable page URL. */}
-          <CommandBox command={pageUrl || null} placeholder="…" />
-        </div>
-
-        <div className="flex">
-          <Button type="button" variant="outline" onClick={() => void finishLater()}>
-            {COPY.invitee.startAnyway}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <InviteeBlocked
+      title={COPY.invitee.noInstallTitle}
+      why={COPY.invitee.noInstallBody}
+      status={COPY.invitee.noInstallStatus}
+    />
   );
 }
 

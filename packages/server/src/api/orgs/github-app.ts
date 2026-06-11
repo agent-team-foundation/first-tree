@@ -40,7 +40,14 @@ const POST_INSTALL_NEXT = "/settings/github";
  * Allowlisted — never reflect a caller-supplied path verbatim into the
  * signed redirect, so a crafted `?next=` can't become an open redirect.
  */
-export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([POST_INSTALL_NEXT, "/onboarding"]);
+export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([
+  POST_INSTALL_NEXT,
+  "/onboarding",
+  // Tiny "connected — you can close this tab" landing: onboarding connect-code
+  // installs in a popup and lands the popup here so it can auto-close while the
+  // original tab keeps polling.
+  "/onboarding/connected",
+]);
 
 /**
  * Resolve the post-install redirect destination from a caller-supplied

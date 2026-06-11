@@ -481,6 +481,8 @@
      / settings pages. */
   --agent-detail-rail: 52rem;
   --agent-detail-error-rail: 30rem;
+  /* Shared label column for ConfigRow / IdentityField / DangerActionRow grids. */
+  --agent-detail-label-col: 8.25rem;
 
   /* Default color-scheme so native form controls, scrollbars, and the
      canvas match the light theme (.dark flips this to dark below). */

@@ -206,7 +206,13 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
-├── append-prompt <agent> [-f <file>]               # reads stdin if no file
+├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
+├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
+│                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
+│                                                   #   briefing headings); --force overrides the heading heuristic.
+│                                                   #   Does NOT cover inline replacements of team prompts — those are
+│                                                   #   resource bindings, managed in Cloud → Org Settings → Resources.
+├── append-prompt <agent> [-f <file>]               # deprecated alias of `prompt set`
 ├── add-mcp <agent> --name <id> --transport <t> [--command <c> --args <a>... | --url <u>]
 ├── set-env <agent> KEY=VALUE [--sensitive]
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]
@@ -248,7 +254,9 @@ Day-to-day messaging.
 first-tree chat
 ├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
-│     --reply-to <messageId>                         #   answer/thread a question; clears red-dot
+│     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
+│     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
+│     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
 ├── list
 ├── history <chatId>
@@ -273,8 +281,14 @@ first-tree chat send alice --request \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
 
-# Answer / thread a question (clears the asker's red-dot)
+# Thread a reply under a message (pure threading; does NOT resolve a question)
 first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
+
+# Resolve an open question you asked the human (marks answered, clears their red-dot; body = the answer)
+first-tree chat send alice "Ship it — go ahead with migration 0021." --answer <requestId>
+
+# Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
+first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
 
 # Pull a non-member into the current chat first, then send normally.
 first-tree chat invite code-agent

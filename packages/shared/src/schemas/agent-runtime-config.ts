@@ -19,8 +19,39 @@ const MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:/;
 
+export const promptSectionScopeSchema = z.enum(["team", "agent"]);
+export type PromptSectionScope = z.infer<typeof promptSectionScopeSchema>;
+
+/**
+ * One resolved entry of the effective prompt stack, tagged by provenance.
+ *
+ * `scope: "team"` rows come from team prompt resources (read-only for the
+ * agent); `scope: "agent"` rows are agent-specific. Within agent scope,
+ * `editable: true` marks the ONE kind of row `agent config prompt set` owns —
+ * the standalone inline fragment. Agent-scope rows without it (inline
+ * *replacements* of team prompts, agent-scoped prompt resources) are managed
+ * via resource bindings, and the client briefing must not present them under
+ * an "editable" heading, or an agent following the heading's instructions
+ * would be unable to edit the content it sees.
+ */
+export const promptSectionSchema = z.object({
+  scope: promptSectionScopeSchema,
+  name: z.string().default(""),
+  body: z.string().default(""),
+  editable: z.boolean().optional(),
+});
+export type PromptSection = z.infer<typeof promptSectionSchema>;
+
 export const promptConfigSchema = z.object({
   append: z.string().max(PROMPT_APPEND_MAX_LENGTH).default(""),
+  /**
+   * Structured projection of the effective prompt stack, resolved server-side
+   * by the resources service at read time — never persisted. `append` keeps
+   * carrying the legacy merged string so older clients keep working; new
+   * clients render `sections`. Optional (not defaulted) so stored payloads
+   * and patch bodies don't have to carry it.
+   */
+  sections: z.array(promptSectionSchema).optional(),
 });
 export type PromptConfig = z.infer<typeof promptConfigSchema>;
 
@@ -340,7 +371,10 @@ export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
  */
 const agentRuntimeConfigPatchShape = z
   .object({
-    prompt: promptConfigSchema,
+    // `sections` is a read-side projection computed by the resources service;
+    // it is never writable, so the patch prompt shape omits it (and Zod's
+    // default strip mode silently drops it if a client echoes it back).
+    prompt: promptConfigSchema.omit({ sections: true }),
     model: z.string(),
     mcpServers: z.array(mcpServerSchema),
     env: z.array(envEntrySchema),
@@ -430,4 +464,34 @@ export function deriveRepoLocalPath(url: string): string {
   const noQuery = trimmed.split(/[?#]/)[0] ?? "";
   const lastSegment = noQuery.split(/[/:]/).filter(Boolean).pop() ?? "";
   return lastSegment.replace(/\.git$/i, "");
+}
+
+const DEFAULT_BRANCH_NAMES: ReadonlySet<string> = new Set(["main", "master"]);
+
+/**
+ * Short `owner/repo` label from a repo URL — drops the host, the `.git` suffix,
+ * and any query/fragment. Falls back to the bare repo name when no owner segment
+ * is present. For compact, non-technical repo display (vs the full URL).
+ */
+export function deriveRepoShortLabel(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  const noQuery = trimmed.split(/[?#]/)[0] ?? "";
+  const segments = noQuery.split(/[/:]/).filter(Boolean);
+  const repo = (segments.pop() ?? "").replace(/\.git$/i, "");
+  const owner = segments.pop() ?? "";
+  return owner ? `${owner}/${repo}` : repo;
+}
+
+/**
+ * One-line repo coordinate for display: `owner/repo`, with `@branch` appended
+ * only for a non-default branch and `→ localPath` only for a non-default mount
+ * path. Defaults (main/master, the path derived from the repo name) are omitted
+ * so common repos stay clean and only deviations draw the eye.
+ */
+export function formatRepoCoordinate(repo: { url: string; ref?: string; localPath?: string }): string {
+  const base = deriveRepoShortLabel(repo.url);
+  const branchPart = repo.ref && !DEFAULT_BRANCH_NAMES.has(repo.ref) ? `@${repo.ref}` : "";
+  const pathPart = repo.localPath && repo.localPath !== deriveRepoLocalPath(repo.url) ? ` → ${repo.localPath}` : "";
+  return `${base}${branchPart}${pathPart}`;
 }
