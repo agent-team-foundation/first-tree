@@ -6,6 +6,7 @@ import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
+import { Button } from "../../../components/ui/button.js";
 import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
@@ -356,35 +357,37 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header — a single ghost-button row: New chat (primary ink) on the
-          left, the All / Unread / Watching triad pushed right, and the `⚙`
-          popover (Scope / Origin / Group) at the far right. The optional
-          chip row (active origin / participants) sits below. */}
+      {/* Header — New chat (brand-green CTA) on the left, the All / Unread /
+          Watching triad pushed right, and the `⚙` popover (Scope / Origin /
+          Group) at the far right. The optional chip row (active origin /
+          participants) sits below.
+
+          New chat uses the brand-green `cta` Button variant: per DESIGN.md
+          ("Neutral primary, green hero"), the CTA hue is reserved for the
+          one creation moment per surface — and starting a new conversation
+          is exactly that for the workspace surface. Sized `xs` (h-7, chip
+          radius) so the colour does the prominence work without the chip
+          itself eating vertical rhythm — keeps it close to the height of
+          the neighbouring `⚙` filter trigger and avoids dominating a
+          dense rail. Label is bumped one tier from xs's default
+          `text-label` to `text-body` so the CTA reads decisively even at
+          the compact height. */}
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         {/* Row 1 — primary action (New chat) + filter entry (⚙). Kept on
             its own line so it never crowds against the filter triad. */}
         <div className="flex items-center" style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3)" }}>
-          <button
+          <Button
             type="button"
+            variant="cta"
+            size="xs"
+            className="text-body"
             onClick={onNewChat}
             aria-current={isDraftActive ? "page" : undefined}
-            className={cn(
-              "inline-flex items-center text-label font-medium cursor-pointer transition-colors",
-              !isDraftActive && "hover:bg-[var(--bg-active)]",
-            )}
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              border: 0,
-              borderRadius: 4,
-              background: isDraftActive ? "var(--bg-active)" : "transparent",
-              color: "var(--primary)",
-            }}
             title="New chat"
           >
-            <Plus size={15} strokeWidth={2} />
+            <Plus size={14} strokeWidth={2} />
             <span>New chat</span>
-          </button>
+          </Button>
 
           <span style={{ marginLeft: "auto" }} />
 
