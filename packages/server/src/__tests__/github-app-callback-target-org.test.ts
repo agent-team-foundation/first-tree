@@ -333,6 +333,98 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     expect(row?.hubOrganizationId).toBe(admin.organizationId);
   });
 
+  it("surfaces an error (not success) when the identities mismatch and there is no verified installation to bind", async () => {
+    // Review finding (yuezengwu + codex): with no `installation_id` (or one
+    // cleared by the fail-closed GitHub-side admin proof), the mismatch
+    // branch must NOT bounce to the success `next` — in onboarding that
+    // page auto-closes as "connected" while nothing was bound.
+    const app = getApp();
+    const kickoffGithubId = 770_008;
+    const strangerGithubId = 770_009;
+    const login = `targetorg-noinstall-${uuidv7().slice(0, 6)}`;
+
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, kickoffGithubId, login);
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/onboarding/connected", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    const restore = stubGithub({ githubId: strangerGithubId, login: `${login}-stranger`, installationIds: [] });
+    try {
+      // No installation_id on the callback at all.
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("error=install-not-verified");
+      expect(res.headers.location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+  });
+
+  it("surfaces an error (not success) when the identities mismatch and the bind itself fails", async () => {
+    // Same review finding, bind-failure leg: the installation is already
+    // bound to a DIFFERENT org (D2 1:1), so `bindInstallationToOrg` throws.
+    // The user must land on the error surface, not the success `next`.
+    const app = getApp();
+    const kickoffGithubId = 770_010;
+    const strangerGithubId = 770_011;
+    const login = `targetorg-bindfail-${uuidv7().slice(0, 6)}`;
+    const installationId = 8_822_007;
+
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, kickoffGithubId, login);
+
+    // Pre-bind the installation to another org so the bind is refused.
+    const otherOrgId = uuidv7();
+    await app.db.insert(organizations).values({ id: otherOrgId, name: `other-${otherOrgId}`, displayName: "Other" });
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "Organization",
+        accountLogin: "acme",
+        accountGithubId: 990_001,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+    });
+    const { bindInstallationToOrg } = await import("../services/github-app-installations.js");
+    await bindInstallationToOrg(app.db, installationId, otherOrgId);
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    const restore = stubGithub({
+      githubId: strangerGithubId,
+      login: `${login}-stranger`,
+      installationIds: [installationId],
+    });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("error=install-bind-failed");
+      expect(res.headers.location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+
+    // The pre-existing binding is untouched.
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row?.hubOrganizationId).toBe(otherOrgId);
+  });
+
   it("redirects to a friendly error page when the kickoff admin's membership was revoked mid-flight", async () => {
     const app = getApp();
     const githubId = 770_007;

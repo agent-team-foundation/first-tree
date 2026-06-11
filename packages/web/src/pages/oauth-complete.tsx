@@ -16,6 +16,10 @@ const CALLBACK_ERROR_COPY: Record<string, string> = {
   "github-exchange-failed": "GitHub didn't accept the sign-in handshake. Head back and try again in a moment.",
   "install-not-admin":
     "The GitHub App was installed, but connecting it needs an admin of the First Tree team it was started from. Ask a team admin to finish the connection from Settings → GitHub.",
+  "install-not-verified":
+    "The GitHub App install couldn't be verified, so nothing was connected to your team. Start the install again from the app.",
+  "install-bind-failed":
+    "The GitHub App was installed, but it couldn't be connected to your team — it may already be connected to a different team. Try again from Settings → GitHub.",
   "invite-invalid": "This invitation link is no longer valid. Ask your team for a fresh invite.",
   "invite-not-allowed": "This invitation isn't allowed on this server.",
   "invite-required": "This server requires an invitation link to join. Ask your team for an invite.",

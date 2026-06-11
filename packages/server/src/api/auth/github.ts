@@ -336,6 +336,8 @@ type CallbackErrorCode =
   | "state-expired"
   | "github-exchange-failed"
   | "install-not-admin"
+  | "install-not-verified"
+  | "install-bind-failed"
   | "invite-invalid"
   | "invite-not-allowed"
   | "invite-required"
@@ -483,6 +485,12 @@ async function completeOauthFlow(
       // unchanged: `installationId` is non-null only when the OAuth user
       // proved they administer the installed account, and the nonce cookie
       // pins this request to the same browser that minted the kickoff.
+      //
+      // The no-token success redirect is earned ONLY by an actual bind
+      // (review finding on the first cut of this branch): with no verified
+      // installation, or a bind refusal, `next` may be the onboarding
+      // auto-close page — bouncing there would present a silent failure as
+      // "connected". Surface the error instead.
       app.log.warn(
         {
           event: "github_app.install_callback_identity_mismatch",
@@ -495,15 +503,19 @@ async function completeOauthFlow(
         },
         "install callback: OAuth identity differs from the kickoff session — binding on kickoff authority, skipping sign-in",
       );
-      if (installationId !== null) {
-        try {
-          await bindInstallationToOrg(app.db, installationId, targetOrganizationId);
-        } catch (err) {
-          app.log.warn(
-            { err, installationId, hubOrganizationId: targetOrganizationId, kickoffUserId: bindAuthorityUserId },
-            "github app install bind-to-org failed on identity-mismatch path — reconcile in Settings",
-          );
-        }
+      if (installationId === null) {
+        // Either GitHub never sent an installation_id, or the GitHub-side
+        // admin proof / fetch / upsert failed closed and cleared it.
+        return redirectCallbackError(reply, "install-not-verified", next);
+      }
+      try {
+        await bindInstallationToOrg(app.db, installationId, targetOrganizationId);
+      } catch (err) {
+        app.log.warn(
+          { err, installationId, hubOrganizationId: targetOrganizationId, kickoffUserId: bindAuthorityUserId },
+          "github app install bind-to-org failed on identity-mismatch path — reconcile in Settings",
+        );
+        return redirectCallbackError(reply, "install-bind-failed", next);
       }
       return reply.redirect(next, 302);
     }
