@@ -17,7 +17,7 @@ class ConfigurationError extends AppError {
 
 function requireEncryptionKey(key: string | undefined): string {
   if (!key) {
-    throw new ConfigurationError("ADAPTER_ENCRYPTION_KEY is not configured on the server");
+    throw new ConfigurationError("FIRST_TREE_ENCRYPTION_KEY is not configured on the server");
   }
   return key;
 }
