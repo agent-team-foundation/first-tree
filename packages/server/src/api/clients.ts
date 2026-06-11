@@ -68,27 +68,10 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
-  /** POST /clients/:clientId/claim — transfer ownership to the authenticated user. */
-  app.post<{ Params: { clientId: string } }>("/:clientId/claim", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const { clientId } = request.params;
-    const result = await clientService.claimClient(app.db, clientId, userId);
-    const droppedAgentIds = forceDisconnectClient(clientId);
-    request.log.info(
-      {
-        event: "client.owner_transfer",
-        clientId,
-        fromUserId: result.previousUserId,
-        toUserId: userId,
-        unpinnedAgentCount: result.unpinnedAgentIds.length,
-        droppedSocketAgentCount: droppedAgentIds.length,
-      },
-      "client ownership transferred via /clients/:clientId/claim",
-    );
-    return reply.status(200).send({
-      clientId,
-      previousUserId: result.previousUserId,
-      unpinnedAgentCount: result.unpinnedAgentIds.length,
-    });
-  });
+  // POST /:clientId/claim (cross-user ownership transfer) was removed: a
+  // clientId is org-visible, so with only-JWT auth the route let any
+  // authenticated user knock another user's machine offline. Machine handover
+  // now goes through `login --override`, which abandons the local client
+  // identity and registers a fresh clientId instead (no server-side transfer
+  // protocol to secure).
 }

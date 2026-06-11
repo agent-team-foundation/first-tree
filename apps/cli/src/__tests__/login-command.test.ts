@@ -7,8 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const cliFetchMock = vi.hoisted(() => vi.fn());
 const installClientServiceMock = vi.hoisted(() => vi.fn());
 const isServiceSupportedMock = vi.hoisted(() => vi.fn());
-const postClaimMock = vi.hoisted(() => vi.fn());
-const cleanupStaleAliasesAfterClaimMock = vi.hoisted(() => vi.fn());
+const cleanupStaleLocalAliasesMock = vi.hoisted(() => vi.fn());
 const selectMock = vi.hoisted(() => vi.fn());
 const clientRuntimeMock = vi.hoisted(() => vi.fn());
 const createApiNameResolverMock = vi.hoisted(() => vi.fn());
@@ -61,8 +60,7 @@ vi.mock("../core/update-glue.js", async (importOriginal) => ({
 
 vi.mock("../commands/_shared/account-transfer.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/_shared/account-transfer.js")>()),
-  cleanupStaleAliasesAfterClaim: cleanupStaleAliasesAfterClaimMock,
-  postClaim: postClaimMock,
+  cleanupStaleLocalAliases: cleanupStaleLocalAliasesMock,
 }));
 
 vi.mock("@inquirer/prompts", () => ({
@@ -125,8 +123,7 @@ beforeEach(() => {
   cliFetchMock.mockReset();
   installClientServiceMock.mockReset();
   isServiceSupportedMock.mockReset();
-  postClaimMock.mockReset();
-  cleanupStaleAliasesAfterClaimMock.mockReset();
+  cleanupStaleLocalAliasesMock.mockReset();
   selectMock.mockReset();
   clientRuntimeMock.mockReset();
   createApiNameResolverMock.mockReset();
@@ -202,20 +199,40 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
   });
 
-  it("transfers ownership in override mode and starts supported services", async () => {
-    postClaimMock.mockResolvedValueOnce({ clientId: "client-1", previousUserId: "old", unpinnedAgentCount: 2 });
-    cleanupStaleAliasesAfterClaimMock.mockResolvedValueOnce(undefined);
+  it("override mode rotates the local client identity and starts supported services", async () => {
+    // Pre-existing machine identity from the previous account.
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    cleanupStaleLocalAliasesMock.mockResolvedValueOnce(undefined);
     isServiceSupportedMock.mockReturnValueOnce(true);
     installClientServiceMock.mockReturnValueOnce({ platform: "launchd", logDir: join(home, "logs") });
 
     await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--override"]);
 
-    expect(postClaimMock).toHaveBeenCalledWith("http://first-tree.test", expect.any(String));
-    expect(cleanupStaleAliasesAfterClaimMock).toHaveBeenCalledWith(
+    // Fresh identity written, old one preserved in the backup.
+    const rotatedYaml = readFileSync(yamlPath, "utf8");
+    expect(rotatedYaml).not.toContain("client_aabbccdd");
+    expect(rotatedYaml).toMatch(/id: client_[a-f0-9]{8}/);
+    expect(readFileSync(join(home, "config", "client.yaml.bak"), "utf8")).toContain("client_aabbccdd");
+
+    expect(cleanupStaleLocalAliasesMock).toHaveBeenCalledWith(
       expect.objectContaining({ serverUrl: "http://first-tree.test", nonInteractive: true }),
     );
     expect(installClientServiceMock).toHaveBeenCalled();
-    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Ownership transferred");
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Rotated local client identity");
+  });
+
+  it("override mode on a fresh machine skips rotation (nothing to abandon)", async () => {
+    cleanupStaleLocalAliasesMock.mockResolvedValueOnce(undefined);
+    isServiceSupportedMock.mockReturnValueOnce(true);
+    installClientServiceMock.mockReturnValueOnce({ platform: "launchd", logDir: join(home, "logs") });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--override"]);
+
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).not.toContain("Rotated local client identity");
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toMatch(/id: client_[a-f0-9]{8}/);
   });
 
   it("maps invalid tokens and token exchange failures to CLI errors", async () => {

@@ -19,8 +19,9 @@ import { runtimeFieldsReset } from "./presence.js";
  * Assert the caller can act on this client. Throws 404 for both "not found"
  * and "not yours" to prevent UUID enumeration. The client is owned by exactly
  * one user; cross-user admin access is no longer supported by this code path
- * (see decouple-client-from-identity-design §4.10.5 option A). Cross-user
- * ownership transfer goes through `claimClient` in PR-B.
+ * (see decouple-client-from-identity-design §4.10.5 option A). There is no
+ * cross-user ownership transfer: machine handover rotates the local client
+ * identity (`login --override`) and registers a fresh clientId.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
   const [row] = await db
@@ -45,8 +46,9 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `<binName> login <token> --override` to take
- *     ownership, which unpins the previous owner's agents from the machine.
+ *     operator through `<binName> login <token> --override`, which rotates
+ *     the machine's local client identity and registers a fresh clientId
+ *     under the new user; the previous owner's row stays untouched.
  */
 export async function registerClient(
   db: Database,
@@ -79,7 +81,8 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} login <token> --override\` to transfer ownership.`,
+        `Run \`${getServerCliBinding().binName} login <token> --override\` to re-register this machine ` +
+        "under your account with a fresh client identity.",
     );
   }
 
@@ -124,65 +127,6 @@ export async function registerClient(
         ...(metadataMerge ? { metadata: metadataMerge } : {}),
       },
     });
-}
-
-/**
- * Transfer ownership of a client row to a new user, unpinning any agents
- * whose manager belonged to the previous owner. Atomic: caller is guaranteed
- * either a fully-applied ownership flip + bulk unpin, or no change. Idempotent
- * when `newUserId` already owns the row.
- *
- * Manager → user resolution goes through the members JOIN (the agents table
- * carries only `manager_id`); cross-org agents under the same previous owner
- * are unpinned together (decouple-client-from-identity §4.4).
- *
- * Caller is responsible for the caller-side authorization (the new owner must
- * be the authenticated request's user). The structured log
- * `event: client.owner_transfer` is emitted by the caller after the
- * transaction commits, using the returned `previousUserId` /
- * `unpinnedAgentIds`.
- */
-export async function claimClient(
-  db: Database,
-  clientId: string,
-  newUserId: string,
-): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[] }> {
-  return db.transaction(async (tx) => {
-    const [locked] = await tx.execute<{ id: string; user_id: string | null }>(
-      sql`SELECT id, user_id FROM clients WHERE id = ${clientId} FOR UPDATE`,
-    );
-    if (!locked) {
-      throw new NotFoundError(`Client "${clientId}" not found`);
-    }
-    const previousUserId = locked.user_id;
-
-    if (previousUserId === newUserId) {
-      return { previousUserId, unpinnedAgentIds: [] as string[] };
-    }
-
-    let unpinnedAgentIds: string[] = [];
-    if (previousUserId !== null) {
-      const rows = await tx
-        .select({ uuid: agents.uuid })
-        .from(agents)
-        .innerJoin(members, eq(agents.managerId, members.id))
-        .where(and(eq(agents.clientId, clientId), eq(members.userId, previousUserId)));
-      unpinnedAgentIds = rows.map((r) => r.uuid);
-
-      if (unpinnedAgentIds.length > 0) {
-        const now = new Date();
-        await tx.update(agents).set({ clientId: null, updatedAt: now }).where(inArray(agents.uuid, unpinnedAgentIds));
-        await tx
-          .update(agentPresence)
-          .set({ status: "offline", clientId: null, ...runtimeFieldsReset(now) })
-          .where(inArray(agentPresence.agentId, unpinnedAgentIds));
-      }
-    }
-
-    await tx.update(clients).set({ userId: newUserId }).where(eq(clients.id, clientId));
-
-    return { previousUserId, unpinnedAgentIds };
-  });
 }
 
 export async function disconnectClient(db: Database, clientId: string) {

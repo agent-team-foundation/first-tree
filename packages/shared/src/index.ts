@@ -200,13 +200,11 @@ export {
 } from "./schemas/chat-metadata.js";
 export {
   CLIENT_STATUSES,
-  type ClaimClientResponse,
   type Client,
   type ClientAuthState,
   type ClientRegister,
   type ClientStatus,
   type ClientWireCapabilities,
-  claimClientResponseSchema,
   clientAuthStateSchema,
   clientRegisterSchema,
   clientSchema,

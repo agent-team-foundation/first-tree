@@ -88,7 +88,7 @@ name — there is no separate "local alias" to invent.
 | Cross-subsystem readiness check | `first-tree doctor` |
 | List local agent bindings | `first-tree agent list` |
 | List every agent you manage on the server | `first-tree agent list --remote` |
-| Take over a machine bound to another user | `first-tree login <token> --override` |
+| Take over a machine bound to another user (fresh client identity) | `first-tree login <token> --override` |
 | Send a chat message | `first-tree chat send <agent-name> "message"` |
 | List chats | `first-tree chat list` |
 | View chat history | `first-tree chat history <chat-id>` |
@@ -160,8 +160,11 @@ and ack via `connection.sendInboxAck(entryId)`.
   avoid `AMBIGUOUS_AGENT`.
 - If the user already has a connect token bound to a different account
   on this machine, use `first-tree login <token> --override` rather
-  than `logout` + `login`: it transfers ownership and unpins the
-  previous owner's agents in a single transaction.
+  than `logout` + `login`: it rotates the machine's local client
+  identity (the old `client.yaml` is backed up) and registers a fresh
+  clientId under your account. The previous account's client entry and
+  agents stay on the server and show offline until that account removes
+  them.
 
 ## See also
 
