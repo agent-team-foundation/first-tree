@@ -184,157 +184,152 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
   }
   const webhookSecret = appConfig.webhookSecret;
   const appSlug = appConfig.slug ?? null;
-  const webhookMax = app.config.rateLimit?.webhookMax ?? 600;
 
-  app.post(
-    "/github-app",
-    { config: { rateLimit: { max: webhookMax, timeWindow: "1 minute" } } },
-    async (request, reply) => {
-      const rawBody = request.body;
-      if (!Buffer.isBuffer(rawBody)) {
-        throw new BadRequestError("Expected raw body buffer");
-      }
+  app.post("/github-app", async (request, reply) => {
+    const rawBody = request.body;
+    if (!Buffer.isBuffer(rawBody)) {
+      throw new BadRequestError("Expected raw body buffer");
+    }
 
-      const signatureHeader = request.headers["x-hub-signature-256"];
-      if (typeof signatureHeader !== "string") {
-        throw new UnauthorizedError("Missing x-hub-signature-256 header");
-      }
-      verifySignature(webhookSecret, rawBody, signatureHeader);
+    const signatureHeader = request.headers["x-hub-signature-256"];
+    if (typeof signatureHeader !== "string") {
+      throw new UnauthorizedError("Missing x-hub-signature-256 header");
+    }
+    verifySignature(webhookSecret, rawBody, signatureHeader);
 
-      let payload: unknown;
-      try {
-        payload = JSON.parse(rawBody.toString("utf8"));
-      } catch {
-        throw new BadRequestError("Invalid JSON payload");
-      }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      throw new BadRequestError("Invalid JSON payload");
+    }
 
-      const eventType = request.headers["x-github-event"];
-      if (typeof eventType !== "string") {
-        throw new BadRequestError("Missing x-github-event header");
-      }
+    const eventType = request.headers["x-github-event"];
+    if (typeof eventType !== "string") {
+      throw new BadRequestError("Missing x-github-event header");
+    }
 
-      if (eventType === "ping") {
-        return reply.status(200).send({ ok: true, event: "ping" });
-      }
+    if (eventType === "ping") {
+      return reply.status(200).send({ ok: true, event: "ping" });
+    }
 
-      if (eventType === "installation" || eventType === "installation_repositories") {
-        const lifecycle = await handleInstallationLifecycle(app, eventType, payload);
-        return reply.status(200).send({ ok: true, event: eventType, lifecycle });
-      }
+    if (eventType === "installation" || eventType === "installation_repositories") {
+      const lifecycle = await handleInstallationLifecycle(app, eventType, payload);
+      return reply.status(200).send({ ok: true, event: eventType, lifecycle });
+    }
 
-      const installationId = readInstallationId(payload);
-      if (installationId === null) {
-        return reply.status(200).send({ ok: true, event: eventType, ignored: "no installation context" });
-      }
+    const installationId = readInstallationId(payload);
+    if (installationId === null) {
+      return reply.status(200).send({ ok: true, event: eventType, ignored: "no installation context" });
+    }
 
-      const installation = await findInstallationByGithubId(app.db, installationId);
-      if (!installation) {
-        log.warn({ installationId, eventType }, "installation not seen, skipping");
-        return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not seen" });
-      }
-      if (!installation.hubOrganizationId) {
-        log.warn({ installationId, eventType }, "installation not bound to any First Tree org, skipping");
-        return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not bound" });
-      }
-      if (installation.suspendedAt !== null) {
-        return reply.status(200).send({ ok: true, event: eventType, ignored: "suspended" });
-      }
+    const installation = await findInstallationByGithubId(app.db, installationId);
+    if (!installation) {
+      log.warn({ installationId, eventType }, "installation not seen, skipping");
+      return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not seen" });
+    }
+    if (!installation.hubOrganizationId) {
+      log.warn({ installationId, eventType }, "installation not bound to any First Tree org, skipping");
+      return reply.status(200).send({ ok: true, event: eventType, ignored: "installation not bound" });
+    }
+    if (installation.suspendedAt !== null) {
+      return reply.status(200).send({ ok: true, event: eventType, ignored: "suspended" });
+    }
 
-      const source: WebhookSource = {
-        kind: "github-app-installation",
-        installationId,
-        organizationId: installation.hubOrganizationId,
-      };
+    const source: WebhookSource = {
+      kind: "github-app-installation",
+      installationId,
+      organizationId: installation.hubOrganizationId,
+    };
 
-      const deliveryHeader = request.headers["x-github-delivery"];
-      const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
+    const deliveryHeader = request.headers["x-github-delivery"];
+    const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
 
-      // Bypass: sync the upstream PR/Issue lifecycle onto
-      // `github_entity_chat_mappings.entity_state`. Runs independently of
-      // the normalize/audience/deliver pipeline so this branch never
-      // produces an inbox message. The chat-archive sweeper
-      // (services/chat-archive.ts) reads this column to decide when to
-      // archive. Idempotent under retries — sits before claimEvent on
-      // purpose so a retry whose normalized event was already claimed
-      // still gets its state column updated.
-      if (isRecord(payload)) {
-        const repo = isRecord(payload.repository) ? payload.repository : null;
-        const repoFullName = readString(repo?.full_name);
-        const action = typeof payload.action === "string" ? payload.action : null;
-        if (repoFullName && action) {
-          const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
-          if (stateUpdate) {
-            try {
-              const stats = await setEntityState(app.db, {
-                organizationId: installation.hubOrganizationId,
-                entityType: stateUpdate.entityType,
-                entityKey: stateUpdate.entityKey,
-                state: stateUpdate.state,
-              });
-              if (stats.updated > 0) {
-                log.info(
-                  { entityKey: stateUpdate.entityKey, state: stateUpdate.state, rows: stats.updated },
-                  "synced github entity state",
-                );
-              }
-            } catch (err) {
-              // Best-effort: state-sync failure must not block normalize/deliver.
-              log.error(
-                { err, entityKey: stateUpdate.entityKey, state: stateUpdate.state },
-                "failed to sync github entity state",
+    // Bypass: sync the upstream PR/Issue lifecycle onto
+    // `github_entity_chat_mappings.entity_state`. Runs independently of
+    // the normalize/audience/deliver pipeline so this branch never
+    // produces an inbox message. The chat-archive sweeper
+    // (services/chat-archive.ts) reads this column to decide when to
+    // archive. Idempotent under retries — sits before claimEvent on
+    // purpose so a retry whose normalized event was already claimed
+    // still gets its state column updated.
+    if (isRecord(payload)) {
+      const repo = isRecord(payload.repository) ? payload.repository : null;
+      const repoFullName = readString(repo?.full_name);
+      const action = typeof payload.action === "string" ? payload.action : null;
+      if (repoFullName && action) {
+        const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
+        if (stateUpdate) {
+          try {
+            const stats = await setEntityState(app.db, {
+              organizationId: installation.hubOrganizationId,
+              entityType: stateUpdate.entityType,
+              entityKey: stateUpdate.entityKey,
+              state: stateUpdate.state,
+            });
+            if (stats.updated > 0) {
+              log.info(
+                { entityKey: stateUpdate.entityKey, state: stateUpdate.state, rows: stats.updated },
+                "synced github entity state",
               );
             }
+          } catch (err) {
+            // Best-effort: state-sync failure must not block normalize/deliver.
+            log.error(
+              { err, entityKey: stateUpdate.entityKey, state: stateUpdate.state },
+              "failed to sync github entity state",
+            );
           }
         }
       }
+    }
 
-      const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
-      if (!event) {
-        log.debug({ eventType, action: isRecord(payload) ? payload.action : null }, "Stage 1 returned null");
-        return reply.status(200).send({ ok: true, event: eventType, handled: false });
+    const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
+    if (!event) {
+      log.debug({ eventType, action: isRecord(payload) ? payload.action : null }, "Stage 1 returned null");
+      return reply.status(200).send({ ok: true, event: eventType, handled: false });
+    }
+
+    if (deliveryId) {
+      const claimed = await claimEvent(app.db, deliveryId, "github");
+      if (!claimed) {
+        log.info({ deliveryId, eventType }, "duplicate delivery, skipping");
+        return reply.status(200).send({ ok: true, event: eventType, deduped: true });
       }
+    }
 
+    try {
+      const audience = await resolveAudience(app.db, event, appSlug);
+      if (audience.length === 0) {
+        // Distinguish "expected nobody" (no involves, no subscription)
+        // from "had explicit involves but resolved to zero agents" — the
+        // latter usually means a mentioned GitHub login has no
+        // `delegateMention`-configured agent in this org, which is a
+        // potential mis-configuration worth surfacing on a dashboard.
+        // See #507.
+        const reason: "audience_empty_no_involves" | "audience_empty_with_involves" =
+          event.involves.length > 0 ? "audience_empty_with_involves" : "audience_empty_no_involves";
+        log.info(
+          {
+            entityType: event.entity.type,
+            entityKey: event.entity.key,
+            actor: event.actor.githubLogin,
+            involvesCount: event.involves.length,
+            reason,
+          },
+          "audience empty, skipping",
+        );
+        return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason });
+      }
+      const stats = await deliverNormalizedEvent(app, event, audience);
+      return reply.status(200).send({ ok: true, event: eventType, ...stats });
+    } catch (err) {
       if (deliveryId) {
-        const claimed = await claimEvent(app.db, deliveryId, "github");
-        if (!claimed) {
-          log.info({ deliveryId, eventType }, "duplicate delivery, skipping");
-          return reply.status(200).send({ ok: true, event: eventType, deduped: true });
-        }
+        await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
+          log.error({ err: unclaimErr, deliveryId }, "failed to unclaim delivery after handler error");
+        });
       }
-
-      try {
-        const audience = await resolveAudience(app.db, event, appSlug);
-        if (audience.length === 0) {
-          // Distinguish "expected nobody" (no involves, no subscription)
-          // from "had explicit involves but resolved to zero agents" — the
-          // latter usually means a mentioned GitHub login has no
-          // `delegateMention`-configured agent in this org, which is a
-          // potential mis-configuration worth surfacing on a dashboard.
-          // See #507.
-          const reason: "audience_empty_no_involves" | "audience_empty_with_involves" =
-            event.involves.length > 0 ? "audience_empty_with_involves" : "audience_empty_no_involves";
-          log.info(
-            {
-              entityType: event.entity.type,
-              entityKey: event.entity.key,
-              actor: event.actor.githubLogin,
-              involvesCount: event.involves.length,
-              reason,
-            },
-            "audience empty, skipping",
-          );
-          return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason });
-        }
-        const stats = await deliverNormalizedEvent(app, event, audience);
-        return reply.status(200).send({ ok: true, event: eventType, ...stats });
-      } catch (err) {
-        if (deliveryId) {
-          await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
-            log.error({ err: unclaimErr, deliveryId }, "failed to unclaim delivery after handler error");
-          });
-        }
-        throw err;
-      }
-    },
-  );
+      throw err;
+    }
+  });
 }

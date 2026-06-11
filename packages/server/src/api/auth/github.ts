@@ -70,10 +70,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     );
   }
 
-  // Rate-limit `/start` more tightly than the global default — minting state
-  // tokens is cheap server-side but a flood inflates the cookie+JWT budget
-  // a single browser carries, so cap at 20/min/IP.
-  app.get("/start", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+  app.get("/start", async (request, reply) => {
     const { next } = githubStartQuerySchema.parse(request.query);
     const safeNext = safeRedirectPath(next ?? null);
     if (!appCfg) {

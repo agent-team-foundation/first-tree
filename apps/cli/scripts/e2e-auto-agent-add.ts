@@ -139,7 +139,7 @@ async function main(): Promise<void> {
       jwtSecret,
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
-    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
+    rateLimit: { max: 10000 },
     instanceId: "e2e-instance",
     logger: false,
   });

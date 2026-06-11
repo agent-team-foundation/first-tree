@@ -27,7 +27,6 @@ export async function setupOwnTuiWorld(): Promise<CurrentRunHandle> {
     serverExtraEnv: {
       FIRST_TREE_DEV_CALLBACK_ENABLED: "1",
       FIRST_TREE_RATE_LIMIT_MAX: "100000",
-      FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX: "100000",
     },
     clientClaudeCodeExecutable: FAKE_CLAUDE_TUI_EXECUTABLE,
     clientExtraEnv: { ANTHROPIC_API_KEY: "fake-tui-e2e-key" },

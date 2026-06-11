@@ -182,34 +182,13 @@ export const serverConfigSchema = defineConfig({
   /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
    * in production where First Tree sits behind Cloudflare / a reverse proxy — otherwise
-   * `req.ip` resolves to the proxy and every IP-keyed rate-limit key collapses
-   * to the same value. Default false; safe for local development.
+   * unauthenticated rate-limit fallback keys resolve to the proxy. Default false;
+   * safe for local development.
    */
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
   rateLimit: optional({
-    /** Default cap applied to all routes that don't override; overridden per-route below. */
-    max: field(z.number().default(100), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
-    /** Cap on `/auth/login`, `/auth/connect-token`, and other token-issuing paths. */
-    loginMax: field(z.number().default(5), { env: "FIRST_TREE_RATE_LIMIT_LOGIN_MAX" }),
-    /**
-     * Cap on `/webhooks/github-app` (the GitHub App ingestion endpoint).
-     * Sized for SaaS-wide aggregate traffic (single endpoint serves every
-     * installation): typical busy repos burst ~5–10 events/s, and the
-     * `pull_request.synchronize` events that now flow through (Bug 1
-     * fix — no longer silenced) only add to the total. 600/min leaves
-     * headroom for multi-org onboarding without per-installation tuning.
-     */
-    webhookMax: field(z.number().default(600), { env: "FIRST_TREE_RATE_LIMIT_WEBHOOK_MAX" }),
-    /** Cap on Context Tree snapshot reads. */
-    contextTreeSnapshotMax: field(z.number().default(6), {
-      env: "FIRST_TREE_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX",
-    }),
-    /**
-     * Per-agent cap on outbound message writes (`POST /agent/chats/:chatId/messages`
-     * and `POST /agent/agents/:name/messages`). Tighter than the global default
-     * because automated agents are the common loop-failure mode.
-     */
-    agentMessageMax: field(z.number().default(30), { env: "FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX" }),
+    /** Actor-aware global safety cap. High enough to avoid normal-use 429s. */
+    max: field(z.number().default(3000), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
   }),
   ws: optional({
     /**
