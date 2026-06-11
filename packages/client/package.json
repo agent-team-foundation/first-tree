@@ -25,7 +25,7 @@
     "smoke:codex-sandbox": "node scripts/codex-sandbox-smoke.mjs"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",

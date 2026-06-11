@@ -16,7 +16,7 @@ What first-tree is NOT:
 - **Shared:** Zod schemas + TypeScript types + config system
 - **Web:** React 19 / Vite
 - **Tooling:** pnpm (workspace) / Turborepo / Biome / Vitest / tsdown
-- **Node.js:** minimum 22, recommended 24
+- **Node.js:** minimum 22.13, recommended 24
 
 ## Common Commands
 
