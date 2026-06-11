@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -102,12 +102,12 @@ function credentialsPath(): string {
   return join(home, "config", "credentials.json");
 }
 
-function writeCredentials(memberId: string, serverUrl = "http://old.test"): void {
+function writeCredentials(memberId: string, serverUrl = "http://old.test", sub = "user-old"): void {
   mkdirSync(join(home, "config"), { recursive: true });
   writeFileSync(
     credentialsPath(),
     JSON.stringify({
-      accessToken: jwt({ memberId, exp: Math.floor(Date.now() / 1000) + 3600 }),
+      accessToken: jwt({ sub, memberId, exp: Math.floor(Date.now() / 1000) + 3600 }),
       refreshToken: "old-refresh",
       serverUrl,
     }),
@@ -136,7 +136,7 @@ beforeEach(() => {
   exitMock.mockClear();
   process.exitCode = undefined;
   cliFetchMock.mockImplementation(async () =>
-    response(200, { accessToken: jwt({ memberId: "member-new" }), refreshToken: "r1" }),
+    response(200, { accessToken: jwt({ sub: "user-new", memberId: "member-new" }), refreshToken: "r1" }),
   );
   isServiceSupportedMock.mockReturnValue(false);
   createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "kael") });
@@ -199,14 +199,16 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
   });
 
-  it("override mode rotates the local client identity and starts supported services", async () => {
-    // Pre-existing machine identity from the previous account.
+  it("cross-account override rotates the local client identity and starts supported services", async () => {
+    // Pre-existing machine identity + credentials owned by a DIFFERENT user.
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
     cleanupStaleLocalAliasesMock.mockResolvedValueOnce(undefined);
     isServiceSupportedMock.mockReturnValueOnce(true);
     installClientServiceMock.mockReturnValueOnce({ platform: "launchd", logDir: join(home, "logs") });
 
+    // Incoming token belongs to user-new (default mock) — a real handover.
     await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--override"]);
 
     // Fresh identity written, old one preserved in the backup.
@@ -221,6 +223,28 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(installClientServiceMock).toHaveBeenCalled();
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Rotated local client identity");
+  });
+
+  it("same-account override is idempotent: no rotation, no destructive alias cleanup", async () => {
+    // Pre-existing identity + credentials owned by the SAME user as the
+    // incoming token (sub "user-new"). Re-running `login --override` here is a
+    // reauth/retry, not a handover — it must NOT abandon the clientId (which
+    // would orphan the server row and prune our own local agent mirrors).
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    writeCredentials("member-new", "http://first-tree.test", "user-new");
+    isServiceSupportedMock.mockReturnValueOnce(true);
+    installClientServiceMock.mockReturnValueOnce({ platform: "launchd", logDir: join(home, "logs") });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test", memberId: "member-new" }), "--override"]);
+
+    // clientId preserved, no backup, no rotation message.
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(existsSync(join(home, "config", "client.yaml.bak"))).toBe(false);
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).not.toContain("Rotated local client identity");
+    // Stale-alias cleanup is rotation-gated, so it must not run.
+    expect(cleanupStaleLocalAliasesMock).not.toHaveBeenCalled();
   });
 
   it("override mode on a fresh machine skips rotation (nothing to abandon)", async () => {

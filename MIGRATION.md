@@ -177,8 +177,8 @@ that changed.
 
 | Old | New | Notes |
 | --- | --- | --- |
-| `first-tree connect <token>` | `first-tree login <token>` | `--no-service` renamed to `--no-start`. New `--override` flag folds in the retired `client claim`. |
-| `first-tree client claim --confirm` | `first-tree login <token> --override` | Same server-side `POST /clients/:id/claim` + stale-alias cleanup, but folded into `login` so the operator does both steps with one command. |
+| `first-tree connect <token>` | `first-tree login <token>` | `--no-service` renamed to `--no-start`. New `--override` flag replaces the retired `client claim`. |
+| `first-tree client claim --confirm` | `first-tree login <token> --override` | There is no longer a server-side ownership transfer (`POST /clients/:id/claim` was removed because an org-visible `clientId` must not double as a transfer capability). `--override` now rotates the machine's local client identity, registers a fresh `clientId` under your account, and prunes stale local aliases. The previous account's client entry and pinned agents stay on the server (offline) until that account removes them. |
 | `first-tree update [--check] [--no-restart]` | `first-tree upgrade [--check] [--no-restart]` | Flags unchanged. |
 | `first-tree client start` | `first-tree daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
 | `first-tree client stop` | `first-tree daemon stop` | — |
