@@ -83,7 +83,7 @@ describe("agent config CLI registration (Step 8)", () => {
     registerAgentConfigCommands(agent);
 
     await expect(
-      root.parseAsync(["node", "test", "agent", "config", "add-mcp", "kael", "--name", "docs", "--transport", "http"]),
+      root.parseAsync(["node", "test", "agent", "config", "add-mcp", "nova", "--name", "docs", "--transport", "http"]),
     ).rejects.toMatchObject({ code: "LEGACY_MCP_CONFIG_DISABLED", exitCode: 2 });
     expect(failMock).toHaveBeenCalledWith(
       "LEGACY_MCP_CONFIG_DISABLED",

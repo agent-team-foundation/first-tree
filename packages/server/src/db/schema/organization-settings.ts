@@ -16,8 +16,7 @@ import { users } from "./users.js";
  * one so tightening to compare-and-swap later is a code-only change.
  *
  * Sensitive fields inside `value` are AES-256-GCM-encrypted at the service
- * layer using `crypto.ts`'s `encryptValue` / `decryptValue` — same pattern
- * as `adapter_configs`.
+ * layer using `crypto.ts`'s `encryptValue` / `decryptValue`.
  */
 export const organizationSettings = pgTable(
   "organization_settings",

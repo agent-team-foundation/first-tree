@@ -57,17 +57,3 @@ export function agentAttrs(agent: { uuid?: string; id?: string; organizationId?:
   if (agent.clientId) out[FIRST_TREE_ATTR.CLIENT_ID] = agent.clientId;
   return out;
 }
-
-export function adapterAttrs(a: {
-  id?: number | string;
-  platform?: string;
-  externalChatId?: string;
-  agentId?: string;
-}): Attrs {
-  const out: Attrs = {};
-  if (a.id !== undefined && a.id !== null) out[FIRST_TREE_ATTR.ADAPTER_ID] = String(a.id);
-  if (a.platform) out[FIRST_TREE_ATTR.ADAPTER_PLATFORM] = a.platform;
-  if (a.externalChatId) out[FIRST_TREE_ATTR.ADAPTER_EXTERNAL_CHAT_ID] = a.externalChatId;
-  if (a.agentId) out[FIRST_TREE_ATTR.AGENT_ID] = a.agentId;
-  return out;
-}

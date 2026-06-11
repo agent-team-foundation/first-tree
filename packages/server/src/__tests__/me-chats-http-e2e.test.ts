@@ -240,8 +240,8 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     //   "an agent running in any chat appears here for every chat
     //    they speak in."
     // With the new derivation (agent_chat_sessions.state per-(agent,chat) +
-    // session_events per-(agent,chat)), Alice working with Kael in her
-    // chat must NOT light up Bob's chat with Kael.
+    // session_events per-(agent,chat)), Alice working with Nova in her
+    // chat must NOT light up Bob's chat with Nova.
     const app = getApp();
 
     // Two members of the same default org — the helper plops both onto it.
@@ -252,31 +252,31 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     const bobHumanId = bob.humanAgentUuid;
     const bobToken = bob.accessToken;
 
-    // Kael — single shared agent.
-    const kael = await createAgent(app.db, {
-      name: `kael-${crypto.randomUUID().slice(0, 6)}`,
+    // Nova — single shared agent.
+    const nova = await createAgent(app.db, {
+      name: `nova-${crypto.randomUUID().slice(0, 6)}`,
       type: "agent",
-      displayName: "Kael",
+      displayName: "Nova",
       managerId: alice.memberId,
       organizationId: orgId,
     });
 
-    // Alice ↔ Kael and Bob ↔ Kael: two distinct direct chats.
-    const aliceChat = await createMeChat(app.db, alice.humanAgentUuid, orgId, { participantIds: [kael.uuid] });
-    const bobChat = await createMeChat(app.db, bobHumanId, orgId, { participantIds: [kael.uuid] });
+    // Alice ↔ Nova and Bob ↔ Nova: two distinct direct chats.
+    const aliceChat = await createMeChat(app.db, alice.humanAgentUuid, orgId, { participantIds: [nova.uuid] });
+    const bobChat = await createMeChat(app.db, bobHumanId, orgId, { participantIds: [nova.uuid] });
 
-    // Kael is actively working IN ALICE'S CHAT ONLY.
-    await setSessionState(app.db, kael.uuid, aliceChat.chatId, "active");
-    await setSessionState(app.db, kael.uuid, bobChat.chatId, "suspended");
-    await appendEvent(app.db, kael.uuid, aliceChat.chatId, "tool_call", {
+    // Nova is actively working IN ALICE'S CHAT ONLY.
+    await setSessionState(app.db, nova.uuid, aliceChat.chatId, "active");
+    await setSessionState(app.db, nova.uuid, bobChat.chatId, "suspended");
+    await appendEvent(app.db, nova.uuid, aliceChat.chatId, "tool_call", {
       toolUseId: "x",
       name: "Edit",
       args: {},
       status: "pending",
     });
-    // No events at all for Bob's chat with Kael.
+    // No events at all for Bob's chat with Nova.
 
-    // Alice's chat list — Kael's chat should light up the live activity.
+    // Alice's chat list — Nova's chat should light up the live activity.
     const aliceRes = await app.inject({
       method: "GET",
       url: `/api/v1/orgs/${encodeURIComponent(orgId)}/chats`,
@@ -287,7 +287,7 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
       .rows.find((r) => r.chatId === aliceChat.chatId);
     expect((aliceRow?.liveActivity as { label?: string })?.label, "Alice's row: live label").toBe("Edit");
 
-    // Bob's chat list — Kael's chat must NOT light up.
+    // Bob's chat list — Nova's chat must NOT light up.
     const bobRes = await app.inject({
       method: "GET",
       url: `/api/v1/orgs/${encodeURIComponent(orgId)}/chats`,

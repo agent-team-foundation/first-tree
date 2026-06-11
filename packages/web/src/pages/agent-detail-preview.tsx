@@ -241,8 +241,8 @@ const RESOURCES: AgentResourcesOutput = {
 
 const AGENT: Agent = {
   uuid: UUID,
-  name: "kael",
-  displayName: "Kael",
+  name: "vega",
+  displayName: "Vega",
   type: "agent",
   managerId: "member-self",
   visibility: "organization",

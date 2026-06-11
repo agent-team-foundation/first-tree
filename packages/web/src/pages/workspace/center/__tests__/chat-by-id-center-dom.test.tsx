@@ -136,7 +136,7 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     updatedAt: overrides.updatedAt ?? NOW,
     participants: overrides.participants ?? [
       participant({ agentId: "human-agent-self", type: "human", displayName: "Gandy" }),
-      participant({ agentId: "agent-1", type: "agent", displayName: "Kael" }),
+      participant({ agentId: "agent-1", type: "agent", displayName: "Nova" }),
       participant({ agentId: "human-agent-alice", type: "human", displayName: "Alice" }),
     ],
     title: overrides.title ?? "Launch chat",

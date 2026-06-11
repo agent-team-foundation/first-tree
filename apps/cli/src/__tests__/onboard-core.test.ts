@@ -49,9 +49,9 @@ describe("onboard core", () => {
     const { loadOnboardState, saveOnboardState } = await import("../core/onboard.js");
 
     expect(loadOnboardState()).toBeNull();
-    saveOnboardState({ id: "kael", type: "agent", domains: "runtime,tools" });
+    saveOnboardState({ id: "nova", type: "agent", domains: "runtime,tools" });
 
-    expect(loadOnboardState()).toEqual({ id: "kael", type: "agent", domains: "runtime,tools" });
+    expect(loadOnboardState()).toEqual({ id: "nova", type: "agent", domains: "runtime,tools" });
   });
 
   it("checks credentials, server health, and required inputs", async () => {
@@ -69,12 +69,12 @@ describe("onboard core", () => {
     process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     cliFetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
 
-    const ok = await onboardCheck({ id: "kael", type: "agent", clientId: "client-1" });
+    const ok = await onboardCheck({ id: "nova", type: "agent", clientId: "client-1" });
     expect(ok.map((item) => [item.key, item.status, item.value])).toEqual([
       ["connect", "ok", "http://first-tree.test"],
       ["server", "ok", "http://first-tree.test"],
       ["server_reachable", "ok", "healthy"],
-      ["id", "ok", "kael"],
+      ["id", "ok", "nova"],
       ["type", "ok", "agent"],
       ["client", "ok", "client-1"],
     ]);
@@ -94,7 +94,7 @@ describe("onboard core", () => {
     loadCredentialsMock.mockReturnValueOnce(null);
     process.env.FIRST_TREE_SERVER_URL = "http://hub.test";
     cliFetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
-    const unhealthy = await onboardCheck({ id: "kael", type: "agent" });
+    const unhealthy = await onboardCheck({ id: "nova", type: "agent" });
     expect(unhealthy.map((item) => [item.key, item.status, item.value])).toContainEqual([
       "server_reachable",
       "error",
@@ -199,7 +199,7 @@ describe("onboard core", () => {
       }),
     );
 
-    await expect(onboardCreate({ id: "kael", type: "agent" })).rejects.toThrow(
+    await expect(onboardCreate({ id: "nova", type: "agent" })).rejects.toThrow(
       "Multiple organizations — pass --org explicitly to onboard",
     );
 
@@ -210,7 +210,7 @@ describe("onboard core", () => {
       )
       .mockResolvedValueOnce(jsonResponse(409, { error: "name already exists" }));
 
-    await expect(onboardCreate({ id: "kael", type: "agent" })).rejects.toThrow("name already exists");
+    await expect(onboardCreate({ id: "nova", type: "agent" })).rejects.toThrow("name already exists");
   });
 
   it("creates runtime agent configs and tolerates assistant/state cleanup failures", async () => {
@@ -237,24 +237,24 @@ describe("onboard core", () => {
     mkdirSync(join(home, ".onboard-state.json"), { recursive: true });
 
     await onboardCreate({
-      id: "kael",
+      id: "nova",
       type: "agent",
       assistant: "helper",
       clientId: "client-1",
     });
 
     expect(JSON.parse(String(cliFetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
-      name: "kael",
+      name: "nova",
       type: "agent",
-      displayName: "kael",
+      displayName: "nova",
       delegateMention: "helper",
       clientId: "client-1",
     });
-    expect(readFileSync(join(home, "config", "agents", "kael", "agent.yaml"), "utf8")).toContain(
+    expect(readFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain(
       'agentId: "agent-uuid"',
     );
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain('Warning: Failed to create assistant "helper": assistant failed');
-    expect(output).toContain("Agent:     kael");
+    expect(output).toContain("Agent:     nova");
   });
 });

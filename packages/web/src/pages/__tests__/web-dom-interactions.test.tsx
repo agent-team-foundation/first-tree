@@ -185,13 +185,13 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 const NOW = "2026-05-28T12:00:00.000Z";
 
 const AGENT_NAMES: Record<string, string> = {
-  "agent-1": "Kael",
+  "agent-1": "Nova",
   "agent-2": "Design Critique",
   "human-agent-self": "Gandy",
 };
 
 const AGENT_SLUGS: Record<string, string> = {
-  "agent-1": "kael",
+  "agent-1": "nova",
   "agent-2": "design",
   "human-agent-self": "gandy",
 };
@@ -204,10 +204,10 @@ const MEMBER_NAMES: Record<string, string> = {
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
+    name: overrides.name ?? "nova",
     organizationId: overrides.organizationId ?? "org-1",
     type: overrides.type ?? "agent",
-    displayName: overrides.displayName ?? "Kael",
+    displayName: overrides.displayName ?? "Nova",
     delegateMention: overrides.delegateMention ?? null,
     inboxId: overrides.inboxId ?? "inbox-1",
     status: overrides.status ?? "active",
@@ -610,8 +610,8 @@ beforeEach(() => {
   agentApiMocks.listManagedAgents.mockResolvedValue([
     {
       uuid: "agent-1",
-      name: "kael",
-      displayName: "Kael",
+      name: "nova",
+      displayName: "Nova",
       type: "agent",
       organizationId: "org-1",
       inboxId: "inbox-1",
@@ -848,7 +848,7 @@ describe("web DOM interaction coverage", () => {
     const { NewChatDraft } = await import("../workspace/conversations/new-chat-draft.js");
     const onCreated = vi.fn();
     const first = await renderDom(<NewChatDraft onCreated={onCreated} onShowConversations={() => undefined} />);
-    await waitForText("Kael", first.container);
+    await waitForText("Nova", first.container);
     const textarea = first.container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Draft textarea missing");
     await setValue(textarea, "hello");
@@ -862,7 +862,7 @@ describe("web DOM interaction coverage", () => {
     meChatMocks.createMeChat.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
     const second = await renderDom(<NewChatDraft onCreated={() => undefined} />);
-    await waitForText("Kael", second.container);
+    await waitForText("Nova", second.container);
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
     await waitForText("Design Critique", second.container);
     await click(
@@ -914,7 +914,7 @@ describe("web DOM interaction coverage", () => {
     );
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Kael", rendered.container);
+    await waitForText("Nova", rendered.container);
     const search = rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
     if (!search) throw new Error("Participant search missing");
     await setValue(search, "nobody");
@@ -923,7 +923,7 @@ describe("web DOM interaction coverage", () => {
     });
     await flush();
     await waitForText("No agents match", rendered.container);
-    await setValue(search, "Kael");
+    await setValue(search, "Nova");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
@@ -931,7 +931,7 @@ describe("web DOM interaction coverage", () => {
     await keyDown(search, "ArrowDown");
     await keyDown(search, "ArrowUp");
     await keyDown(search, "Enter");
-    await waitForText("Kael", rendered.container);
+    await waitForText("Nova", rendered.container);
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
     await waitForText("Design Critique", rendered.container);
@@ -993,7 +993,7 @@ describe("web DOM interaction coverage", () => {
     chatApiMocks.sendChatMessage.mockClear();
     meChatMocks.createMeChat.mockResolvedValueOnce({ chatId: "image-only-chat" });
     const imageOnly = await renderDom(<NewChatDraft onCreated={onCreated} initialParticipantIds={["agent-1"]} />);
-    await waitForText("Kael", imageOnly.container);
+    await waitForText("Nova", imageOnly.container);
     const imageOnlyInput = imageOnly.container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!imageOnlyInput) throw new Error("Image-only file input missing");
     const imageOnlyFile = new File(["ghi"], "only.png", { type: "image/png" });
@@ -1018,7 +1018,7 @@ describe("web DOM interaction coverage", () => {
     );
 
     await click(first.container.querySelector("button"));
-    await waitForText("Kael", first.container);
+    await waitForText("Nova", first.container);
     await waitForText("Design Critique", first.container);
     expect(first.container.querySelector('[aria-label="Already in chat"]')).toBeTruthy();
     const input = first.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
@@ -1049,7 +1049,7 @@ describe("web DOM interaction coverage", () => {
       />,
     );
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Kael", second.container);
+    await waitForText("Nova", second.container);
     expect(second.container.querySelector('[aria-label="Already in chat"]')).toBeTruthy();
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -1210,7 +1210,7 @@ describe("web DOM interaction coverage", () => {
     });
     await renderDom(
       <LastStepModal
-        agent={agent({ clientId: "client-1", name: "kael" })}
+        agent={agent({ clientId: "client-1", name: "nova" })}
         open
         onClose={() => undefined}
         onBound={() => undefined}

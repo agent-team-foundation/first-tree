@@ -157,8 +157,8 @@ describe("prompt core", () => {
     writeCredentials();
     process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     ensureFreshAccessTokenMock.mockResolvedValue("access-1");
-    cliFetchMock.mockResolvedValueOnce(response(200, { name: "kael" }));
-    await expect(promptAddAgent({ agentId: "agent-1" })).resolves.toEqual({ name: "kael", agentId: "agent-1" });
+    cliFetchMock.mockResolvedValueOnce(response(200, { name: "nova" }));
+    await expect(promptAddAgent({ agentId: "agent-1" })).resolves.toEqual({ name: "nova", agentId: "agent-1" });
     expect(cliFetchMock.mock.calls[0]?.[0]).toBe("http://first-tree.test/api/v1/agents/agent-1");
 
     cliFetchMock.mockResolvedValueOnce(response(404, { error: "missing" }));

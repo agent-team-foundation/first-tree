@@ -71,8 +71,8 @@ export type GithubAppInstallationEvents = z.infer<typeof githubAppInstallationEv
  * user re-OAuths through the App. Service code MUST tolerate both shapes
  * and treat absence of expiry fields as "still on legacy OAuth token".
  *
- * The token strings themselves are AES-256-GCM ciphertext — same pattern as
- * `adapter_configs`. Plaintext never touches the row.
+ * The token strings themselves are AES-256-GCM ciphertext via crypto.ts.
+ * Plaintext never touches the row.
  */
 export const githubAppUserTokenMetadataSchema = z.object({
   login: z.string().optional(),

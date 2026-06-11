@@ -28,7 +28,7 @@ vi.mock("../../../../auth/auth-context.js", () => ({
 }));
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
   useAgentNameMap: () => (id: string | null | undefined) => {
-    if (id === "agent-1") return "Kael";
+    if (id === "agent-1") return "Nova";
     if (id === "agent-2") return "Design Critique";
     return id ?? "unknown";
   },
@@ -59,7 +59,7 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     description: overrides.description ?? null,
     participants: overrides.participants ?? [
       participant("human-agent-self", "Gandy", "human"),
-      participant("agent-1", "Kael"),
+      participant("agent-1", "Nova"),
       participant("agent-2", "Design Critique"),
     ],
     participantCount: overrides.participantCount ?? 3,

@@ -3,7 +3,7 @@
  *
  * Centralized to avoid typos (`inbox.entry.id` vs `inbox_entry_id`) and to
  * make trace-backend queries consistent — operators can search by these keys
- * to correlate spans across inbox enqueue / deliver / ws push / adapter flush
+ * to correlate spans across inbox enqueue / deliver / ws push
  * without real parent links.
  *
  * Keys follow OTel convention: lowercase dot-separated namespaces.
@@ -31,14 +31,6 @@ export const FIRST_TREE_ATTR = {
   WS_MESSAGE_REF: "ws.message.ref",
   WS_CLOSE_CODE: "ws.close.code",
   WS_REMOTE_IP: "ws.remote.ip",
-
-  // Adapter (external IM bridging)
-  ADAPTER_PLATFORM: "adapter.platform",
-  ADAPTER_ID: "adapter.id",
-  ADAPTER_EXTERNAL_CHAT_ID: "adapter.external_chat_id",
-
-  // Kael forwarding
-  KAEL_ENDPOINT: "kael.endpoint",
 
   // Background tasks
   BG_TASK_NAME: "bg_task.name",

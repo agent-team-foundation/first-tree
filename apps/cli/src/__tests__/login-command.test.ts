@@ -142,7 +142,7 @@ beforeEach(() => {
     response(200, { accessToken: jwt({ memberId: "member-new" }), refreshToken: "r1" }),
   );
   isServiceSupportedMock.mockReturnValue(false);
-  createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "kael") });
+  createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "nova") });
   createExecuteUpdateMock.mockReturnValue(async () => undefined);
   ensureFreshAccessTokenMock.mockResolvedValue("access-token");
   migrateLocalAgentDirsMock.mockResolvedValue({ scanned: 0, renamed: 0, skipped: 0, errors: 0 });
@@ -233,8 +233,8 @@ describe("login command", { timeout: 15_000 }, () => {
   });
 
   it("falls back to inline runtime when service install is unsupported", async () => {
-    mkdirSync(join(home, "config", "agents", "kael"), { recursive: true });
-    writeFileSync(join(home, "config", "agents", "kael", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
 
     await expect(runLogin(["login", jwt({ iss: "http://hub.test", memberId: "member-new" })])).rejects.toThrow(
       "process.exit",
@@ -257,7 +257,7 @@ describe("login command", { timeout: 15_000 }, () => {
         }),
       }),
     );
-    expect(runtimeInstance.addAgent).toHaveBeenCalledWith("kael", expect.objectContaining({ agentId: "agent-1" }));
+    expect(runtimeInstance.addAgent).toHaveBeenCalledWith("nova", expect.objectContaining({ agentId: "agent-1" }));
     expect(runtimeInstance.start).toHaveBeenCalled();
     expect(runtimeInstance.watchAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
     const text = stderrMock.mock.calls.map((call) => String(call[0])).join("");

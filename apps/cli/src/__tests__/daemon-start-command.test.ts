@@ -83,12 +83,12 @@ let runtimeInstance: {
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ft-daemon-start-"));
-  mkdirSync(join(home, "config", "agents", "kael"), { recursive: true });
+  mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
   writeFileSync(
     join(home, "config", "client.yaml"),
     "server:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
   );
-  writeFileSync(join(home, "config", "agents", "kael", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
+  writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
   delete process.env.FIRST_TREE_SERVICE_MODE;
@@ -114,7 +114,7 @@ beforeEach(() => {
     { agentId: "agent-1", clientId: "client_1234abcd", runtimeProvider: "claude-code", status: "active" },
   ]);
   coreMocks.promptMissingFields.mockResolvedValue(undefined);
-  coreMocks.createApiNameResolver.mockReturnValue(async () => "kael");
+  coreMocks.createApiNameResolver.mockReturnValue(async () => "nova");
   coreMocks.createExecuteUpdate.mockReturnValue(async () => undefined);
   coreMocks.migrateLocalAgentDirs.mockResolvedValue(undefined);
   coreMocks.reconcileLocalRuntimeProviders.mockResolvedValue(undefined);
@@ -247,7 +247,7 @@ describe("daemon start command", () => {
       "client_1234abcd",
       expect.objectContaining({ currentVersion: "0.0.0-test" }),
     );
-    expect(runtimeInstance.addAgent).toHaveBeenCalledWith("kael", expect.objectContaining({ agentId: "agent-1" }));
+    expect(runtimeInstance.addAgent).toHaveBeenCalledWith("nova", expect.objectContaining({ agentId: "agent-1" }));
     expect(runtimeInstance.start).toHaveBeenCalled();
     expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: "client_1234abcd", capabilities: { "claude-code": { state: "ok" } } }),
@@ -343,6 +343,6 @@ describe("daemon start command", () => {
 
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
 
-    expect(output()).toContain("skills upload for kael skipped: agent skill upload failed");
+    expect(output()).toContain("skills upload for nova skipped: agent skill upload failed");
   });
 });

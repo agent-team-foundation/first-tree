@@ -119,7 +119,7 @@ describe("low coverage UI components", () => {
 
     const { container, root } = await renderDom(
       <>
-        <AgentChip name="kael" displayName="Kael" tone="accent" />
+        <AgentChip name="nova" displayName="Nova" tone="accent" />
         <AgentChip name="design" displayName="Design" variant="stacked" />
         <AgentChip name={null} displayName={null} emptyLabel="No agent" />
         <HistoryGapBanner />
@@ -134,7 +134,7 @@ describe("low coverage UI components", () => {
       </>,
     );
 
-    expect(container.textContent).toContain("Kael");
+    expect(container.textContent).toContain("Nova");
     expect(container.textContent).toContain("@design");
     expect(container.textContent).toContain("No agent");
     expect(container.textContent).toContain("Some older messages may not be loaded");

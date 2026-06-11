@@ -231,9 +231,9 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     node("ftskill/repo", "ftskill", "/ftskill/repo", "Repo Architecture", "subdomain", null),
     node("ftskill/src", "ftskill", "/ftskill/src", "Source/Workspace Installation Contract", "subdomain", null),
 
-    // Kael: 1 own edit, 1 hidden quiet child.
-    node("kael", "root", "/kael", "Kael", "domain", "edited"),
-    node("kael/legacy", "kael", "/kael/legacy", "Legacy CLI Notes", "subdomain", null),
+    // Nova: 1 own edit, 1 hidden quiet child.
+    node("nova", "root", "/nova", "Nova", "domain", "edited"),
+    node("nova/legacy", "nova", "/nova/legacy", "Legacy CLI Notes", "subdomain", null),
 
     // Members: 4 updates including selected Notebook.
     node("members", "root", "/members", "Members", "domain", "edited"),
@@ -266,7 +266,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
       "yuezengwu",
     ]),
     update("u3", "members", "/members", "Members", "edited", "yuezengwu", "members", []),
-    update("u4", "kael", "/kael", "Kael", "edited", "yuezengwu", "kael", ["liuchao-001", "yuezengwu"]),
+    update("u4", "nova", "/nova", "Nova", "edited", "yuezengwu", "nova", ["liuchao-001", "yuezengwu"]),
     update(
       "u5",
       "practices/tm",

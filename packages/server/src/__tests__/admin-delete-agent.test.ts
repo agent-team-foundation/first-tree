@@ -74,27 +74,6 @@ describe("Admin DELETE Agent API", () => {
     expect(recreated.status).toBe("active");
   });
 
-  it("deletes agent's adapter bindings", async () => {
-    const app = getApp();
-    const { req, ctx } = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { name: "del-adapter-agent" });
-
-    await req("POST", `/api/v1/orgs/${ctx.organizationId}/adapters`, {
-      platform: "kael",
-      agentId: agent.uuid,
-      credentials: { kaelUserId: "user_del_test", kaelProjectId: "proj_del_test" },
-    });
-
-    await suspendAgent(app.db, agent.uuid);
-    const delRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
-    expect(delRes.statusCode).toBe(204);
-
-    const listRes = await req("GET", `/api/v1/orgs/${ctx.organizationId}/adapters`);
-    const configs = listRes.json();
-    const found = configs.find((c: { agentId: string }) => c.agentId === agent.uuid);
-    expect(found).toBeUndefined();
-  });
-
   it("returns 404 for non-existent agent", async () => {
     const app = getApp();
     const { req } = await authedRequest(app);

@@ -130,7 +130,7 @@ export type RequestResolution = z.infer<typeof requestResolutionSchema>;
  *     for humans, not a message addressed into the room.
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
- * adapter, etc.) and goes through the normal enforcement profile.
+ * API, etc.) and goes through the normal enforcement profile.
  */
 export const messagePurposeSchema = z.enum(["agent-final-text"]);
 export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
@@ -224,7 +224,7 @@ export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
 export const clientMessageSchema = messageSchema.extend({
   configVersion: z.number().int().positive(),
   // Forward-roll defence: the server may push new source values before the
-  // client ships the matching enum update (e.g. a new adapter is added).
+  // client ships the matching enum update (e.g. a new source is added).
   // Without `.catch`, the strict enum rejects the whole inbox frame; the
   // entry stays `delivered` server-side and every subsequent `agent:bind`
   // resets it back to `pending` and re-pushes the same un-parseable frame

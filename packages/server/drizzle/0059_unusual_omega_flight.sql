@@ -1,0 +1,1 @@
+DROP TABLE "adapter_configs" CASCADE;

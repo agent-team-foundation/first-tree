@@ -169,12 +169,12 @@ describe("api wrapper paths", () => {
     await agentConfig.getAgentClientStatus("agent/id");
     await agentStatus.fetchChatAgentStatuses("chat/id");
 
-    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "kael" });
+    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "nova" });
     await agents.listAllAgents({ limit: 5, cursor: "older" });
     await agents.listManagedAgents();
     await agents.getAgent("agent/id");
     await agents.getAgentSkills("agent/id");
-    await agents.createAgent({ name: "kael", type: "agent", displayName: "Kael" });
+    await agents.createAgent({ name: "nova", type: "agent", displayName: "Nova" });
     await agents.checkAgentNameAvailability("name with spaces");
     await agents.updateAgent("agent/id", { displayName: "New" });
     await agents.rebindAgent("agent/id", { clientId: "client-2", runtimeProvider: "claude-code" });
@@ -256,7 +256,7 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
     expect(apiMock.post).toHaveBeenCalledWith("/agents/agent/id/config/dry-run", { payload: { gitRepos: [] } });
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents?limit=10&cursor=next&type=agent&query=kael");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");

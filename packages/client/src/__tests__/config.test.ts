@@ -15,24 +15,24 @@ describe("Runtime Config", () => {
     const path = writeTempYaml(`
 server: http://localhost:8000
 agents:
-  kael:
-    agentId: agent-kael-uuid
+  nova:
+    agentId: agent-nova-uuid
     type: claude-code
 `);
     const config = loadRuntimeConfig(path);
     expect(config.server).toBe("http://localhost:8000");
 
-    const kael = config.agents.kael;
-    expect(kael).toBeDefined();
-    expect(kael?.agentId).toBe("agent-kael-uuid");
-    expect(kael?.type).toBe("claude-code");
+    const nova = config.agents.nova;
+    expect(nova).toBeDefined();
+    expect(nova?.agentId).toBe("agent-nova-uuid");
+    expect(nova?.type).toBe("claude-code");
     // Defaults are kept in lock-step with `@first-tree/shared`
     // `agentConfigSchema` — see runtime/config.ts. The shipped CLI goes
     // through that schema; this YAML loader is the legacy back-door.
-    expect(kael?.concurrency).toBe(5);
-    expect(kael?.session.idle_timeout).toBe(300);
-    expect(kael?.session.max_sessions).toBe(10);
-    expect(kael?.session.working_grace_seconds).toBe(3600);
+    expect(nova?.concurrency).toBe(5);
+    expect(nova?.session.idle_timeout).toBe(300);
+    expect(nova?.session.max_sessions).toBe(10);
+    expect(nova?.session.working_grace_seconds).toBe(3600);
   });
 
   it("loads config with custom session and concurrency settings", () => {

@@ -646,7 +646,7 @@ export function StyleguidePreviewPage() {
         <Section title="Form controls" subtitle="Input, Label, SegmentedControl.">
           <div className="flex flex-col" style={{ gap: "var(--sp-2)", maxWidth: "22rem", marginBottom: "var(--sp-5)" }}>
             <Label htmlFor="sg-name">Agent name</Label>
-            <Input id="sg-name" placeholder="e.g. kael" defaultValue="kael" />
+            <Input id="sg-name" placeholder="e.g. nova" defaultValue="nova" />
             <Input placeholder="Disabled" disabled />
           </div>
           <Subhead>Textarea</Subhead>
@@ -680,7 +680,7 @@ export function StyleguidePreviewPage() {
             <Breadcrumb>
               <BreadcrumbLink onClick={() => undefined}>Team</BreadcrumbLink>
               <BreadcrumbSep />
-              <BreadcrumbLink onClick={() => undefined}>kael</BreadcrumbLink>
+              <BreadcrumbLink onClick={() => undefined}>nova</BreadcrumbLink>
               <BreadcrumbSep />
               <BreadcrumbCurrent>Profile</BreadcrumbCurrent>
             </Breadcrumb>
@@ -778,7 +778,7 @@ export function StyleguidePreviewPage() {
             </TableHeader>
             <TableBody>
               <TableRow>
-                <TableCell>kael</TableCell>
+                <TableCell>nova</TableCell>
                 <TableCell>
                   <StateChip state="working" />
                 </TableCell>

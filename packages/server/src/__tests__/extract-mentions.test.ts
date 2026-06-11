@@ -22,7 +22,7 @@ describe("extractMentions", () => {
   });
 
   it("handles hyphens in usernames", () => {
-    expect(extractMentions("@kael-agent")).toEqual(["kael-agent"]);
+    expect(extractMentions("@ops-agent")).toEqual(["ops-agent"]);
   });
 
   it("handles underscores in usernames", () => {

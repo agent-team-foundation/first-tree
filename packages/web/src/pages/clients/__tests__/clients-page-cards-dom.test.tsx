@@ -54,7 +54,7 @@ vi.mock("../../../lib/visibility-interval.js", () => ({
 const NOW = "2026-05-28T12:00:00.000Z";
 
 const AGENT_NAMES: Record<string, string> = {
-  "agent-1": "Kael",
+  "agent-1": "Nova",
   "agent-2": "Design Critique",
   "agent-3": "Codex Runner",
   "agent-4": "Offline Worker",
@@ -399,7 +399,7 @@ describe("ClientsPage computer cards", () => {
     await click(container.querySelector('button[aria-label="Computer actions"]'));
     await click(exactButton(container, "Retire"));
     await waitForText(document.body, "Retire Computer");
-    await waitForText(document.body, "Kael");
+    await waitForText(document.body, "Nova");
     activityMocks.retireClient.mockRejectedValueOnce(new ApiError(409, "delete pinned agents first"));
     await click(
       [...document.body.querySelectorAll("button")].reverse().find((button) => button.textContent === "Retire") ?? null,

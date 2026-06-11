@@ -124,8 +124,8 @@ describe("doctor core checks", () => {
     writeAgent("broken", "agentId: [not-valid\n");
     expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: false, detail: "error reading agent configs" });
     rmSync(join(home, "config", "agents", "broken"), { recursive: true, force: true });
-    writeAgent("kael", "agentId: agent-1\nruntime: claude-code\n");
-    expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: true, detail: "1 configured (kael)" });
+    writeAgent("nova", "agentId: agent-1\nruntime: claude-code\n");
+    expect(checkAgentConfigs()).toEqual({ label: "Agents", ok: true, detail: "1 configured (nova)" });
 
     await expect(
       reconcileAgentConfigs({
@@ -178,7 +178,7 @@ describe("doctor core checks", () => {
       }),
     ).resolves.toEqual({ label: "Agents", ok: false, detail: "no agents configured" });
 
-    writeAgent("kael", "agentId: agent-1\nruntime: claude-code\n");
+    writeAgent("nova", "agentId: agent-1\nruntime: claude-code\n");
     const failed = await reconcileAgentConfigs({
       clientId: "client-1",
       listPinnedAgents: async () => {

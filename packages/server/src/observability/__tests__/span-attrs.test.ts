@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adapterAttrs, agentAttrs, chatAttrs, inboxAttrs, messageAttrs } from "../span-attrs.js";
+import { agentAttrs, chatAttrs, inboxAttrs, messageAttrs } from "../span-attrs.js";
 
 describe("span-attrs helpers", () => {
   describe("messageAttrs", () => {
@@ -75,22 +75,6 @@ describe("span-attrs helpers", () => {
     });
   });
 
-  describe("adapterAttrs", () => {
-    it("stringifies numeric adapter ids", () => {
-      const out = adapterAttrs({ id: 7, platform: "kael", externalChatId: "oc_abc", agentId: "a1" });
-      expect(out).toEqual({
-        "adapter.id": "7",
-        "adapter.platform": "kael",
-        "adapter.external_chat_id": "oc_abc",
-        "agent.id": "a1",
-      });
-    });
-
-    it("accepts string ids unchanged", () => {
-      expect(adapterAttrs({ id: "github-adapter" })["adapter.id"]).toBe("github-adapter");
-    });
-  });
-
   describe("stability of attribute keys (contract)", () => {
     // These assertions guard the *string* keys that become queries in Logfire /
     // Honeycomb. Changing them is a cross-span search-breaking event — the
@@ -101,7 +85,6 @@ describe("span-attrs helpers", () => {
         ...inboxAttrs({ id: 1, messageId: "x", agentId: "x", status: "x", retryCount: 1 }),
         ...chatAttrs({ id: "x", type: "x", organizationId: "x" }),
         ...agentAttrs({ uuid: "x", organizationId: "x", clientId: "x" }),
-        ...adapterAttrs({ id: 1, platform: "x", externalChatId: "x", agentId: "x" }),
       };
       const expectedKeys = [
         "message.id",
@@ -114,9 +97,6 @@ describe("span-attrs helpers", () => {
         "chat.type",
         "organization.id",
         "client.id",
-        "adapter.id",
-        "adapter.platform",
-        "adapter.external_chat_id",
       ];
       for (const key of expectedKeys) {
         expect(all).toHaveProperty(key);

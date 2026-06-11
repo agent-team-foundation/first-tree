@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   restoreEnv();
   configMocks.defaultConfigDir.mockReturnValue("/tmp/first-tree-config");
-  configMocks.loadAgents.mockReturnValue(new Map([["kael", { agentId: "agent-1" }]]));
+  configMocks.loadAgents.mockReturnValue(new Map([["nova", { agentId: "agent-1" }]]));
   configMocks.resolveConfigReadonly.mockReturnValue({ client: { id: "client-1" } });
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
@@ -111,18 +111,18 @@ describe("local agent shared helpers", () => {
   it("resolves explicit, env, and single local agents and creates scoped SDK clients", async () => {
     const { createSdk, resolveLocalAgent } = await import("../commands/_shared/local-agent.js");
 
-    expect(resolveLocalAgent("kael")).toEqual({ serverUrl: "https://hub.example", agentId: "agent-1" });
+    expect(resolveLocalAgent("nova")).toEqual({ serverUrl: "https://hub.example", agentId: "agent-1" });
 
     process.env.FIRST_TREE_AGENT_ID = "agent-2";
     configMocks.loadAgents.mockReturnValueOnce(
       new Map([
-        ["kael", { agentId: "agent-1" }],
+        ["nova", { agentId: "agent-1" }],
         ["mira", { agentId: "agent-2" }],
       ]),
     );
     expect(resolveLocalAgent()).toEqual({ serverUrl: "https://hub.example", agentId: "agent-2" });
 
-    createSdk("kael");
+    createSdk("nova");
     expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
       expect.objectContaining({
         serverUrl: "https://hub.example",
@@ -144,7 +144,7 @@ describe("local agent shared helpers", () => {
     );
 
     process.env.FIRST_TREE_AGENT_ID = "missing";
-    configMocks.loadAgents.mockReturnValueOnce(new Map([["kael", { agentId: "agent-1" }]]));
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
     expect(() => resolveLocalAgent(undefined, { envMismatch: "Use --agent." })).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith(
       "ENV_AGENT_NOT_LOCAL",
@@ -155,14 +155,14 @@ describe("local agent shared helpers", () => {
     delete process.env.FIRST_TREE_AGENT_ID;
     configMocks.loadAgents.mockReturnValueOnce(
       new Map([
-        ["kael", { agentId: "agent-1" }],
+        ["nova", { agentId: "agent-1" }],
         ["mira", { agentId: "agent-2" }],
       ]),
     );
     expect(() => resolveLocalAgent(undefined, { ambiguous: "Pick one." })).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("AMBIGUOUS_AGENT", expect.stringContaining("Pick one."), 2);
 
-    configMocks.loadAgents.mockReturnValueOnce(new Map([["kael", { agentId: "agent-1" }]]));
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
     bootstrapMocks.resolveServerUrl.mockImplementationOnce(() => {
       throw new Error("missing server");
     });

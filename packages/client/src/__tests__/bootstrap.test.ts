@@ -380,7 +380,7 @@ describe("bootstrapWorkspace", () => {
     mkdirSync(workspace, { recursive: true });
     mkdirSync(join(ctxTree, "members", "test-agent"), { recursive: true });
     writeFileSync(join(ctxTree, "AGENT.md"), "## Before Every Task\n\nRead the root NODE.md.");
-    writeFileSync(join(ctxTree, "NODE.md"), "# Context Tree\n\n## Domains\n\n- kael/\n");
+    writeFileSync(join(ctxTree, "NODE.md"), "# Context Tree\n\n## Domains\n\n- nova/\n");
 
     bootstrapWorkspace({
       workspacePath: workspace,

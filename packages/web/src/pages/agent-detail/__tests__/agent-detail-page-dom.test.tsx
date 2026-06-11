@@ -120,8 +120,8 @@ function effectivePrompt(overrides: Partial<EffectivePromptRow> = {}): Effective
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     uuid: overrides.uuid ?? "agent-1",
-    name: overrides.name ?? "kael",
-    displayName: overrides.displayName ?? "Kael",
+    name: overrides.name ?? "vega",
+    displayName: overrides.displayName ?? "Vega",
     type: overrides.type ?? "agent",
     managerId: overrides.managerId ?? "member-self",
     visibility: overrides.visibility ?? "organization",
@@ -462,7 +462,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    expect(container.textContent).toContain("Kael");
+    expect(container.textContent).toContain("Vega");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
     expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
@@ -901,7 +901,7 @@ describe("AgentDetailPage", () => {
     const { RuntimeTab } = await import("../runtime-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(container, "Model settings");
-    await waitForText(container, "Nova"); // switcher list loaded (Kael + Nova)
+    await waitForText(container, "Nova"); // switcher list loaded (Vega + Nova)
     await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
     await waitForText(container, "Configuration changes in");
 
@@ -992,7 +992,7 @@ describe("AgentDetailPage", () => {
     const active = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(active.container, "Agent lifecycle");
     expect(active.container.textContent).toContain("Identity");
-    expect(active.container.textContent).toContain("@kael");
+    expect(active.container.textContent).toContain("@vega");
     expect(active.container.textContent).toContain("Owner");
     expect(active.container.textContent).toContain("Agent lifecycle");
     expect(active.container.textContent).toContain("Lifecycle changes save immediately.");
@@ -1004,7 +1004,7 @@ describe("AgentDetailPage", () => {
     expect(active.container.textContent).toContain("Availability");
     expect(active.container.textContent).toContain("Deletion");
     await click(exactButtonByText(active.container, "Suspend"));
-    expect(document.body.textContent).toContain('Suspend "Kael"?');
+    expect(document.body.textContent).toContain('Suspend "Vega"?');
     await click(exactButtonByText(document.body, "Suspend agent"));
     await waitForCondition(() => agentMocks.suspendAgent.mock.calls.length > 0, "Expected suspend mutation");
     expect(agentMocks.suspendAgent).toHaveBeenCalledWith("agent-1");
@@ -1022,10 +1022,10 @@ describe("AgentDetailPage", () => {
     const toDelete = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(toDelete.container, "Deletion");
     await click(exactButtonByText(toDelete.container, "Delete"));
-    await waitForText(document.body, 'Delete "Kael"?');
+    await waitForText(document.body, 'Delete "Vega"?');
     const input = document.body.querySelector<HTMLInputElement>("input");
     if (!input) throw new Error("Delete confirmation input missing");
-    await setValue(input, "Kael");
+    await setValue(input, "Vega");
     await click(exactButtonByText(document.body, "Delete agent"));
     await waitForCondition(() => agentMocks.deleteAgent.mock.calls.length > 0, "Expected delete mutation");
     expect(agentMocks.deleteAgent).toHaveBeenCalledWith("agent-1");

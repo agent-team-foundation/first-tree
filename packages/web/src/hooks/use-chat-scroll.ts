@@ -7,8 +7,7 @@
  * container has settled, then the layout shifts under them and the
  * scroll position no longer points at what we asked for.
  *
- * This hook borrows the pattern Kael's frontend has been running in
- * production: a `ResizeObserver` on the container plus a short debounce
+ * The pattern: a `ResizeObserver` on the container plus a short debounce
  * — we only perform the scroll once the container has been the same
  * height for `stabilityDelay` ms.
  *
@@ -27,8 +26,7 @@
  * surface a count instead.
  *
  * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2) — see
- * issue first-tree-all 120. Pattern lifted from
- * `kael-frontend/src/hooks/useChatScroll.ts`.
+ * issue first-tree-all 120.
  */
 
 import { type RefObject, useCallback, useEffect, useState } from "react";

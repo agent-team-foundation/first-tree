@@ -233,11 +233,10 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
     expect(await countSilentEntries(app.db, newcomer.agent.inboxId, chat.id)).toBe(6);
   });
 
-  it("ensureParticipant (adapter/HTTP send fallback) backfills the joiner on first call", async () => {
-    // adapter-mapping calls ensureParticipant on every IM message. The first
-    // call promotes a missing/watcher row to speaker — that crossing must
-    // backfill. Subsequent calls short-circuit (already a speaker) and must
-    // not re-backfill.
+  it("ensureParticipant (HTTP send fallback) backfills the joiner on first call", async () => {
+    // ensureParticipant promotes a missing/watcher row to speaker on the
+    // first call — that crossing must backfill. Subsequent calls
+    // short-circuit (already a speaker) and must not re-backfill.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
     const peer = await createTestAgent(app, { type: "agent" });

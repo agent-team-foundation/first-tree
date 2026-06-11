@@ -21,7 +21,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  *     all other speakers get notify=false context rows.
  *
  * These tests exercise the sendMessage service directly so behaviour is
- * pinned regardless of which HTTP path (web / agent / adapter) produced
+ * pinned regardless of which HTTP path (web / agent) produced
  * the call.
  */
 describe("server routing + fan-out filter (explicit mentions only)", () => {

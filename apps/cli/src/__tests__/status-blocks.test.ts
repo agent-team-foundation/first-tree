@@ -133,12 +133,12 @@ describe("status block renderers", () => {
     expect(output()).toContain("0 configured");
 
     stderrSpy.mockClear();
-    const agentDir = join(home, "config", "agents", "kael");
+    const agentDir = join(home, "config", "agents", "nova");
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
     renderAgentsBlock();
     expect(output()).toContain("1 configured");
-    expect(output()).toContain("kael");
+    expect(output()).toContain("nova");
     expect(output()).toContain("agent-1");
   });
 });

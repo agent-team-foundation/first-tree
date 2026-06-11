@@ -195,8 +195,8 @@ describe("ContextPage DOM behavior", () => {
     await click(buttonByText(container, "Show all 12"));
     expect(container.textContent).toContain("#hat-12");
 
-    await click(buttonByText(container, "Kael"));
-    expect(container.querySelector(".context-network-card.is-live")?.textContent).toContain("Kael");
+    await click(buttonByText(container, "Nova"));
+    expect(container.querySelector(".context-network-card.is-live")?.textContent).toContain("Nova");
 
     await click(buttonByText(container, "#topic-1"));
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-1");

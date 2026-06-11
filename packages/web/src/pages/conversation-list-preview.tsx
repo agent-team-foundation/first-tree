@@ -51,7 +51,7 @@ function p(name: string, id: string): MeChatRow["participants"][number] {
   return { agentId: id, displayName: name, type: "agent", avatarColorToken: null, avatarImageUrl: null };
 }
 
-const KAEL = p("kael", "agent-kael");
+const NOVA = p("nova", "agent-nova");
 const DESIGN = p("design-critique", "agent-design");
 const MARKET = p("marketing-writer", "agent-market");
 const RESEARCH = p("research", "agent-res");
@@ -70,7 +70,7 @@ const ATTENTION_ROWS: MeChatRow[] = [
   row({
     chatId: "c-mention",
     title: "Release checklist",
-    participants: [KAEL],
+    participants: [NOVA],
     unreadMentionCount: 1,
     chatHasExplicitMentionToMe: true,
     lastMessageAt: minutesAgo(6),
@@ -100,7 +100,7 @@ const NORMAL_ROWS: MeChatRow[] = [
   row({
     chatId: "c-read",
     title: "Refactor the auth flow",
-    participants: [KAEL],
+    participants: [NOVA],
     lastMessageAt: minutesAgo(34),
     lastMessagePreview: "let's split the token service out first",
   }),
@@ -108,7 +108,7 @@ const NORMAL_ROWS: MeChatRow[] = [
     chatId: "c-group",
     type: "group",
     title: "platform-trio",
-    participants: [KAEL, DESIGN, MARKET],
+    participants: [NOVA, DESIGN, MARKET],
     lastMessageAt: minutesAgo(52),
     lastMessagePreview: "design-critique: spacing nudge on the hero",
   }),
@@ -124,7 +124,7 @@ const NORMAL_ROWS: MeChatRow[] = [
   row({
     chatId: "c-single",
     title: "standup-notes",
-    participants: [KAEL],
+    participants: [NOVA],
     lastMessageAt: minutesAgo(140),
     // No preview → single-line row (no em-dash placeholder).
     lastMessagePreview: null,
@@ -133,7 +133,7 @@ const NORMAL_ROWS: MeChatRow[] = [
     chatId: "c-group-unread",
     type: "group",
     title: "release-train",
-    participants: [KAEL, DESIGN, RESEARCH],
+    participants: [NOVA, DESIGN, RESEARCH],
     unreadMentionCount: 5,
     chatHasExplicitMentionToMe: true,
     lastMessageAt: minutesAgo(70),

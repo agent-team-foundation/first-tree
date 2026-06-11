@@ -50,7 +50,7 @@ function buttonByLabel(container: ParentNode, label: string): HTMLButtonElement 
 }
 
 const props = {
-  agentNameFn: (id: string) => (id === "agent-1" ? "Kael" : id),
+  agentNameFn: (id: string) => (id === "agent-1" ? "Nova" : id),
   agentAvatarFn: (id: string) => `https://example.test/${id}.png`,
   agentColorTokenFn: () => "hue-2",
 };
@@ -96,7 +96,7 @@ describe("WorkingTurn", () => {
 
     const { container, root } = await renderDom(<WorkingTurn {...props} events={events} defaultOpen />);
     expect(container.querySelector("[data-working-agent='agent-1']")).not.toBeNull();
-    expect(container.textContent).toContain("Kael");
+    expect(container.textContent).toContain("Nova");
     expect(container.textContent).toContain("working · 0s");
     expect(container.textContent).toContain("Latest progress update");
     expect(container.textContent).not.toContain("Starting...");

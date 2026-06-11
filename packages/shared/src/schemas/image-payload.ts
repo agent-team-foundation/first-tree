@@ -53,7 +53,7 @@ export type ImageBatchRefContent = z.infer<typeof imageBatchRefContentSchema>;
 /**
  * Type guards for the persisted `messages.content` shapes. Hand-rolled
  * (instead of `schema.safeParse`) so they stay cheap in hot paths —
- * every inbound message in chat-view / agent-io / adapter-manager passes
+ * every inbound message in chat-view / agent-io passes
  * through these on render. The shape contract here mirrors the schemas
  * above; if either schema gains a required field the guard must match.
  *

@@ -77,8 +77,8 @@ beforeEach(() => {
     items: [
       {
         uuid: "agent-org",
-        name: "kael",
-        displayName: "Org Kael",
+        name: "nova",
+        displayName: "Org Nova",
         avatarImageUrl: "/org.webp",
         avatarColorToken: "hue-3",
       },
@@ -129,7 +129,7 @@ describe("agent name maps", () => {
     expect(maps().slugToId(null)).toBeNull();
     expect(maps().identityFor(undefined)).toBeNull();
 
-    await waitForCondition(() => container.textContent === "Org Kael", "expected org agent to load");
+    await waitForCondition(() => container.textContent === "Org Nova", "expected org agent to load");
 
     expect(maps().nameFor("agent-managed")).toBe("Managed Poe");
     expect(maps().nameFor("agent-collision")).toBe("Org Wins");
