@@ -340,6 +340,49 @@ export const createMeChatSchema = z.object({
 });
 export type CreateMeChat = z.infer<typeof createMeChatSchema>;
 
+const createMeChatInitialTextMessageSchema = z.object({
+  format: z.literal("text"),
+  content: z.string().trim().min(1),
+  metadata: z
+    .object({
+      mentions: z.array(z.string().min(1)).min(1).optional(),
+    })
+    .optional(),
+});
+
+const imageRefContentSchema = z.object({
+  imageId: z.string().min(1),
+  mimeType: z.string().min(1),
+  filename: z.string().min(1),
+  size: z.number().optional(),
+});
+
+const createMeChatInitialFileMessageSchema = z.object({
+  format: z.literal("file"),
+  content: z.object({
+    caption: z.string().trim().min(1).optional(),
+    attachments: z.array(imageRefContentSchema).min(1),
+  }),
+  metadata: z
+    .object({
+      mentions: z.array(z.string().min(1)).min(1).optional(),
+    })
+    .optional(),
+});
+
+export const createMeChatWithInitialMessageSchema = z.object({
+  participantIds: z.array(z.string().min(1)).min(1),
+  topic: z.string().trim().max(500).optional().nullable(),
+  message: z.discriminatedUnion("format", [createMeChatInitialTextMessageSchema, createMeChatInitialFileMessageSchema]),
+});
+export type CreateMeChatWithInitialMessage = z.infer<typeof createMeChatWithInitialMessageSchema>;
+
+export const createMeChatWithInitialMessageResultSchema = z.object({
+  chatId: z.string(),
+  messageId: z.string(),
+});
+export type CreateMeChatWithInitialMessageResult = z.infer<typeof createMeChatWithInitialMessageResultSchema>;
+
 export const addMeChatParticipantsSchema = z.object({
   participantIds: z.array(z.string().min(1)).min(1),
 });

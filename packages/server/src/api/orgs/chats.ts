@@ -1,5 +1,6 @@
 import {
   createMeChatSchema,
+  createMeChatWithInitialMessageSchema,
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
@@ -11,7 +12,9 @@ import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
 import { listChatsForMember } from "../../services/chat.js";
+import { createMeChatWithInitialMessage } from "../../services/chat-create-and-send.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
+import { notifyRecipients } from "../../services/notifier.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -105,6 +108,30 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     const query = listMeChatSourceCountsQuerySchema.parse(request.query);
     return listMeChatSourceCounts(app.db, scope.humanAgentId, scope.organizationId, query);
   });
+
+  /**
+   * POST /orgs/:orgId/chats/create-and-send — start a Web chat by sending
+   * its first message. The browser still owns rich draft work (mentions,
+   * image upload, local cache warming); the server owns the create + send
+   * domain operation so Web and CLI do not grow parallel chat-start rules.
+   */
+  app.post<{ Params: { orgId: string } }>(
+    "/create-and-send",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const scope = await requireOrgMembership(request, app.db);
+      const body = createMeChatWithInitialMessageSchema.parse(request.body);
+      const targetIds = [...new Set(body.participantIds)].filter((id) => id !== scope.humanAgentId);
+      if (targetIds.length === 0) {
+        throw new BadRequestError("At least one non-self participant required");
+      }
+      await assertAllAgentsVisibleInOrg(app.db, scope, targetIds);
+
+      const result = await createMeChatWithInitialMessage(app.db, scope.humanAgentId, scope.organizationId, body);
+      notifyRecipients(app.notifier, result.recipients, result.messageId);
+      return reply.status(201).send({ chatId: result.chatId, messageId: result.messageId });
+    },
+  );
 
   /**
    * POST /orgs/:orgId/chats — create a new chat. The :orgId path param

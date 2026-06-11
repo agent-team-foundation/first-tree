@@ -2,6 +2,8 @@ import type {
   AddMeChatParticipants,
   ChatEngagementView,
   CreateMeChat,
+  CreateMeChatWithInitialMessage,
+  CreateMeChatWithInitialMessageResult,
   ListMeChatsQuery,
   ListMeChatsResponse,
   MeChatLeaveResponse,
@@ -50,6 +52,12 @@ export function listMeChatSourceCounts(params?: { engagement?: ChatEngagementVie
 
 export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
   return api.post<{ chatId: string }>(withOrg("/chats"), body);
+}
+
+export function createMeChatWithInitialMessage(
+  body: CreateMeChatWithInitialMessage,
+): Promise<CreateMeChatWithInitialMessageResult> {
+  return api.post<CreateMeChatWithInitialMessageResult>(withOrg("/chats/create-and-send"), body);
 }
 
 export function markMeChatRead(chatId: string): Promise<MeChatReadResponse> {

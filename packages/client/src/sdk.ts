@@ -105,7 +105,7 @@ const STARTUP_FETCH_TIMEOUT_MS = 5_000;
  * `sendMessage` / `listMessages` paths); startup-critical GETs override
  * with `STARTUP_FETCH_TIMEOUT_MS`.
  */
-type SdkCallOptions = { timeoutMs?: number };
+type SdkCallOptions = { timeoutMs?: number; retryHttp5xx?: boolean };
 
 /**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
@@ -293,10 +293,14 @@ export class FirstTreeHubSDK {
   }
 
   async createChatWithInitialMessage(body: CreateChatWithInitialMessage): Promise<CreateChatWithInitialMessageResult> {
-    return this.requestJson<CreateChatWithInitialMessageResult>("/api/v1/agent/chats/create-and-send", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    return this.requestJson<CreateChatWithInitialMessageResult>(
+      "/api/v1/agent/chats/create-and-send",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retryHttp5xx: false },
+    );
   }
 
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
@@ -474,7 +478,7 @@ export class FirstTreeHubSDK {
       try {
         const response = await this.doFetchOnce(path, init, opts);
         const isLastAttempt = attempt === delays.length - 1;
-        if (response.status >= 500 && !isLastAttempt) {
+        if ((opts?.retryHttp5xx ?? true) && response.status >= 500 && !isLastAttempt) {
           console.warn(`sdk: retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
           lastErr = new Error(`HTTP ${response.status}`);
           continue;

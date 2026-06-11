@@ -163,6 +163,37 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     expect(result).toMatchObject({ id: "m-1" });
   });
 
+  it("does not retry create-and-send HTTP 500 partial failures", async () => {
+    const fetchMock = buildFetchMock([
+      makeStatusResponse(
+        500,
+        JSON.stringify({
+          code: "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+          error: "Chat was created, but the initial message could not be sent.",
+          details: { chatId: "chat-partial", cause: "send failed" },
+        }),
+      ),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sdk = makeSdk();
+    await expect(
+      flush(
+        sdk.createChatWithInitialMessage({
+          operationId: "op-partial",
+          to: ["agent-1"],
+          with: [],
+          message: { format: "text", content: "hello", source: "cli" },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 500,
+      serverCode: "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+      details: { chatId: "chat-partial", cause: "send failed" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("treats AbortError (timeout) as transient and retries up to three times", async () => {
     const fetchMock = buildFetchMock([makeAbortError(), makeAbortError(), makeAbortError()]);
     vi.stubGlobal("fetch", fetchMock);

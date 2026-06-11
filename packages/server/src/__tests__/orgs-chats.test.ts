@@ -1,6 +1,9 @@
+import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import { uuidv7 } from "../uuid.js";
@@ -44,6 +47,11 @@ async function attachOrg(
     await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
   });
   return { orgId, memberId, humanAgentId };
+}
+
+async function tableCount(app: FastifyInstance, table: typeof chats | typeof messages) {
+  const [row] = await app.db.select({ count: sql<number>`count(*)::int` }).from(table);
+  return row?.count ?? 0;
 }
 
 describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)", () => {
@@ -116,5 +124,129 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
       payload: { participantIds: ["any-uuid-doesnt-matter"] },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("POST /orgs/:orgId/chats/create-and-send", () => {
+  const getApp = useTestApp();
+
+  it("creates a Web chat and persists the first text message with source=web", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `web-create-text-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Text",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [target.uuid],
+        message: { format: "text", content: "hello from web", metadata: { mentions: [target.uuid] } },
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ chatId: string; messageId: string }>();
+    expect(typeof body.chatId).toBe("string");
+    expect(typeof body.messageId).toBe("string");
+
+    const [message] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(message).toMatchObject({
+      chatId: body.chatId,
+      senderId: alice.humanAgentUuid,
+      source: "web",
+      format: "text",
+      content: "hello from web",
+    });
+    expect(message?.metadata.mentions).toEqual([target.uuid]);
+  });
+
+  it("creates a Web chat with a file initial message after the browser uploads attachments", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `web-create-file-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create File",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+
+    const attachment = {
+      imageId: "11111111-1111-4111-8111-111111111111",
+      mimeType: "image/png",
+      filename: "draft.png",
+      size: 123,
+    };
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [target.uuid],
+        message: {
+          format: "file",
+          content: { caption: "see image", attachments: [attachment] },
+          metadata: { mentions: [target.uuid] },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ chatId: string; messageId: string }>();
+    const [message] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(message?.source).toBe("web");
+    expect(message?.format).toBe("file");
+    expect(message?.content).toEqual({ caption: "see image", attachments: [attachment] });
+  });
+
+  it("returns structured partial failure and leaves an empty chat if initial send fails after creation", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const target = await createAgent(app.db, {
+      name: `web-create-fail-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Web Create Fail",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const initialChatCount = await tableCount(app, chats);
+    const initialMessageCount = await tableCount(app, messages);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats/create-and-send`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        participantIds: [target.uuid],
+        message: {
+          format: "file",
+          content: {
+            attachments: [
+              {
+                imageId: "11111111-1111-4111-8111-111111111111",
+                mimeType: "text/plain",
+                filename: "bad.txt",
+              },
+            ],
+          },
+          metadata: { mentions: [target.uuid] },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      code: "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+      details: { cause: expect.any(String), chatId: expect.any(String) },
+    });
+    expect(await tableCount(app, chats)).toBe(initialChatCount + 1);
+    expect(await tableCount(app, messages)).toBe(initialMessageCount);
   });
 });

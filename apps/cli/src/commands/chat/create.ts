@@ -175,6 +175,9 @@ export function registerChatCreateCommand(chat: Command): void {
           renderHumanResult(result);
         }
       } catch (error) {
+        if (error instanceof SdkError && error.serverCode === "CHAT_CREATE_INITIAL_MESSAGE_FAILED") {
+          handleSdkError(error);
+        }
         if (error instanceof SdkError && error.statusCode >= 500) {
           failUnknownCommitStatus(operationId, error);
         }

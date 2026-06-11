@@ -3,9 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { uploadImageAttachment } from "../../../api/attachments.js";
-import { type ImageRefContent, readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
+import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
-import { createMeChat } from "../../../api/me-chats.js";
+import { createMeChatWithInitialMessage } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
@@ -51,15 +51,15 @@ import { cn } from "../../../lib/utils.js";
  *
  *   - Images attach via the Paperclip button, drag-drop, or paste —
  *     staged through `usePendingImages` (shared with the in-chat
- *     composer). Bytes are read and uploaded only on send, after the
- *     chat exists. An image-only send (empty body) is allowed; a group
- *     (2+ chips) still needs an `@` in the body so each file POST
+ *     composer). Bytes are read and uploaded before the create-and-send
+ *     request. An image-only send (empty body) is allowed; a group
+ *     (2+ chips) still needs an `@` in the body so the initial message
  *     carries non-empty `metadata.mentions` and clears the server's
- *     per-message explicit-recipient enforcement check.
+ *     explicit-recipient enforcement check.
  *
- * On send: createMeChat({participantIds: chips ∪ body @s}) → stage each
- * image into IndexedDB → single `sendFileMessageBatch` carrying caption +
- * all attachments. Empty body is allowed when there's ≥1 chip and
+ * On send: stage each image into the attachment store + IndexedDB, then
+ * create the chat and its first text/file message through one server-side
+ * create-and-send operation. Empty body is allowed when there's ≥1 chip and
  * (a non-empty body or ≥1 image).
  */
 
@@ -350,19 +350,14 @@ export function NewChatDraft({
       images: PendingImage[];
       mentions: string[];
     }) => {
-      const created = await createMeChat({ participantIds });
-      const chatId = created.chatId;
       const trimmed = text.trim();
       // Collapse "N images + optional caption" into a single batched
-      // `format: "file"` message — one bubble, no N+1 split. Pure-text
-      // sends still go through `sendChatMessage` below.
+      // `format: "file"` initial message — one bubble, no N+1 split.
       if (images.length > 0) {
         // Carry the resolved mentions onto the batched file send so the
-        // single POST clears the server's explicit-recipient enforcement check. 1:1
-        // drafts have `mentions` already auto-injected by handleSend (the
-        // single chip's uuid); group drafts carry the body's `@-mention`
-        // set. The server applies explicit-recipient enforcement to every chat shape now,
-        // so no path can rely on an empty-mentions skip.
+        // server's explicit-recipient enforcement check. 1:1 drafts have
+        // `mentions` already auto-injected by handleSend (the single chip's
+        // uuid); group drafts carry the body's `@-mention` set.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
         const attachments: ImageRefContent[] = [];
         for (const img of images) {
@@ -387,18 +382,32 @@ export function NewChatDraft({
             size: img.file.size,
           });
         }
-        await sendFileMessageBatch(
-          chatId,
-          {
-            ...(trimmed.length > 0 ? { caption: trimmed } : {}),
-            attachments,
+        const created = await createMeChatWithInitialMessage({
+          participantIds,
+          message: {
+            format: "file",
+            content: {
+              ...(trimmed.length > 0 ? { caption: trimmed } : {}),
+              attachments,
+            },
+            ...(imageMetadata ? { metadata: imageMetadata } : {}),
           },
-          imageMetadata,
-        );
-      } else if (trimmed.length > 0) {
-        await sendChatMessage(chatId, trimmed, mentions);
+        });
+        return created.chatId;
       }
-      return chatId;
+      if (trimmed.length > 0) {
+        const textMetadata = mentions.length > 0 ? { mentions } : undefined;
+        const created = await createMeChatWithInitialMessage({
+          participantIds,
+          message: {
+            format: "text",
+            content: trimmed,
+            ...(textMetadata ? { metadata: textMetadata } : {}),
+          },
+        });
+        return created.chatId;
+      }
+      throw new Error("Cannot create a chat without an initial message");
     },
     onSuccess: (chatId) => {
       setDraft("");

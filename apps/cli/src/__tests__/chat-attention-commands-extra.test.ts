@@ -226,6 +226,27 @@ describe("chat command behavior", () => {
     );
   });
 
+  it("preserves structured initial-message partial failures instead of mapping them to unknown commit", async () => {
+    const sdk = localAgentMocks.createSdk();
+    const error = new SdkError(500, "Chat was created, but the initial message could not be sent.", {
+      serverCode: "CHAT_CREATE_INITIAL_MESSAGE_FAILED",
+      details: { chatId: "chat-partial", cause: "send failed" },
+      traceId: "trace-partial",
+    });
+    sdk.createChatWithInitialMessage.mockRejectedValueOnce(error);
+
+    await expect(
+      runChat(["create", "--to", "code-agent", "--message", "go", "--operation-id", "op-partial"]),
+    ).rejects.toBe(error);
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(error);
+    expect(outputMocks.fail).not.toHaveBeenCalledWith(
+      "CHAT_CREATE_UNKNOWN_COMMIT_STATUS",
+      expect.any(String),
+      expect.any(Number),
+      expect.anything(),
+    );
+  });
+
   it("maps terminal SDK network errors to chat create unknown commit status", async () => {
     const sdk = localAgentMocks.createSdk();
     const cases = [

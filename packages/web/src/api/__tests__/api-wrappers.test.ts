@@ -217,6 +217,10 @@ describe("api wrapper paths", () => {
     });
     await meChats.listMeChatSourceCounts({ engagement: "archived" });
     await meChats.createMeChat({ participantIds: ["agent-1"] });
+    await meChats.createMeChatWithInitialMessage({
+      participantIds: ["agent-1"],
+      message: { format: "text", content: "hello", metadata: { mentions: ["agent-1"] } },
+    });
     await meChats.markMeChatRead("chat/id");
     await meChats.markMeChatUnread("chat/id");
     await meChats.addMeChatParticipants("chat/id", { participantIds: ["agent-2"] });
@@ -276,6 +280,10 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub&with=agent-1%2Cagent-2&watching=1",
     );
+    expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/chats/create-and-send", {
+      participantIds: ["agent-1"],
+      message: { format: "text", content: "hello", metadata: { mentions: ["agent-1"] } },
+    });
     expect(apiMock.get).toHaveBeenCalledWith(
       "/chats/chat%2Fid/docs/preview?agentId=agent%2Fid&path=docs%2Fplan.md&basePath=%2Fworkspace",
     );
