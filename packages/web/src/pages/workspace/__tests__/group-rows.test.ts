@@ -170,11 +170,12 @@ describe("groupRows — source", () => {
   });
 });
 
-// Phase 1 chat-granularity predicate.
-// R1 (mine-failed via failedAgentIds), R2 (explicit @<me> in unread window via
-// chatHasExplicitMentionToMe + unreadMentionCount > 0). See
-// docs/development/needs-attention-scoping.20260526.md.
-describe("splitAttentionRows — Phase 1 predicate", () => {
+// Chat-granularity predicate.
+// R1 (mine-failed via failedAgentIds), R2 (open question directed at me via
+// openRequestCount > 0 — ANSWER-cleared, so reading the chat does not unpin),
+// R3 (explicit @<me> in unread window via chatHasExplicitMentionToMe +
+// unreadMentionCount > 0). See the rule ladder in group-rows.ts.
+describe("splitAttentionRows — predicate", () => {
   it("R1: mine-failed → attention bucket, failed tier", () => {
     const rows = [row({ id: "r1", lastMessageAt: null, failedAgentIds: ["mine"] })];
     const { attention } = splitAttentionRows(rows);
@@ -182,7 +183,40 @@ describe("splitAttentionRows — Phase 1 predicate", () => {
     expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
   });
 
-  it("R2: unread + explicit @<me> → attention bucket, mention tier", () => {
+  it("R2: open request, no unread → attention bucket, request tier", () => {
+    // The core scenario: a `--question` chat the human has already READ but
+    // not answered. `unreadMentionCount` is 0 (read-cleared), yet the open
+    // request keeps the row pinned — it must not leave "Needs attention"
+    // until the question is answered or closed.
+    const rows = [
+      row({
+        id: "r2-open",
+        lastMessageAt: null,
+        openRequestCount: 1,
+        unreadMentionCount: 0,
+        chatHasExplicitMentionToMe: false,
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["r2-open"]);
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("request");
+  });
+
+  it("R2 cleared: request answered (count back to 0) → NOT attention", () => {
+    const rows = [
+      row({
+        id: "r2-answered",
+        lastMessageAt: null,
+        openRequestCount: 0,
+        unreadMentionCount: 0,
+      }),
+    ];
+    const { attention, rest } = splitAttentionRows(rows);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["r2-answered"]);
+  });
+
+  it("R3: unread + explicit @<me> → attention bucket, mention tier", () => {
     const rows = [
       row({
         id: "r2",
@@ -196,7 +230,7 @@ describe("splitAttentionRows — Phase 1 predicate", () => {
     expect(attention[0] && rowAttentionReason(attention[0])).toBe("mention");
   });
 
-  it("R2 disabled by 1-on-1 implicit auto-mention: unreadMentionCount > 0 but flag false → NOT attention", () => {
+  it("R3 disabled by 1-on-1 implicit auto-mention: unreadMentionCount > 0 but flag false → NOT attention", () => {
     // The original痛点 (t7): in a 1v1, agent → human plain "ack" bumps the
     // v1 red-dot counter but `metadata.mentions` is empty, so the server
     // emits `chatHasExplicitMentionToMe: false`. The front-end must NOT
@@ -221,13 +255,31 @@ describe("splitAttentionRows — Phase 1 predicate", () => {
     expect(rest.map((r) => r.chatId)).toEqual(["quiet"]);
   });
 
-  it("priority: failed > mention across two tiers", () => {
+  it("priority: failed > request > mention across three tiers", () => {
     const rows = [
       row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true }),
+      row({ id: "q", lastMessageAt: null, openRequestCount: 1 }),
       row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] }),
     ];
     const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f", "m"]);
+    expect(attention.map((r) => r.chatId)).toEqual(["f", "q", "m"]);
+  });
+
+  it("priority: request beats mention on the same row", () => {
+    // A fresh `--question` is typically also an unread explicit mention —
+    // the row sorts under the request tier, and stays pinned (as `request`)
+    // after the mention half is read away.
+    const rows = [
+      row({
+        id: "qm",
+        lastMessageAt: null,
+        openRequestCount: 1,
+        unreadMentionCount: 1,
+        chatHasExplicitMentionToMe: true,
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("request");
   });
 
   it("priority: failed beats mention on the same row", () => {
@@ -278,7 +330,7 @@ describe("splitAttentionRows — Phase 1 predicate", () => {
 // an old server returns "off" for that rule instead of trusting a `&&`
 // coercion of an unknown shape.
 describe("splitAttentionRows — version skew (old server, new web)", () => {
-  it("missing chatHasExplicitMentionToMe (undefined) → R2 disabled", () => {
+  it("missing chatHasExplicitMentionToMe (undefined) → R3 disabled", () => {
     const stale = {
       ...row({ id: "stale", lastMessageAt: null, unreadMentionCount: 1 }),
     };
@@ -286,6 +338,18 @@ describe("splitAttentionRows — version skew (old server, new web)", () => {
     const { attention, rest } = splitAttentionRows([stale]);
     expect(attention).toEqual([]);
     expect(rest.map((r) => r.chatId)).toEqual(["stale"]);
+  });
+
+  it("missing openRequestCount (undefined) → R2 disabled", () => {
+    // `undefined > 0` is `false` — an old server build that predates the
+    // field degrades the request rule to "off" rather than mispinning.
+    const stale = {
+      ...row({ id: "stale-r2", lastMessageAt: null }),
+    };
+    delete (stale as { openRequestCount?: number }).openRequestCount;
+    const { attention, rest } = splitAttentionRows([stale]);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["stale-r2"]);
   });
 
   it("missing field still lets R1 (failedAgentIds) fire", () => {
