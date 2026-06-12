@@ -50,8 +50,8 @@ export type BuildAgentBriefingOptions = {
  *                                                (inline replacements of team prompts)
  *   4. `# Working in First Tree (First Tree Managed)` — mostly static, with subsections:
  *        intro · Working Directory · Source Repositories · Worktrees ·
- *        Communication · Workspace Collaboration · Asking Humans ·
- *        Chat Topic & Description · CLI Overview
+ *        Communication · Workspace Collaboration · GitHub Entity Attention ·
+ *        Asking Humans · Chat Topic & Description · CLI Overview
  *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
  *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
@@ -79,7 +79,13 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
     if (legacyPrompt) sections.push(`## Agent-Specific Prompt\n\n${legacyPrompt}`);
   }
 
-  sections.push(workingInFirstTreeSection({ agentHome: opts.workspacePath, sourceRepos: opts.sourceRepos }));
+  sections.push(
+    workingInFirstTreeSection({
+      agentHome: opts.workspacePath,
+      sourceRepos: opts.sourceRepos,
+      contextTreePath: opts.contextTreePath,
+    }),
+  );
 
   // `# Required Reading` — sits AFTER `# Working in First Tree` so the
   // agent first reads the inline workspace-collab basics (chat send,
@@ -294,6 +300,7 @@ source of advice that conflicts with reality.`;
 type WorkingInFirstTreeOpts = {
   agentHome: string;
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
+  contextTreePath: string | null;
 };
 
 function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
@@ -336,6 +343,7 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   blocks.push(worktreesBlock(opts.agentHome, opts.sourceRepos));
   blocks.push(communicationBlock(bin));
   blocks.push(workspaceCollaborationBlock(bin));
+  blocks.push(githubAttentionBlock(bin, opts.contextTreePath !== null));
   blocks.push(askingHumansBlock());
   blocks.push(chatTopicBlock(bin));
   blocks.push(cliOverviewBlock(bin));
@@ -445,6 +453,44 @@ agents** (no Context Tree binding) won't have \`first-tree\` installed on
 disk; the Communication block above is inline here for exactly that
 reason — the sunk content is the long CLI mechanics, not the routing
 rules.`;
+}
+
+// Inline (not skill-only) on purpose: the follow-after-create default has to
+// fire at PR/issue-creation time, and progressive disclosure of the
+// `first-tree-github` skill only triggers when the agent already *thinks*
+// about following. Without this always-present rule, agents create entities
+// and never wire their event streams (the session-event auto-binder was
+// deliberately removed in #979 — explicit declaration is the only entrance).
+function githubAttentionBlock(bin: string, treeBound: boolean): string {
+  // Tree-less agents have no First Tree skill payloads on disk
+  // (`installFirstTreeIntegration` is gated on the tree binding), so the
+  // full-guide pointer must not name the skill for them — the same
+  // discipline `requiredReadingSection` and `firstTreeFamilyMap` follow.
+  const fullGuide = treeBound
+    ? `For the full decision guide — upstream-dependency follows, the \`409\` /
+\`--rebind\` conflict flow, and the error contract — load the
+\`first-tree-github\` skill.`
+    : `For the full flag surface and conflict handling, see
+\`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
+
+  return `## GitHub Entity Attention
+
+Creating a PR or issue **never** follows it — no creation path
+(\`gh pr create\`, curl, GitHub MCP, the web UI) wires anything for you,
+and there is no auto-binding. Declaring the dependency is your job:
+
+- **Default: follow what you create.** Immediately after creating a PR or
+  issue — in the same breath as creation — wire it into the current chat:
+
+      ${bin} github follow <url>
+
+  Skip the follow only when the entity is clearly unrelated to this
+  chat's task.
+- **Unfollow when the human explicitly asks to stop tracking** the entity
+  (\`${bin} github unfollow <entity>\`), or when the task's attention span
+  on it has genuinely closed.
+
+${fullGuide}`;
 }
 
 function askingHumansBlock(): string {
@@ -584,6 +630,7 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
+| \`${bin} github …\` | GitHub entity attention — \`follow\` / \`unfollow\` / \`following\` an entity's event stream for the current chat |
 | \`${bin} tree verify\` | validate a Context Tree's structure |
 | \`${bin} tree tree\` | browse Context Tree nodes as a hierarchy |
 
@@ -743,7 +790,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |
-| \`first-tree-github\`  | follow / unfollow a GitHub entity's event stream for the current chat — right after creating a PR/issue (creation never auto-follows), when tracking an upstream dependency, or when the task no longer concerns a followed entity |`;
+| \`first-tree-github\`  | follow / unfollow a GitHub entity's event stream for the current chat — the follow-after-create DEFAULT is inline in \`## GitHub Entity Attention\` above; load for the full decision guide (upstream-dependency follows, \`409\` / \`--rebind\`, error contract) |`;
 }
 
 /**
