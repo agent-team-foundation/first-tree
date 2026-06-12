@@ -340,9 +340,10 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (error instanceof ClientUserMismatchError) {
           print.line("\n");
           print.line("  ⚠️  This client.yaml is owned by a different user.\n");
-          print.line(`  Run \`${binName} login <token> --override\` to transfer ownership\n`);
-          print.line("  to your account. The previous owner's agents will be unpinned\n");
-          print.line("  from this machine.\n\n");
+          print.line(`  Run \`${binName} login <token> --override\` to take this machine over\n`);
+          print.line("  for your account: it registers a fresh client identity here. The other\n");
+          print.line("  account keeps its own client entry and agents server-side (they show\n");
+          print.line("  offline until that account removes them).\n\n");
           process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {

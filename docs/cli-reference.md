@@ -63,7 +63,7 @@ and switching to a different deployment only requires a fresh token.
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
-| `--override` | Transfer ownership of this client from a different account (folds in what the retired `client claim` did). |
+| `--override` | Take over this machine from a different account: rotates the local client identity (backs up `client.yaml`) and registers a fresh clientId. No server-side ownership transfer happens; the previous account's client entry stays until that account removes it. |
 
 ## logout
 

@@ -116,8 +116,11 @@ export class ClientOrgMismatchError extends AppError {
 /**
  * Thrown when a client.yaml is presented with a JWT whose user_id does not
  * match the row's owner. The CLI responds by guiding the operator through
- * `<binName> login <token> --override` to take over ownership, which
- * unpins the previous owner's agents from this machine.
+ * `<binName> login <token> --override`, which rotates the machine's local
+ * client identity and registers a fresh clientId under the new account —
+ * there is no server-side ownership transfer; this row and its pinned
+ * agents stay with the original owner (offline) until that owner removes
+ * them.
  */
 export class ClientUserMismatchError extends AppError {
   readonly code = "CLIENT_USER_MISMATCH";

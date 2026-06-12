@@ -112,17 +112,3 @@ export const clientRegisterSchema = z.object({
   lastUpdateAttempt: updateAttemptSchema.optional(),
 });
 export type ClientRegister = z.infer<typeof clientRegisterSchema>;
-
-// -- Client Claim (POST /me/clients/:clientId/claim) --
-
-/**
- * Response body for ownership transfer. The previous owner's user_id (null
- * for legacy unclaimed rows) and the count of agents whose pin was cleared
- * by the transaction (decouple-client-from-identity §4.4).
- */
-export const claimClientResponseSchema = z.object({
-  clientId: z.string(),
-  previousUserId: z.string().nullable(),
-  unpinnedAgentCount: z.number().int().nonnegative(),
-});
-export type ClaimClientResponse = z.infer<typeof claimClientResponseSchema>;

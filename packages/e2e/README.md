@@ -146,7 +146,6 @@ packages/e2e/
     │   ├── agent-lifecycle.e2e.test.ts             # POST → PATCH → suspend → reactivate → DELETE
     │   ├── session-control.e2e.test.ts             # server → client session:suspend / session:terminate WS push
     │   ├── heartbeat-stale.e2e.test.ts             # heartbeat + runtime:state + 30s background tick stale-detection
-    │   ├── client-claim.e2e.test.ts                # POST /clients/:id/claim transfers ownership + unpins agents
     │   ├── inbox-pull-resume.e2e.test.ts           # at-least-once redelivery on WS reconnect
     │   └── cli-chat-send.e2e.test.ts               # spawn dist CLI `chat send …` and verify the message lands
     ├── mocks/

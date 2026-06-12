@@ -196,36 +196,8 @@ describe("local agent shared helpers", () => {
 });
 
 describe("account transfer helpers", () => {
-  it("posts client claims with auth headers and surfaces server failures", async () => {
-    const { postClaim } = await import("../commands/_shared/account-transfer.js");
-    cliFetchMock.mockResolvedValueOnce(
-      jsonResponse({ clientId: "client-1", previousUserId: "user-old", unpinnedAgentCount: 2 }),
-    );
-
-    await expect(postClaim("https://hub.example", "client/1")).resolves.toEqual({
-      clientId: "client-1",
-      previousUserId: "user-old",
-      unpinnedAgentCount: 2,
-    });
-    expect(cliFetchMock).toHaveBeenCalledWith("https://hub.example/api/v1/clients/client%2F1/claim", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer token",
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-      signal: expect.any(AbortSignal),
-    });
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse("denied", false, 409));
-    await expect(postClaim("https://hub.example", "client-1")).rejects.toMatchObject({
-      code: "CLAIM_ERROR",
-      exitCode: 1,
-    });
-  });
-
-  it("cleans stale aliases after claim with non-interactive, prompt-denied, failure, empty, and catch-all paths", async () => {
-    const { cleanupStaleAliasesAfterClaim } = await import("../commands/_shared/account-transfer.js");
+  it("cleans stale aliases after identity rotation with non-interactive, prompt-denied, failure, empty, and catch-all paths", async () => {
+    const { cleanupStaleLocalAliases } = await import("../commands/_shared/account-transfer.js");
     agentPruneMocks.findStaleAliases.mockResolvedValueOnce([
       { name: "old", agentId: "agent-old", reason: { kind: "unowned" } },
       { name: "broken", agentId: null, reason: { kind: "unreadable", error: "bad yaml" } },
@@ -236,7 +208,7 @@ describe("account transfer helpers", () => {
         throw new Error("locked");
       });
 
-    await cleanupStaleAliasesAfterClaim({
+    await cleanupStaleLocalAliases({
       serverUrl: "https://hub.example",
       clientId: "client-1",
       nonInteractive: true,
@@ -254,15 +226,15 @@ describe("account transfer helpers", () => {
       { name: "keep", agentId: "agent-keep", reason: { kind: "pinned-elsewhere", clientId: "client-2" } },
     ]);
     promptMocks.confirm.mockResolvedValueOnce(false);
-    await cleanupStaleAliasesAfterClaim({ serverUrl: "https://hub.example", clientId: "client-1" });
+    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Skipped.");
 
     agentPruneMocks.findStaleAliases.mockResolvedValueOnce([]);
-    await cleanupStaleAliasesAfterClaim({ serverUrl: "https://hub.example", clientId: "client-1" });
+    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No stale local aliases");
 
     agentPruneMocks.findStaleAliases.mockRejectedValueOnce(new Error("offline"));
-    await cleanupStaleAliasesAfterClaim({ serverUrl: "https://hub.example", clientId: "client-1" });
+    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
       "Could not check for stale aliases: offline",
     );
