@@ -211,6 +211,14 @@ describe("CommandPalette", () => {
     expect(document.body.textContent).not.toContain("Pages");
     expect(document.body.textContent).not.toContain("Workspace");
 
+    // Regression: cmdk ≥1.0 puts `data-disabled="false"` on every enabled
+    // item, so the disabled dim must use the value-matching selector — the
+    // presence-matching form (`data-[disabled]:`) grayed out the whole list.
+    const anyItem = commandItemByText(document.body, "Launch planning");
+    expect(anyItem?.getAttribute("data-disabled")).toBe("false");
+    expect(anyItem?.className).toContain("data-[disabled=true]:opacity-50");
+    expect(anyItem?.className).not.toMatch(/data-\[disabled\]:/);
+
     await click(commandItemByText(document.body, "Launch planning"));
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
     expect(routerMocks.navigate).toHaveBeenLastCalledWith("/?c=chat-123456789");
