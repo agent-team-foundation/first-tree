@@ -129,3 +129,31 @@ export function formatRelative(iso: string | null | undefined): string {
   }
   return RELATIVE_FORMATTER.format(Math.round(diffMs / unitMs), unit);
 }
+
+/**
+ * Ultra-compact row timestamp for dense chat lists ("now", "5m", "3h",
+ * then "MM/DD"). Shared by the conversation rail and the jump-to
+ * palette so a chat reads the same age in both surfaces. Returns ""
+ * for null/invalid input — these rows simply omit the time slot rather
+ * than render a placeholder dash.
+ *
+ * ≥ 24h renders `MM/DD` only. Hour:minute is dropped — once a chat
+ * slips out of "today", knowing the exact minute is rarely useful and
+ * the extra " HH:mm" squeezes the title column for every older row.
+ */
+export function formatRowTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (Number.isNaN(t)) return "";
+  const ageMs = Date.now() - t;
+  if (ageMs < MINUTE_MS) return "now";
+  if (ageMs < HOUR_MS) return `${Math.round(ageMs / MINUTE_MS)}m`;
+  if (ageMs < DAY_MS) return `${Math.round(ageMs / HOUR_MS)}h`;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("month")}/${get("day")}`;
+}
