@@ -106,4 +106,24 @@ const CommandItem = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
 );
 CommandItem.displayName = CommandPrimitive.Item.displayName;
 
-export { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator };
+/**
+ * Async-source pending state. cmdk renders this only while
+ * `<Command.Loading>` is mounted AND keeps it outside filtering, so it
+ * never competes with real items for selection.
+ */
+const CommandLoading = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof CommandPrimitive.Loading>>(
+  ({ className, ...props }, ref) => <CommandPrimitive.Loading ref={ref} className={cn("py-2", className)} {...props} />,
+);
+CommandLoading.displayName = CommandPrimitive.Loading.displayName;
+
+export {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandLoading,
+  CommandSeparator,
+};

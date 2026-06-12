@@ -9,7 +9,7 @@ import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { Button } from "../../../components/ui/button.js";
 import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
-import { cn } from "../../../lib/utils.js";
+import { cn, formatRowTime } from "../../../lib/utils.js";
 import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
 import { type GroupMode, groupRows, rowIsFailed, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
@@ -43,31 +43,6 @@ export const DRAFT_CHAT_ID = "draft" as const;
  * atomic URL write — see `nextParamsForRailFilter` in `workspace/index.tsx`).
  */
 export type RailFilter = "all" | "unread" | "watching";
-
-function formatRowTime(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const now = Date.now();
-  const ageMs = now - d.getTime();
-  if (ageMs < 60_000) return "now";
-  if (ageMs < 60 * 60_000) {
-    const m = Math.round(ageMs / 60_000);
-    return `${m}m`;
-  }
-  if (ageMs < 24 * 60 * 60_000) {
-    const h = Math.round(ageMs / (60 * 60_000));
-    return `${h}h`;
-  }
-  // ≥ 24h: render `MM/DD` only. Hour:minute is dropped — once a chat
-  // slips out of "today", knowing the exact minute is rarely useful and
-  // the extra " HH:mm" squeezes the title column for every older row.
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${get("month")}/${get("day")}`;
-}
 
 export function ConversationList({
   selectedChatId,
