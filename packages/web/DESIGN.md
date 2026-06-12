@@ -220,8 +220,9 @@ Three marketing tiers for the public landing page only.
 **Spacing** — Tailwind utilities first; for compound inline `padding`/`gap`
 strings that can't be classes, use the `--sp-*` ladder (mirror of Tailwind:
 `--sp-N ≈ N × 0.25rem`, with 2/6/10/14px half-steps), range `--sp-0` →
-`--sp-75` (300px). Hairlines: `--hairline` (1px) / `--hairline-bold` (2px) —
-never write `"1px"`.
+`--sp-95` (380px) — dense through `--sp-12`, then sparse wider rungs
+(`--sp-16/20/35/45/60/70/75/95`) for panel / card widths. Hairlines:
+`--hairline` (1px) / `--hairline-bold` (2px) — never write `"1px"`.
 
 **Radius** — semantic, ascending with surface importance, plus one fully-round token:
 | Token | Value | Use |

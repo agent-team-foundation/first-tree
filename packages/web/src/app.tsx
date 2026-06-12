@@ -64,6 +64,14 @@ const ComposeStatusBarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const ChatDescriptionPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/chat-description-preview.js").then((module) => ({
+        default: module.ChatDescriptionPreviewPage,
+      })),
+    )
+  : null;
+
 const RequestDockPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/request-dock-preview.js").then((module) => ({
@@ -146,6 +154,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ComposeStatusBarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ChatDescriptionPreviewPage ? (
+                <Route
+                  path="/preview/chat-description"
+                  element={
+                    <Suspense fallback={null}>
+                      <ChatDescriptionPreviewPage />
                     </Suspense>
                   }
                 />

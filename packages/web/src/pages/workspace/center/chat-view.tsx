@@ -67,6 +67,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
+import { ChatDescriptionInfo } from "../../../components/chat/chat-description-info.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -2580,11 +2581,11 @@ export function ChatView({
           <div
             className="shrink-0 flex items-center"
             style={{
-              // Min-height, not a fixed height: the topic + description flow
-              // inline in one cluster and wrap onto further lines as the
-              // description grows, so the header grows with them. Vertical
-              // padding keeps a single-line header (topic only, or topic +
-              // short description) sitting at the min-height floor.
+              // Min-height as a comfortable floor for a now-stable single-row
+              // header: the topic sits on one line (truncating with an ellipsis
+              // when long) and the description lives behind the ⓘ affordance, so
+              // the header no longer grows with content. Vertical padding
+              // centers that single row within the min-height.
               minHeight: 52,
               padding: "var(--sp-1_5) var(--sp-6)",
               gap: 10,
@@ -2643,31 +2644,24 @@ export function ChatView({
               also dropped — in chat-first, runtime is a per-agent
               concept that belongs on each chip avatar (D-4), not on
               the chat header. */}
-              {/* Title cluster — topic + description flow together on the
-                  same line and wrap by length: the topic leads in bold, the
-                  chat description follows inline right after it (reads as
-                  "**Topic** description …") and wraps onto further lines as it
-                  grows or the viewport narrows. NOT stacked on separate lines,
-                  and NOT a topic-left / description-right split. */}
-              {/* On portrait / narrow viewports (`narrow`, <768) the inline
-                  topic + description can wrap into many lines — a long
-                  description reached ~17 lines (about a third of the screen) in
-                  QA. Cap it: clamp the whole cluster to 3 lines so the mobile
-                  header stays a bounded
-                  chrome bar; the full description remains reachable via the
-                  tooltip. Desktop has room, so it flows unclamped. The clamp is
-                  lifted while renaming so the edit row (input + ✓/✗) is never
-                  clipped. */}
-              <div className={narrow && !renaming ? "min-w-0 line-clamp-3" : "min-w-0"} style={{ flex: 1 }}>
+              {/* Title cluster — a stable single row: the topic leads in bold
+                  (truncating with an ellipsis when it runs long), followed by
+                  the optional GitHub entity link and the ⓘ description
+                  affordance. The description text is no longer rendered inline
+                  (it made the header height jitter with the running summary and
+                  buried the topic); it now lives behind the ⓘ icon's
+                  hover/click card (`ChatDescriptionInfo`). With the multi-line
+                  description gone the row is naturally bounded, so the old
+                  narrow-viewport `line-clamp-3` cap is no longer needed. */}
+              <div className="flex min-w-0 items-center" style={{ flex: 1, gap: "var(--sp-1)" }}>
                 {readOnly ? (
-                  <>
-                    <span className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
+                  <span className="flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
+                    <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                       {chatDetail?.title ?? titleFallback ?? "…"}
                     </span>
                     <span
-                      className="mono uppercase text-eyebrow"
+                      className="mono uppercase text-eyebrow shrink-0"
                       style={{
-                        marginLeft: 8,
                         padding: "var(--hairline) var(--sp-1_25)",
                         borderRadius: 2,
                         color: "var(--fg-3)",
@@ -2677,9 +2671,9 @@ export function ChatView({
                     >
                       watching
                     </span>
-                  </>
+                  </span>
                 ) : renaming ? (
-                  <span className="inline-flex items-center" style={{ gap: 8 }}>
+                  <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
                     <input
                       ref={renameInputRef}
                       value={renameDraft}
@@ -2764,9 +2758,8 @@ export function ChatView({
                       setRenaming(true);
                     }}
                     title="Click to rename"
-                    className="text-subtitle font-semibold text-left"
+                    className="min-w-0 truncate text-subtitle font-semibold text-left"
                     style={{
-                      display: "inline",
                       color: "var(--fg)",
                       background: "transparent",
                       border: "none",
@@ -2778,24 +2771,15 @@ export function ChatView({
                   </button>
                 )}
                 <EntityLink metadata={chatDetail?.metadata} />
-                {/* Chat description (running work summary) — flows inline
-                    right after the topic on the same line and wraps onto
-                    further lines by length. Muted + a notch smaller than the
-                    topic so the topic still leads the cluster. Hidden while
-                    renaming the topic so the rename row stays clean, and
-                    absent entirely when no description is set. Read-only on
-                    the web: written by the owning agent via
-                    `chat set-topic --description`, not edited from the
-                    console; the full text also stays reachable via the native
-                    tooltip. */}
+                {/* Chat description (running work summary) — no longer rendered
+                    inline. It sits behind the ⓘ icon: hover previews it,
+                    clicking pins a copyable card. Hidden while renaming so the
+                    edit row stays clean, and absent entirely when no
+                    description is set (no dead entry point). Read-only on the
+                    web — written by the owning agent via
+                    `chat set-topic --description`, not edited from the console. */}
                 {!renaming && chatDetail?.description ? (
-                  <span
-                    className="text-label"
-                    style={{ color: "var(--fg-3)", marginLeft: 8 }}
-                    title={chatDetail.description}
-                  >
-                    {chatDetail.description}
-                  </span>
+                  <ChatDescriptionInfo description={chatDetail.description} />
                 ) : null}
               </div>
               {/* Audience — compact stats icon + quick-add icon. Replaces
