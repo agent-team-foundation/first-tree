@@ -198,7 +198,14 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // can't read a stale cross-org agent (the org filter in
       // resolveOnboardingAgent only catches that when the org id is known).
       writeOnboardingAgentUuid(null);
-      await markOnboardingCompleted();
+      try {
+        await markOnboardingCompleted();
+      } catch {
+        // Intentionally swallowed: the completion stamp is best-effort at
+        // this point. The API helper already catches its own failures, but
+        // keep the always-navigate invariant local to this flow rather than
+        // depending on a callee's error handling.
+      }
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
     [path, markOnboardingCompleted, navigate],
