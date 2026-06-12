@@ -1,9 +1,10 @@
 import type { MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { readStdin } from "./_shared/io.js";
+import { looksLikeEscapedNewlineBody, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
 interface SendOptions {
@@ -83,6 +84,23 @@ export function registerChatSendCommand(chat: Command): void {
           fail(
             "NO_TARGET",
             "Pass <name> to @mention a recipient — a message must name a recipient (there is no no-mention send).",
+            2,
+          );
+        }
+
+        // Reject an inline body whose newlines are the two-character escape
+        // `\n` — shell quotes do not expand it, so the row would render as
+        // one long unformatted line. Stdin bodies are never checked: piping
+        // is both the fix and the escape hatch for intentional literal `\n`.
+        if (inlineBody !== undefined && looksLikeEscapedNewlineBody(inlineBody)) {
+          fail(
+            "ESCAPED_NEWLINES",
+            'Message body contains literal "\\n" escapes and no real newlines — shell quotes do not expand \\n, ' +
+              "so the message would render as one long unformatted line instead of markdown. " +
+              "Pipe the body with real newlines via stdin instead:\n\n" +
+              `  cat <<'EOF' | ${channelConfig.binName} chat send <name> -f markdown\n` +
+              "  first line\n\n  **second** line\n  EOF\n\n" +
+              "(stdin is not checked — pipe the body if the literal \\n text is intentional.)",
             2,
           );
         }
