@@ -12,18 +12,7 @@ import {
   type RequestResolution,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowUp,
-  AtSign,
-  Check,
-  ExternalLink,
-  Eye,
-  Menu,
-  MessageSquare,
-  MoreHorizontal,
-  Paperclip,
-  X,
-} from "lucide-react";
+import { ArrowUp, AtSign, Check, ExternalLink, Eye, Menu, MessageSquare, PanelRight, Paperclip, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -2575,7 +2564,7 @@ export function ChatView({
           {/* Chat header — content centred in a reading column that's now
           measured against the left column rather than the full panel.
           Title + EntityLink + ParticipantsStats live in the reading
-          column; the chat-level icon strip (UserPlus / MoreHorizontal)
+          column; the chat-level icon strip (UserPlus / PanelRight)
           rides along at the column's right edge so it sits flush with
           the composer's right edge below. */}
           <div
@@ -2818,8 +2807,12 @@ export function ChatView({
               )}
               {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
-              mirroring the rail's position. The "..." glyph follows the
-              collaboration-product convention referenced in the design discussion. */}
+              mirroring the rail's position. The PanelRight glyph is the
+              panel-toggle convention (Linear / Notion / VS Code); the same
+              glyph renders in both states — pressed styling (sunken
+              background + darker foreground) carries the open/closed state.
+              An ellipsis is reserved for overflow-action menus (see
+              row-actions-menu.tsx), so it would mislead here. */}
               <button
                 type="button"
                 onClick={toggleSidebar}
@@ -2838,7 +2831,7 @@ export function ChatView({
                   cursor: "pointer",
                 }}
               >
-                <MoreHorizontal size={16} strokeWidth={2.25} />
+                <PanelRight size={16} strokeWidth={2.25} />
               </button>
             </div>
           </div>
