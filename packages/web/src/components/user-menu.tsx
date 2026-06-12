@@ -1,5 +1,5 @@
 import type { OrgBrief } from "@first-tree/shared";
-import { Check, Link2, LogOut, Plus, UserPlus } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Link2, LogOut, Plus, UserPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
@@ -7,6 +7,8 @@ import { useAuth } from "../auth/auth-context.js";
 import { Avatar } from "./avatar.js";
 import { InviteDialog } from "./invite-dialog.js";
 import { TeamSetupModal } from "./team-setup-modal.js";
+
+const COLLAPSED_TEAM_LIMIT = 5;
 
 /**
  * Right-side user menu. Avatar trigger; dropdown nests team switching,
@@ -22,6 +24,7 @@ export function UserMenu() {
   const navigate = useNavigate();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [open, setOpen] = useState(false);
+  const [teamsExpanded, setTeamsExpanded] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -54,11 +57,19 @@ export function UserMenu() {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) setTeamsExpanded(false);
+  }, [open]);
+
   const displayName = user?.displayName ?? "User";
   const username = user?.username ?? "";
   const avatarSrc = user?.avatarUrl ?? null;
   const currentOrg = orgs.find((o) => o.id === organizationId) ?? null;
   const currentRole = currentOrg?.role ?? (role === "admin" || role === "member" ? role : null);
+  const orderedOrgs = currentOrg ? [currentOrg, ...orgs.filter((o) => o.id !== currentOrg.id)] : orgs;
+  const hasHiddenTeams = orderedOrgs.length > COLLAPSED_TEAM_LIMIT;
+  const visibleOrgs = teamsExpanded ? orderedOrgs : orderedOrgs.slice(0, COLLAPSED_TEAM_LIMIT);
+  const hiddenTeamCount = Math.max(0, orderedOrgs.length - COLLAPSED_TEAM_LIMIT);
 
   const switchOrg = async (id: string) => {
     if (id === organizationId) {
@@ -144,27 +155,45 @@ export function UserMenu() {
                     <span style={{ width: 14, display: "inline-flex" }}>
                       <Check className="h-3.5 w-3.5" />
                     </span>
-                    <span className="min-w-0 flex-1 truncate">{orgs[0]?.displayName}</span>
-                    <RoleBadge role={orgs[0]?.role ?? currentRole} />
+                    <span className="min-w-0 flex-1 truncate">{orderedOrgs[0]?.displayName}</span>
+                    <RoleBadge role={orderedOrgs[0]?.role ?? currentRole} />
                   </div>
                 ) : (
                   <div>
-                    {orgs.map((o) => (
+                    <div style={teamsExpanded ? { maxHeight: "var(--sp-75)", overflowY: "auto" } : undefined}>
+                      {visibleOrgs.map((o) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          key={o.id}
+                          onClick={() => void switchOrg(o.id)}
+                          className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                          style={{ color: "var(--fg)" }}
+                        >
+                          <span style={{ width: 14, display: "inline-flex" }}>
+                            {o.id === organizationId ? <Check className="h-3.5 w-3.5" /> : null}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{o.displayName}</span>
+                          <RoleBadge role={o.role} />
+                        </button>
+                      ))}
+                    </div>
+                    {hasHiddenTeams && (
                       <button
                         type="button"
                         role="menuitem"
-                        key={o.id}
-                        onClick={() => void switchOrg(o.id)}
-                        className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
-                        style={{ color: "var(--fg)" }}
+                        onClick={() => setTeamsExpanded((value) => !value)}
+                        className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-label hover:bg-accent transition-colors"
+                        style={{ color: "var(--fg-2)" }}
                       >
-                        <span style={{ width: 14, display: "inline-flex" }}>
-                          {o.id === organizationId ? <Check className="h-3.5 w-3.5" /> : null}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{o.displayName}</span>
-                        <RoleBadge role={o.role} />
+                        {teamsExpanded ? (
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        )}
+                        <span>{teamsExpanded ? "Show fewer teams" : `View ${hiddenTeamCount} more teams`}</span>
                       </button>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
