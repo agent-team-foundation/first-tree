@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +77,7 @@ vi.mock("@first-tree/client", () => {
   }
   return {
     AgentSlot: FakeAgentSlot,
+    agentSessionRegistryPath: (name: string) => `${process.env.FIRST_TREE_HOME ?? "/tmp"}/data/sessions/${name}.json`,
     ClientConnection: class {
       clientId = connectionMock.clientId;
       on = connectionMock.on;
@@ -388,6 +389,60 @@ describe("ClientRuntime runtime-provider switching (issue #552)", () => {
     );
     expect(slotInstances).toHaveLength(1);
     expect(slotInstances[0]?.stop).not.toHaveBeenCalled();
+    await rt.stop();
+  });
+
+  it("clears the persisted session registry on a provider switch", async () => {
+    // Provider session ids are not portable: a Claude session id hydrated by
+    // the rebuilt slot and fed to Codex resumeThread wedges resume in every
+    // existing chat (review finding R3 on PR #1043).
+    writeAgentYaml("alpha", "agentId: agent-1\nruntime: claude-code\n");
+    const registryPath = join(home, "data", "sessions", "alpha.json");
+    mkdirSync(join(home, "data", "sessions"), { recursive: true });
+    writeFileSync(registryPath, JSON.stringify({ version: 1, entries: { "chat-1": { claudeSessionId: "sess-1" } } }));
+    const rt = await makeRuntime();
+    addAgent(rt, "alpha", "agent-1", "claude-code");
+    await rt.start();
+
+    firePinned("agent-1", "alpha", "codex");
+
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    expect(slotInstances[1]?.type).toBe("codex");
+    expect(existsSync(registryPath)).toBe(false);
+    await rt.stop();
+  });
+
+  it("applies the latest provider queued while a switch is in flight", async () => {
+    // A pin landing mid-swap must not be dropped: it can arrive after the
+    // rebuilt slot already bound, in which case no runtime_provider_mismatch
+    // rejection would ever repair the miss (review finding R4 on PR #1043).
+    const yamlPath = writeAgentYaml("alpha", "agentId: agent-1\nruntime: claude-code\n");
+    const rt = await makeRuntime();
+    addAgent(rt, "alpha", "agent-1", "claude-code");
+    await rt.start();
+    const oldSlot = slotInstances[0];
+    if (!oldSlot) throw new Error("initial slot missing");
+    let releaseStop: () => void = () => undefined;
+    oldSlot.stop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseStop = resolve;
+        }),
+    );
+
+    firePinned("agent-1", "alpha", "claude-code-tui");
+    await vi.waitFor(() => expect(oldSlot.stop).toHaveBeenCalled());
+    // Second switch arrives while the first is still stopping the old slot.
+    firePinned("agent-1", "alpha", "codex");
+    releaseStop();
+
+    await vi.waitFor(() =>
+      expect(slotInstances.map((slot) => slot.type)).toEqual(["claude-code", "claude-code-tui", "codex"]),
+    );
+    const finalSlot = slotInstances[2];
+    if (!finalSlot) throw new Error("final slot missing");
+    await vi.waitFor(() => expect(finalSlot.start).toHaveBeenCalled());
+    expect(readFileSync(yamlPath, "utf8")).toContain("runtime: codex");
     await rt.stop();
   });
 

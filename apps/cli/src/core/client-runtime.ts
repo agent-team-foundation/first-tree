@@ -1,8 +1,9 @@
 import type { FSWatcher } from "node:fs";
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AgentSlot,
+  agentSessionRegistryPath,
   ClientConnection,
   createGitMirrorManager,
   createLogger,
@@ -113,6 +114,15 @@ export class ClientRuntime {
   private readonly unsupportedAgents = new Map<string, { name: string; config: AgentConfig }>();
   /** Per-agent re-entrancy guard for {@link switchAgentRuntime}. */
   private readonly runtimeSwitchesInFlight = new Set<string>();
+  /**
+   * Latest provider requested while a switch for the same agent was already
+   * in flight. A push landing mid-swap cannot be dropped: it may arrive after
+   * the rebuilt slot has already bound successfully, in which case no
+   * `runtime_provider_mismatch` rejection would ever repair the miss. The
+   * map collapses bursts to the last requested value; {@link switchAgentRuntime}
+   * drains it once the active swap completes.
+   */
+  private readonly queuedRuntimeSwitch = new Map<string, string>();
   /** Per-agent timestamp throttle for {@link repairRuntimeProviderMismatch}. */
   private readonly lastMismatchRepairAt = new Map<string, number>();
   private readonly options: ClientRuntimeOptions;
@@ -544,6 +554,9 @@ export class ClientRuntime {
     if (unsupported) {
       if (unsupported.config.runtime !== message.runtimeProvider) {
         this.rewriteAgentYamlRuntime(unsupported.name, message.runtimeProvider);
+        // Same rule as performRuntimeSwitch: session ids persisted under the
+        // previous provider are not resumable by the new one.
+        this.clearAgentSessionRegistry(unsupported.name);
         unsupported.config = { ...unsupported.config, runtime: message.runtimeProvider };
       }
       if (!hasHandler(message.runtimeProvider)) return; // still unsupported — wait for a client update
@@ -656,42 +669,75 @@ export class ClientRuntime {
    * pins `type`/`handlerFactory` at construction, so a swap always builds a
    * fresh slot.
    *
-   * Re-entrancy: one switch per agent at a time. A push landing mid-swap is
-   * dropped — if it carried an even newer provider, the rebuilt slot's bind
-   * fails with `runtime_provider_mismatch` and the repair path (Fix B)
-   * converges on the authoritative value.
+   * Re-entrancy: one switch per agent at a time. A request landing mid-swap
+   * is queued (latest value wins) and applied once the active swap completes
+   * — see {@link queuedRuntimeSwitch} for why dropping it would strand the
+   * agent on the wrong provider.
    */
   private async switchAgentRuntime(entry: AgentEntry, to: string, source: string): Promise<void> {
     const agentId = entry.slot.agentId;
     if (this.runtimeSwitchesInFlight.has(agentId)) {
-      print.status("", `agent "${entry.name}": runtime switch already in progress — ignoring ${source}`);
+      this.queuedRuntimeSwitch.set(agentId, to);
+      print.status("", `agent "${entry.name}": runtime switch already in progress — queued "${to}" (${source})`);
       return;
     }
     this.runtimeSwitchesInFlight.add(agentId);
     try {
-      const from = entry.config.runtime;
-      print.status("", `agent "${entry.name}": runtime provider change ${from} → ${to} (${source})`);
-      this.rewriteAgentYamlRuntime(entry.name, to);
-      entry.config = { ...entry.config, runtime: to };
-      try {
-        await entry.slot.stop();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        print.status("⚠️", `agent "${entry.name}": stop before runtime switch failed: ${msg}`);
-      }
-      if (!hasHandler(to)) {
-        entry.state = "failed";
-        print.status(
-          "⚠️",
-          `agent "${entry.name}" now uses runtime "${to}" which this client build does not support yet — stopped. Update the client to run it.`,
-        );
-        return;
-      }
-      entry.slot = this.buildSlot(entry.name, entry.config);
-      entry.state = "idle";
-      await this.startAgentEntry(entry);
+      await this.performRuntimeSwitch(entry, to, source);
     } finally {
       this.runtimeSwitchesInFlight.delete(agentId);
+    }
+    const queued = this.queuedRuntimeSwitch.get(agentId);
+    if (queued !== undefined) {
+      this.queuedRuntimeSwitch.delete(agentId);
+      if (queued !== entry.config.runtime) {
+        await this.switchAgentRuntime(entry, queued, "queued during previous switch");
+      }
+    }
+  }
+
+  private async performRuntimeSwitch(entry: AgentEntry, to: string, source: string): Promise<void> {
+    const from = entry.config.runtime;
+    print.status("", `agent "${entry.name}": runtime provider change ${from} → ${to} (${source})`);
+    this.rewriteAgentYamlRuntime(entry.name, to);
+    entry.config = { ...entry.config, runtime: to };
+    try {
+      await entry.slot.stop();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      print.status("⚠️", `agent "${entry.name}": stop before runtime switch failed: ${msg}`);
+    }
+    // Provider session ids are not portable across providers: the registry
+    // maps chatId → provider-native session id, and the rebuilt slot hydrates
+    // the same per-name file. A Claude session id fed to Codex `resumeThread`
+    // (or vice versa) wedges resume in every existing chat, so drop the
+    // registry and let each chat cold-start under the new provider.
+    this.clearAgentSessionRegistry(entry.name);
+    if (!hasHandler(to)) {
+      entry.state = "failed";
+      print.status(
+        "⚠️",
+        `agent "${entry.name}" now uses runtime "${to}" which this client build does not support yet — stopped. Update the client to run it.`,
+      );
+      return;
+    }
+    entry.slot = this.buildSlot(entry.name, entry.config);
+    entry.state = "idle";
+    await this.startAgentEntry(entry);
+  }
+
+  /**
+   * Remove the persisted session registry for an agent whose runtime provider
+   * just changed. Best-effort: a failure only warns — the worst case is the
+   * new handler attempting to resume a foreign session id and falling back to
+   * its own cold-start/error path.
+   */
+  private clearAgentSessionRegistry(name: string): void {
+    try {
+      rmSync(agentSessionRegistryPath(name), { force: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      print.status("⚠️", `agent "${name}": failed to clear session registry after provider switch: ${msg}`);
     }
   }
 

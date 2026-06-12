@@ -39,6 +39,18 @@ export type AgentSlotConfig = {
   runtimeVersion?: string;
 };
 
+/**
+ * Canonical on-disk location of an agent's session registry — the persisted
+ * `chatId → provider-native session id` mappings (`SessionRegistry`). Exposed
+ * so higher layers that rebuild a slot under a different runtime provider can
+ * clear the file: provider session ids are not portable across providers
+ * (a Claude session id fed to Codex `resumeThread`, or vice versa, breaks
+ * resume), so a provider switch must cold-start every chat.
+ */
+export function agentSessionRegistryPath(agentName: string): string {
+  return join(defaultDataDir(), "sessions", `${agentName}.json`);
+}
+
 type ConnectionListener =
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
@@ -200,7 +212,7 @@ export class AgentSlot {
         );
       }
 
-      const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
+      const registryPath = agentSessionRegistryPath(this.config.name);
 
       // The runtime owns the GitMirrorManager and injects it here — sharing one
       // manager across slots is what makes `withUrlLock` actually serialise

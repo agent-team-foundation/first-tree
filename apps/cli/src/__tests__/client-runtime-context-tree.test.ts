@@ -97,6 +97,7 @@ vi.mock("@first-tree/client", () => {
   }
   return {
     AgentSlot: FakeAgentSlot,
+    agentSessionRegistryPath: (name: string) => `${process.env.FIRST_TREE_HOME ?? "/tmp"}/data/sessions/${name}.json`,
     ClientConnection: class {
       clientId = connectionMock.clientId;
       on = connectionMock.on;
