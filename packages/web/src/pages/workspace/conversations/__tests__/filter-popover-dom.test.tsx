@@ -119,9 +119,9 @@ describe("FilterPopover", () => {
     expect(checkboxByLabel("Archived").checked).toBe(true);
     expect(checkboxByLabel("GitHub").checked).toBe(true);
     expect(checkboxByLabel("Agent").checked).toBe(true);
-    expect(checkboxByLabel("Manual").checked).toBe(false);
+    expect(checkboxByLabel("Human").checked).toBe(false);
 
-    await click(checkboxByLabel("Manual"));
+    await click(checkboxByLabel("Human"));
     expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github", "agent"]);
     expect(trigger?.textContent).toContain("4");
 
@@ -135,7 +135,7 @@ describe("FilterPopover", () => {
 
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset") ?? null);
     expect(onOriginChange).toHaveBeenLastCalledWith([]);
-    expect(checkboxByLabel("Manual").checked).toBe(false);
+    expect(checkboxByLabel("Human").checked).toBe(false);
 
     await click(checkboxByLabel("Active"));
     expect(onEngagementChange).toHaveBeenLastCalledWith("all");

@@ -15,7 +15,10 @@ import type { GroupMode } from "./group-rows.js";
  * mapping.
  */
 export const ORIGIN_OPTIONS: ReadonlyArray<{ value: ChatSource; label: string }> = [
-  { value: "manual", label: "Manual" },
+  // "Human" (not "Manual") — users don't think of themselves as creating
+  // chats "manually"; the dimension is who started the work stream, matching
+  // the Source group-by buckets ("Started by me/teammates").
+  { value: "manual", label: "Human" },
   { value: "github", label: "GitHub" },
   { value: "agent", label: "Agent" },
 ];

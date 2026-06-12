@@ -99,7 +99,7 @@ vi.mock("../conversations/index.js", () => ({
       <button type="button" onClick={() => onParticipantsChange(["agent-2"])}>
         Set participants
       </button>
-      <button type="button" onClick={() => onGroupChange("recency")}>
+      <button type="button" onClick={() => onGroupChange("source")}>
         Set group
       </button>
       <button type="button" onClick={onClearFilters}>
@@ -220,6 +220,9 @@ function lastConversationList(container: ParentNode): HTMLElement | null {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // The group-by preference persists in localStorage; clear it so each
+  // test starts from the default rather than a previous test's choice.
+  window.localStorage.clear();
   viewportMock.value = "xl";
   authMock.value = {
     meLoaded: true,
@@ -275,10 +278,10 @@ describe("WorkspacePage DOM behavior", () => {
     expect(filtered.get("watching")).toBe("1");
     expect(filtered.get("origin")).toBe("manual,github");
     expect(filtered.get("with")).toBe("agent-2");
-    expect(filtered.get("group")).toBe("recency");
+    expect(filtered.get("group")).toBe("source");
 
     await click(buttonByText(container, "Clear filters"));
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?group=recency");
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?group=source");
 
     await act(async () => root.unmount());
   });
@@ -293,7 +296,9 @@ describe("WorkspacePage DOM behavior", () => {
 
     const list = container.querySelector<HTMLElement>('[data-testid="conversation-list"]');
     expect(list?.dataset.width).toBe("100%");
-    expect(container.textContent).toContain("list:none:active:read:not-watching:manual:agent-1:source");
+    // `group=bad` is unrecognized → falls back to the (empty) stored
+    // preference → the `recency` default.
+    expect(container.textContent).toContain("list:none:active:read:not-watching:manual:agent-1:recency");
     expect(container.querySelector('[data-testid="center-panel"]')).toBeNull();
     expect(container.querySelector('[data-testid="doc-preview"]')).toBeTruthy();
 
