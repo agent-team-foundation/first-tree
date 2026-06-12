@@ -3069,6 +3069,10 @@ export function ChatView({
                         draftEmpty={draft.trim().length === 0}
                         askerName={chatScopedAgentName(dockRequest.senderId)}
                         onPick={pickDockOption}
+                        // Back to the full markdown context: the request's own
+                        // timeline card. No-op when the card is outside the
+                        // loaded message window (querySelector miss).
+                        onJumpToOrigin={() => scrollToMessage(dockRequest.id, "start", "smooth")}
                       />
                     ) : null}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}

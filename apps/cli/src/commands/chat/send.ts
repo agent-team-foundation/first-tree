@@ -10,12 +10,24 @@ interface SendOptions {
   metadata?: string;
   agent?: string;
   request?: boolean;
+  subject?: string;
   question?: string;
   option?: string[];
   replyTo?: string;
   answer?: string;
   close?: string;
 }
+
+/**
+ * Hard caps on the structured ask. `--question` is the ONE-LINE ask the web
+ * pins above the composer (RequestDock); `--subject` is its headline. The
+ * background/context belongs in the message body, which renders as the
+ * request card's full markdown body. The caps exist because agents otherwise
+ * cram the whole context into `--question`, producing an unreadable wall in
+ * the dock.
+ */
+const REQUEST_QUESTION_MAX_CHARS = 200;
+const REQUEST_SUBJECT_MAX_CHARS = 80;
 
 /** Commander collector for a repeatable flag (`--option a --option b`). */
 function collectOption(value: string, previous: string[]): string[] {
@@ -39,7 +51,11 @@ export function registerChatSendCommand(chat: Command): void {
       "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
         "background/context; --question carries only the ask",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
+    .option(
+      "--subject <text>",
+      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+    )
+    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
     .option(
       "--answer <requestId>",
@@ -116,11 +132,29 @@ export function registerChatSendCommand(chat: Command): void {
           if (!options.question) {
             fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
           }
+          if (options.question && options.question.length > REQUEST_QUESTION_MAX_CHARS) {
+            fail(
+              "QUESTION_TOO_LONG",
+              `--question must stay a short ask (≤${REQUEST_QUESTION_MAX_CHARS} chars, got ${options.question.length}). ` +
+                "Move the background/context into the message body — it renders as the request card's markdown body; " +
+                "the question is pinned verbatim above the composer.",
+              2,
+            );
+          }
+          if (options.subject && options.subject.length > REQUEST_SUBJECT_MAX_CHARS) {
+            fail(
+              "SUBJECT_TOO_LONG",
+              `--subject is a headline (≤${REQUEST_SUBJECT_MAX_CHARS} chars, got ${options.subject.length}). ` +
+                "Keep it to a few words; details belong in the body or --question.",
+              2,
+            );
+          }
           const opts = options.option ?? [];
           format = "request";
           metadata = {
             ...(metadata ?? {}),
             request: {
+              ...(options.subject ? { subject: options.subject } : {}),
               questions: [
                 {
                   id: "q1",

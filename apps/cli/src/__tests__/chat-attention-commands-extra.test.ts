@@ -188,6 +188,44 @@ describe("chat command behavior", () => {
     });
   });
 
+  it("passes --subject through as the request's dock/card headline", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "send",
+      "nova",
+      "Rollout is at 5% and error rate is flat for 24h.",
+      "--request",
+      "--subject",
+      "Rollout gate",
+      "--question",
+      "Ship to 20%?",
+      "--option",
+      "yes",
+    ]);
+
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        format: "request",
+        metadata: expect.objectContaining({
+          request: expect.objectContaining({ subject: "Rollout gate" }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects an over-long --question — the wall of text belongs in the body", async () => {
+    await expect(
+      runChat(["send", "nova", "body context", "--request", "--question", "x".repeat(201)]),
+    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
+  });
+
+  it("rejects an over-long --subject — it is a headline, not a summary", async () => {
+    await expect(
+      runChat(["send", "nova", "body context", "--request", "--subject", "s".repeat(81), "--question", "Ship?"]),
+    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
+  });
+
   it("creates task chats with first-message routing and silent context participants", async () => {
     docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
       content: "see docs/plan.md",

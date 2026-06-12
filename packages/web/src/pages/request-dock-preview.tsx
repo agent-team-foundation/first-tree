@@ -65,6 +65,33 @@ const MODES: Record<string, { label: string; payload: OpenQuestionRequest }> = {
       allowExtra: true,
     },
   },
+  legacy: {
+    label: "legacy wall-of-text prompt (pre-cap markdown crammed into --question)",
+    payload: {
+      questions: [
+        {
+          id: "q1",
+          prompt: [
+            "## Meeting records landed in the tree",
+            "",
+            "### 2026-06-02 team regular meeting — your asks",
+            "① **Workflow planning** — this week's focus is deep OpenClaw usage, wiring it into the workflow → **landed**: goal/NODE.md updated",
+            "② **Consensus capture** — move capture rules out of agent system prompts into a skill (P3)",
+            "③ **Git workflow convergence** — agents integrate via skill/prompt upgrades, not direct pushes",
+            "",
+            "### 2026-06-03 team regular meeting — follow-ups",
+            "① Planning conclusions merged into raw-context; branch notes pending",
+            "",
+            "Answer ① status quo OK / ② which section to change (explain in chat)?",
+          ].join("\n"),
+          kind: "single",
+          options: ["OK as landed", "Needs changes (explain in chat)"],
+          required: true,
+        },
+      ],
+      allowExtra: false,
+    },
+  },
 };
 
 function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestionRequest }) {
