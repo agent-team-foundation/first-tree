@@ -1,9 +1,10 @@
 import type { Agent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { generateConnectToken } from "../api/activity.js";
 import { getAgent } from "../api/agents.js";
+import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { StateDot } from "./ui/state-dot.js";
@@ -37,7 +38,10 @@ function shellQuote(value: string): string {
 }
 
 export function LastStepModal({ agent, open, onClose, onBound }: Props) {
-  const [copied, setCopied] = useState(false);
+  // Shared copy → transient-feedback machine. This modal historically used a
+  // slightly longer 2s window than the 1.5s default — kept as-is.
+  const { status: copyStatus, copy } = useCopyFeedback({ feedbackMs: 2_000 });
+  const copied = copyStatus === "copied";
 
   const tokenQuery = useQuery({
     queryKey: ["connect-token", agent.uuid],
@@ -100,9 +104,7 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
 
   function handleCopy() {
     if (!command) return;
-    navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copy(command);
   }
 
   return (

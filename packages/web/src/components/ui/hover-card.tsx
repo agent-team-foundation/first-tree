@@ -44,6 +44,11 @@ export function HoverCard({
   content: (api: { close: () => void }) => ReactNode;
   placement?: HoverCardPlacement;
   contentClassName?: string;
+  /**
+   * Consumer-specific card styles (typically just `width` / `maxWidth`).
+   * The primitive already provides the shared card chrome (background,
+   * border, radius, shadow, padding); anything passed here overrides it.
+   */
   contentStyle?: React.CSSProperties;
   triggerClassName?: string;
   ariaLabel?: string;
@@ -226,6 +231,16 @@ export function HoverCard({
                 zIndex: 60,
                 // Hidden until positioned, so it never flashes at the origin.
                 visibility: coords ? "visible" : "hidden",
+                // Default card chrome — the primitive owns the shared popover
+                // surface so every hover-card looks the same (consumers used
+                // to re-declare these identically; issue 998). Sizing stays
+                // with the consumer via `contentStyle`, which also overrides
+                // any of these when a card genuinely needs to diverge.
+                background: "var(--bg-raised)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-panel)",
+                boxShadow: "var(--shadow-md)",
+                padding: "var(--sp-3)",
                 ...contentStyle,
               }}
               onPointerEnter={cancelClose}

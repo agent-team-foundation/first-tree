@@ -1,8 +1,8 @@
 import { Check, CircleAlert, Copy, ExternalLink, Info, Lock } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
 import { Button } from "../../components/ui/button.js";
+import { useCopyFeedback } from "../../lib/use-copy-feedback.js";
 import { cn } from "../../lib/utils.js";
 
 /**
@@ -206,14 +206,14 @@ export function CommandBox({
   /** Shown when `command` is null (e.g. "Generating command…" or "…"). */
   placeholder?: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  // Shared copy → transient-feedback machine (success label only here).
+  const { status: copyStatus, copy } = useCopyFeedback();
+  const copied = copyStatus === "copied";
   const lines = command ? command.split("\n").filter((l) => l.trim().length > 0) : [];
 
-  const handleCopy = async (): Promise<void> => {
+  const handleCopy = (): void => {
     if (!command) return;
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copy(command);
   };
 
   return (

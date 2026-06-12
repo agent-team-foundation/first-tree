@@ -2,9 +2,9 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 
 const mocks = vi.hoisted(() => ({
   getChat: vi.fn(),
@@ -30,10 +30,7 @@ vi.mock("../../../lib/use-client-map.js", () => ({
 // Imported after the mocks are registered.
 import { AgentHovercard } from "../agent-hovercard.js";
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-
-let root: Root | null = null;
-let container: HTMLElement | null = null;
+let h: DomHarness;
 let queryClient: QueryClient;
 let latestPath = "";
 
@@ -43,40 +40,20 @@ function LocationProbe(): null {
 }
 
 function render(ui: ReactElement): void {
-  act(() => {
-    root?.render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/start"]}>
-          <LocationProbe />
-          <Routes>
-            <Route path="*" element={ui} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-  });
+  h.render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/start"]}>
+        <LocationProbe />
+        <Routes>
+          <Route path="*" element={ui} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
-function flush(): Promise<void> {
-  return act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-async function waitFor(assertion: () => void): Promise<void> {
-  let lastErr: unknown;
-  for (let i = 0; i < 25; i++) {
-    try {
-      assertion();
-      return;
-    } catch (err) {
-      lastErr = err;
-    }
-    await flush();
-  }
-  throw lastErr;
-}
+const flush = (): Promise<void> => h.flush();
+const waitFor = (assertion: () => void): Promise<void> => h.waitFor(assertion);
 
 // Pass A is read from the warm React Query cache (ChatView keeps it hot in the
 // real app). Seed it directly so the test mirrors that warm-cache open.
@@ -86,26 +63,18 @@ function seedPassA(chatId: string, participants: unknown, statuses: unknown): vo
 }
 
 beforeEach(() => {
-  container = document.createElement("div");
-  document.body.appendChild(container);
-  root = createRoot(container);
+  h = createDomHarness();
   // staleTime: Infinity so the seeded Pass A cache (chat-detail / agent-status)
   // is never background-refetched; Pass B (getAgent) has no seed, so it still
   // fetches on open.
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1400 });
-  Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
   mocks.getChat.mockReset();
   mocks.fetchChatAgentStatuses.mockReset();
   mocks.getAgent.mockReset();
 });
 
 afterEach(() => {
-  act(() => root?.unmount());
-  container?.remove();
-  container = null;
-  root = null;
-  document.body.innerHTML = "";
+  h.cleanup();
 });
 
 const AGENT_PARTICIPANT = {
@@ -145,7 +114,7 @@ const AGENT_DTO = {
 };
 
 async function openCard(): Promise<HTMLElement> {
-  const trigger = container?.querySelector<HTMLButtonElement>("button");
+  const trigger = h.container.querySelector<HTMLButtonElement>("button");
   if (!trigger) throw new Error("trigger not found");
   await act(async () => {
     trigger.click();

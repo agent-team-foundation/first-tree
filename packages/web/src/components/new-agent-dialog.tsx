@@ -13,6 +13,7 @@ import { getClientCapabilities, type HubClient, listClients } from "../api/activ
 import { checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
+import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
@@ -232,7 +233,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [connectToken, setConnectToken] = useState<string | null>(null);
   const [connectCommand, setConnectCommand] = useState<string | null>(null);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
-  const [tokenCopied, setTokenCopied] = useState(false);
+  // Shared copy → transient-feedback machine for the zero-computer block's
+  // connect command (success label only here).
+  const { status: tokenCopyStatus, copy: copyToken, reset: resetTokenCopy } = useCopyFeedback();
 
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
 
@@ -253,10 +256,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setConnectToken(null);
       setConnectCommand(null);
       setConnectTokenExpiresAt(null);
-      setTokenCopied(false);
+      resetTokenCopy();
       setClientErrors({});
     }
-  }, [open]);
+  }, [open, resetTokenCopy]);
 
   const baseSlug = useMemo(() => slugify(displayName), [displayName]);
   const hasDisplay = displayName.trim().length > 0;
@@ -754,12 +757,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             ) : connectedClients.length === 0 ? (
               <ZeroComputerBlock
                 command={connectCommand}
-                copied={tokenCopied}
-                onCopy={async () => {
+                copied={tokenCopyStatus === "copied"}
+                onCopy={() => {
                   if (!connectCommand) return;
-                  await navigator.clipboard.writeText(connectCommand);
-                  setTokenCopied(true);
-                  window.setTimeout(() => setTokenCopied(false), 1500);
+                  void copyToken(connectCommand);
                 }}
               />
             ) : connectedClients.length === 1 ? (
