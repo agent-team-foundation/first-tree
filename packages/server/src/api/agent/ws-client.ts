@@ -1151,9 +1151,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     agentId,
                     payload.chatId,
                     payload.event,
-                    {
-                      deferSideEffects: true,
-                    },
                   );
                   if (boundInfo) {
                     await contextTreeIoService
@@ -1171,7 +1168,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                         );
                       });
                   }
-                  sessionEventService.emitAppendEventSideEffects(app.db, agentId, payload.chatId, payload.event);
                   if (boundInfo) {
                     // Best-effort cross-instance kick so admin WS sockets in
                     // the same org can invalidate `liveActivity` without

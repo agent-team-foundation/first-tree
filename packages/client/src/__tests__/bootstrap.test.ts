@@ -470,7 +470,14 @@ function makeFixtureSkillsRoot(
 }
 
 describe("installFirstTreeIntegration (inline skill installer)", () => {
-  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
+  const TREE_SKILLS = [
+    "first-tree",
+    "first-tree-context",
+    "first-tree-read",
+    "first-tree-sync",
+    "first-tree-seed",
+    "first-tree-github",
+  ];
 
   function expectSkillInstalled(workspace: string, name: string): void {
     const agentsDir = join(workspace, ".agents", "skills", name);
@@ -562,6 +569,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
       { name: "first-tree-read", version: "1.0.0" },
       { name: "first-tree-sync", version: "1.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
+      { name: "first-tree-github", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
@@ -973,7 +981,14 @@ describe("deepEqualIdentity", () => {
  * giving it a complete vs incomplete bundled-skills layout.
  */
 describe("CLI-version pin contract (handler invariants)", () => {
-  const TREE_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
+  const TREE_SKILLS = [
+    "first-tree",
+    "first-tree-context",
+    "first-tree-read",
+    "first-tree-sync",
+    "first-tree-seed",
+    "first-tree-github",
+  ];
 
   it("does not overwrite the existing pin when integrate fails — next start retries", () => {
     const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");

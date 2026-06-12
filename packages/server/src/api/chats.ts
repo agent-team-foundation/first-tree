@@ -1,5 +1,6 @@
 import {
   addMeChatParticipantsSchema,
+  followGithubEntityRequestSchema,
   paginationQuerySchema,
   patchChatEngagementSchema,
   sendMessageSchema,
@@ -10,16 +11,14 @@ import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
-import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { BadRequestError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { agentAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat } from "../services/chat.js";
-import { findInstallationByOrg } from "../services/github-app-installations.js";
-import { mintContextTreeInstallationToken } from "../services/github-app-token.js";
-import { resolveChatGithubEntity } from "../services/github-entity-live.js";
+import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
   addMeChatParticipants,
   getCallerEngagement,
@@ -35,6 +34,7 @@ import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { extractSummary } from "../services/session.js";
 import { summarizeChatTokenUsage } from "../services/session-event.js";
+import { sendFollowResult } from "./github-entity-reply.js";
 
 /**
  * Class C — resource-scoped chat routes. Mounted at
@@ -168,52 +168,102 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
     const { chat, scope } = await requireChatAccess(request, app.db);
-
-    // Pull every mapping row that points at this chat. A given chat can
-    // be the target of multiple bindings — e.g. the direct PR binding
-    // plus the `Fixes #N` linker pointing at the related Issue — so we
-    // expect 1..N rows here. Dedup by (entityType, entityKey) on the way
-    // out: the (humanAgent, delegateAgent) axes are an audit detail the
-    // sidebar doesn't surface, and they would otherwise produce visible
-    // duplicates when more than one delegate agent acts on the same
-    // entity in the same chat.
-    const rows = await app.db
-      .select({
-        entityType: githubEntityChatMappings.entityType,
-        entityKey: githubEntityChatMappings.entityKey,
-        boundVia: githubEntityChatMappings.boundVia,
-        boundAt: githubEntityChatMappings.boundAt,
-      })
-      .from(githubEntityChatMappings)
-      .where(eq(githubEntityChatMappings.chatId, chat.id))
-      .orderBy(desc(githubEntityChatMappings.boundAt));
-
-    if (rows.length === 0) return { items: [] };
-
-    const dedup = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) {
-      const key = `${r.entityType}::${r.entityKey}`;
-      // Earliest-encountered row wins: rows arrive newest-first so the
-      // dedup keeps the **most recent** binding, which carries the
-      // `boundVia` the user actually triggered last.
-      if (!dedup.has(key)) dedup.set(key, r);
-    }
-
-    // Mint an installation token once and reuse it for every entity
-    // fetch. The token TTL is ~1h — well outside the request window —
-    // and minting per-entity would inflate latency proportional to
-    // mapping count.
-    const installation = await findInstallationByOrg(app.db, scope.organizationId);
-    const mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
-    const token = mintResult.ok ? mintResult.token : null;
-
-    const items = await Promise.all(
-      Array.from(dedup.values()).map((r) =>
-        resolveChatGithubEntity({ entityType: r.entityType, entityKey: r.entityKey, boundVia: r.boundVia }, token),
-      ),
+    return listChatGithubEntities(
+      app.db,
+      { appCredentials: app.config.oauth?.githubApp },
+      { chatId: chat.id, organizationId: scope.organizationId },
     );
-    return { items: items.filter((x): x is NonNullable<typeof x> => x !== null) };
   });
+
+  /**
+   * Follow a GitHub entity from the user scope (web UI / human terminal).
+   * The caller's human agent is the binding's human side; the delegate side
+   * comes from their `delegate_mention` configuration — without one there is
+   * no (human, delegate) pair to wire, so the request is rejected with
+   * guidance. Agents follow through the Class D route instead.
+   *
+   * The delegate must be an ACTIVE SPEAKER of this chat before the mapping
+   * is recorded: GitHub delivery addresses event cards to the delegate, and
+   * `sendMessage` only fans out to active speaker rows — a mapping whose
+   * delegate isn't in the room would "succeed" while every event lands as a
+   * silently stored card that wakes nobody, violating the follow contract
+   * (every event wakes the wiring agent). Rejecting with guidance beats
+   * silently wiring a dead line; inviting the delegate is one explicit
+   * `chat invite` away.
+   */
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/github-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const { chat, scope } = await requireChatAccess(request, app.db);
+      const body = followGithubEntityRequestSchema.parse(request.body);
+
+      const [human] = await app.db
+        .select({ delegateMention: agents.delegateMention })
+        .from(agents)
+        .where(eq(agents.uuid, scope.humanAgentId))
+        .limit(1);
+      if (!human?.delegateMention) {
+        throw new BadRequestError(
+          "Following needs a delegate agent to receive the entity's events, and your account has no " +
+            "delegate_mention configured. Set one in your member settings, then retry.",
+        );
+      }
+
+      const [delegate] = await app.db
+        .select({ agentId: chatMembership.agentId })
+        .from(chatMembership)
+        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+        .where(
+          and(
+            eq(chatMembership.chatId, chat.id),
+            eq(chatMembership.agentId, human.delegateMention),
+            eq(chatMembership.accessMode, "speaker"),
+            eq(agents.status, "active"),
+          ),
+        )
+        .limit(1);
+      if (!delegate) {
+        throw new BadRequestError(
+          "Your delegate agent is not an active speaker of this chat, so the entity's events could never wake " +
+            "it here. Invite the delegate into this chat (chat invite) — or follow from the chat where it " +
+            "already speaks — then retry.",
+        );
+      }
+
+      const result = await declareEntityFollow(
+        app.db,
+        { appCredentials: app.config.oauth?.githubApp },
+        {
+          chatId: chat.id,
+          organizationId: scope.organizationId,
+          humanAgentId: scope.humanAgentId,
+          delegateAgentId: human.delegateMention,
+          boundVia: "human_declared",
+          entity: body.entity,
+          rebind: body.rebind,
+        },
+      );
+      return sendFollowResult(reply, result, body.entity);
+    },
+  );
+
+  /**
+   * Unfollow a GitHub entity: sever every line wired into this chat for it.
+   * Always 200 + `{ removed }` — idempotent by design (`removed: 0` is
+   * terminal success, not an error).
+   */
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string } }>(
+    "/:chatId/github-entities",
+    async (request) => {
+      const { chat } = await requireChatAccess(request, app.db);
+      const entity = request.query.entity;
+      if (!entity) {
+        throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
+      }
+      return removeEntityFollow(app.db, { chatId: chat.id, entity });
+    },
+  );
 
   app.post<{ Params: { chatId: string } }>(
     "/:chatId/engagement",

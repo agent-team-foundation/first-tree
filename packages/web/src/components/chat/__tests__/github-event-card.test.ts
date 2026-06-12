@@ -197,11 +197,11 @@ describe("stripEntityPrefix", () => {
 /**
  * `shortEntityNumber` produces the value the L1 chip displays *and* the
  * value `stripEntityPrefix` reconstructs the head from — so the two
- * always need to agree. Discussion is the load-bearing case because the
- * server stores the key as `owner/repo#discussion-N` but writes the
- * surface title as `"Discussion #N: ..."` (numeric). If chip and strip
- * disagree on the discussion number format, dedupe silently fails for
- * discussion cards (caught by code-review on this PR).
+ * always need to agree. Discussion is the load-bearing case because older
+ * persisted cards may still carry `owner/repo#discussion-N`, while the
+ * canonical server key and surface title now use plain `#N`. If chip and
+ * strip disagree on the discussion number format, dedupe silently fails for
+ * discussion cards.
  */
 describe("shortEntityNumber", () => {
   it("strips the repo prefix for issue / PR keys", () => {
@@ -209,7 +209,11 @@ describe("shortEntityNumber", () => {
     expect(shortEntityNumber("owner/repo#7", "owner/repo")).toBe("#7");
   });
 
-  it("collapses the discussion-N infix so chip and surface title agree on #N", () => {
+  it("keeps canonical discussion keys as #N", () => {
+    expect(shortEntityNumber("owner/repo#9", "owner/repo")).toBe("#9");
+  });
+
+  it("collapses the legacy discussion-N infix so chip and surface title agree on #N", () => {
     expect(shortEntityNumber("owner/repo#discussion-9", "owner/repo")).toBe("#9");
   });
 
@@ -237,9 +241,15 @@ describe("entity-key → strip integration (mirrors GithubEventCardMessage)", ()
     { type: "issue" as const, key: "owner/repo#7", title: "Issue #7: Bug in parser", expected: "Bug in parser" },
     {
       type: "discussion" as const,
-      key: "owner/repo#discussion-9",
+      key: "owner/repo#9",
       title: "Discussion #9: RFC draft",
       expected: "RFC draft",
+    },
+    {
+      type: "discussion" as const,
+      key: "owner/repo#discussion-9",
+      title: "Discussion #9: Legacy RFC draft",
+      expected: "Legacy RFC draft",
     },
     { type: "commit" as const, key: "owner/repo@abc", title: "Commit: Fix typo", expected: "Fix typo" },
   ];

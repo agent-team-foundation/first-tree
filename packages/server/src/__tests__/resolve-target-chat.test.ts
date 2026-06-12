@@ -61,6 +61,12 @@ const pr50: GithubEntity = {
   url: "https://github.com/owner/repo/pull/50",
 };
 const issue43: GithubEntity = { type: "issue", key: "owner/repo#43", title: "Unrelated" };
+const discussion7: GithubEntity = {
+  type: "discussion",
+  key: "owner/repo#7",
+  title: "RFC",
+  url: "https://github.com/owner/repo/discussions/7",
+};
 
 describe("resolveTargetChat", () => {
   const getApp = useTestApp();
@@ -134,6 +140,40 @@ describe("resolveTargetChat", () => {
 
     const allChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.id, first.chatId));
     expect(allChats).toHaveLength(1);
+  });
+
+  it("reuses a legacy discussion mapping when webhooks now carry the canonical numeric key", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+    const legacyChatId = `chat_${randomUUID()}`;
+    await app.db
+      .insert(chats)
+      .values({ id: legacyChatId, organizationId: admin.organizationId, type: "group", metadata: {} });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entityType: "discussion",
+      entityKey: "owner/repo#discussion-7",
+      chatId: legacyChatId,
+      boundVia: "direct",
+    });
+
+    const resolved = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: discussion7,
+      relatedEntities: [],
+      eventType: "discussion_comment",
+      action: "created",
+    });
+
+    expect(resolved.chatId).toBe(legacyChatId);
+    expect(resolved.created).toBe(false);
+    const allChats = await app.db.select({ id: chats.id }).from(chats);
+    expect(allChats.filter((chat) => chat.id === legacyChatId)).toHaveLength(1);
   });
 
   it("links a PR to the issue's chat via Fixes #N and writes a fixes_link mapping", async () => {
