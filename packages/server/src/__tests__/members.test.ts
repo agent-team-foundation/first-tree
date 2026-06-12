@@ -1,5 +1,11 @@
+import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { agents as agentsTable } from "../db/schema/agents.js";
+import { members as membersTable } from "../db/schema/members.js";
+import * as memberService from "../services/member.js";
+import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Members API", () => {
@@ -16,6 +22,24 @@ describe("Members API", () => {
         payload,
       });
     return req;
+  }
+
+  async function createOtherOrgTargetMember(app: FastifyInstance, prefix: string) {
+    const otherOrg = await createOrganization(app.db, {
+      name: `${prefix}-${randomUUID().slice(0, 8)}`,
+      displayName: "IDOR Target",
+    });
+    await memberService.createMember(app.db, otherOrg.id, {
+      username: `${prefix}-owner-${randomUUID().slice(0, 8)}`,
+      displayName: "Other Org Admin",
+      role: "admin",
+    });
+    const target = await memberService.createMember(app.db, otherOrg.id, {
+      username: `${prefix}-target-${randomUUID().slice(0, 8)}`,
+      displayName: "Other Org Member",
+      role: "member",
+    });
+    return { otherOrg, target };
   }
 
   describe("GET /api/v1/members", () => {
@@ -94,6 +118,20 @@ describe("Members API", () => {
       expect(patchRes.statusCode).toBe(200);
       expect(patchRes.json<{ role: string }>().role).toBe("admin");
     });
+
+    it("returns 404 for an empty patch against a member from another org", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `patch-idor-admin-${randomUUID().slice(0, 8)}` });
+      const { target } = await createOtherOrgTargetMember(app, "patch-idor");
+
+      const patchRes = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/orgs/${admin.organizationId}/members/${target.id}`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: {},
+      });
+      expect(patchRes.statusCode).toBe(404);
+    });
   });
 
   describe("DELETE /api/v1/members/:id", () => {
@@ -114,6 +152,34 @@ describe("Members API", () => {
       const listRes = await req("GET", "/api/v1/members");
       const members = listRes.json<Array<{ id: string }>>();
       expect(members.find((m: { id: string }) => m.id === id)).toBeUndefined();
+    });
+
+    it("returns 404 and leaves the target intact when deleting a member from another org", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `delete-idor-admin-${randomUUID().slice(0, 8)}` });
+      const { otherOrg, target } = await createOtherOrgTargetMember(app, "delete-idor");
+
+      const deleteRes = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/orgs/${admin.organizationId}/members/${target.id}`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(deleteRes.statusCode).toBe(404);
+
+      const [memberRow] = await app.db
+        .select({ id: membersTable.id, organizationId: membersTable.organizationId })
+        .from(membersTable)
+        .where(eq(membersTable.id, target.id))
+        .limit(1);
+      expect(memberRow).toEqual({ id: target.id, organizationId: otherOrg.id });
+
+      const [agentRow] = await app.db
+        .select({ status: agentsTable.status, name: agentsTable.name })
+        .from(agentsTable)
+        .where(eq(agentsTable.uuid, target.agentId))
+        .limit(1);
+      expect(agentRow?.status).toBe("active");
+      expect(agentRow?.name).not.toBeNull();
     });
   });
 
