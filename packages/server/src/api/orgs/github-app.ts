@@ -47,6 +47,10 @@ export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([
   // installs in a popup and lands the popup here so it can auto-close while the
   // original tab keeps polling.
   "/onboarding/connected",
+  // Build-tree recovery surface: its connect-code step passes itself as `next`
+  // when the install popup is blocked (the full-page redirect must return to
+  // the recovery flow, not Settings — see step-connect-code.tsx).
+  "/build-tree",
 ]);
 
 /**
