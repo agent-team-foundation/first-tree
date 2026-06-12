@@ -22,10 +22,12 @@ export function mockCtxPlumbing(
   chatId: string,
 ): {
   forwardResult: (text: string) => Promise<void>;
-  markCompleted: () => void;
   markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
-  markMessagesCompleted: (messages: SessionMessage | readonly SessionMessage[]) => void;
-  markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
+  finishTurn: (
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: { status: "success" | "error"; terminal?: boolean },
+  ) => Promise<void>;
+  retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
   buildAgentEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   formatInboundContent: (msg: SessionMessage) => Promise<string>;
   resolveSenderLabel: (senderId: string) => Promise<string>;
@@ -35,10 +37,9 @@ export function mockCtxPlumbing(
       await sdk.sendMessage(chatId, { source: "api", format: "text", content: text });
     },
     // Default stub: tests that care about ack timing override via spies.
-    markCompleted: () => {},
     markMessagesConsumed: () => {},
-    markMessagesCompleted: () => {},
-    markMessagesRetryable: () => {},
+    finishTurn: async () => {},
+    retryTurn: () => {},
     buildAgentEnv: (env) => env,
     formatInboundContent: async (msg) => {
       const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);

@@ -33,10 +33,7 @@ type SessionRecord = {
 type SessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
   evictedMappings: Map<string, { claudeSessionId: string; lastActivity: number }>;
-  // entryId tracking moved out of PendingMessage and into a per-chat
-  // FIFO (`inFlightEntries`) per the in-flight message recovery PR.
   pendingQueue: Array<{ message: SessionMessage; chatId: string }>;
-  inFlightEntries: Map<string, Array<{ entryId: number; messageId: string; dedupKey: string }>>;
   _activeCount: number;
   acquireActiveSlot(chatId: string, message: SessionMessage): boolean;
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
@@ -48,7 +45,6 @@ type SessionManagerInternals = {
   notifySessionState(chatId: string, state: SessionState): void;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
-  drainAllInFlightEntries(chatId: string): void;
 };
 
 type TestRuntimeState = RuntimeState;
@@ -248,7 +244,11 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("handles suspend, terminate, pending-queue cleanup, ack failures, and quiet-gate snapshots", async () => {
-    const first = handler();
+    const first = handler({
+      async start() {
+        return "idle-log-session";
+      },
+    });
     const ackEntry = vi
       .fn<(entryId: number) => Promise<void>>()
       .mockResolvedValueOnce(undefined)
@@ -277,8 +277,7 @@ describe("SessionManager edge coverage", () => {
     // Same-socket recovery fail-closed: suspending clears unfinished local
     // entries and newer same-chat input asks the server to reset/redeliver
     // before the handler resumes.
-    expect(internals(sm).inFlightEntries.has("chat-active")).toBe(false);
-    expect(recoverChat).toHaveBeenCalledTimes(2);
+    expect(recoverChat).toHaveBeenCalledTimes(1);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
     internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });
@@ -368,7 +367,7 @@ describe("SessionManager edge coverage", () => {
       async start(_message, ctx) {
         captured = ctx;
         ctx.log("started");
-        ctx.touch();
+        ctx.recordProviderActivity();
         return "session-context";
       },
     });
@@ -909,7 +908,7 @@ describe("SessionManager edge coverage", () => {
     await stringFailure.shutdown();
   });
 
-  it("reports runtime snapshots only for active sessions and ignores inactive runtime writes", async () => {
+  it("reports runtime snapshots only for active sessions and ignores inactive provider activity", async () => {
     const runtimeChanges: RuntimeState[] = [];
     let captured: SessionContext | undefined;
     const sm = makeManager({
@@ -926,10 +925,11 @@ describe("SessionManager edge coverage", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-runtime" }));
-    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "idle" }]);
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "working" }]);
     if (!captured) throw new Error("context was not captured");
+    runtimeChanges.length = 0;
     await sm.handleCommand("chat-runtime", "session:suspend");
-    captured.setRuntimeState("working");
+    captured.recordProviderActivity();
     expect(runtimeChanges).not.toContain("working");
 
     internals(sm).reaffirmRuntimeStates();
@@ -939,7 +939,15 @@ describe("SessionManager edge coverage", () => {
   it("uses idle fallback in evictIdle logging when no runtime state was recorded", async () => {
     vi.useFakeTimers({ now: 100_000 });
     const log = recordingLogger();
-    const first = handler();
+    let captured: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const first = handler({
+      async start(message, ctx) {
+        capturedMessage = message;
+        captured = ctx;
+        return "idle-log-session";
+      },
+    });
     const sm = new SessionManager({
       session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 1, reconcile_interval_seconds: 300 },
       concurrency: 5,
@@ -960,6 +968,8 @@ describe("SessionManager edge coverage", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-idle-log" }));
+    if (!capturedMessage) throw new Error("message was not captured");
+    await captured?.finishTurn(capturedMessage, { status: "success", terminal: true });
     vi.advanceTimersByTime(2_000);
 
     vi.advanceTimersByTime(10_000);

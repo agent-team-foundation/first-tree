@@ -114,7 +114,7 @@ function makeMessage(id: string, content: string): SessionMessage {
 }
 
 function makeContext(
-  markCompleted: (count?: number) => void,
+  onFinishTurn: (count?: number) => void,
   opts: { formatInboundContent?: SessionContext["formatInboundContent"] } = {},
 ): SessionContext {
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -131,13 +131,13 @@ function makeContext(
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-claude-startup-race",
     log: () => {},
-    touch: () => {},
-    setRuntimeState: () => {},
+    recordProviderActivity: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, "chat-claude-startup-race"),
     ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
-    markCompleted,
-    markMessagesCompleted: () => markCompleted(),
+    finishTurn: async () => {
+      onFinishTurn();
+    },
   };
 }
 

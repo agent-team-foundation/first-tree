@@ -44,14 +44,18 @@ export type HandlerContext = {
   log: (msg: string) => void;
 };
 
+export type TurnOutcome = {
+  status: "success" | "error";
+  terminal?: boolean;
+  errorKind?: "deterministic" | "transient" | "unknown";
+};
+
 /** Extended context for session-oriented handlers. */
 export type SessionContext = HandlerContext & {
   /** The server-side chat this session belongs to. */
   chatId: string;
-  /** Refresh `lastActivity` timestamp to prevent idle timeout. */
-  touch: () => void;
-  /** Report per-session runtime state (working/idle/blocked/error). */
-  setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
+  /** Refresh `lastActivity` timestamp when the provider produces activity. */
+  recordProviderActivity: () => void;
   /**
    * Persist a structured session event (tool_call / error) to the server.
    * Assistant text does NOT go through here — it flows via `forwardResult`.
@@ -66,13 +70,6 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Mark a single-message turn complete. Built-in handlers should prefer
-   * `markMessagesCompleted(messageOrBatch)` so the runtime can ack-through
-   * the exact inbox entry the handler actually consumed.
-   */
-  markCompleted: () => void;
-
-  /**
    * Mark the concrete message or fused batch as entered into the current
    * provider turn. This is an in-memory boundary used by suspend: consumed
    * entries can be ACKed when the turn is paused, while handler queues that
@@ -81,21 +78,18 @@ export type SessionContext = HandlerContext & {
   markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
 
   /**
-   * Mark the concrete message or fused message batch a handler has actually
-   * consumed. The runtime sends one `inbox:ack` for the last message's
-   * `inboxEntryId`; the server interprets it as ack-through for the chat's
-   * delivered prefix. This replaces the old `markCompleted(count)` FIFO
-   * pairing, which could ack an older queued entry while the completed entry
-   * remained unacked.
+   * Mark the concrete message or fused message batch's provider turn finished.
+   * The coordinator sends one ACK-through for the last message's
+   * `inboxEntryId` and settles local ledger only after server confirmation.
    */
-  markMessagesCompleted: (messages: SessionMessage | readonly SessionMessage[]) => void;
+  finishTurn: (messages: SessionMessage | readonly SessionMessage[], outcome: TurnOutcome) => Promise<void>;
 
   /**
    * Mark a concrete message or batch as abandoned by a retryable path
    * (abort, timeout, unknown failure). The runtime leaves the server-side
    * entries unacked; a later chat recovery or bind reset redelivers them.
    */
-  markMessagesRetryable: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
+  retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.

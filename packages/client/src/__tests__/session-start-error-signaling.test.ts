@@ -310,12 +310,11 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
     const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
     const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
-    await sm.dispatch(chatAStart); // asks for recovery
-    await sm.dispatch(chatAStart); // redelivery starts chat-A
-    await sm.dispatch(chatBStart); // asks for recovery
-    await sm.dispatch(chatBStart); // redelivery starts chat-B and preempts chat-A
-    await sm.dispatch(chatAResume); // asks for recovery of chat-A's unacked tail
-    await sm.dispatch(chatAResume); // redelivery resumes chat-A → throws
+    await sm.dispatch(chatAStart); // starts chat-A
+    await sm.dispatch(chatBStart); // starts chat-B and preempts chat-A
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await sm.dispatch(chatAResume); // recovery redelivery resumes chat-A -> throws
 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
     expect(chatAStates.at(-1)).toBe("errored");
@@ -365,16 +364,14 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
     const chatARecovery = mockEntry({ id: 4, chatId: "chat-A" });
     await sm.dispatch(chatAStart);
-    await sm.dispatch(chatAStart);
     await sm.dispatch(chatBStart);
-    await sm.dispatch(chatBStart);
-    await sm.dispatch(chatAResume);
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
+    await new Promise((resolve) => setImmediate(resolve));
     await sm.dispatch(chatAResume); // resume → errored
 
     // A fresh inbound for chat-A should route as start (entry was dropped
     // on resume failure — the resume catch tears down the same way the
     // start catch does, so there's no "stuck suspended" entry blocking it).
-    await sm.dispatch(chatARecovery);
     await sm.dispatch(chatARecovery);
     expect(handlerARecovery.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.filter((c) => c.chatId === "chat-A").at(-1)?.state).toBe("active");

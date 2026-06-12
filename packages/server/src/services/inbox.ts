@@ -131,7 +131,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
             .where(
               and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)),
             )
-            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .orderBy(asc(inboxEntries.id))
             .limit(limit)
             .for("update", { skipLocked: true })
         : tx
@@ -145,7 +145,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
                 eq(inboxEntries.notify, true),
               ),
             )
-            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .orderBy(asc(inboxEntries.id))
             .limit(limit)
             .for("update", { skipLocked: true });
 
@@ -169,7 +169,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
  * hub-inbox-ws-data-plane §3.2 risk #1).
  *
  * Steps:
- *   1. Sort by `createdAt` ASC (PG `RETURNING` does not guarantee order).
+ *   1. Sort by inbox `id` ASC (PG `RETURNING` does not guarantee order).
  *   2. For each trigger, collect silent context without consuming silent rows.
  *   3. Fetch the trigger messages.
  *   4. Build wire payloads via the single dispatcher.
@@ -183,11 +183,10 @@ export async function bundleDeliveryWithSilentContext(
 ): Promise<InboxEntryWithMessage[]> {
   if (claimed.length === 0) return [];
 
-  // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so we sort
-  // by createdAt/id (ascending) before assembling the response. Downstream
-  // consumers — and silent-context bundling in particular — depend on
-  // chronological order to split context windows correctly.
-  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
+  // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so sort by
+  // the delivery cursor. ACK-through uses `id <= cursor`; delivery cannot use
+  // `createdAt` as a separate prefix order without making that cursor unsafe.
+  claimed.sort((a, b) => a.id - b.id);
 
   const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed);
 
@@ -248,7 +247,7 @@ export async function bundleDeliveryWithSilentContext(
  * that target.
  *
  * Production WS delivery no longer exact-claims NOTIFY message ids; it treats
- * NOTIFY as a wake-up hint and drains backlog oldest-first through
+ * NOTIFY as a wake-up hint and drains backlog by inbox-id cursor through
  * `claimBacklogForPush()`. This helper remains for direct tests and any
  * explicit exact-message claim callers that need the same ack-through prefix
  * safety.
@@ -257,10 +256,10 @@ export async function bundleDeliveryWithSilentContext(
  * (or the debug `GET /inbox` endpoint) that already claimed the entry.
  * NOTIFY is fire-and-forget (proposal §3.2).
  *
- * Ack-through safety depends on this prefix behavior: a newer entry must not
- * be claimed/sent while an older same-chat pending entry remains invisible to
- * the client attempt. Callers that send the returned frames must preserve the
- * returned oldest-first order.
+ * Ack-through safety depends on this prefix behavior: a higher-id entry must
+ * not be claimed/sent while a lower-id same-chat pending entry remains
+ * invisible to the client attempt. Callers that send the returned frames must
+ * preserve the returned id order.
  */
 export async function claimAndBuildForPush(
   db: Database,
@@ -280,7 +279,7 @@ export async function claimAndBuildForPush(
             eq(inboxEntries.notify, true),
           ),
         )
-        .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+        .orderBy(asc(inboxEntries.id))
         .for("update")
         .limit(1);
       if (!target) return [];
@@ -376,7 +375,7 @@ async function collectPrecedingContext(
   }
 
   for (const [chatId, chatTriggers] of byChat) {
-    chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
+    chatTriggers.sort((a, b) => a.id - b.id);
 
     const firstTrigger = chatTriggers[0];
     if (!firstTrigger) continue;
