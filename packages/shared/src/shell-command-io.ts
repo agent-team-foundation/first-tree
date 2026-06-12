@@ -525,6 +525,31 @@ export function classifyShellCommandIo(command: string): ShellIoClassification {
   return classifyShellCommandIoInternal(command, 0);
 }
 
+export function stripShellCommandDisplayWrapper(command: string): string {
+  const tokenized = tokenizeSimpleShell(command);
+  if (!tokenized.ok) return command;
+
+  const commandToken = tokenized.tokens[0];
+  if (!commandToken || commandToken.dynamic) return command;
+
+  const commandName = commandBasename(commandToken.value);
+  const flagToken = tokenized.tokens[1];
+  const innerToken = tokenized.tokens[2];
+
+  if (
+    SHELL_WRAPPER_BASENAMES.has(commandName) &&
+    flagToken &&
+    innerToken &&
+    SHELL_WRAPPER_FLAGS.has(flagToken.value) &&
+    innerToken.value.length > 0 &&
+    !innerToken.dynamic
+  ) {
+    return innerToken.value;
+  }
+
+  return command;
+}
+
 function classifyShellCommandIoInternal(command: string, wrapperDepth: number): ShellIoClassification {
   const tokenized = tokenizeSimpleShell(command);
   if (!tokenized.ok) return { supported: false, reason: tokenized.reason };

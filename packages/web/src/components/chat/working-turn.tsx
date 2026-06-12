@@ -14,6 +14,7 @@
  * body and process lane sit still) — not by any border, fill, or card chrome.
  */
 
+import { stripShellCommandDisplayWrapper } from "@first-tree/shared";
 import { useEffect, useState } from "react";
 import {
   asAssistantTextPayload,
@@ -43,6 +44,7 @@ type WorkingTurnProps = {
 // Tool name → human action verb. Unknown tools fall back to "use <Name>".
 const TOOL_VERBS: Record<string, string> = {
   Bash: "run",
+  command: "run",
   Read: "read",
   Grep: "search",
   Glob: "find",
@@ -84,6 +86,13 @@ function readString(args: unknown, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+function displayArgs(p: ToolCallEventPayload): unknown {
+  if (p.name !== "command" || typeof p.args !== "object" || p.args === null) return p.args;
+  const command = readString(p.args, "command");
+  if (!command) return p.args;
+  return { ...(p.args as Record<string, unknown>), command: stripShellCommandDisplayWrapper(command) };
+}
+
 function basename(path: string): string {
   const tail = path.split("/").pop() ?? path;
   return tail.length > 0 ? tail : path;
@@ -98,6 +107,8 @@ function describeTool(p: ToolCallEventPayload): { verb: string; target: string }
   switch (p.name) {
     case "Bash":
       return { verb, target: readString(p.args, "command").split("\n")[0] ?? "" };
+    case "command":
+      return { verb, target: stripShellCommandDisplayWrapper(readString(p.args, "command")).split("\n")[0] ?? "" };
     case "Read":
     case "Edit":
     case "MultiEdit":
@@ -134,6 +145,7 @@ function ToolCallLine({ event }: { event: SessionEventRow }) {
   const isPending = payload.status === "pending";
   const { verb, target } = describeTool(payload);
   const result = isPending ? "" : resultPreviewLine(payload.resultPreview);
+  const argsTitle = fullArgs(displayArgs(payload));
   return (
     <div
       className="mono flex items-center text-label"
@@ -149,7 +161,7 @@ function ToolCallLine({ event }: { event: SessionEventRow }) {
           {isErr ? "⚠" : "↳"}
         </span>
       )}
-      <span className="flex items-baseline" style={{ minWidth: 0, flex: 1 }} title={fullArgs(payload.args)}>
+      <span className="flex items-baseline" style={{ minWidth: 0, flex: 1 }} title={argsTitle}>
         <span style={{ flexShrink: 0, color: "var(--fg-3)" }}>{verb}</span>
         {target ? (
           <span className="truncate" style={{ color: "var(--fg-2)", minWidth: 0, flexShrink: 1, marginLeft: 6 }}>

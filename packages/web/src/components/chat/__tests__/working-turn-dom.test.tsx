@@ -172,4 +172,39 @@ describe("WorkingTurn", () => {
 
     await act(async () => root.unmount());
   });
+
+  it("strips codex login-shell wrappers from command tool display", async () => {
+    const { WorkingTurn } = await import("../working-turn.js");
+    const wrapped = "/bin/zsh -lc \"sed -n '1,40p' /home/op/context-tree/NODE.md\"";
+    const { container, root } = await renderDom(
+      <WorkingTurn
+        {...props}
+        defaultOpen
+        events={[
+          event({
+            id: "codex-command",
+            seq: 1,
+            kind: "tool_call",
+            payload: {
+              toolUseId: "cmd-1",
+              name: "command",
+              args: { command: wrapped, cwd: "/home/op/repo" },
+              status: "pending",
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(container.textContent).toContain("run");
+    expect(container.textContent).toContain("sed -n '1,40p' /home/op/context-tree/NODE.md");
+    expect(container.textContent).not.toContain("/bin/zsh");
+    expect(container.textContent).not.toContain("-lc");
+
+    const titles = Array.from(container.querySelectorAll<HTMLElement>("[title]")).map((el) => el.title);
+    expect(titles.join("\n")).toContain("sed -n '1,40p' /home/op/context-tree/NODE.md");
+    expect(titles.join("\n")).not.toContain("/bin/zsh");
+
+    await act(async () => root.unmount());
+  });
 });

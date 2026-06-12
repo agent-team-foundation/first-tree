@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyShellCommandIo } from "../shell-command-io.js";
+import { classifyShellCommandIo, stripShellCommandDisplayWrapper } from "../shell-command-io.js";
 
 describe("classifyShellCommandIo", () => {
   it("classifies sed file operands after options and script", () => {
@@ -247,5 +247,31 @@ describe("classifyShellCommandIo", () => {
         supported: false,
       });
     });
+  });
+});
+
+describe("stripShellCommandDisplayWrapper", () => {
+  it("strips one codex login-shell wrapper for display", () => {
+    expect(stripShellCommandDisplayWrapper("/bin/zsh -lc \"sed -n '1,7p' /Users/op/tree/NODE.md\"")).toBe(
+      "sed -n '1,7p' /Users/op/tree/NODE.md",
+    );
+    expect(stripShellCommandDisplayWrapper("/bin/bash -lc 'cat /home/op/tree/NODE.md'")).toBe(
+      "cat /home/op/tree/NODE.md",
+    );
+    expect(stripShellCommandDisplayWrapper("sh -c 'rg --files /tree'")).toBe("rg --files /tree");
+  });
+
+  it("leaves non-wrapper and dynamic-wrapper commands unchanged", () => {
+    expect(stripShellCommandDisplayWrapper("sed -n '1,7p' /tree/NODE.md")).toBe("sed -n '1,7p' /tree/NODE.md");
+    expect(stripShellCommandDisplayWrapper("/bin/bash -x cat /tree/NODE.md")).toBe("/bin/bash -x cat /tree/NODE.md");
+    expect(stripShellCommandDisplayWrapper('/bin/zsh -lc "cat $TREE/NODE.md"')).toBe(
+      '/bin/zsh -lc "cat $TREE/NODE.md"',
+    );
+  });
+
+  it("only strips a single display wrapper", () => {
+    expect(stripShellCommandDisplayWrapper("/bin/bash -lc \"sh -c 'cat /tree/NODE.md'\"")).toBe(
+      "sh -c 'cat /tree/NODE.md'",
+    );
   });
 });

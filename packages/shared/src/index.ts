@@ -775,4 +775,5 @@ export {
   type ShellIoPathArg,
   type ShellIoPathKindHint,
   type ShellIoUnsupportedReason,
+  stripShellCommandDisplayWrapper,
 } from "./shell-command-io.js";
