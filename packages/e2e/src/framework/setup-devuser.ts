@@ -210,8 +210,12 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     "POST",
     `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
     {
+      // Group-chat sends now require explicit routing intent; declare the new
+      // agent by name so the seed message keeps working across server-side
+      // mention/routing tightenings.
       format: "text",
       content: "Hello from the e2e environment — this message was posted via POST /chats/:id/messages.",
+      receiverNames: [agentName],
     },
     201,
   );
