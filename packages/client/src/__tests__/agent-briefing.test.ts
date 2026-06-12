@@ -801,6 +801,152 @@ describe("buildAgentBriefing — # Context Tree", () => {
   });
 });
 
+describe("buildAgentBriefing — degraded workspace warnings (repoHealth / treeHealth)", () => {
+  // These blocks carry model behavior guardrails ("Not guess or fabricate",
+  // "WITHOUT organizational context", the no-self-serve-credentials rule) —
+  // pin their rendering so the contract text cannot drift unchecked
+  // (degraded-workspace design §4.3).
+
+  it("renders the degraded source repos block: unreachable + stale flavors, ok entries filtered, behavioral constraints pinned", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        sourceRepos: [
+          {
+            absolutePath: `${AGENT_HOME}/api`,
+            url: "git@github.com:example/api.git",
+          },
+        ],
+        repoHealth: [
+          { url: "git@github.com:example/api.git", status: "ok" },
+          {
+            url: "git@github.com:example/private.git",
+            status: "unreachable",
+            reasonCode: "git_repo_not_found",
+          },
+          {
+            url: "git@github.com:example/web.git",
+            localPath: "web",
+            status: "stale",
+            reasonCode: "git_clone_auth_failed",
+            headCommit: "0123456789abcdef0123456789abcdef01234567",
+          },
+        ],
+      }),
+    );
+
+    expect(briefing).toContain("### ⚠️ DEGRADED: unavailable source repositories");
+    expect(briefing).toContain("**partial workspace**");
+
+    // Unreachable flavor: not on disk, cause line from the reason taxonomy.
+    expect(briefing).toContain("- `git@github.com:example/private.git` — **NOT available on disk** (clone skipped).");
+    expect(briefing).toContain("repository not found (404)");
+
+    // Stale flavor: localPath preferred over url, frozen HEAD truncated to 12.
+    expect(briefing).toContain("- `web` — present but **FROZEN** at its last synced commit (`0123456789ab`)");
+    expect(briefing).toContain("it is NOT being updated");
+    expect(briefing).toContain("git authentication failed");
+
+    // `ok` entries never render a degraded line (the block lists only the
+    // filtered subset; the healthy repo still appears in ## Source
+    // Repositories above).
+    expect(briefing).toContain("## Source Repositories");
+    expect(briefing).not.toContain("- `git@github.com:example/api.git` —");
+
+    // The behavioral constraints are the actual payload of the block.
+    expect(briefing).toContain("**Not guess or fabricate**");
+    expect(briefing).toContain("**Tell the human about the gap**");
+    expect(briefing).toContain("**Not attempt to obtain or configure git credentials yourself**");
+    // Self-heal contract: re-checked per session, no agent action needed.
+    expect(briefing).toContain("re-checks at every session start");
+  });
+
+  it("emits the degraded block even when EVERY repo was skipped and sourceRepos is empty (git/gh-not-installed case)", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        sourceRepos: [],
+        repoHealth: [
+          {
+            url: "git@github.com:example/api.git",
+            status: "unreachable",
+            reasonCode: "git_not_installed",
+          },
+        ],
+      }),
+    );
+
+    // No healthy repo list — but the warning must still appear where the
+    // list would have been.
+    expect(briefing).not.toContain("## Source Repositories");
+    expect(briefing).toContain("### ⚠️ DEGRADED: unavailable source repositories");
+    expect(briefing).toContain("git is not installed");
+  });
+
+  it("omits the degraded block when health is untracked or all-ok (legacy rendering)", () => {
+    // Untracked (repoHealth omitted) — callers that don't track health get
+    // the legacy rendering.
+    expect(buildAgentBriefing(makeOpts())).not.toContain("DEGRADED: unavailable source repositories");
+
+    // Tracked and healthy.
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        repoHealth: [{ url: "git@github.com:example/api.git", status: "ok" }],
+      }),
+    );
+    expect(briefing).not.toContain("DEGRADED: unavailable source repositories");
+  });
+
+  it("appends the FROZEN staleness note to Tree Location when the bound tree checkout is stale", () => {
+    const treePath = "/var/lib/context-trees/example";
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: treePath,
+        treeHealth: { status: "stale", reasonCode: "git_clone_auth_failed" },
+      }),
+    );
+
+    // The tree is still on disk and still pointed at.
+    expect(briefing).toContain("## Tree Location");
+    expect(briefing).toContain(treePath);
+    // …but flagged frozen: content is possibly outdated, no self-serve
+    // credential fixing, clears automatically on repair.
+    expect(briefing).toContain("**The tree checkout is currently FROZEN**");
+    expect(briefing).toContain("possibly outdated");
+    expect(briefing).toContain("Do not attempt to fix git credentials");
+
+    // A healthy tree must NOT carry the note.
+    const healthy = buildAgentBriefing(makeOpts({ contextTreePath: treePath, treeHealth: { status: "ok" } }));
+    expect(healthy).not.toContain("FROZEN");
+  });
+
+  it("renders the bound-but-unreachable Tree Location variant — distinct from the neutral tree-less stub", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: null,
+        treeHealth: { status: "unreachable", reasonCode: "git_repo_not_found" },
+      }),
+    );
+
+    // The org HAS organizational context; this machine just cannot fetch
+    // it — the agent must be told it is flying blind, not that no tree
+    // exists (design §4.3).
+    expect(briefing).toContain("## Tree Location");
+    expect(briefing).toMatch(
+      /this organization HAS a Context Tree, but this machine[\s\n]+cannot reach its repository/,
+    );
+    expect(briefing).toContain("WITHOUT organizational context");
+    expect(briefing).toContain("confirm background and");
+    expect(briefing).toContain("Do not attempt to obtain or configure git credentials yourself");
+    expect(briefing).toContain("retries at every session start");
+    // The neutral tree-less stub must NOT appear.
+    expect(briefing).not.toContain("This agent has no Context Tree bound");
+
+    // `unbound` (org genuinely has no tree) keeps the neutral stub.
+    const unbound = buildAgentBriefing(makeOpts({ contextTreePath: null, treeHealth: { status: "unbound" } }));
+    expect(unbound).toContain("This agent has no Context Tree bound");
+    expect(unbound).not.toContain("HAS a Context Tree");
+  });
+});
+
 describe("buildAgentBriefing — # Skills (Skill Map)", () => {
   it("lists only the shipped First Tree family skills — drift detector against the on-disk skills/ directory", () => {
     // Compute repo root from the test file location, then enumerate
