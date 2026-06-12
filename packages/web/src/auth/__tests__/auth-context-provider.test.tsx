@@ -58,6 +58,9 @@ const MEMBERSHIPS: MeMembership[] = [
     agentId: "human-agent-1",
     orgHasOtherMembers: true,
     hasUsableAgent: true,
+    onboardingSuppressedAt: null,
+    onboardingSuppressedReason: null,
+    onboardingCompletedAt: null,
   },
   {
     id: "member-2",
@@ -67,6 +70,9 @@ const MEMBERSHIPS: MeMembership[] = [
     agentId: "human-agent-2",
     orgHasOtherMembers: false,
     hasUsableAgent: false,
+    onboardingSuppressedAt: null,
+    onboardingSuppressedReason: null,
+    onboardingCompletedAt: null,
   },
 ];
 

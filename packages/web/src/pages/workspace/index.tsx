@@ -258,7 +258,7 @@ export function WorkspacePage() {
     shouldEnterOnboarding({
       meLoaded,
       onboardingStep,
-      onboardingDismissedAt,
+      onboardingSuppressedAt: onboardingDismissedAt,
       currentOrgReady: currentOrgHasUsableAgent,
     })
   ) {

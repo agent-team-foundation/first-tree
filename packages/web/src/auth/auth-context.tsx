@@ -211,6 +211,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMemberships(ms);
       const nextStep = data.onboarding?.step ?? null;
       setOnboardingStep(nextStep);
+      // Legacy fallback for older /me payloads. Modern payloads carry these
+      // stamps per membership and the provider derives the public values from
+      // currentMembership below.
       setOnboardingDismissedAt(data.onboarding?.dismissedAt ?? null);
       setOnboardingCompletedAt(data.onboarding?.completedAt ?? null);
       // Drop the join-path flag once onboarding is complete so a later
@@ -276,41 +279,92 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fetchMe, queryClient],
   );
 
+  const currentMembership = useMemo<MeMembership | null>(() => {
+    if (memberships.length === 0) return null;
+    const match = memberships.find((m) => m.organizationId === selectedOrgId);
+    return match ?? memberships[0] ?? null;
+  }, [memberships, selectedOrgId]);
+
+  const currentOnboardingDismissedAt = currentMembership?.onboardingSuppressedAt ?? onboardingDismissedAt;
+  const currentOnboardingCompletedAt = currentMembership?.onboardingCompletedAt ?? onboardingCompletedAt;
+
+  const patchMembershipOnboarding = useCallback(
+    (
+      patch: Partial<
+        Pick<MeMembership, "onboardingSuppressedAt" | "onboardingSuppressedReason" | "onboardingCompletedAt">
+      >,
+    ) => {
+      const memberId = currentMembership?.id;
+      if (!memberId) return;
+      setMemberships((prev) => prev.map((m) => (m.id === memberId ? { ...m, ...patch } : m)));
+    },
+    [currentMembership?.id],
+  );
+
   // Track the latest dismissal stamp in a ref so `dismissOnboarding`'s
   // rollback path can read it synchronously without depending on the
   // setState updater closure (concurrent rendering can drop+re-run
   // updaters, making the captured value unreliable).
   const dismissedAtRef = useRef<string | null>(null);
   useEffect(() => {
-    dismissedAtRef.current = onboardingDismissedAt;
-  }, [onboardingDismissedAt]);
+    dismissedAtRef.current = currentOnboardingDismissedAt;
+  }, [currentOnboardingDismissedAt]);
 
   const dismissOnboarding = useCallback(async () => {
     // Optimistic: stamp client-side immediately so the workspace stops
     // redirecting into onboarding without a round-trip. Server returns the
     // canonical timestamp.
     const prior = dismissedAtRef.current;
-    setOnboardingDismissedAt(new Date().toISOString());
+    const organizationId = currentMembership?.organizationId;
+    const optimistic = new Date().toISOString();
+    setOnboardingDismissedAt(optimistic);
+    patchMembershipOnboarding({ onboardingSuppressedAt: optimistic, onboardingSuppressedReason: "finish_later" });
     try {
-      const res = await api.patch<{ dismissedAt: string | null }>("/me/onboarding", { dismissed: true });
-      if (res?.dismissedAt) setOnboardingDismissedAt(res.dismissedAt);
+      const res = await api.patch<{ dismissedAt: string | null }>("/me/onboarding", {
+        dismissed: true,
+        ...(organizationId ? { organizationId } : {}),
+      });
+      if (res?.dismissedAt) {
+        setOnboardingDismissedAt(res.dismissedAt);
+        patchMembershipOnboarding({
+          onboardingSuppressedAt: res.dismissedAt,
+          onboardingSuppressedReason: currentMembership?.onboardingSuppressedReason ?? "finish_later",
+        });
+      }
     } catch {
       // Restore the prior value rather than blanket-clearing — the user
       // may have already had a non-null timestamp from a previous dismiss.
       setOnboardingDismissedAt(prior);
+      patchMembershipOnboarding({
+        onboardingSuppressedAt: prior,
+        onboardingSuppressedReason: prior ? (currentMembership?.onboardingSuppressedReason ?? "finish_later") : null,
+      });
     }
-  }, []);
+  }, [currentMembership?.onboardingSuppressedReason, currentMembership?.organizationId, patchMembershipOnboarding]);
 
   const restoreOnboarding = useCallback(async () => {
     // Optimistic clear so onboarding is pending again immediately.
     const prior = dismissedAtRef.current;
+    const priorReason = currentMembership?.onboardingSuppressedReason ?? null;
+    const organizationId = currentMembership?.organizationId;
     setOnboardingDismissedAt(null);
+    patchMembershipOnboarding({ onboardingSuppressedAt: null, onboardingSuppressedReason: null });
     try {
-      await api.patch<{ dismissedAt: string | null }>("/me/onboarding", { dismissed: false });
+      const res = await api.patch<{ dismissedAt: string | null }>("/me/onboarding", {
+        dismissed: false,
+        ...(organizationId ? { organizationId } : {}),
+      });
+      const next = res?.dismissedAt ?? null;
+      setOnboardingDismissedAt(next);
+      patchMembershipOnboarding({
+        onboardingSuppressedAt: next,
+        onboardingSuppressedReason: next ? (priorReason ?? "completed") : null,
+      });
     } catch {
       setOnboardingDismissedAt(prior);
+      patchMembershipOnboarding({ onboardingSuppressedAt: prior, onboardingSuppressedReason: priorReason });
     }
-  }, []);
+  }, [currentMembership?.onboardingSuppressedReason, currentMembership?.organizationId, patchMembershipOnboarding]);
 
   const markOnboardingCompleted = useCallback(async () => {
     // Optimistic: stamp immediately so the Settings sidebar gate and the
@@ -322,9 +376,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // navigating away, so a network blip here just means the sidebar entry
     // lingers until the next /me — strictly less wrong than briefly
     // un-completing the user.
-    setOnboardingCompletedAt((prev) => prev ?? new Date().toISOString());
-    await postOnboardingCompleted();
-  }, []);
+    const organizationId = currentMembership?.organizationId;
+    const optimistic = new Date().toISOString();
+    setOnboardingCompletedAt((prev) => prev ?? optimistic);
+    setOnboardingDismissedAt((prev) => prev ?? optimistic);
+    patchMembershipOnboarding({
+      onboardingCompletedAt: currentMembership?.onboardingCompletedAt ?? optimistic,
+      onboardingSuppressedAt: currentMembership?.onboardingSuppressedAt ?? optimistic,
+      onboardingSuppressedReason: "completed",
+    });
+    await postOnboardingCompleted(organizationId ?? undefined);
+  }, [
+    currentMembership?.onboardingCompletedAt,
+    currentMembership?.onboardingSuppressedAt,
+    currentMembership?.organizationId,
+    patchMembershipOnboarding,
+  ]);
 
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
@@ -339,12 +406,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
   }, [logout]);
-
-  const currentMembership = useMemo<MeMembership | null>(() => {
-    if (memberships.length === 0) return null;
-    const match = memberships.find((m) => m.organizationId === selectedOrgId);
-    return match ?? memberships[0] ?? null;
-  }, [memberships, selectedOrgId]);
 
   return (
     <AuthContext.Provider
@@ -362,8 +423,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
         currentOrgHasUsableAgent: currentMembership?.hasUsableAgent ?? false,
         onboardingStep,
-        onboardingDismissedAt,
-        onboardingCompletedAt,
+        onboardingDismissedAt: currentOnboardingDismissedAt,
+        onboardingCompletedAt: currentOnboardingCompletedAt,
         dismissOnboarding,
         restoreOnboarding,
         markOnboardingCompleted,

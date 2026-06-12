@@ -22,6 +22,15 @@ export const members = pgTable(
     /** "admin" | "member" */
     role: text("role").notNull(),
     /**
+     * Per-membership onboarding auto-open suppressor. A user completing or
+     * hiding onboarding in one org must not suppress setup for another org.
+     */
+    onboardingSuppressedAt: timestamp("onboarding_suppressed_at", { withTimezone: true }),
+    /** "finish_later" | "completed" | "invitee_skip"; NULL iff onboardingSuppressedAt is NULL. */
+    onboardingSuppressedReason: text("onboarding_suppressed_reason"),
+    /** Audit stamp for completing this membership's onboarding journey. */
+    onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+    /**
      * "active" | "left". Soft-delete marker. Members who leave a team have
      * their row flipped to "left" rather than deleted, so historical chats /
      * agent ownership references stay intact. The auth middleware refuses
