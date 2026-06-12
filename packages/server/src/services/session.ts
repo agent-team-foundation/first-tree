@@ -67,6 +67,61 @@ export type SessionListItem = {
   topic: string | null;
 };
 
+export type OrgSessionListViewer = {
+  role: "admin" | "member";
+  memberId: string;
+  humanAgentId: string;
+};
+
+function chatAccessPredicate(viewer: OrgSessionListViewer) {
+  return sql`(
+    EXISTS (
+      SELECT 1
+      FROM chat_membership direct_cm
+      WHERE direct_cm.chat_id = ${chats.id}
+        AND direct_cm.agent_id = ${viewer.humanAgentId}
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM chat_membership managed_cm
+      INNER JOIN agents managed_agent ON managed_agent.uuid = managed_cm.agent_id
+      WHERE managed_cm.chat_id = ${chats.id}
+        AND managed_cm.access_mode = 'speaker'
+        AND managed_agent.manager_id = ${viewer.memberId}
+    )
+  )`;
+}
+
+async function accessibleChatIdSet(
+  db: Database,
+  viewer: OrgSessionListViewer,
+  chatIds: string[],
+): Promise<Set<string>> {
+  const accessible = new Set<string>();
+  if (chatIds.length === 0) return accessible;
+
+  const directRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
+  for (const row of directRows) accessible.add(row.chatId);
+
+  const supervisedRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.managerId, viewer.memberId),
+      ),
+    );
+  for (const row of supervisedRows) accessible.add(row.chatId);
+
+  return accessible;
+}
+
 /** List sessions for a specific agent, with optional state filters. */
 export async function listAgentSessions(
   db: Database,
@@ -226,6 +281,7 @@ export async function getSession(db: Database, agentId: string, chatId: string):
 export async function listAllSessions(
   db: Database,
   organizationId: string,
+  viewer: OrgSessionListViewer,
   limit: number,
   cursor?: string,
   filters?: { state?: string; agentId?: string },
@@ -236,6 +292,9 @@ export async function listAllSessions(
   // reporting session:state for a foreign chatId could otherwise leak that
   // chat's topic/summary through the unconstrained chats join.
   const conditions = [eq(agents.organizationId, organizationId), eq(chats.organizationId, organizationId)];
+  if (viewer.role !== "admin") {
+    conditions.push(chatAccessPredicate(viewer));
+  }
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
   } else {
@@ -289,12 +348,14 @@ export async function listAllSessions(
 
   // Batch-fetch first message per chat for summary (parity with listAgentSessions)
   const chatIds = [...new Set(items.map((r) => r.chatId))];
+  const accessibleChatIds = await accessibleChatIdSet(db, viewer, chatIds);
+  const visibleSummaryChatIds = chatIds.filter((chatId) => accessibleChatIds.has(chatId));
   const firstMessages =
-    chatIds.length > 0
+    visibleSummaryChatIds.length > 0
       ? await db
           .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
           .from(messages)
-          .where(inArray(messages.chatId, chatIds))
+          .where(inArray(messages.chatId, visibleSummaryChatIds))
           .orderBy(messages.chatId, messages.createdAt)
       : [];
   const summaryMap = new Map<string, string>();
@@ -307,17 +368,20 @@ export async function listAllSessions(
   const nextCursor = hasMore && last ? last.updatedAt.toISOString() : null;
 
   return {
-    items: items.map((r) => ({
-      agentId: r.agentId,
-      chatId: r.chatId,
-      state: r.state,
-      runtimeState: runtimeMap.get(r.agentId) ?? null,
-      startedAt: r.chatCreatedAt.toISOString(),
-      lastActivityAt: r.updatedAt.toISOString(),
-      messageCount: 0, // Omit per-session message count in global list for performance
-      summary: summaryMap.get(r.chatId) ?? null,
-      topic: r.chatTopic ?? null,
-    })),
+    items: items.map((r) => {
+      const canSeeChat = accessibleChatIds.has(r.chatId);
+      return {
+        agentId: r.agentId,
+        chatId: r.chatId,
+        state: r.state,
+        runtimeState: runtimeMap.get(r.agentId) ?? null,
+        startedAt: r.chatCreatedAt.toISOString(),
+        lastActivityAt: r.updatedAt.toISOString(),
+        messageCount: 0, // Omit per-session message count in global list for performance
+        summary: canSeeChat ? (summaryMap.get(r.chatId) ?? null) : null,
+        topic: canSeeChat ? (r.chatTopic ?? null) : null,
+      };
+    }),
     nextCursor,
   };
 }
