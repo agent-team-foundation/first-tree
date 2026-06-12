@@ -156,6 +156,7 @@ export {
   type ChatParticipantDetail,
   type ChatType,
   type CreateChat,
+  type CreateTaskChat,
   chatDetailSchema,
   chatEngagementStatusSchema,
   chatParticipantDetailSchema,
@@ -163,6 +164,9 @@ export {
   chatSchema,
   chatTypeSchema,
   createChatSchema,
+  createTaskChatSchema,
+  type LegacyCreateChat,
+  legacyCreateChatSchema,
   type PatchChatEngagement,
   patchChatEngagementSchema,
   type RemoveParticipant,
@@ -192,6 +196,8 @@ export {
   unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";
 export {
+  type AgentChatMetadata,
+  agentChatMetadataSchema,
   CHAT_SOURCES,
   type ChatMetadata,
   type ChatSource,

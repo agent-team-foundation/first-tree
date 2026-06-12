@@ -1,5 +1,6 @@
 import {
   createMeChatSchema,
+  createTaskChatSchema,
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
@@ -10,8 +11,9 @@ import { chats } from "../../db/schema/chats.js";
 import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
-import { listChatsForMember } from "../../services/chat.js";
+import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../../services/chat.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
+import { notifyRecipients } from "../../services/notifier.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -96,7 +98,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET /orgs/:orgId/chats/source-counts — per-source aggregate powering the
-   * conversation-list tag bar (Manual / GitHub PR / GitHub Issue).
+   * conversation-list tag bar (Manual / GitHub / Agent).
    * Returns counts only for sources the caller has chats in, plus an
    * always-present `manual` entry. Same engagement view filter as the list.
    */
@@ -113,7 +115,44 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
-    const body = createMeChatSchema.parse(request.body);
+    const rawBody = request.body;
+    if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
+      const body = createTaskChatSchema.parse(rawBody);
+      const initialRecipientAgentIds = [
+        ...body.initialRecipientAgentIds,
+        ...(await resolveAgentIdsByNameInOrg(app.db, scope.organizationId, body.initialRecipientNames)),
+      ];
+      const contextParticipantAgentIds = [
+        ...body.contextParticipantAgentIds,
+        ...(await resolveAgentIdsByNameInOrg(app.db, scope.organizationId, body.contextParticipantNames)),
+      ];
+      const visibleTargetIds = [...new Set([...initialRecipientAgentIds, ...contextParticipantAgentIds])].filter(
+        (id) => id !== scope.humanAgentId,
+      );
+      await assertAllAgentsVisibleInOrg(app.db, scope, visibleTargetIds);
+      const result = await createChat(app.db, {
+        mode: "task",
+        initiatorAgentId: scope.humanAgentId,
+        organizationId: scope.organizationId,
+        initialRecipientAgentIds,
+        contextParticipantAgentIds,
+        topic: body.topic ?? null,
+        description: body.description ?? null,
+        initialMessage: { ...body.initialMessage, source: "web" },
+        source: "manual",
+      });
+      notifyRecipients(app.notifier, result.recipients, result.message.id);
+      return reply.status(201).send({
+        chatId: result.chat.id,
+        messageId: result.message.id,
+        topic: result.chat.topic,
+        effectiveSenderId: result.effectiveSenderId,
+        initialRecipientAgentIds: result.initialRecipientAgentIds,
+        contextParticipantAgentIds: result.contextParticipantAgentIds,
+      });
+    }
+
+    const body = createMeChatSchema.parse(rawBody);
     const targetIds = [...new Set(body.participantIds)].filter((id) => id !== scope.humanAgentId);
     if (targetIds.length === 0) {
       // Service layer also enforces this (services/me-chat.ts), but bail at

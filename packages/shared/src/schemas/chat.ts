@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalChatMetadataSchema } from "./chat-metadata.js";
+import { sendMessageSchema } from "./message.js";
 
 export const CHAT_TYPES = {
   DIRECT: "direct",
@@ -41,12 +42,31 @@ export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
  * that explicitly sends `type: "direct"` gets a 400 instead of silently
  * minting a new `direct` row.
  */
-export const createChatSchema = z.object({
+export const legacyCreateChatSchema = z.object({
   type: z.literal("group"),
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
   metadata: optionalChatMetadataSchema.optional(),
 });
+export type LegacyCreateChat = z.infer<typeof legacyCreateChatSchema>;
+
+export const createTaskChatSchema = z
+  .object({
+    mode: z.literal("task"),
+    topic: z.string().trim().max(500).nullable().optional(),
+    description: z.string().trim().max(500).nullable().optional(),
+    initialRecipientAgentIds: z.array(z.string().min(1)).default([]),
+    initialRecipientNames: z.array(z.string().min(1)).default([]),
+    contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
+    contextParticipantNames: z.array(z.string().min(1)).default([]),
+    initialMessage: sendMessageSchema,
+  })
+  .refine((v) => v.initialRecipientAgentIds.length > 0 || v.initialRecipientNames.length > 0, {
+    message: "task chat creation requires at least one initial recipient",
+  });
+export type CreateTaskChat = z.infer<typeof createTaskChatSchema>;
+
+export const createChatSchema = z.union([createTaskChatSchema, legacyCreateChatSchema]);
 export type CreateChat = z.infer<typeof createChatSchema>;
 
 export const chatParticipantSchema = z.object({

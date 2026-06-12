@@ -10,6 +10,7 @@ import {
   type ChatGithubEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type CreateTaskChat,
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
@@ -108,7 +109,7 @@ const STARTUP_FETCH_TIMEOUT_MS = 5_000;
  * `sendMessage` / `listMessages` paths); startup-critical GETs override
  * with `STARTUP_FETCH_TIMEOUT_MS`.
  */
-type SdkCallOptions = { timeoutMs?: number };
+type SdkCallOptions = { timeoutMs?: number; retry?: boolean };
 
 /**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
@@ -293,6 +294,24 @@ export class FirstTreeHubSDK {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async createTaskChat(data: CreateTaskChat): Promise<{
+    chatId: string;
+    messageId: string;
+    topic: string | null;
+    effectiveSenderId: string;
+    initialRecipientAgentIds: string[];
+    contextParticipantAgentIds: string[];
+  }> {
+    return this.requestJson(
+      "/api/v1/agent/chats",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+      { retry: false },
+    );
   }
 
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
@@ -513,7 +532,7 @@ export class FirstTreeHubSDK {
    * same error type on terminal failure.
    */
   private async doFetch(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<Response> {
-    const delays = [0, 500, 1000];
+    const delays = opts?.retry === false ? [0] : [0, 500, 1000];
     let lastErr: unknown;
     for (let attempt = 0; attempt < delays.length; attempt++) {
       const delay = delays[attempt];

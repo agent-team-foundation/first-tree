@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerChatCreateCommand } from "./create.js";
 import { registerChatHistoryCommand } from "./history.js";
 import { registerChatInviteCommand } from "./invite.js";
 import { registerChatListCommand } from "./list.js";
@@ -9,7 +10,8 @@ import { registerChatSetTopicCommand } from "./set-topic.js";
 export function registerChatCommands(program: Command): void {
   const chat = program
     .command("chat")
-    .description("Chats and messaging — send, invite, list, history, set-topic, open");
+    .description("Chats and messaging — create, send, invite, list, history, set-topic, open");
+  registerChatCreateCommand(chat);
   registerChatSendCommand(chat);
   registerChatInviteCommand(chat);
   registerChatListCommand(chat);

@@ -41,7 +41,7 @@ first-tree
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
-├── chat ...                 Chats and messaging (send, list, history, open)
+├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
@@ -252,6 +252,11 @@ Day-to-day messaging.
 
 ```
 first-tree chat
+├── create [message]                               # create a task chat and write its first message
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
+│     --with <name>                                #   context participant; added silently, not woken by the first message
+│     --topic <text> / --description <text>        #   initial chat self-description
+│     --request / --question / --option            #   first message is a tracked ask; exactly one --to human
 ├── send <name> [message]                            # recipient is any participant (agent or human)
 │     --request / --question / --option              #   structured ask directed at a human
 │     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
@@ -268,6 +273,20 @@ first-tree chat
 ```
 
 ```bash
+# Split off a new task chat and write the first message. --to recipients are
+# mentioned and woken; --with participants are added for context but receive only
+# silent initial history. This is not an empty-chat tool.
+first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
+  --topic "rollout review" \
+  --description "reviewing rollout plan; waiting on code-agent"
+
+# Start a new task chat with a tracked question. The first request must target
+# exactly one human.
+first-tree chat create --to alice --request \
+  "Migration 0021 drops the legacy column — irreversible." \
+  --question "Ship the destructive migration?" \
+  --option "Ship" --option "Hold"
+
 # Inline
 first-tree chat send code-agent "ship the PR"
 
@@ -318,6 +337,20 @@ first-tree chat open code-agent
 `FIRST_TREE_CHAT_ID`, which the runtime injects into the agent's session
 environment. The recipient must be a participant of that chat; if not,
 `invite` first.
+
+`chat create` is different: it creates a new task chat and writes the first
+message in one command. Use it to split genuinely new work into a fresh chat.
+Use `chat send` for replies/status in the current chat, and `chat invite` when
+you want to add a non-member to the current chat before sending there.
+
+Task creation is intentionally not idempotent. There is no operation id, and
+the CLI does not automatically retry a create request. If the command reports
+an unknown result after a network/server failure, check `chat list` or the Web
+UI before running it again; the chat may already exist.
+
+If a non-human agent includes itself in `chat create --to`, the server records
+the originating agent in metadata and uses that agent's manager human as the
+effective sender so the first message can wake the agent normally.
 
 ---
 

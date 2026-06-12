@@ -54,7 +54,7 @@ function StatefulFilter({
   onEngagementChange: (engagement: ChatEngagementView) => void;
   onResetAll: () => void;
 }) {
-  const [origin, setOrigin] = useState<ChatSource[]>(["github"]);
+  const [origin, setOrigin] = useState<ChatSource[]>(["github", "agent"]);
   const [engagement, setEngagement] = useState<ChatEngagementView>("archived");
   return (
     <FilterPopover
@@ -93,6 +93,7 @@ afterEach(async () => {
 describe("FilterPopover", () => {
   it("labels unknown origins defensively", () => {
     expect(originLabel("github")).toBe("GitHub");
+    expect(originLabel("agent")).toBe("Agent");
     expect(originLabel("future" as ChatSource)).toBe("future");
   });
 
@@ -109,7 +110,7 @@ describe("FilterPopover", () => {
     );
 
     const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Filter"]');
-    expect(trigger?.textContent).toContain("2");
+    expect(trigger?.textContent).toContain("3");
     await click(trigger ?? null);
 
     expect(document.body.textContent).toContain("Status");
@@ -117,11 +118,16 @@ describe("FilterPopover", () => {
     expect(checkboxByLabel("Active").checked).toBe(false);
     expect(checkboxByLabel("Archived").checked).toBe(true);
     expect(checkboxByLabel("GitHub").checked).toBe(true);
+    expect(checkboxByLabel("Agent").checked).toBe(true);
     expect(checkboxByLabel("Manual").checked).toBe(false);
 
     await click(checkboxByLabel("Manual"));
+    expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github", "agent"]);
+    expect(trigger?.textContent).toContain("4");
+
+    await click(checkboxByLabel("Agent"));
     expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github"]);
-    expect(trigger?.textContent).toContain("3");
+    expect(checkboxByLabel("Agent").checked).toBe(false);
 
     await click(checkboxByLabel("GitHub"));
     expect(onOriginChange).toHaveBeenLastCalledWith(["manual"]);

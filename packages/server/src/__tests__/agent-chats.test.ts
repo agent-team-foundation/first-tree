@@ -1,4 +1,11 @@
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
+import { suspendAgent } from "../services/agent.js";
 import { resolveTargetChat } from "../services/github-entity-chat.js";
 import { createMeChat, leaveMeChat } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
@@ -25,6 +32,255 @@ describe("Agent Chats API", () => {
     const getRes = await a.request("GET", `/api/v1/agent/chats/${chat.id}`);
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().id).toBe(chat.id);
+  });
+
+  it("creates a task chat with an initial message, woken recipients, and silent context participants", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const sender = await createTestAgent(app, { name: `task-src-${uid}` });
+    const target = await createTestAgent(app, { name: `task-to-${uid}` });
+    const context = await createTestAgent(app, { name: `task-with-${uid}` });
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [target.agent.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [context.agent.uuid],
+      contextParticipantNames: [],
+      topic: "Task create route",
+      description: "checking the task chat create path",
+      initialMessage: { source: "cli", format: "text", content: "please review" },
+    });
+
+    expect(createRes.statusCode).toBe(201);
+    const body = createRes.json<{
+      chatId: string;
+      messageId: string;
+      effectiveSenderId: string;
+      initialRecipientAgentIds: string[];
+      contextParticipantAgentIds: string[];
+    }>();
+    expect(body.effectiveSenderId).toBe(sender.agent.uuid);
+    expect(body.initialRecipientAgentIds).toEqual([target.agent.uuid]);
+    expect(body.contextParticipantAgentIds).toEqual([context.agent.uuid]);
+
+    const [chatRow] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(chatRow?.topic).toBe("Task create route");
+    expect(chatRow?.description).toBe("checking the task chat create path");
+    expect(chatRow?.metadata).toEqual({ source: "agent" });
+
+    const participantRows = await app.db
+      .select({ agentId: chatMembership.agentId, role: chatMembership.role, accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(eq(chatMembership.chatId, body.chatId));
+    expect(participantRows).toEqual(
+      expect.arrayContaining([
+        { agentId: sender.agent.uuid, role: "owner", accessMode: "speaker" },
+        { agentId: target.agent.uuid, role: "member", accessMode: "speaker" },
+        { agentId: context.agent.uuid, role: "member", accessMode: "speaker" },
+      ]),
+    );
+
+    const [messageRow] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(messageRow).toMatchObject({
+      chatId: body.chatId,
+      senderId: sender.agent.uuid,
+      source: "cli",
+      format: "text",
+      content: `@${target.agent.name} please review`,
+    });
+    expect(messageRow?.metadata).toEqual({ mentions: [target.agent.uuid] });
+
+    const targetInbox = await app.db
+      .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, body.chatId), eq(inboxEntries.inboxId, target.agent.inboxId)));
+    expect(targetInbox).toEqual([{ notify: true, messageId: body.messageId }]);
+
+    const contextInbox = await app.db
+      .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, body.chatId), eq(inboxEntries.inboxId, context.agent.inboxId)));
+    expect(contextInbox).toEqual([{ notify: false, messageId: body.messageId }]);
+  });
+
+  it("creates a task chat by recipient names while keeping context participants silent", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const sender = await createTestAgent(app, { name: `task-name-src-${uid}` });
+    const target = await createTestAgent(app, { name: `task-name-to-${uid}` });
+    const context = await createTestAgent(app, { name: `task-name-with-${uid}` });
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [],
+      initialRecipientNames: [target.agent.name],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [context.agent.name],
+      topic: "Task create names",
+      initialMessage: { source: "cli", format: "text", content: "please review by name" },
+    });
+
+    expect(createRes.statusCode).toBe(201);
+    const body = createRes.json<{
+      chatId: string;
+      messageId: string;
+      initialRecipientAgentIds: string[];
+      contextParticipantAgentIds: string[];
+    }>();
+    expect(body.initialRecipientAgentIds).toEqual([target.agent.uuid]);
+    expect(body.contextParticipantAgentIds).toEqual([context.agent.uuid]);
+
+    const [messageRow] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(messageRow?.content).toBe(`@${target.agent.name} please review by name`);
+    expect(messageRow?.metadata).toEqual({ mentions: [target.agent.uuid] });
+
+    const targetInbox = await app.db
+      .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, body.chatId), eq(inboxEntries.inboxId, target.agent.inboxId)));
+    expect(targetInbox).toEqual([{ notify: true, messageId: body.messageId }]);
+
+    const contextInbox = await app.db
+      .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, body.chatId), eq(inboxEntries.inboxId, context.agent.inboxId)));
+    expect(contextInbox).toEqual([{ notify: false, messageId: body.messageId }]);
+  });
+
+  it("uses the manager human as effective sender when an agent creates a self-target task chat", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: `task-self-${crypto.randomUUID().slice(0, 6)}` });
+    const [manager] = await app.db
+      .select({ agentId: members.agentId })
+      .from(members)
+      .where(eq(members.id, sender.memberId))
+      .limit(1);
+    expect(manager?.agentId).toBeTruthy();
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [sender.agent.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      topic: "Self target",
+      initialMessage: { source: "cli", format: "text", content: "check this" },
+    });
+
+    expect(createRes.statusCode).toBe(201);
+    const body = createRes.json<{ chatId: string; messageId: string; effectiveSenderId: string }>();
+    expect(body.effectiveSenderId).toBe(manager?.agentId);
+
+    const [chatRow] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(chatRow?.metadata).toEqual({
+      source: "agent",
+      initiatedByAgentId: sender.agent.uuid,
+      effectiveSenderReason: "self_target_manager_human",
+    });
+
+    const [messageRow] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
+    expect(messageRow?.senderId).toBe(manager?.agentId);
+    expect(messageRow?.metadata).toEqual({
+      mentions: [sender.agent.uuid],
+      initiatedByAgentId: sender.agent.uuid,
+      effectiveSenderReason: "self_target_manager_human",
+    });
+
+    const ownerRows = await app.db
+      .select({ agentId: chatMembership.agentId, role: chatMembership.role })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, body.chatId), eq(chatMembership.role, "owner")));
+    expect(ownerRows).toEqual([{ agentId: manager?.agentId, role: "owner" }]);
+
+    const selfInbox = await app.db
+      .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, body.chatId), eq(inboxEntries.inboxId, sender.agent.inboxId)));
+    expect(selfInbox).toEqual([{ notify: true, messageId: body.messageId }]);
+  });
+
+  it("runs deterministic send preflight before inserting a task chat", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const sender = await createTestAgent(app, { name: `task-preflight-src-${uid}` });
+    const targetA = await createTestAgent(app, { name: `task-preflight-a-${uid}` });
+    const targetB = await createTestAgent(app, { name: `task-preflight-b-${uid}` });
+    const createTopic = `preflight-no-create-${uid}`;
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [targetA.agent.uuid, targetB.agent.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      topic: createTopic,
+      initialMessage: { source: "cli", format: "request", content: "please choose" },
+    });
+
+    expect(createRes.statusCode).toBe(400);
+    const leakedChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.topic, createTopic));
+    expect(leakedChats).toHaveLength(0);
+
+    const agentRequestTopic = `preflight-agent-request-${uid}`;
+    const agentRequestRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [targetA.agent.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      topic: agentRequestTopic,
+      initialMessage: { source: "cli", format: "request", content: "please choose" },
+    });
+
+    expect(agentRequestRes.statusCode).toBe(400);
+    const leakedAgentRequestChats = await app.db
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.topic, agentRequestTopic));
+    expect(leakedAgentRequestChats).toHaveLength(0);
+  });
+
+  it("does not fall back to legacy empty-chat creation when a task payload is malformed", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const sender = await createTestAgent(app, { name: `task-malformed-src-${uid}` });
+    const target = await createTestAgent(app, { name: `task-malformed-to-${uid}` });
+    const createTopic = `task-malformed-no-create-${uid}`;
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      type: "group",
+      participantIds: [target.agent.uuid],
+      topic: createTopic,
+    });
+
+    expect(createRes.statusCode).toBe(400);
+    const leakedChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.topic, createTopic));
+    expect(leakedChats).toHaveLength(0);
+  });
+
+  it("rejects inactive task-create targets before inserting a chat", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const sender = await createTestAgent(app, { name: `task-inactive-src-${uid}` });
+    const target = await createTestAgent(app, { name: `task-inactive-to-${uid}` });
+    const createTopic = `task-inactive-no-create-${uid}`;
+    await suspendAgent(app.db, target.agent.uuid);
+
+    const createRes = await sender.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [target.agent.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      topic: createTopic,
+      initialMessage: { source: "cli", format: "text", content: "please review" },
+    });
+
+    expect(createRes.statusCode).toBe(400);
+    const leakedChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.topic, createTopic));
+    expect(leakedChats).toHaveLength(0);
   });
 
   it("lists chats for an agent", async () => {

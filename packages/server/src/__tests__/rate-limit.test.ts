@@ -1,4 +1,6 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { chats } from "../db/schema/chats.js";
 import { createAgent } from "../services/agent.js";
 import { agentRequest, createAdminContext, createTestAdmin, createTestAgent, createTestApp } from "./helpers.js";
 
@@ -97,6 +99,37 @@ describe("Rate limit", () => {
         });
         expect(res.statusCode).toBe(201);
       }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("counts agent task chat creation in the agent actor bucket", async () => {
+    const app = await createTestApp({ rateLimit: { max: 2 } });
+    try {
+      const uid = crypto.randomUUID().slice(0, 8);
+      const sender = await createTestAgent(app, { name: `rl-create-${uid}-s` });
+      const target = await createTestAgent(app, { name: `rl-create-${uid}-t` });
+
+      const createTask = (topic: string) =>
+        sender.request("POST", "/api/v1/agent/chats", {
+          mode: "task",
+          initialRecipientAgentIds: [target.agent.uuid],
+          initialRecipientNames: [],
+          contextParticipantAgentIds: [],
+          contextParticipantNames: [],
+          topic,
+          initialMessage: { source: "cli", format: "text", content: "task handoff" },
+        });
+
+      expect((await createTask(`rl-create-ok-1-${uid}`)).statusCode).toBe(201);
+      expect((await createTask(`rl-create-ok-2-${uid}`)).statusCode).toBe(201);
+
+      const blockedTopic = `rl-create-blocked-${uid}`;
+      expect((await createTask(blockedTopic)).statusCode).toBe(429);
+
+      const leakedChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.topic, blockedTopic));
+      expect(leakedChats).toHaveLength(0);
     } finally {
       await app.close();
     }

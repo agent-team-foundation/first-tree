@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 
+import { SdkError } from "@first-tree/client";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -86,6 +87,13 @@ beforeEach(() => {
   localAgentMocks.createSdk.mockReturnValue({
     agentId: "agent-self",
     attention: { raise: vi.fn() },
+    createTaskChat: vi.fn(async () => ({
+      chatId: "chat-created",
+      messageId: "msg-created",
+      initialRecipientAgentIds: ["agent-1"],
+      contextParticipantAgentIds: [],
+      effectiveSenderId: "agent-self",
+    })),
     sendMessage: vi.fn(async () => ({ id: "msg-1" })),
     updateChat: vi.fn(async (_chatId: string, patch: unknown) => {
       const patchObject = patch && typeof patch === "object" ? patch : {};
@@ -178,6 +186,127 @@ describe("chat command behavior", () => {
       code: "REQUEST_NEEDS_BODY",
       exitCode: 2,
     });
+  });
+
+  it("creates task chats with first-message routing and silent context participants", async () => {
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "see docs/plan.md",
+      documentContext: [{ path: "docs/plan.md", content: "Plan" }],
+    });
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "create",
+      "see docs/plan.md",
+      "--to",
+      "nova",
+      "--to",
+      "design",
+      "--with",
+      "observer",
+      "--topic",
+      "Review plan",
+      "--description",
+      "reviewing the new CLI flow",
+      "--metadata",
+      '{"priority":2}',
+      "--format",
+      "markdown",
+    ]);
+
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("see docs/plan.md");
+    expect(sdk.createTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: [],
+      initialRecipientNames: ["nova", "design"],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: ["observer"],
+      topic: "Review plan",
+      description: "reviewing the new CLI flow",
+      initialMessage: {
+        format: "markdown",
+        content: "see docs/plan.md",
+        metadata: { priority: 2, documentContext: [{ path: "docs/plan.md", content: "Plan" }] },
+        source: "cli",
+      },
+    });
+    expect(sdk.sendMessage).not.toHaveBeenCalled();
+    expect(outputMocks.success).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "chat-created", messageId: "msg-created" }),
+    );
+  });
+
+  it("creates task chats from stdin and supports request metadata", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "create",
+      "--to",
+      "nova",
+      "--agent",
+      "worker",
+      "--request",
+      "--question",
+      "Ship to 20%?",
+      "--option",
+      "yes",
+      "--option",
+      "hold",
+    ]);
+
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("worker");
+    expect(sdk.createTaskChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialRecipientNames: ["nova"],
+        initialMessage: expect.objectContaining({
+          format: "request",
+          content: "stdin message",
+          metadata: {
+            request: {
+              questions: [
+                {
+                  id: "q1",
+                  prompt: "Ship to 20%?",
+                  kind: "single",
+                  options: ["yes", "hold"],
+                  required: true,
+                },
+              ],
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(runChat(["create", "body", "--request", "--to", "nova", "--to", "design"])).rejects.toMatchObject({
+      code: "REQUEST_NEEDS_ONE_TARGET",
+      exitCode: 2,
+    });
+    await expect(runChat(["create", "body", "--request", "--to", "nova"])).rejects.toMatchObject({
+      code: "REQUEST_NEEDS_QUESTION",
+      exitCode: 2,
+    });
+  });
+
+  it("validates chat create input and treats uncertain create outcomes as non-retryable", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await expect(runChat(["create", "body"])).rejects.toMatchObject({ code: "NO_TARGET", exitCode: 2 });
+    await expect(runChat(["create", "body", "--to", "nova", "--metadata", "{bad"])).rejects.toMatchObject({
+      code: "INVALID_METADATA",
+      exitCode: 2,
+    });
+    await expect(runChat(["create", "body", "--to", "nova", "--format", "html"])).rejects.toMatchObject({
+      code: "INVALID_FORMAT",
+      exitCode: 2,
+    });
+    ioMocks.readStdin.mockResolvedValueOnce("   ");
+    await expect(runChat(["create", "--to", "nova"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
+
+    sdk.createTaskChat.mockRejectedValueOnce(new SdkError(503, "temporarily unavailable"));
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toMatchObject({
+      code: "CREATE_RESULT_UNKNOWN",
+      exitCode: 6,
+    });
+    expect(sdk.createTaskChat).toHaveBeenCalledTimes(1);
   });
 
   it("sets, clears, and validates chat topics", async () => {

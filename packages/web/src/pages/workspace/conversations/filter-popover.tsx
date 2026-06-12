@@ -17,6 +17,7 @@ import type { GroupMode } from "./group-rows.js";
 export const ORIGIN_OPTIONS: ReadonlyArray<{ value: ChatSource; label: string }> = [
   { value: "manual", label: "Manual" },
   { value: "github", label: "GitHub" },
+  { value: "agent", label: "Agent" },
 ];
 
 /** Map a `ChatSource` to its short user-facing label. */
