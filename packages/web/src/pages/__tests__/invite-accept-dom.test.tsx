@@ -183,7 +183,7 @@ describe("InviteAcceptPage", () => {
     expect(clientMocks.post).toHaveBeenCalledWith("/me/organizations/join", { token: "token-1" });
     expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-new");
     expect(onboardingMocks.markOnboardingResume).toHaveBeenCalledWith("invite");
-    expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
   });
 
   it("renders public OAuth and invalid invitation states", async () => {

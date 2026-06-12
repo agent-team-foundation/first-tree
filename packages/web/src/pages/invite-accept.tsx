@@ -91,7 +91,7 @@ export function InviteAcceptPage() {
       }>("/me/organizations/join", { token });
       await selectOrganization(res.organizationId);
       markOnboardingResume("invite");
-      navigate("/", { replace: true });
+      navigate("/onboarding", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join team");
     } finally {
