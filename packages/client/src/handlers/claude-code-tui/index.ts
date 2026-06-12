@@ -8,13 +8,8 @@ import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
-import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos,
-  releaseSourceReposForSession,
-} from "../../runtime/source-repos.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
@@ -38,8 +33,6 @@ const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const TURN_POLL_MS = 250;
 const TURN_GRACE_MS = 1500;
 const READY_TIMEOUT_MS = 30_000;
-
-type Worktree = { clonePath: string };
 
 /**
  * Module-level lazy sweep: on first handler instantiation in this process, kill
@@ -83,11 +76,9 @@ async function orphanSweep(clientId: string): Promise<void> {
 export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
-  const agentName = (config.agentName as string | undefined) ?? null;
   // Identifies this client process; scopes tmux session ownership so the orphan
   // sweep and session names never collide with another live client / QA slot
   // on the shared tmux server. Empty string is tolerated (falls back to a
@@ -110,7 +101,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let ctx: SessionContext | null = null;
   let configTempDir: string | null = null;
   const queuedMessages: SessionMessage[] = [];
-  const ownedWorktrees: Worktree[] = [];
   // Per-chat state captured at session start — feeds the unified briefing
   // (AGENTS.md / CLAUDE.md symlink) that claude reads at startup via
   // `--setting-sources user,project`. The TUI handler can't update the
@@ -148,6 +138,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      contextTreeRepoUrl,
+      contextTreeBranch,
     });
   }
 
@@ -554,26 +546,17 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // shared `ensureAgentBootstrap` materialises is fully populated; claude
         // then reads CLAUDE.md once on spawn via `--setting-sources project`.
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
-          workspace: cwd,
-          payload,
-          sessionCtx,
-          gitMirrorManager,
-          agentName,
-          // `payloadResolved: false` when we fell back to `defaultPayload()` —
-          // the empty `gitRepos: []` is then NOT authoritative and state-based
-          // cleanup is suppressed for this session (see PR #869 P0-2).
-          payloadResolved: resolvedPayload !== null && resolvedPayload !== undefined,
-        });
+        // Pure declaration — the agent itself clones/refreshes the repos per
+        // its briefing protocol; the listed paths may not exist yet.
+        sourceReposForPrompt = declaredSourceRepos(cwd, payload);
         ensureAgentBootstrap({
           workspace: cwd,
           sessionCtx,
           contextTreePath,
           briefing: buildBriefing(sessionCtx, payload, cwd),
-          // Forward the authoritative current source-repo set to migrations
-          // (PR #869 baixiaohang round-3 P0). Same `payloadResolved` signal as
-          // above — null when defaultPayload was used, so v1-orphan-ft-clones
-          // defers until a future resolved start.
+          // `null` when we fell back to `defaultPayload()` — the empty
+          // `gitRepos: []` is then NOT authoritative, and the workspace
+          // manifest write is deferred for this session.
           currentSourceRepoNames: currentSourceRepoNamesFromPayload(
             payload,
             resolvedPayload !== null && resolvedPayload !== undefined,
@@ -609,17 +592,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const payload = resumePayloadResolved ?? defaultPayload();
 
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
-          workspace: cwd,
-          payload,
-          sessionCtx,
-          gitMirrorManager,
-          agentName,
-          // See PR #869 P0-2: same gate as the start() path.
-          payloadResolved: resumePayloadResolved !== null && resumePayloadResolved !== undefined,
-        });
+        // Pure declaration — same as the start() path.
+        sourceReposForPrompt = declaredSourceRepos(cwd, payload);
         // Same shared bootstrap as start(): ensureAgentBootstrap handles the
-        // sentinel + Context-Tree/CLI drift internally, so a stale or failed
+        // sentinel + CLI-version drift internally, so a stale or failed
         // integration is re-run on resume instead of being skipped.
         ensureAgentBootstrap({
           workspace: cwd,
@@ -698,23 +674,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() must NOT remove it; that would wipe
-      // persistent state and source-repo checkouts other chats may resume
-      // against. Source repos are also intentionally left in place
-      // (proposals/agent-session-cwd-redesign §⑤). On-demand worktrees the
-      // agent created under `<cwd>/worktrees/<name>/` belong to the agent.
-      if (ctx) releaseSourceReposForSession(ctx);
-      if (gitMirrorManager) {
-        for (const wt of ownedWorktrees) {
-          try {
-            await gitMirrorManager.removeSourceRepo({ clonePath: wt.clonePath });
-          } catch (err) {
-            ctx?.log(
-              `tui worktree cleanup failed (${wt.clonePath}): ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
-        ownedWorktrees.length = 0;
-      }
+      // persistent state other chats may resume against. Source repos, the
+      // Context Tree clone, and on-demand worktrees under
+      // `<cwd>/worktrees/<name>/` are agent-managed state — the agent
+      // creates, refreshes, and removes them per its briefing protocol.
       cwd = null;
       ctx = null;
       queuedMessages.length = 0;

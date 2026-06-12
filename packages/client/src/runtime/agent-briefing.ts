@@ -17,6 +17,14 @@ export type BuildAgentBriefingOptions = {
   workspacePath: string;
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
   contextTreePath: string | null;
+  /**
+   * Upstream coordinates of the Context Tree the agent maintains at
+   * `contextTreePath`. Required by the agent-managed clone protocol the
+   * briefing injects (clone-if-missing needs the URL + branch). `null` /
+   * omitted when the agent is tree-less.
+   */
+  contextTreeRepoUrl?: string | null;
+  contextTreeBranch?: string | null;
 };
 
 /**
@@ -102,7 +110,9 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const requiredReading = requiredReadingSection(opts.contextTreePath);
   if (requiredReading) sections.push(requiredReading);
 
-  sections.push(contextTreeSection(opts.contextTreePath));
+  sections.push(
+    contextTreeSection(opts.contextTreePath, opts.contextTreeRepoUrl ?? null, opts.contextTreeBranch ?? null),
+  );
 
   const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
   if (skillsBlock) sections.push(skillsBlock);
@@ -365,18 +375,11 @@ chat are visible from another. Operate accordingly:
 }
 
 function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
-  const lines: string[] = ["## Source Repositories", ""];
+  const lines: string[] = ["## Source Repositories (agent-managed)", ""];
   lines.push(
-    "The following repositories are pre-checked-out at the top level of your",
-    "working directory as standalone clones. First Tree keeps each one current:",
-    "at the start of every chat it fetches and — when the checkout is clean and",
-    "not in use by another live session — brings it to the latest default branch.",
-    "So unless it was left dirty or busy, the code here already reflects current",
-    "`origin/<default>`. Use them for read-only orientation (grep, file layout,",
-    "`git log`) and as the base for new worktrees (see below). Do **not** edit",
-    "them in place or switch their branches — local changes block the auto-update,",
-    "and the `worktrees/` flow is the place for any code work. Shared across",
-    "every chat of this agent.",
+    "The following repositories are declared for this agent at the listed",
+    "paths. **You manage these clones yourself** — First Tree never runs git",
+    "on your behalf (no auto-clone, no auto-update):",
   );
   lines.push("");
   for (const repo of sourceRepos) {
@@ -385,6 +388,33 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     if (repo.branch) coords.push(`branch=${repo.branch}`);
     lines.push(`- \`${repo.absolutePath}\`  (${coords.join(", ")})`);
   }
+  lines.push("");
+  lines.push(
+    "Management protocol (shared by every chat of this agent):",
+    "",
+    "1. **Ensure** — if a listed path is missing, create it as a **bare**",
+    "   clone (no working tree, so nothing can ever go stale or dirty):",
+    "",
+    "   ```bash",
+    "   git clone --bare <url> <path>",
+    "   git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
+    "   git -C <path> fetch origin",
+    "   ```",
+    "",
+    "   An existing directory — bare or a legacy regular clone — is reused",
+    "   as-is; never delete or re-clone it (sibling chats may hold worktrees",
+    "   rooted in it).",
+    "2. **Refresh** — before creating any worktree, `git -C <path> fetch",
+    "   origin` so `origin/<default>` is current.",
+    "3. **Never read or write a clone path directly.** A bare clone has no",
+    "   files to read; a legacy regular clone's working tree is stale by",
+    "   design. ALL reading and writing happens in your task worktree (see",
+    "   `## Worktrees`). A pinned `ref`, when listed, is the base your",
+    "   worktrees should branch from instead of `origin/<default>`.",
+    "4. **Credential failures are reportable events** — if clone/fetch fails",
+    "   with an auth error, tell a human in the chat what failed and continue",
+    "   with what you have locally; do not retry silently.",
+  );
   return lines.join("\n");
 }
 
@@ -392,11 +422,11 @@ function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<Predeclare
   // Per proposal §⑧ R3: use absolute paths in the snippet. LLMs sometimes
   // literal-copy `<placeholder>` strings, so only `<task-name>` and
   // `<new-branch>` are placeholders here — the home prefix is interpolated.
-  return `## Worktrees
+  return `## Worktrees (one per task — you create AND clean up)
 
-**No worktrees are pre-created.** Every new task starts by branching a
-fresh worktree under \`${agentHome}/worktrees/<task-name>/\` off a freshly-
-fetched \`origin/<base>\` — do not reuse the pre-checked-out path above.
+**No worktrees are pre-created.** Every task works in its own worktree
+under \`${agentHome}/worktrees/<task-name>/\`, branched off a freshly-fetched
+\`origin/<base>\`:
 
 \`\`\`bash
 # from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}
@@ -404,8 +434,15 @@ git fetch origin
 git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main
 \`\`\`
 
-Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit. When
-finished, the operator cleans up with \`git worktree remove\`.`;
+Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit.
+
+- **Frozen for the task's life**: the worktree stays on its branch point
+  for the whole PR — do not rebase/merge \`origin/main\` into it mid-task
+  unless a human asks.
+- **Cleanup is yours**: when the task closes — typically when its PR is
+  merged or abandoned — remove the worktree:
+  \`git -C <source-repo-path> worktree remove ${agentHome}/worktrees/<task-name>\`.
+  Also sweep stale worktrees of finished tasks when you notice them.`;
 }
 
 function communicationBlock(bin: string): string {
@@ -647,7 +684,11 @@ workspace ↔ tree binding) runs from the web console or a human terminal
 
 // --- # Context Tree ---------------------------------------------------------
 
-function contextTreeSection(contextTreePath: string | null): string {
+function contextTreeSection(
+  contextTreePath: string | null,
+  contextTreeRepoUrl: string | null,
+  contextTreeBranch: string | null,
+): string {
   const blocks: string[] = [];
 
   blocks.push(`# Context Tree (First Tree Managed)
@@ -684,6 +725,11 @@ Where the tree's requirements or constraints **conflict with the
 instruction, the tree wins** — follow it and surface the conflict.
 (Local memory is the opposite: it yields to the instruction.)
 
+**Refresh before you read**: the tree clone is yours to keep fresh —
+run \`git pull --ff-only\` in it before every tree read (see
+\`## Tree Location\` for the full protocol). A stale tree is the #1
+source of designs that conflict with current decisions.
+
 Read eagerly, not lazily — acting before reading is the #1 source of
 advice that conflicts with reality. On scope shift to a new
 domain/repo/owner, read those nodes first; in doubt, re-read.`);
@@ -716,13 +762,36 @@ operating guide covers staging, review routing, and ownership rules
 you will not remember by default.`);
 
   if (contextTreePath) {
-    blocks.push(`## Tree Location
+    const upstream = contextTreeRepoUrl
+      ? `\n\nUpstream: \`${contextTreeRepoUrl}\` (branch \`${contextTreeBranch ?? "main"}\`).`
+      : "";
+    const cloneCmd = contextTreeRepoUrl
+      ? `git clone --branch ${contextTreeBranch ?? "main"} --single-branch ${contextTreeRepoUrl} ${contextTreePath}`
+      : `git clone --branch <branch> --single-branch <tree-repo-url> ${contextTreePath}`;
+    blocks.push(`## Tree Location (agent-managed clone)
 
-The Context Tree for this workspace is at:
+The Context Tree for this workspace lives at:
 
-    ${contextTreePath}
+    ${contextTreePath}${upstream}
 
-Read its root \`NODE.md\` first to map the domains before you act.`);
+**You maintain this clone yourself** — the runtime never runs git on it:
+
+- **Missing** → clone it:
+
+      ${cloneCmd}
+
+- **A symlink at this path** (legacy shared-pool layout) → remove the
+  symlink itself (\`rm ${contextTreePath}\` — this deletes only the link,
+  never its target), then clone as above.
+- **Before every tree read** → \`git -C ${contextTreePath} pull --ff-only\`.
+  On network/credential failure: use the local copy, and report the
+  failure to a human in the chat. On a dirty-tree failure: the read-only
+  rule below was violated — stash or re-clone, then report.
+- **Read-only**: never edit this clone in place. Tree writes branch a
+  worktree off it (\`git -C ${contextTreePath} worktree add …\`) and go
+  through a PR, per the Writing the Tree rules above.
+
+Read the root \`NODE.md\` first to map the domains before you act.`);
   } else {
     // Tree-less stub. Binding a workspace to a tree is an operator
     // action (web console / human at the terminal), not something an

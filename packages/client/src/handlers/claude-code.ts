@@ -32,16 +32,11 @@ import {
   createContextTreeGitWriteTracker,
 } from "../runtime/context-tree-git-status.js";
 import { classify } from "../runtime/error-taxonomy.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
@@ -665,7 +660,6 @@ export function isSameModelFamily(a: string, b: string): boolean {
 export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
   // defer to the SDK's bundled native binary (see claude-executable.ts for
   // why we can't always rely on it).
@@ -685,14 +679,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedModel = "";
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /**
-   * On-demand worktrees materialised for this session — each entry `rm -rf`'d on
-   * shutdown via `removeSourceRepo`. INVARIANT: only ever push paths under
-   * `<agentHome>/worktrees/` here. NEVER push a predeclared source-repo path —
-   * those are agent-scoped persistent clones shared across chats, and cleanup
-   * would delete another chat's checkout. (Currently nothing pushes here.)
-   */
-  const ownedWorktrees: Array<{ clonePath: string }> = [];
-  /**
    * Latest chat-context snapshot for the active session. Used to build the
    * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
    * when the session ends or `start()` runs for a fresh session.
@@ -702,16 +688,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const pendingAckMessages: SessionMessage[] = [];
   let injectDrainInProgress = false;
   /**
-   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
-   * the per-turn prompt block so the LLM knows the absolute paths without
-   * having to discover them.
-   */
-  /**
-   * Predeclared source repos materialised at `<agentHome>/<localPath>/` by
-   * `prepareSourceRepos`. Surfaced in the per-chat system-prompt block so
-   * the LLM knows their absolute paths. NOT to be confused with on-demand
-   * worktrees the agent itself creates under `<agentHome>/worktrees/<name>/`
-   * — those are runtime-opaque (created by the agent, not by First Tree).
+   * Predeclared source repos the agent config declares at
+   * `<agentHome>/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
+   * the agent itself clones/refreshes them per its briefing protocol.
+   * Surfaced in the briefing so the LLM knows the absolute paths and
+   * upstream coordinates. NOT to be confused with on-demand worktrees the
+   * agent creates under `<agentHome>/worktrees/<name>/` — those are
+   * runtime-opaque (created and cleaned up by the agent, not by First Tree).
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   /**
@@ -1455,78 +1438,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
-  // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
-  // `agents.<name>` key). Carried through to the per-session bootstrap so a
-  // single agent's multi-chat workspaces share the same workspace identity
-  // instead of churning a new id per chat.
-  const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
-   * Materialise the runtime config's `gitRepos` as **predeclared source
-   * repos** at the **top level** of the agent home (`<cwd>/<localPath>/`),
-   * NOT under `<cwd>/worktrees/`. Per the 2026-05-22 redesign, the
-   * `worktrees/` subdirectory is reserved entirely for agent-on-demand
-   * worktrees the LLM creates per task — the runtime never pre-creates any.
-   *
-   * Idempotent across sessions: with the per-agent-home model the checkout
-   * is **shared** across every chat for this agent. First call clones the
-   * repo as a standalone clone; subsequent calls fetch and — when the
-   * checkout is clean and not in use by another live session — bring it to
-   * the latest default branch. A dirty or in-use checkout is left at its
-   * current commit, so pending state the LLM left behind survives.
-   *
-   * Concurrency: the manager serialises per clone path so two sessions
-   * starting at the same time don't race a clone / update for the same path.
-   * See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
-   *
-   * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
-   * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
-   * list absolute paths + upstream coordinates for the LLM.
-   *
-   * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
-   * and the error bubbles up to the caller (SessionManager).
+   * Derive the prompt-facing source-repo list from the runtime config's
+   * `gitRepos` — pure declaration, no git. The agent itself clones and
+   * refreshes `<cwd>/<localPath>/` per the protocol in its briefing; the
+   * `worktrees/` subdirectory stays reserved for the per-task worktrees the
+   * agent creates and cleans up on its own.
    */
-  async function prepareSourceRepos(
-    workspace: string,
-    payload: AgentRuntimeConfigPayload | undefined,
-    sessionCtx: SessionContext,
-  ): Promise<void> {
-    // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
-    // TUI handlers share one worktree-lock / Hub-marker implementation rather
-    // than each carrying its own source-repo invariant.
-    //
-    // `payloadResolved` distinguishes "agent config truly says zero repos"
-    // from "we couldn't reach the cache/server and `payload` is undefined".
-    // Without this gate, a cache miss would compute an empty current-repo
-    // set and the state-reconcile path would `rm` every previously-managed
-    // clone. See `PrepareSourceReposParams.payloadResolved`.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved: payload !== undefined,
-    });
-  }
-
-  /** Tear down all worktrees this session owns; best-effort. */
-  async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
-    // Drop this session's live-use references on shared source-repo checkouts so
-    // a later session is free to bring them to the latest default branch.
-    releaseSourceReposForSession(sessionCtx);
-    if (!gitMirrorManager) return;
-    while (ownedWorktrees.length > 0) {
-      const entry = ownedWorktrees.pop();
-      if (!entry) continue;
-      try {
-        await gitMirrorManager.removeSourceRepo(entry);
-      } catch (err) {
-        sessionCtx.log(
-          `Git: removeSourceRepo(${entry.clonePath}) failed — ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+  function declareSourceRepos(workspace: string, payload: AgentRuntimeConfigPayload | undefined): void {
+    sourceReposForPrompt = declaredSourceRepos(workspace, payload);
   }
 
   /**
@@ -1599,6 +1520,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       workspacePath: workspace,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      contextTreeRepoUrl,
+      contextTreeBranch,
     });
   }
 
@@ -1660,10 +1583,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       const chatContext = await fetchChatContextOrLog(sessionCtx);
       chatContextForPrompt = chatContext;
-      // Materialise gitRepos under `<cwd>/<localPath>/` before computing the
-      // briefing so the source-repo list reflects what the agent will see on
-      // disk. Failures here abort session creation (D10/D13).
-      await prepareSourceRepos(cwd, payload, sessionCtx);
+      // Declare gitRepos coordinates before computing the briefing so the
+      // source-repo list names the paths + upstreams the agent manages.
+      declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
@@ -1719,7 +1641,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
         const chatContext = await fetchChatContextOrLog(sessionCtx);
         chatContextForPrompt = chatContext;
-        // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
+        // Intentionally NOT calling ensureAgentBootstrap / declareSourceRepos /
         // markWorkspaceInitComplete here — those write the new
         // `.first-tree-workspace/` agent-home layout, which would pollute the
         // legacy chat dir's v1.x `.agent/` and `<localPath>/` source repos.
@@ -1732,11 +1654,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // would only see the stale v1.x stable CLAUDE.md, dropping the
         // current `prompt.append`, resource-skill briefing, and Current Chat
         // Context the previous per-turn SDK append used to deliver.
-        // `sourceReposForPrompt` stays `[]` here on purpose: we don't run
-        // `prepareSourceRepos` against the legacy cwd, so the briefing's
-        // Source Repositories section is omitted for legacy resumes. The
-        // agent still finds the v1.x checkouts at their original `<localPath>/`
-        // — just without a top-level enumeration in the prompt.
+        // `sourceReposForPrompt` stays `[]` here on purpose: the declared
+        // paths are derived against the agent home, not the legacy cwd, so
+        // the briefing's Source Repositories section is omitted for legacy
+        // resumes. The agent still finds the v1.x checkouts at their
+        // original `<localPath>/` — just without a top-level enumeration in
+        // the prompt.
         writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
@@ -1766,7 +1689,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       const chatContext = await fetchChatContextOrLog(sessionCtx);
       chatContextForPrompt = chatContext;
-      await prepareSourceRepos(cwd, payload, sessionCtx);
+      declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
@@ -1858,20 +1781,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     },
 
     async shutdown() {
-      const sessionCtx = ctx;
       await handler.suspend();
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() of ONE chat must NOT remove it (would
-      // wipe persistent state and worktrees other chats are using). The
-      // legacy `rmSync(cwd)` is therefore deleted.
+      // wipe persistent state and worktrees other chats are using).
       //
-      // Source repos materialised by `prepareSourceRepos` are agent-scoped
-      // shared resources, so we also no longer call cleanupGitWorktrees on
-      // shutdown — those checkouts are explicit operator-managed state (see
-      // proposals/agent-session-cwd-redesign §⑤). On-demand worktrees the
-      // agent itself created under `<cwd>/worktrees/<name>/` are also
-      // intentionally left alone — the agent owns their lifecycle.
-      if (sessionCtx) await cleanupGitWorktrees(sessionCtx);
+      // Source repos and the Context Tree clone are agent-managed state
+      // (the agent clones / refreshes them per its briefing protocol), and
+      // on-demand worktrees under `<cwd>/worktrees/<name>/` live until the
+      // agent itself removes them when the task closes (e.g. on PR merge) —
+      // the runtime touches none of them on shutdown.
       cwd = null;
     },
   };

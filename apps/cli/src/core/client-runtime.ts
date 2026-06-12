@@ -4,9 +4,6 @@ import { dirname, join } from "node:path";
 import {
   AgentSlot,
   ClientConnection,
-  createGitMirrorManager,
-  createLogger,
-  type GitMirrorManager,
   getChildProcessRegistry,
   getHandlerFactory,
   hasHandler,
@@ -16,7 +13,7 @@ import {
 } from "@first-tree/client";
 import type { AgentPinnedMessage, ClientPausedReason } from "@first-tree/shared";
 import type { AgentConfig } from "@first-tree/shared/config";
-import { agentConfigSchema, defaultConfigDir, defaultDataDir, loadAgents } from "@first-tree/shared/config";
+import { agentConfigSchema, defaultConfigDir, loadAgents } from "@first-tree/shared/config";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
@@ -76,13 +73,6 @@ export type ClientRuntimeOptions = {
 export class ClientRuntime {
   private readonly serverUrl: string;
   private readonly connection: ClientConnection;
-  /**
-   * One GitMirrorManager per runtime — every slot gets the same instance.
-   * The manager's per-clone-path serial queue is what stops two sessions of the
-   * same agent from racing a clone / update on the same source-repo checkout;
-   * one manager per slot would defeat the lock.
-   */
-  private readonly gitMirrorManager: GitMirrorManager;
   private readonly agents: AgentEntry[] = [];
   private readonly agentNames = new Set<string>();
   private readonly agentIds = new Set<string>();
@@ -125,14 +115,6 @@ export class ClientRuntime {
       // self-update. Read is synchronous (small JSON file) and tolerant —
       // missing / corrupt state file simply omits the field.
       getLastUpdateAttempt: () => readUpdateState()?.last ?? null,
-    });
-    this.gitMirrorManager = createGitMirrorManager({
-      dataDir: defaultDataDir(),
-      log: createLogger("git-mirror"),
-      // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
-      // rm -rf) for any target under the per-agent workspaces tree. Operator
-      // paths outside this root still fail loud — see GitMirrorManagerOptions.
-      hubManagedRoots: [join(defaultDataDir(), "workspaces")],
     });
     registerBuiltinHandlers();
 
@@ -228,7 +210,6 @@ export class ClientRuntime {
       },
       concurrency: config.concurrency,
       clientConnection: this.connection,
-      gitMirrorManager: this.gitMirrorManager,
     });
     this.agents.push({ name, slot, state: "idle" });
     this.agentNames.add(name);
@@ -245,20 +226,6 @@ export class ClientRuntime {
   }
 
   async start(): Promise<void> {
-    // One-time cleanup of the legacy shared `<dataDir>/git-mirrors/` tree left
-    // by the pre-per-agent-source-repo bare-mirror model. Pure cache, no state.
-    try {
-      const sweep = await this.gitMirrorManager.sweepLegacyMirrors();
-      if (sweep.removed.length > 0) {
-        print.status(
-          "[git-mirror]",
-          `removed legacy shared git-mirrors tree (${sweep.removed.length} entr${sweep.removed.length === 1 ? "y" : "ies"})`,
-        );
-      }
-    } catch (err) {
-      print.status("⚠️", `legacy git-mirrors sweep failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
     // Attach before connecting so the first welcome frame on a stale client
     // is acted on rather than missed until the next reconnect.
     if (this.options.currentVersion && this.options.update) {

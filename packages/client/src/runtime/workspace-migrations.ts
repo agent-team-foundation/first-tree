@@ -23,7 +23,6 @@
 //   - One migration's failure does NOT block the rest; failures are logged
 //     and the marker is NOT recorded for that id (so a future run retries).
 
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -38,8 +37,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { type RemoveCloneOutcome, tryRemoveCloneSafely } from "./source-repo-cleanup.js";
-import { isSourceRepoPathInUse } from "./source-repos.js";
 
 /**
  * The per-agent runtime directory name. Mirrors `bootstrap.ts ::
@@ -57,11 +54,6 @@ const RUNTIME_DIR = ".first-tree-workspace";
 export const MIGRATIONS_APPLIED_REL = join(RUNTIME_DIR, "migrations-applied.json");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Origin URLs matching this prefix are treated as First-Tree-managed —
- *  the orphan-clone migration uses it to scope deletion to clones FT
- *  itself planted, never user-cloned third-party repos. */
-const FT_ORIGIN_RE = /github\.com[/:]agent-team-foundation\//i;
 
 export type MigrationLog = (msg: string) => void;
 
@@ -200,21 +192,6 @@ function hasResolvedConfig(ctx: MigrationContext): ctx is { currentSourceRepoNam
   return ctx.currentSourceRepoNames !== null;
 }
 
-function readGitOrigin(repoDir: string): string | null {
-  const gitDir = join(repoDir, ".git");
-  if (!existsSync(gitDir)) return null;
-  try {
-    return execFileSync("git", ["config", "--get", "remote.origin.url"], {
-      cwd: repoDir,
-      encoding: "utf-8",
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
 // ─── Migration registry ───────────────────────────────────────────────
 
 /**
@@ -266,75 +243,13 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       }
     },
   },
-  {
-    id: "v1-retired-source-repo-first-tree-hub",
-    description:
-      "Remove <ws>/first-tree-hub/ — a retired First-Tree source repo. Narrowly scoped to the broken-pointer shape the legacy hub-worktree model left behind: `.git` is a regular FILE (not a directory) with `gitdir: <path>` whose target no longer exists on disk. In that shape, `git config --get remote.origin.url` exits 128 and the general `v1-orphan-ft-clones` sweep can't identify the clone by origin URL — and the local git state is unusable anyway, so there's no recoverable work to lose. Healthy `first-tree-hub/` clones (with `.git/` as a real directory) defer to `v1-orphan-ft-clones`, which goes through `tryRemoveCloneSafely` with the dirty / ahead / worktree guards. PR #869 code-reviewer P0-1.",
-    apply: (workspacePath, log, ctx) => {
-      const target = join(workspacePath, "first-tree-hub");
-      if (!existsSync(target) || !isDirectory(target)) return;
-      // Same defer rule as the UUID + orphan paths: when the live ctx
-      // cannot confirm whether `first-tree-hub` is currently configured,
-      // refuse to act. The broken-pointer shape check below would otherwise
-      // nuke a clone the user re-added before the cache had a chance to
-      // populate.
-      if (!hasResolvedConfig(ctx)) {
-        log(
-          "workspace-migrations: v1-retired-source-repo-first-tree-hub deferred — no authoritative current source-repo set; will retry next resolved session",
-        );
-        return "deferred";
-      }
-      // Skip if `first-tree-hub` is in the agent's current source-repos
-      // config — a future re-add would otherwise lose its checkout.
-      const currentRepos = ctx.currentSourceRepoNames;
-      if (currentRepos.has("first-tree-hub")) {
-        log(
-          "workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — still in current source repos config",
-        );
-        return;
-      }
-      const gitEntry = join(target, ".git");
-      let gitStat: ReturnType<typeof lstatSync>;
-      try {
-        gitStat = lstatSync(gitEntry);
-      } catch {
-        // No `.git` → not a clone (user content, or already cleaned).
-        return;
-      }
-      if (gitStat.isDirectory()) {
-        // Healthy clone — `v1-orphan-ft-clones` will inspect it through
-        // `tryRemoveCloneSafely` with the dirty / ahead / worktree guards.
-        // Skip here to avoid duplicating that path.
-        return;
-      }
-      // `.git` is a regular file (the pointer shape). Read it and confirm
-      // the gitdir target is gone — that's what makes the clone "broken
-      // legacy" rather than a healthy `git worktree add` linked checkout
-      // a future feature might rely on.
-      let pointerTarget: string | null = null;
-      try {
-        const pointerContent = readFileSync(gitEntry, "utf-8");
-        const match = pointerContent.match(/^gitdir:\s*(.+)$/m);
-        if (match?.[1]) pointerTarget = match[1].trim();
-      } catch {
-        return;
-      }
-      if (pointerTarget === null) {
-        log("workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — `.git` file has unexpected shape");
-        return;
-      }
-      if (existsSync(pointerTarget)) {
-        log(
-          `workspace-migrations: v1-retired-source-repo-first-tree-hub skipped — \`.git\` pointer target ${pointerTarget} still exists (live worktree)`,
-        );
-        return;
-      }
-      rmSync(target, { recursive: true, force: true });
-      log(
-        "workspace-migrations: v1-retired-source-repo-first-tree-hub removed first-tree-hub/ (broken `.git` pointer)",
-      );
-    },
-  },
+  // NOTE: the clone-deleting migrations `v1-retired-source-repo-first-tree-hub`
+  // and `v1-orphan-ft-clones` were retired with the agent-managed-repos
+  // refactor: the runtime no longer deletes any repo clone, ever (zero-deletion
+  // posture — existing chats may hold worktrees rooted in those clones).
+  // Their applied-markers stay honoured via the marker file; any legacy
+  // residue they used to sweep is now the agent's to clean per its briefing.
+  //
   // NOTE: a `v1-legacy-dot-first-tree` migration was proposed but withdrawn
   // during Codex review (PR #869, P1 from baixiaohang). The directory
   // `<workspace>/.first-tree/` is the active W1 binding state (it holds
@@ -354,63 +269,6 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
       const target = join(workspacePath, "WHITEPAPER.md");
       if (unlinkSymlinkIfExists(target)) {
         log("workspace-migrations: v1-whitepaper-symlink removed WHITEPAPER.md");
-      }
-    },
-  },
-  {
-    id: "v1-orphan-ft-clones",
-    description:
-      'Remove top-level clones whose `.git/config` origin points at agent-team-foundation/* but are not in the workspace\'s current source-repos config (catches retired source repos like first-tree-hub). Same dirty / ahead-of-upstream / worktree guards as the state-based source cleanup — Codex review P1 on PR #869. **Requires an authoritative current source-repo set** (`ctx.currentSourceRepoNames !== null`); on a cache-miss session it returns `"deferred"` so it retries when the next resolved session arrives. PR #869 baixiaohang round-3 P0.',
-    apply: (workspacePath, log, ctx) => {
-      // The migration relies on "absent from current source-repos config"
-      // to identify orphans. When the live ctx is unresolved, treating it
-      // as an empty set would mark every clean steady-state FT clone as
-      // orphan and `rm` it. Defer instead — `tryRemoveCloneSafely`'s
-      // safety guards still protect dirty / ahead / worktree clones, but
-      // a clean repo with no work to lose is exactly what we'd
-      // accidentally nuke without an authoritative set. See
-      // `hasResolvedConfig` for the full round-5 rationale.
-      if (!hasResolvedConfig(ctx)) {
-        log(
-          "workspace-migrations: v1-orphan-ft-clones deferred — no authoritative current source-repo set (live config unresolved); will retry next resolved session",
-        );
-        return "deferred";
-      }
-      const currentRepos = ctx.currentSourceRepoNames;
-      let removed = 0;
-      let skipped = 0;
-      for (const name of safeReaddir(workspacePath)) {
-        // Workspace-meta dirs and the agent-self-managed dirs never have a
-        // `.git/` so they're filtered by the origin probe below; skip them
-        // here just to keep the loop body cheap.
-        if (name.startsWith(".") || name === "worktrees" || name === "notes") continue;
-        const full = join(workspacePath, name);
-        if (!isDirectory(full)) continue;
-        if (currentRepos.has(name)) continue;
-        const origin = readGitOrigin(full);
-        if (origin === null) continue;
-        if (!FT_ORIGIN_RE.test(origin)) continue;
-        const outcome: RemoveCloneOutcome = tryRemoveCloneSafely(
-          full,
-          `${name}/ (origin ${origin})`,
-          log,
-          isSourceRepoPathInUse,
-        );
-        if (outcome === "removed") {
-          removed += 1;
-        } else if (outcome !== "absent" && outcome !== "not-a-clone") {
-          // dirty / ahead-of-upstream / has-worktrees / probe-failed /
-          // remove-failed — `tryRemoveCloneSafely` already logged the reason;
-          // count as "left behind" for the summary line below.
-          skipped += 1;
-        }
-      }
-      if (removed > 0 && skipped === 0) {
-        log(`workspace-migrations: v1-orphan-ft-clones removed ${removed} orphan clone(s)`);
-      } else if (skipped > 0) {
-        log(
-          `workspace-migrations: v1-orphan-ft-clones removed ${removed} orphan clone(s); ${skipped} held back by safety guards — operator follow-up`,
-        );
       }
     },
   },

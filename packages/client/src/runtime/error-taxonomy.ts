@@ -19,13 +19,6 @@
  * a conservative cap — see {@link UNKNOWN_FALLBACK} for the rationale.
  */
 
-import {
-  isLikelyGitDiskError,
-  isLikelyRefNotFound,
-  isLikelyRepoNotFound,
-  isLikelyTlsTrustFailure,
-} from "./git-mirror-manager.js";
-
 export const ERROR_KINDS = {
   TRANSIENT: "transient",
   DEGRADED: "degraded",
@@ -70,12 +63,6 @@ export function nextRetryDelayMs(strategy: RetryStrategy, attempt: number): numb
 const TRANSIENT_FAST: RetryStrategy = { kind: "exponentialBackoff", baseMs: 1_000, capMs: 5 * 60_000, jitter: true };
 const TRANSIENT_BIND: RetryStrategy = { kind: "exponentialBackoff", baseMs: 2_000, capMs: 5 * 60_000, jitter: true };
 const TRANSIENT_NPM: RetryStrategy = { kind: "exponentialBackoff", baseMs: 10_000, capMs: 10 * 60_000, jitter: true };
-// Git ops already run their own in-process backoff for transient network blips
-// (gitWithNetworkRetry, ~5s budget). Anything that surfaces past that is
-// either a longer outage or the post-fallback wrap-up after both protocols
-// failed — wait longer between session-level retries to avoid hammering a
-// quietly degraded remote.
-const TRANSIENT_GIT: RetryStrategy = { kind: "exponentialBackoff", baseMs: 5_000, capMs: 5 * 60_000, jitter: true };
 const UNKNOWN_FALLBACK: RetryStrategy = { kind: "exponentialBackoff", baseMs: 5_000, capMs: 60_000, jitter: true };
 const NONE: RetryStrategy = { kind: "none" };
 
@@ -245,102 +232,6 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Refresh token rejected",
     };
   }
-  // GitMirrorAuthError: the source-repo layer already tried BOTH transports
-  // (primary protocol + peer-protocol insteadOf rewrite) and git rejected
-  // each one. Waiting will not mint credentials — a human has to fix the
-  // host's git auth (credential helper, SSH key, known_hosts), so retrying
-  // is pure churn: before this branch existed the error fell through to the
-  // `unknown` transient fallback and session start retried forever without
-  // ever surfacing a readable error. Degraded rather than permanent because
-  // only THIS resource (the chat's source repo) is unusable; the process and
-  // every other agent/chat stay healthy. Matched by class name here, before
-  // the substring heuristics below, because the message embeds raw git
-  // stderr from both attempts which can contain arbitrary text ("server
-  // error", "fetch failed", …) that would misclassify it as transient.
-  if (shape.name === "GitMirrorAuthError") {
-    return {
-      kind: ERROR_KINDS.DEGRADED,
-      strategy: NONE,
-      reasonCode: "git_clone_auth_failed",
-      message: shape.message ?? "Source repo git authentication failed",
-    };
-  }
-  // GitMirrorTimeoutError: our own per-call git timeout fired. Distinct from a
-  // permanent "git refused" failure — the next session likely runs against a
-  // different network state, so retry at the session level (the inner git
-  // backoff is gone with the killed subprocess). TRANSIENT_GIT spaces those
-  // retries further apart than TRANSIENT_FAST to avoid piling on a remote that
-  // is already slow.
-  if (shape.name === "GitMirrorTimeoutError") {
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_GIT,
-      reasonCode: "git_clone_timeout",
-      message: shape.message ?? "Source repo git operation timed out",
-    };
-  }
-  // GitMirrorWorktreeConflictError: the configured target path is occupied by
-  // operator data (a non-managed directory we refuse to delete) OR a managed
-  // reclaim still couldn't free the slot. Either way only a human can resolve
-  // it — move/clean the directory, or re-point the agent at a different path.
-  // Permanent: retrying is pure churn.
-  if (shape.name === "GitMirrorWorktreeConflictError") {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "git_target_occupied",
-      message: shape.message ?? "Source repo target path occupied",
-    };
-  }
-  // GitMirrorError (base): every other non-zero-exit git failure. Without
-  // further narrowing this fell through to UNKNOWN_FALLBACK and the session
-  // retried forever — see the prod incident that motivated this branch
-  // (`reasonCode:"unknown"`, repo deleted upstream). Match message substrings
-  // for the four high-confidence non-transient shapes; anything else is still
-  // transient but under a distinct `git_unknown` code so future incidents land
-  // in their own observability bucket instead of the generic `unknown`.
-  if (shape.name === "GitMirrorError") {
-    const msg = shape.message ?? "";
-    if (isLikelyRepoNotFound(msg)) {
-      return {
-        kind: ERROR_KINDS.PERMANENT,
-        strategy: NONE,
-        reasonCode: "git_repo_not_found",
-        message: shape.message ?? "Source repo not found at configured URL",
-      };
-    }
-    if (isLikelyRefNotFound(msg)) {
-      return {
-        kind: ERROR_KINDS.PERMANENT,
-        strategy: NONE,
-        reasonCode: "git_ref_not_found",
-        message: shape.message ?? "Source repo configured ref not found",
-      };
-    }
-    if (isLikelyTlsTrustFailure(msg)) {
-      return {
-        kind: ERROR_KINDS.PERMANENT,
-        strategy: NONE,
-        reasonCode: "git_tls_trust_failure",
-        message: shape.message ?? "Source repo TLS verification failed",
-      };
-    }
-    if (isLikelyGitDiskError(msg)) {
-      return {
-        kind: ERROR_KINDS.DEGRADED,
-        strategy: NONE,
-        reasonCode: "git_disk_error",
-        message: shape.message ?? "Source repo local disk error",
-      };
-    }
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_GIT,
-      reasonCode: "git_unknown",
-      message: shape.message ?? "Source repo git operation failed",
-    };
-  }
-
   // -- Anthropic SDK / stream errors ---------------------------------------
   // RateLimitError (429) — name is contributed by the SDK; substrings are
   // fallbacks for proxied / wrapped errors that drop the class identity.

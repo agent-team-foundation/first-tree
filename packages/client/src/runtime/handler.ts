@@ -1,6 +1,5 @@
 import type { AgentVisibility, SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
-import type { GitMirrorManager } from "./git-mirror-manager.js";
 
 /** Agent identity fields flowing from Server through the runtime pipeline. */
 export type AgentIdentity = {
@@ -188,13 +187,6 @@ export type HandlerFactory = (config: HandlerConfig) => AgentHandler;
 export type HandlerConfig = {
   /** Root directory for per-chat workspaces (`<dataDir>/workspaces/<agentName>`). */
   workspaceRoot: string;
-  /**
-   * Optional bare-mirror manager. When present, the handler materialises the
-   * runtime config's `gitRepos` into `<cwd>/<localPath>` worktrees on session
-   * start and removes them on shutdown (PRD §5.1.5 / §7.5). Absent in unit
-   * tests that don't need git materialisation.
-   */
-  gitMirrorManager?: GitMirrorManager;
   /** Additional handler-specific config. */
   [key: string]: unknown;
 };

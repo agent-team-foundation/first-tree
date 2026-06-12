@@ -74,7 +74,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "# Identity",
       "# Working in First Tree (First Tree Managed)",
       "## Working Directory",
-      "## Worktrees",
+      "## Worktrees (one per task — you create AND clean up)",
       "## Communication",
       "## Workspace Collaboration",
       "## GitHub Entity Attention",
@@ -86,7 +86,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Core Model",
       "## Reading the Tree",
       "## Writing the Tree",
-      "## Tree Location",
+      "## Tree Location (agent-managed clone)",
       "# Skills (First Tree Managed)",
       "## First Tree Family",
       "## Current Chat Context (First Tree Managed, per-chat)",
@@ -544,7 +544,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     ];
     const briefing = buildAgentBriefing(makeOpts({ sourceRepos }));
 
-    expect(briefing).toContain("## Source Repositories");
+    expect(briefing).toContain("## Source Repositories (agent-managed)");
     // Top-level paths — no `worktrees/` prefix.
     expect(briefing).toContain(`\`${AGENT_HOME}/api\``);
     expect(briefing).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
@@ -554,11 +554,11 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
-    // Per-agent-source-repo: standalone clones are kept current each chat, but
-    // the agent must not edit them in place (that would block the auto-update).
-    expect(briefing).toContain("keeps each one current");
-    expect(briefing).toContain("latest default branch");
-    expect(briefing).toContain("**not** edit");
+    // Agent-managed protocol: the agent maintains the clones itself (bare,
+    // fetch-only) — the runtime never runs git on its behalf.
+    expect(briefing).toContain("**You manage these clones yourself**");
+    expect(briefing).toContain("git clone --bare <url> <path>");
+    expect(briefing).toContain("**Never read or write a clone path directly.**");
     expect(briefing).toContain("git fetch origin");
     expect(briefing).toContain("origin/main");
   });

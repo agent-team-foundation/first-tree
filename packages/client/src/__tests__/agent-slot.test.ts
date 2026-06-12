@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import type { AgentSlotConfig } from "../runtime/agent-slot.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { HandlerConfig } from "../runtime/handler.js";
 import type { FirstTreeHubSDK, RegisterResult } from "../sdk.js";
 
@@ -143,7 +142,7 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
     createLogger: () => state.logger,
   }));
   vi.doMock("../runtime/bootstrap.js", () => ({
-    syncAgentContextTree: vi.fn(async (sdk: unknown, log: (msg: string) => void) => {
+    resolveAgentContextTreeBinding: vi.fn(async (sdk: unknown, _workspaceRoot: string, log: (msg: string) => void) => {
       const messages: string[] = [];
       log("sync log");
       messages.push("sync log");
@@ -264,13 +263,6 @@ async function makeSlot(options?: {
     concurrency: 2,
     // AgentSlot only calls the public connection methods mocked above.
     clientConnection: connection as unknown as ClientConnection,
-    // AgentSlot passes this object through to SessionManager; these tests do not exercise git mirror behavior.
-    gitMirrorManager: {
-      ensureSourceRepo: vi.fn(),
-      removeSourceRepo: vi.fn(),
-      sweepLegacyMirrors: vi.fn(),
-      legacyMirrorsRoot: "/tmp/fake-mirrors",
-    } as unknown as GitMirrorManager,
   };
   return { slot: new AgentSlot(config), connection, sdk, state };
 }
@@ -532,7 +524,7 @@ describe("AgentSlot", () => {
     reconcile.call(slot);
 
     expect(state.logger.info).toHaveBeenCalledWith(
-      "context tree not configured or sync skipped — agent will start without organizational context",
+      "context tree not configured or binding unresolved — agent will start without organizational context",
     );
     expect(state.logger.warn).toHaveBeenCalledWith(
       { err: new Error("dispatch failed"), entryId: 55 },

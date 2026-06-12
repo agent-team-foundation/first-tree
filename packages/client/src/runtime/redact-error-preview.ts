@@ -40,7 +40,7 @@ const DEFAULT_MAX_LEN = 256;
  *     `:pass` empty-username form common to redis / postgres, and the bare
  *     `<token>` single-component form like `https://oauth-token@github.com/x`
  *     all collapse to `<scheme>://[REDACTED]@host`). `git clone <url>` echoes
- *     the configured URL into the resulting `GitMirrorError` message, so a
+ *     the configured URL into the resulting error message, so a
  *     PAT-bearing `remote.origin.url` lands here verbatim — but so does any
  *     database connection string an SDK happens to log on failure.
  *  2. Standard token prefixes that are unambiguously credentials:

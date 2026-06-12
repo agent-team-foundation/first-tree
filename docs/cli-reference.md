@@ -529,7 +529,7 @@ Most environment variables use the `FIRST_TREE_` prefix.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and Context Tree mirrors. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
+| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and agent workspaces. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
 | `FIRST_TREE_SERVER_URL` | Server URL (alternative to the connect token's `iss` claim). | — |
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
@@ -676,11 +676,12 @@ See [observability.md](observability.md) for the full config reference, backend 
 │       └── <name>/
 │           └── agent.yaml                         # agentId + runtime
 ├── data/
-│   ├── context-tree-repos/                        # server-managed read-only Context Tree mirrors
+│   ├── context-tree-repos/                        # legacy shared Context Tree pool (retained for old installs; new clones live per-agent)
 │   ├── sessions/                                  # per-agent session registry
 │   └── workspaces/
 │       └── <agent-name>/                          # per-agent home (cwd is shared across chats)
-│           └── worktrees/                         # ad-hoc agent-spawned worktrees
+│           ├── context-tree/                      # agent-managed Context Tree clone (agent clones/pulls it per its briefing)
+│           └── worktrees/                         # per-task worktrees the agent creates and cleans up
 └── logs/                                          # daemon stderr / stdout (macOS)
 ```
 
