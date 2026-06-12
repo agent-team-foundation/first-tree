@@ -296,6 +296,20 @@ first-tree chat send code-agent "ship the PR"
 # Stdin (multiline, markdown, special chars)
 echo "long body" | first-tree chat send code-agent -f markdown
 
+# Inline bodies must carry REAL newlines. A one-line quoted body written with
+# `\n` escapes — chat send code-agent "line1\n\n**title**" — is rejected
+# BEFORE anything is sent (ESCAPED_NEWLINES, exit 2): shells do not expand
+# `\n` inside quotes, so the literal backslash-n would be stored and the
+# message would render as one long unformatted line. The error prints a
+# copyable heredoc retry form on stderr; resend via stdin:
+cat <<'EOF' | first-tree chat send code-agent -f markdown
+first line
+
+**second** line
+EOF
+# Stdin bodies are never checked — piping is also the escape hatch for
+# intentionally sending literal `\n` text.
+
 # Ask a human a tracked question (red-dot until answered). --request must
 # target a single human; the body carries context, --subject is the headline
 # (≤80 chars), and --question carries only the ask (≤200 chars).

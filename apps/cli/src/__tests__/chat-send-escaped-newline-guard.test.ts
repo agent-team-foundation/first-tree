@@ -22,9 +22,15 @@ const outputMocks = vi.hoisted(() => ({
   success: vi.fn(),
 }));
 
+const printLineMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 vi.mock("../core/doc-capture.js", () => docCaptureMock);
 vi.mock("../cli/output.js", () => outputMocks);
+vi.mock("../core/output.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../core/output.js")>();
+  return { ...actual, print: { ...actual.print, line: printLineMock } };
+});
 
 /**
  * Pins the `chat send` escaped-newline guard. Shell-composing models
@@ -145,13 +151,20 @@ describe("chat send escaped-newline guard — intercept then self-correct", () =
     expect(outputMocks.success).not.toHaveBeenCalled();
   });
 
-  it("tells the agent exactly how to retry — copyable heredoc + stdin escape hatch", async () => {
+  it("tells the agent exactly how to retry — copyable heredoc hint + single-line envelope", async () => {
     await expect(runChatSend(["nova", escapedBody])).rejects.toThrow();
 
+    // The copyable form rides `print.line` (plain stderr text with REAL
+    // newlines); the fail envelope stays single-line and points at it.
+    const hint = printLineMock.mock.calls[0]?.[0] ?? "";
+    expect(hint).toContain("cat <<'EOF'");
+    expect(hint).toContain("chat send <name> -f markdown");
+    expect(hint).toContain("\n  EOF\n");
+    expect(hint).toContain("stdin is not checked");
+
     const message = outputMocks.fail.mock.calls[0]?.[1] ?? "";
-    expect(message).toContain("cat <<'EOF'");
-    expect(message).toContain("chat send <name> -f markdown");
-    expect(message).toContain("stdin is not checked");
+    expect(message).toContain("stdin/heredoc");
+    expect(message).not.toContain("\n");
   });
 
   it("retry via stdin with real newlines succeeds and preserves markdown formatting", async () => {
