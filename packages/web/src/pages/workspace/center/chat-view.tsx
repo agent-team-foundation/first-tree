@@ -7,7 +7,9 @@ import {
   isImageBatchRefContent,
   isImageRefContent,
   type MentionParticipant,
+  type OpenQuestionRequest,
   parseWorkspaceDocKey,
+  type RequestResolution,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -74,10 +76,16 @@ import {
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
 import { RequestCard } from "../../../components/chat/request-card.js";
+import { RequestDock } from "../../../components/chat/request-dock.js";
 import {
+  allRequiredSelected,
+  buildAnswerDraft,
   contentStartsWithMention,
+  findDockableRequest,
   findThreadableRequestId,
   readMentions,
+  readRequestPayload,
+  recoverAnswerSelections,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
@@ -115,7 +123,7 @@ import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
-import { computeRequiresMention } from "../../../utils/requires-mention.js";
+import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 
@@ -265,6 +273,7 @@ function TextRow({
   agentColorTokenFn,
   mentionParticipants,
   messages,
+  suppressAnswerBlock = false,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
@@ -274,6 +283,13 @@ function TextRow({
   mentionParticipants: MentionParticipant[];
   /** Full visible thread — RequestCard derives a request's lifecycle from it. */
   messages: readonly MessageWithDelivery[];
+  /**
+   * True when this message is the request currently pinned in the composer
+   * dock — its timeline card suppresses the inline answer block (the dock
+   * owns answering). Passed as a per-row boolean (not the docked id) so a
+   * future memo() on TextRow invalidates only the affected row.
+   */
+  suppressAnswerBlock?: boolean;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -574,6 +590,7 @@ function TextRow({
               }
               resolveAgentName={agentNameFn}
               onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
+              suppressAnswerBlock={suppressAnswerBlock}
             />
           ) : (
             <pre
@@ -955,6 +972,11 @@ export function ChatView({
    * focused the input even once, we don't keep slapping `@` back into an
    * empty draft. Reset when switching chats. */
   const focusPrimedRef = useRef(false);
+  // Current-draft provenance for the single `@` inserted by focus auto-prime.
+  // This is intentionally narrower than `focusPrimedRef`: the latter only
+  // means auto-prime has ever happened in this chat, while this flag means the
+  // current draft is still the untouched auto-prime token.
+  const autoPrimedDraftRef = useRef(false);
   /** Once-per-session set of chatIds we've pre-filled. Set semantics
    * (not a single ref) so revisiting an empty chat we already touched
    * doesn't re-stamp the greeting on top of the user's cleared draft.
@@ -963,6 +985,7 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally chatId-scoped.
   useEffect(() => {
     focusPrimedRef.current = false;
+    autoPrimedDraftRef.current = false;
   }, [chatId]);
 
   // Hydrate timeline from local IndexedDB cache so chat-switches feel
@@ -1089,7 +1112,10 @@ export function ChatView({
     [queryClient, messagesQueryKey],
   );
   const buildOptimisticTextMessage = useCallback(
-    (text: string): MessageWithDelivery | null => {
+    (
+      text: string,
+      route?: { mentions?: string[]; inReplyTo?: string; resolves?: RequestResolution },
+    ): MessageWithDelivery | null => {
       if (!myAgentId) return null;
       return {
         id: `optimistic-${crypto.randomUUID()}`,
@@ -1097,8 +1123,16 @@ export function ChatView({
         senderId: myAgentId,
         format: "text",
         content: text,
-        metadata: {},
-        inReplyTo: null,
+        // Stamp the routing/lifecycle metadata on the optimistic row so
+        // `deriveRequestState` flips a just-answered request immediately —
+        // the dock unpins and the card resolves without waiting for the
+        // POST + refetch round-trip (otherwise the still-"open" question
+        // invites a second resolve send on a slow link).
+        metadata: {
+          ...(route?.mentions && route.mentions.length > 0 ? { mentions: route.mentions } : {}),
+          ...(route?.resolves ? { resolves: route.resolves } : {}),
+        },
+        inReplyTo: route?.inReplyTo ?? null,
         source: "web",
         createdAt: new Date().toISOString(),
         deliveryStatus: "pending",
@@ -1147,20 +1181,32 @@ export function ChatView({
   );
 
   const sendMut = useMutation({
-    mutationFn: ({ content, mentions, inReplyTo }: { content: string; mentions: string[]; inReplyTo?: string }) => {
-      return inReplyTo
-        ? sendChatMessage(chatId, content, mentions, { inReplyTo })
-        : sendChatMessage(chatId, content, mentions);
-    },
+    mutationFn: ({
+      content,
+      mentions,
+      inReplyTo,
+      resolves,
+    }: {
+      content: string;
+      mentions: string[];
+      inReplyTo?: string;
+      resolves?: RequestResolution;
+    }) =>
+      // `resolves` rides only the composer dock's direct-resolve send (the
+      // untouched option selection) — see `dockDirectResolve` in handleSend.
+      // Plain sends keep the 3-arg shape (no opts object on the wire path).
+      inReplyTo || resolves
+        ? sendChatMessage(chatId, content, mentions, { inReplyTo, resolves })
+        : sendChatMessage(chatId, content, mentions),
     // Optimistic insert: render the user's row above the composer immediately
     // and clear the draft so the input feels responsive even when the POST
     // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
     // to onError / onSuccess so we can reconcile with the server row.
-    onMutate: async ({ content }) => {
+    onMutate: async ({ content, mentions, inReplyTo, resolves }) => {
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const previousDraft = draft;
       setDraft("");
-      const optimistic = buildOptimisticTextMessage(content);
+      const optimistic = buildOptimisticTextMessage(content, { mentions, inReplyTo, resolves });
       if (!optimistic) return { tempId: null, previousDraft };
       insertOwnOptimisticMessage(optimistic);
       return { tempId: optimistic.id, previousDraft };
@@ -1233,6 +1279,23 @@ export function ChatView({
     if (!text && images.length === 0) return;
     if (uploading) return;
 
+    // Direct resolve: the draft is exactly the dock's untouched option
+    // selection — send it as the clean answer. It threads under the request
+    // (`inReplyTo`) and carries the explicit `resolves` signal that drives the
+    // server's red-dot −1. Mentions route to the asker automatically, so this
+    // path needs no typed @mention even in a group chat. Any edit, free text,
+    // or attached image fails `dockDirectResolve` and falls through to the
+    // normal send below (a plain reply the asking agent judges).
+    if (dockDirectResolve && dockRequest) {
+      sendMut.mutate({
+        content: text,
+        mentions: [dockRequest.senderId],
+        inReplyTo: dockRequest.id,
+        resolves: { request: dockRequest.id, kind: "answered" },
+      });
+      return;
+    }
+
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
     // Slack/Discord. This avoids false positives like npm scoped
@@ -1246,13 +1309,14 @@ export function ChatView({
 
     // Group-chat send guard: a multi-speaker chat has no no-recipient send
     // path — every message must @mention at least one member. The send button
-    // is already disabled in this state (see the `disabled` prop below), so
+    // is already disabled in this state (see `sendBlockedByMentionGate`), so
     // this is the Enter-key / programmatic backstop. Applies to image-only
     // sends too: the server's mention check runs per message regardless of
     // format, so an un-addressed image would 400 just like un-addressed text.
     // Surface a hint when the user has only attached images so the
-    // silent-return doesn't look like a stuck send.
-    if (requiresMention && draftMentions.length === 0) {
+    // silent-return doesn't look like a stuck send. A live dock lifts the
+    // gate — `routedMentions` below defaults the recipient to the asker.
+    if (sendBlockedByMentionGate) {
       if (images.length > 0) {
         // English matches the other uploadError strings in this file
         // (Failed to send image / Failed to add participants / Image too large).
@@ -1261,15 +1325,35 @@ export function ChatView({
       return;
     }
 
+    // Routing mentions for this send. While a dock is live, its asker is the
+    // default recipient when no explicit @mention resolved — a typed/edited
+    // reply is "for the asker to judge" (exactly what the dock's helper line
+    // promises), and it then threads under the question via
+    // `findThreadableRequestId` below. Explicit @mentions always win.
+    const routedMentions =
+      effectiveSendMentions.length === 0 && dockRequest ? [dockRequest.senderId] : effectiveSendMentions;
+
+    // "Chat about this": a plain reply that addresses the agent which asked an
+    // open question directed at me (explicit @mention, or the dock-asker
+    // fallback above) threads under that question (`inReplyTo`) so the
+    // back-and-forth stays scoped to it. Computed BEFORE the image branch —
+    // a captioned image answering a docked question must thread exactly like
+    // a text reply. This does NOT resolve the question — `inReplyTo` is pure
+    // threading; resolution needs an explicit `metadata.resolves`, written by
+    // the dock's clean answer or the asking agent's `chat send
+    // --answer`/`--close`.
+    const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
+
     if (images.length > 0) {
       setUploading(true);
       setUploadError(null);
       // Carry the routing mentions onto each image message so the
       // server's explicit-recipient enforcement check accepts file-format sends.
-      // `effectiveSendMentions` already includes the 1:1 peer (per the
-      // explicit-only contract), so the file path works in both DM and
-      // group chats — without this every image POST would 400.
-      const imageMetadata = effectiveSendMentions.length > 0 ? { mentions: effectiveSendMentions } : undefined;
+      // `routedMentions` already includes the 1:1 peer (per the
+      // explicit-only contract) or the dock-asker fallback, so the file path
+      // works in DM, group, and docked-question chats — without this every
+      // image POST would 400.
+      const imageMetadata = routedMentions.length > 0 ? { mentions: routedMentions } : undefined;
       // Snapshot draft + clear inputs up front so the composer feels instant.
       // Optimistic rows render into the cache below; rollback restores both
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
@@ -1324,7 +1408,9 @@ export function ChatView({
             format: "file",
             content: optimisticContent,
             metadata: imageMetadata ?? {},
-            inReplyTo: null,
+            // Mirror the POST below: a captioned image answering a docked
+            // question threads under it, optimistically too.
+            inReplyTo: threadedRequestId ?? null,
             source: "web",
             createdAt: new Date().toISOString(),
             deliveryStatus: "pending",
@@ -1344,6 +1430,7 @@ export function ChatView({
             attachments: optimisticRefs,
           },
           imageMetadata,
+          threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
         );
         if (batchTempId) {
           replaceOptimisticMessage(batchTempId, saved);
@@ -1394,16 +1481,9 @@ export function ChatView({
       return;
     }
 
-    // "Chat about this": a plain reply that @-mentions the agent which asked an
-    // open question directed at me threads under that question (`inReplyTo`) so
-    // the back-and-forth stays scoped to it. This does NOT resolve the question
-    // — `inReplyTo` is pure threading now; resolution needs an explicit
-    // `metadata.resolves`, written by the request card's answer block (a clean
-    // answer) or the asking agent's `chat send --answer`/`--close`.
-    const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, effectiveSendMentions) ?? undefined;
     sendMut.mutate({
       content: text,
-      mentions: effectiveSendMentions,
+      mentions: routedMentions,
       inReplyTo: threadedRequestId,
     });
   };
@@ -1467,6 +1547,86 @@ export function ChatView({
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
     [cachedMessages, messagesData],
   );
+
+  // ── Request dock: the most recent live open question directed at me pins
+  // its questions + options directly above the composer (the timeline card
+  // suppresses its inline answer block — the answering surface exists once).
+  // Single send button, one contract: clicking an option REPLACES the draft
+  // with the canonical answer text; sending a clean answer direct-resolves
+  // via `metadata.resolves`; sending any other text is a plain reply routed
+  // to the asking agent to judge — the question stays open.
+  //
+  // The selection state is DERIVED from the draft (`recoverAnswerSelections`),
+  // never stored: the draft is the single source of truth, so the send
+  // mutation's own draft lifecycle (onMutate clears, onError restores) keeps
+  // resolve semantics across a failed-send retry for free, and hand-typing
+  // the exact option text counts as a clean answer (accepted semantics).
+  // Watchers never dock — the read-only branch renders no composer, and
+  // suppressing the timeline card without a dock would leave zero answering
+  // surfaces.
+  const dockRequest = useMemo(
+    () => (readOnly ? null : findDockableRequest(mergedMessages, myAgentId)),
+    [readOnly, mergedMessages, myAgentId],
+  );
+  const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
+  const dockRequestId = dockRequest?.id;
+  const dockSelections = useMemo<Record<string, string>>(
+    () => (dockPayload ? recoverAnswerSelections(draft, dockPayload.questions) : {}),
+    [dockPayload, draft],
+  );
+  const dockDirectResolve =
+    dockRequest != null &&
+    dockPayload != null &&
+    pendingImages.length === 0 &&
+    draft.trim().length > 0 &&
+    draft.trim() === buildAnswerDraft(dockPayload, dockSelections) &&
+    allRequiredSelected(dockPayload, dockSelections);
+  const pickDockOption = (prompt: string, option: string) => {
+    if (!dockPayload) return;
+    const nextDraft = buildAnswerDraft(dockPayload, { ...dockSelections, [prompt]: option });
+    autoPrimedDraftRef.current = false;
+    setDraft(nextDraft);
+    setCursor(nextDraft.length);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+  useEffect(() => {
+    if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
+    // Real message data can arrive after an empty group composer already
+    // focus-primed `@`; once the dock appears, the asker is the default route.
+    autoPrimedDraftRef.current = false;
+    focusPrimedRef.current = false;
+    setDraft("");
+    setCursor(0);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el || el.value !== "") return;
+      el.setSelectionRange(0, 0);
+    });
+  }, [dockRequestId, draft]);
+  // When the dock re-pins to a DIFFERENT request (a newer question arrived,
+  // or the current one resolved under us), drop a draft the old dock
+  // authored — otherwise a staged clean answer silently retargets and would
+  // thread under the new question as a confusing bare reply. Typed
+  // discussion text never matches the old request's canonical answer shape
+  // and is kept. Functional setDraft returns the same string in the keep
+  // case, so React bails out of the no-op update.
+  const prevDockRef = useRef<{ id: string; payload: OpenQuestionRequest } | null>(null);
+  useEffect(() => {
+    const prev = prevDockRef.current;
+    prevDockRef.current = dockRequest && dockPayload ? { id: dockRequest.id, payload: dockPayload } : null;
+    if (!prev || prev.id === dockRequest?.id) return;
+    setDraft((current) => {
+      const trimmed = current.trim();
+      if (trimmed.length === 0) return current;
+      const derived = recoverAnswerSelections(trimmed, prev.payload.questions);
+      return Object.keys(derived).length > 0 && trimmed === buildAnswerDraft(prev.payload, derived) ? "" : current;
+    });
+  }, [dockRequest, dockPayload]);
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];
@@ -2289,12 +2449,21 @@ export function ChatView({
     [draftMentions, peerAgentId],
   );
 
+  // Group-chat mention gate, shared by the send button (disabled / title /
+  // dimming) and handleSend's Enter-key backstop. A live dock lifts the gate:
+  // the pinned question makes its asker the default recipient (a clean answer
+  // direct-resolves; an edited/typed reply routes to the asker to judge —
+  // exactly what the dock's helper line promises), so no typed @mention is
+  // required while a question is docked.
+  const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && dockRequest == null;
+
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates: mentionCandidates,
     disabled: sendMut.isPending || uploading,
     onSelect: (update) => {
+      autoPrimedDraftRef.current = false;
       setDraft(update.text);
       setCursor(update.cursor);
       // Defer so React has committed the new value before we move the
@@ -2366,6 +2535,7 @@ export function ChatView({
     mentionedAgent: slashMentionContext,
     disabled: sendMut.isPending || uploading,
     onSelect: (update, picked) => {
+      autoPrimedDraftRef.current = false;
       setDraft(update.text);
       setCursor(update.cursor);
       requestAnimationFrame(() => {
@@ -2794,6 +2964,7 @@ export function ChatView({
                           agentColorTokenFn={agentColorToken}
                           mentionParticipants={renderMentionParticipants}
                           messages={mergedMessages}
+                          suppressAnswerBlock={dockRequestId != null && msg.id === dockRequestId}
                         />
                       );
                     }
@@ -2909,6 +3080,20 @@ export function ChatView({
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
                     />
+                    {/* The live open question directed at me — questions +
+                        options pinned where the answer happens. See the dock
+                        state block above `handleSend` for the send contract. */}
+                    {dockRequest && dockPayload ? (
+                      <RequestDock
+                        requestId={dockRequest.id}
+                        payload={dockPayload}
+                        selections={dockSelections}
+                        directResolve={dockDirectResolve}
+                        draftEmpty={draft.trim().length === 0}
+                        askerName={chatScopedAgentName(dockRequest.senderId)}
+                        onPick={pickDockOption}
+                      />
+                    ) : null}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
                       style={{
@@ -3018,6 +3203,7 @@ export function ChatView({
                           ref={textareaRef}
                           value={draft}
                           onChange={(e) => {
+                            autoPrimedDraftRef.current = false;
                             setDraft(e.target.value);
                             setCursor(e.target.selectionStart ?? e.target.value.length);
                             // Dismiss a stale upload error (e.g. the "no @mention"
@@ -3039,10 +3225,23 @@ export function ChatView({
                             // their draft and tabbed away/back; that would constantly
                             // fight the user when they're trying to write a fresh
                             // empty message without addressing anyone (e.g. paste over).
-                            if (!requiresMention) return;
-                            if (focusPrimedRef.current) return;
-                            if (draft.length > 0 || mentionCandidates.length === 0) return;
+                            // While a question is docked, priming is skipped — the
+                            // asker is the default recipient (same gate that lifts
+                            // `sendBlockedByMentionGate`), so stamping `@` would fight
+                            // the dock contract as the user starts a free-text answer.
+                            if (
+                              !shouldPrimeMentionOnFocus({
+                                requiresMention,
+                                dockActive: dockRequest != null,
+                                alreadyPrimed: focusPrimedRef.current,
+                                draftLength: draft.length,
+                                mentionCandidateCount: mentionCandidates.length,
+                              })
+                            ) {
+                              return;
+                            }
                             focusPrimedRef.current = true;
+                            autoPrimedDraftRef.current = true;
                             setDraft("@");
                             setCursor(1);
                             requestAnimationFrame(() => {
@@ -3159,6 +3358,7 @@ export function ChatView({
                               const start = el.selectionStart ?? draft.length;
                               const end = el.selectionEnd ?? start;
                               const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                              autoPrimedDraftRef.current = false;
                               setDraft(next);
                               setCursor(start + 1);
                               requestAnimationFrame(() => {
@@ -3222,10 +3422,10 @@ export function ChatView({
                               sendMut.isPending ||
                               uploading ||
                               (!draft.trim() && pendingImages.length === 0) ||
-                              (requiresMention && draftMentions.length === 0)
+                              sendBlockedByMentionGate
                             }
                             title={
-                              requiresMention && draftMentions.length === 0
+                              sendBlockedByMentionGate
                                 ? "@mention a member to send — a group message must address someone"
                                 : "Send (Enter)"
                             }
@@ -3235,7 +3435,7 @@ export function ChatView({
                               (sendMut.isPending ||
                                 uploading ||
                                 (!draft.trim() && pendingImages.length === 0) ||
-                                (requiresMention && draftMentions.length === 0)) &&
+                                sendBlockedByMentionGate) &&
                                 "opacity-40 cursor-not-allowed",
                             )}
                             style={{

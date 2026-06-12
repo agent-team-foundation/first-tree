@@ -31,11 +31,11 @@ import {
   defaultExpanded,
   deriveRequestState,
   isRelatedViewer,
-  parseAnswerSelections,
   type RequestState,
   readCloseReason,
   readMentions,
   readRequestPayload,
+  recoverAnswerSelections,
 } from "./request-state.js";
 
 type ChipSpec = { label: string; Icon: ComponentType<{ size?: number }>; bg: string; fg: string };
@@ -93,6 +93,7 @@ export function RequestCard({
   bodyShowsTarget = false,
   resolveAgentName,
   onSent,
+  suppressAnswerBlock = false,
 }: {
   message: Message;
   thread: readonly Message[];
@@ -110,6 +111,13 @@ export function RequestCard({
   resolveAgentName: (agentId: string) => string;
   /** Called after a successful answer send so the parent can refresh. */
   onSent?: () => void;
+  /**
+   * True when this request is the one pinned in the composer dock
+   * (`RequestDock`) — the dock owns the answering surface, so the timeline
+   * card drops its inline answer block to keep that surface unique. Header,
+   * body, and the resolved/closed read-only states render unchanged.
+   */
+  suppressAnswerBlock?: boolean;
 }) {
   const state = useMemo(() => deriveRequestState(message, thread), [message, thread]);
   const payload = useMemo(() => readRequestPayload(message.metadata), [message.metadata]);
@@ -145,12 +153,7 @@ export function RequestCard({
         (raw as { kind?: unknown }).kind === "answered"
       );
     });
-    return reply
-      ? parseAnswerSelections(
-          reply.content,
-          payload.questions.map((q) => q.prompt),
-        )
-      : {};
+    return reply ? recoverAnswerSelections(reply.content, payload.questions) : {};
   }, [state, payload, thread, message.id]);
 
   const mut = useMutation({
@@ -270,8 +273,10 @@ export function RequestCard({
 
       {/* state-specific block: `open` keeps interactive card chrome; `resolved`
           / `closed` are read-only and render as plain labeled content — no
-          filled/bordered card (DESIGN.md pillar 5). */}
-      {answerable && payload ? (
+          filled/bordered card (DESIGN.md pillar 5). When the composer dock owns
+          this request (`suppressAnswerBlock`), the inline block is dropped so
+          the answering surface exists exactly once. */}
+      {answerable && payload && !suppressAnswerBlock ? (
         <div
           style={{
             marginTop: "var(--sp-3)",

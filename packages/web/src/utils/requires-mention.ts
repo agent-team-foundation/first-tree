@@ -29,3 +29,33 @@ export function computeRequiresMention(
   const speakersAfterSend = participantAgentIds.length + (meIn ? 0 : 1);
   return speakersAfterSend >= 3;
 }
+
+/**
+ * Whether composer focus should auto-insert `@` to pop the recipient picker.
+ *
+ * Primes only when an explicit @mention is genuinely required for this send:
+ * a real group chat (`requiresMention`) with NO live docked question. While a
+ * question is docked, its asker is the default recipient (the mention gate is
+ * lifted — see chat-view's `sendBlockedByMentionGate` / `routedMentions`), so
+ * stamping `@` on focus would fight the dock contract ("no typed @mention
+ * needed") exactly as the user clicks an option or starts a free-text answer.
+ *
+ * The remaining guards mirror the composer's long-standing rules: prime once
+ * per chat visit, never over an existing draft, and only when there is at
+ * least one mention candidate to pick.
+ */
+export function shouldPrimeMentionOnFocus(args: {
+  requiresMention: boolean;
+  dockActive: boolean;
+  alreadyPrimed: boolean;
+  draftLength: number;
+  mentionCandidateCount: number;
+}): boolean {
+  return (
+    args.requiresMention &&
+    !args.dockActive &&
+    !args.alreadyPrimed &&
+    args.draftLength === 0 &&
+    args.mentionCandidateCount > 0
+  );
+}
