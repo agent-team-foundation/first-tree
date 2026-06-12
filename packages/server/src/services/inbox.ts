@@ -17,7 +17,7 @@ export type AckEntryResult =
   | {
       ok: true;
       throughEntry: typeof inboxEntries.$inferSelect;
-      disposition: "acked" | "already_acked";
+      disposition: "acked" | "already_acked" | "accepted_from_pending";
       ackedCount: number;
       ackedEntryIds: number[];
     }
@@ -512,11 +512,14 @@ export async function ackThroughEntryIdForBoundAgents(
         .orderBy(asc(inboxEntries.id))
         .for("update");
 
-      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered")) {
+      const isResetDeliveredRow = (row: ClaimedEntry): boolean => row.status === "pending" && row.deliveredAt !== null;
+      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered" && !isResetDeliveredRow(row))) {
         return { ok: false, reason: "prefix_gap" };
       }
 
       const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
+      const resetPendingIds = prefixRows.filter(isResetDeliveredRow).map((row) => row.id);
+      const committableIds = [...deliveredIds, ...resetPendingIds];
       const ackedAt = new Date();
       const drainPendingSilentRows = async (): Promise<void> => {
         await tx
@@ -533,7 +536,7 @@ export async function ackThroughEntryIdForBoundAgents(
           );
       };
 
-      if (deliveredIds.length === 0) {
+      if (committableIds.length === 0) {
         await drainPendingSilentRows();
         return {
           ok: true,
@@ -547,14 +550,14 @@ export async function ackThroughEntryIdForBoundAgents(
       const updated = await tx
         .update(inboxEntries)
         .set({ status: "acked", ackedAt })
-        .where(and(inArray(inboxEntries.id, deliveredIds), eq(inboxEntries.status, "delivered")))
+        .where(and(inArray(inboxEntries.id, committableIds), inArray(inboxEntries.status, ["delivered", "pending"])))
         .returning();
       await drainPendingSilentRows();
       const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
         throughEntry: updatedThroughEntry,
-        disposition: "acked",
+        disposition: resetPendingIds.length > 0 ? "accepted_from_pending" : "acked",
         ackedCount: updated.length,
         ackedEntryIds: updated.map((row) => row.id),
       };

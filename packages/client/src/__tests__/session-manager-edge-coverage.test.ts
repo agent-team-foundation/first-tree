@@ -508,6 +508,107 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
+  it("queues recovery redelivery instead of preempting a working session", async () => {
+    const working = handler();
+    const recovered = handler();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [working, recovered],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    expect(recoverChat).toHaveBeenCalledWith("chat-recovery");
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+
+    expect(working.suspend).not.toHaveBeenCalled();
+    expect(recovered.start).not.toHaveBeenCalled();
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("does not let a queued recovery steal a slot released for fresh preemption", async () => {
+    const lifecycles: Array<{ chatId: string; phase: "start" | "resume" }> = [];
+    const makeTrackedHandler = () =>
+      handler({
+        async start(message) {
+          lifecycles.push({ chatId: message.chatId, phase: "start" });
+          return `session-${message.chatId}`;
+        },
+        async resume(message) {
+          lifecycles.push({ chatId: message?.chatId ?? "", phase: "resume" });
+          return `session-${message?.chatId ?? "unknown"}`;
+        },
+      });
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [makeTrackedHandler(), makeTrackedHandler(), makeTrackedHandler()],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-fresh", messageId: "msg-fresh" }));
+
+    expect(sm.activeCount).toBe(1);
+    expect(lifecycles).toEqual([
+      { chatId: "chat-working", phase: "start" },
+      { chatId: "chat-fresh", phase: "start" },
+    ]);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("marks queued inbox work for recovery when pending drain routing fails", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    let firstContext: SessionContext | undefined;
+    let firstMessage: SessionMessage | undefined;
+    let factoryCalls = 0;
+    const sm = makeManager({
+      ackEntry,
+      recoverChat,
+      concurrency: 1,
+      maxSessions: 1,
+      handlerFactory: () => {
+        factoryCalls++;
+        if (factoryCalls > 1) throw new Error("handler factory unavailable");
+        return handler({
+          async start(message, ctx) {
+            firstMessage = message;
+            firstContext = ctx;
+            return "session-chat-working";
+          },
+        });
+      },
+    });
+
+    await sm.dispatch(mockEntry({ id: 10, chatId: "chat-working", messageId: "msg-working" }));
+    await sm.dispatch(mockEntry({ id: 11, chatId: "chat-queued", messageId: "msg-queued" }));
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
+    if (!firstContext || !firstMessage) throw new Error("first context missing");
+
+    await firstContext.finishTurn(firstMessage, { status: "success", terminal: true });
+
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-queued"));
+    expect(ackEntry).toHaveBeenCalledWith(10);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(false);
+
+    await sm.shutdown();
+  });
+
   it("covers retry early returns, retry re-queue, empty-message start, resume fallback, and emit failures", async () => {
     const events: SessionEvent[] = [];
     const sm = makeManager({

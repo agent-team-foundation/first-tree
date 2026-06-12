@@ -269,67 +269,67 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
-  it("does NOT re-ack a dedup-hit whose chat was LRU-evicted — the bind-reset recovery path must stay open", async () => {
-    // R5 boundary: LRU eviction moves the entry to recovery debt WITHOUT
-    // acking it (no handler will ever call finishTurn). The
-    // recovery contract documented in `evictIfNeeded` is "server's
-    // bind-reset redelivers against a fresh session." Pre-this-PR the
-    // dispatch dedup short-circuit silently returned, the evicted chat's
-    // dedup key kept the redelivery from being mis-classified as a fresh
-    // message at process restart, and recovery worked. After adding the
-    // dedup-hit re-ack the path would have been broken: dedup-hit + entry
-    // not in-flight → re-ack → server marks acked → no redelivery → loss.
-    // The fix synchronously drops the evicted chat's dedup keys, so the
-    // redelivery is no longer a dedup hit at all and goes through the
-    // normal `startNewSession` (with evictedMappings → handler.resume)
-    // path. Verifies (1) ack is NOT called for the evicted entry on
-    // redelivery, and (2) the handler runs again (fresh session pickup).
+  it("queues a new chat instead of evicting working sessions at max_sessions", async () => {
     const ackEntry = mockAckEntry();
-    const startSpy = vi.fn(async (_msg: unknown, _ctx: SessionContext) => "session-id-mock");
-    const resumeSpy = vi.fn(async (_msg: unknown, _sid: string, _ctx: SessionContext) => "session-id-mock");
-    const handler = createMockHandler({ start: startSpy, resume: resumeSpy });
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const handlers: AgentHandler[] = [];
+    const factory: HandlerFactory = () => {
+      const h = createMockHandler();
+      handlers.push(h);
+      return h;
+    };
     const sm = createSessionManager({
       ackEntry,
-      handler,
+      handlerFactory: factory,
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       recoverChat,
     });
 
-    // Fill the session pool: chat-a then chat-b. chat-a becomes LRU.
-    const chatA = mockEntry({ id: 70, chatId: "chat-a", messageId: "msg-a" });
-    const chatB = mockEntry({ id: 71, chatId: "chat-b", messageId: "msg-b" });
-    await sm.dispatch(chatA);
-    await sm.dispatch(chatA);
-    await sm.dispatch(chatB);
-    await sm.dispatch(chatB);
-    expect(startSpy).toHaveBeenCalledTimes(2);
+    await sm.dispatch(mockEntry({ id: 70, chatId: "chat-a", messageId: "msg-a" }));
+    await sm.dispatch(mockEntry({ id: 71, chatId: "chat-b", messageId: "msg-b" }));
+    expect(sm.totalCount).toBe(2);
 
-    // chat-c trips evictIfNeeded — sessions.size (2) >= max_sessions (2),
-    // chat-a is the LRU candidate and gets evicted (chat-a:msg-a should
-    // come out of the dedup set as part of eviction), then proactively
-    // requests chat-scoped recovery for its unacked work.
-    const chatC = mockEntry({ id: 72, chatId: "chat-c", messageId: "msg-c" });
-    await sm.dispatch(chatC);
-    await sm.dispatch(chatC);
-    expect(startSpy).toHaveBeenCalledTimes(3);
-    expect(recoverChat).toHaveBeenCalledTimes(1);
-    expect(recoverChat).toHaveBeenCalledWith("chat-a");
-    // Nothing has been acked yet — none of the mock handlers call finishTurn.
+    await sm.dispatch(mockEntry({ id: 72, chatId: "chat-c", messageId: "msg-c" }));
+
+    expect(sm.totalCount).toBe(2);
+    expect(handlers).toHaveLength(2);
+    expect(recoverChat).not.toHaveBeenCalled();
     expect(ackEntry).not.toHaveBeenCalled();
 
-    // Simulate redelivery of the SAME entry for the LRU-evicted chat after
-    // proactive recovery. The first dispatch resumes from evictedMappings;
-    // the second is a duplicate-in-flight redelivery and is ignored.
-    await sm.dispatch(chatA);
-    await sm.dispatch(chatA);
+    await sm.shutdown();
+  });
 
-    // Recovery path: handler.resume invoked once for chat-a (it was
-    // evicted, so the new dispatch resumes from evictedMappings).
-    expect(resumeSpy).toHaveBeenCalledTimes(1);
-    // Critically: NO ack for the evicted entry. The fresh session will
-    // ack it when its handler calls finishTurn at turn end.
-    expect(ackEntry).not.toHaveBeenCalled();
+  it("drains max_sessions queue after a working session becomes idle", async () => {
+    const ackEntry = mockAckEntry();
+    const contexts = new Map<string, SessionContext>();
+    const messages = new Map<string, SessionMessage>();
+    const started: string[] = [];
+    const factory: HandlerFactory = () =>
+      createMockHandler({
+        async start(message, ctx) {
+          contexts.set(message.chatId, ctx);
+          messages.set(message.chatId, message);
+          started.push(message.chatId);
+          return `session-${message.chatId}`;
+        },
+      });
+    const sm = createSessionManager({
+      ackEntry,
+      handlerFactory: factory,
+      concurrency: 1,
+      session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    await sm.dispatch(mockEntry({ id: 80, chatId: "chat-a", messageId: "msg-a" }));
+    await sm.dispatch(mockEntry({ id: 81, chatId: "chat-b", messageId: "msg-b" }));
+    expect(started).toEqual(["chat-a"]);
+
+    const ctx = contexts.get("chat-a");
+    const message = messages.get("chat-a");
+    if (!ctx || !message) throw new Error("chat-a context missing");
+    await ctx.finishTurn(message, { status: "success", terminal: true });
+
+    await vi.waitFor(() => expect(started).toEqual(["chat-a", "chat-b"]));
 
     await sm.shutdown();
   });
@@ -468,8 +468,16 @@ describe("SessionManager", () => {
 
   it("evicts LRU session when max_sessions is reached", async () => {
     const handlers: AgentHandler[] = [];
+    const contexts = new Map<string, SessionContext>();
+    const messages = new Map<string, SessionMessage>();
     const factory: HandlerFactory = () => {
-      const h = createMockHandler();
+      const h = createMockHandler({
+        async start(msg, ctx) {
+          contexts.set(msg.chatId, ctx);
+          messages.set(msg.chatId, msg);
+          return `session-${msg.chatId}`;
+        },
+      });
       handlers.push(h);
       return h;
     };
@@ -497,8 +505,12 @@ describe("SessionManager", () => {
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-2" }));
     expect(sm.totalCount).toBe(2);
+    const firstCtx = contexts.get("chat-1");
+    const firstMessage = messages.get("chat-1");
+    if (!firstCtx || !firstMessage) throw new Error("chat-1 context missing");
+    await firstCtx.finishTurn(firstMessage, { status: "success", terminal: true });
 
-    // Third chat should evict the oldest
+    // Third chat should evict the oldest idle session.
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-3" }));
     expect(sm.totalCount).toBe(2);
 
@@ -507,14 +519,22 @@ describe("SessionManager", () => {
 
   it("resumes evicted session when new message arrives for same chat", async () => {
     const lifecycleCalls: Array<{ type: string; chatId: string; sessionId?: string }> = [];
+    const contexts = new Map<string, SessionContext>();
+    const messages = new Map<string, SessionMessage>();
     const factory: HandlerFactory = () =>
       createMockHandler({
-        async start(msg) {
+        async start(msg, ctx) {
           const sid = `session-${msg.chatId}`;
+          contexts.set(msg.chatId, ctx);
+          messages.set(msg.chatId, msg);
           lifecycleCalls.push({ type: "start", chatId: msg.chatId });
           return sid;
         },
-        async resume(msg, sessionId) {
+        async resume(msg, sessionId, ctx) {
+          if (msg) {
+            contexts.set(msg.chatId, ctx);
+            messages.set(msg.chatId, msg);
+          }
           lifecycleCalls.push({ type: "resume", chatId: msg?.chatId ?? "", sessionId });
           return sessionId;
         },
@@ -552,6 +572,13 @@ describe("SessionManager", () => {
     await sm.dispatch(chat2);
     await sm.dispatch(chat2);
     expect(sm.totalCount).toBe(2);
+    const chat1Ctx = contexts.get("chat-1");
+    const chat1Msg = messages.get("chat-1");
+    const chat2Ctx = contexts.get("chat-2");
+    const chat2Msg = messages.get("chat-2");
+    if (!chat1Ctx || !chat1Msg || !chat2Ctx || !chat2Msg) throw new Error("initial contexts missing");
+    await chat1Ctx.finishTurn(chat1Msg, { status: "success", terminal: true });
+    await chat2Ctx.finishTurn(chat2Msg, { status: "success", terminal: true });
 
     // Third chat evicts chat-1 (LRU)
     await sm.dispatch(chat3);
@@ -562,6 +589,10 @@ describe("SessionManager", () => {
     await sm.dispatch(chat4);
     await sm.dispatch(chat4);
     expect(sm.totalCount).toBe(2);
+    const chat3Ctx = contexts.get("chat-3");
+    const chat3Msg = messages.get("chat-3");
+    if (!chat3Ctx || !chat3Msg) throw new Error("chat-3 context missing");
+    await chat3Ctx.finishTurn(chat3Msg, { status: "success", terminal: true });
 
     // Send a message to evicted chat-1: first dispatch triggers recovery,
     // second dispatch represents redelivery and should resume, not start.
@@ -774,6 +805,47 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(recoverChat).toHaveBeenCalledTimes(1);
     expect(recoverChat).toHaveBeenCalledWith("chat-preempted");
     expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("uses an idle active session before preempting a working session for concurrency", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const handlers = new Map<string, AgentHandler>();
+    const contexts = new Map<string, SessionContext>();
+    const messages = new Map<string, SessionMessage>();
+    const factory: HandlerFactory = () => {
+      let current: AgentHandler;
+      current = createMockHandler({
+        async start(message, ctx) {
+          handlers.set(message.chatId, current);
+          contexts.set(message.chatId, ctx);
+          messages.set(message.chatId, message);
+          return `session-${message.chatId}`;
+        },
+      });
+      return current;
+    };
+    const sm = createSessionManager({
+      ackEntry,
+      handlerFactory: factory,
+      concurrency: 2,
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-idle", messageId: "msg-idle" }));
+    const idleCtx = contexts.get("chat-idle");
+    const idleMessage = messages.get("chat-idle");
+    if (!idleCtx || !idleMessage) throw new Error("idle context missing");
+    await idleCtx.finishTurn(idleMessage, { status: "success", terminal: true });
+
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-new", messageId: "msg-new" }));
+
+    await vi.waitFor(() => expect(handlers.get("chat-idle")?.suspend).toHaveBeenCalledTimes(1));
+    expect(handlers.get("chat-working")?.suspend).not.toHaveBeenCalled();
+    expect(handlers.has("chat-new")).toBe(true);
+    expect(ackEntry).toHaveBeenCalledWith(2);
 
     await sm.shutdown();
   });
@@ -1240,11 +1312,11 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const chatB = mockEntry({ id: 2, chatId: "chat-b" });
     await sm.dispatch(chatA);
     await sm.dispatch(chatA);
+    await finishEntry(capturedCtxs[0], 1, "chat-a");
     await sm.dispatch(chatB);
     await sm.dispatch(chatB);
     // Close chat-a and chat-b's start turns so their entries don't pollute
     // the resume-branch ack assertion.
-    await finishEntry(capturedCtxs[0], 1, "chat-a");
     await finishEntry(capturedCtxs[1], 2, "chat-b");
     ackEntry.mockClear();
 

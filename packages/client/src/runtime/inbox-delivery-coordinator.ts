@@ -87,13 +87,17 @@ export class InboxDeliveryCoordinator {
 
   shouldRecoverBeforeDispatch(chatId: string, hasHealthyLiveHandler: boolean, hasLocalSessionRecord: boolean): boolean {
     const ledger = this.ledgers.get(chatId);
-    if (ledger?.recoveryActivationReady) {
-      ledger.recoveryActivationReady = false;
-      this.cleanupLedger(chatId);
-      return false;
-    }
+    if (ledger?.recoveryActivationReady) return false;
     if (ledger?.recoveryDebt === "required" || ledger?.recoveryDebt === "running") return true;
     return Boolean(this.config.recoverChat) && hasLocalSessionRecord && !hasHealthyLiveHandler;
+  }
+
+  takeRecoveryActivationReady(chatId: string): boolean {
+    const ledger = this.ledgers.get(chatId);
+    if (!ledger?.recoveryActivationReady) return false;
+    ledger.recoveryActivationReady = false;
+    this.cleanupLedger(chatId);
+    return true;
   }
 
   async recoverIfNeeded(chatId: string, reason: string): Promise<void> {

@@ -84,7 +84,10 @@ type SessionEntry = {
 type PendingMessage = {
   message: SessionMessage;
   chatId: string;
+  deliveryKind: SlotDeliveryKind;
 };
+
+type SlotDeliveryKind = "fresh" | "recovery";
 
 /**
  * Resolve the directory the runtime reads markdown doc snapshots against —
@@ -381,8 +384,10 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
+    const isRecoveryRedelivery = this.inboxDelivery.takeRecoveryActivationReady(chatId);
 
     if (
+      !isRecoveryRedelivery &&
       this.inboxDelivery.shouldRecoverBeforeDispatch(
         chatId,
         this.hasHealthyLiveHandler(chatId) || this.hasPendingTransientRetry(chatId),
@@ -463,7 +468,8 @@ export class SessionManager {
       // admission barrier: for Codex/TUI, route promises can span the whole
       // turn, but same-chat later messages must still be able to append once
       // this entry has reached handler membership.
-      routePromise = this.routeMessage(chatId, message).catch((err) => {
+      const deliveryKind: SlotDeliveryKind = isRecoveryRedelivery ? "recovery" : "fresh";
+      routePromise = this.routeMessage(chatId, message, deliveryKind).catch((err) => {
         if (this.inboxDelivery.hasEntry(work)) {
           this.inboxDelivery.retryTurn(chatId, message, "route_message_failed");
         }
@@ -692,7 +698,11 @@ export class SessionManager {
     return this.sessions.has(chatId) || this.evictedMappings.has(chatId);
   }
 
-  private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
+  private async routeMessage(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): Promise<void> {
     const existing = this.sessions.get(chatId);
 
     // Transient retry path: keep the original start/resume message at the head
@@ -716,13 +726,13 @@ export class SessionManager {
 
         case "suspended":
         case "evicted":
-          await this.resumeSession(existing, message);
+          await this.resumeSession(existing, message, deliveryKind);
           return;
       }
     }
 
     // No existing session — create new
-    await this.startNewSession(chatId, message);
+    await this.startNewSession(chatId, message, deliveryKind);
   }
 
   /**
@@ -762,12 +772,17 @@ export class SessionManager {
     );
   }
 
-  private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
-    // Enforce concurrency limit
-    if (!this.acquireActiveSlot(chatId, message)) return;
+  private async startNewSession(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind,
+  ): Promise<void> {
+    // Enforce max_sessions before active-slot preemption so a full pool of
+    // working sessions queues instead of first suspending a working victim.
+    if (!this.evictIfNeeded(chatId, message, deliveryKind)) return;
 
-    // Enforce max_sessions (evict LRU)
-    this.evictIfNeeded();
+    // Enforce concurrency limit
+    if (!this.acquireActiveSlot(chatId, message, deliveryKind)) return;
 
     // Check for prior evicted session mapping
     const evicted = this.evictedMappings.get(chatId);
@@ -841,7 +856,11 @@ export class SessionManager {
     }
   }
 
-  private async resumeSession(entry: SessionEntry, message: SessionMessage | null | undefined): Promise<void> {
+  private async resumeSession(
+    entry: SessionEntry,
+    message: SessionMessage | null | undefined,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): Promise<void> {
     // Wait for in-flight suspension to complete before resuming
     if (entry.suspending) {
       await entry.suspending;
@@ -858,7 +877,7 @@ export class SessionManager {
     };
 
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, slotMessage)) return;
+    if (!this.acquireActiveSlot(entry.chatId, slotMessage, deliveryKind)) return;
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
@@ -1071,7 +1090,7 @@ export class SessionManager {
     // Enforce concurrency limit before claiming the slot. If we cannot, the
     // entry stays in transient-retry state and a future retry / message will
     // try again.
-    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId))) {
+    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId), "recovery")) {
       // Couldn't get a slot — re-arm the timer with a short delay.
       const nextDelay = 5_000;
       entry.retryNextAt = Date.now() + nextDelay;
@@ -1199,44 +1218,102 @@ export class SessionManager {
 
   /**
    * Try to acquire an active slot. If at concurrency limit:
-   * 1. Suspend the least-recently-active session to free a slot
-   * 2. If no candidates, queue the message
+   * 1. Suspend the least-recently-active idle session to free a slot.
+   * 2. For fresh external input only, preempt the least-recently-active
+   *    working session as a last resort and force recovery for its work.
+   * 3. Queue recovery/internal traffic instead of displacing working sessions.
    *
    * Returns true if slot acquired, false if queued. The in-flight entryId
    * is tracked separately in `InboxDeliveryCoordinator` (populated at dispatch),
    * so the queue doesn't carry inbox metadata.
    */
-  private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
+  private acquireActiveSlot(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): boolean {
     if (this._activeCount < this.config.concurrency) return true;
 
-    // Find least-recently-active session (excluding the target chat)
-    let oldestActive: SessionEntry | null = null;
-    for (const session of this.sessions.values()) {
-      if (session.status !== "active") continue;
-      if (session.chatId === chatId) continue;
-      if (!oldestActive || session.lastActivity < oldestActive.lastActivity) {
-        oldestActive = session;
-      }
-    }
-
-    if (oldestActive) {
-      this.config.log.info({ chatId: oldestActive.chatId }, "session preempted for concurrency");
-      this.suspendSession(oldestActive, { reason: "concurrency_preempted", ackConsumedPrefix: false });
+    const idleVictim = this.findOldestActiveSession(
+      (session) => session.chatId !== chatId && !this.inboxDelivery.hasUnsettledWork(session.chatId),
+    );
+    if (idleVictim) {
+      this.config.log.info(
+        { chatId: idleVictim.chatId, requesterChatId: chatId },
+        "idle session yielded for concurrency",
+      );
+      this.emitResilienceEvent(idleVictim.chatId, "resilience.session.preempted", {
+        reason: "concurrency_idle_yield",
+        requesterChatId: chatId,
+      });
+      this.suspendSession(idleVictim, { reason: "concurrency_idle_yield", ackConsumedPrefix: true, drainQueue: false });
       return true;
     }
 
-    // All active sessions are busy — queue. The inbox entry stays in
-    // the coordinator ledger until the eventual turn finishes.
-    this.config.log.info({ chatId }, "concurrency limit reached, queuing");
-    this.pendingQueue.push({ message, chatId });
+    const workingVictim =
+      deliveryKind === "fresh" ? this.findOldestActiveSession((session) => session.chatId !== chatId) : null;
+    if (workingVictim) {
+      this.config.log.info(
+        { chatId: workingVictim.chatId, requesterChatId: chatId },
+        "working session preempted for fresh input",
+      );
+      this.emitResilienceEvent(workingVictim.chatId, "resilience.session.preempted", {
+        reason: "concurrency_preempted",
+        requesterChatId: chatId,
+      });
+      this.suspendSession(workingVictim, {
+        reason: "concurrency_preempted",
+        ackConsumedPrefix: false,
+        drainQueue: false,
+      });
+      return true;
+    }
+
+    this.queueForSlot(chatId, message, deliveryKind, "concurrency_limit");
     return false;
+  }
+
+  private findOldestActiveSession(eligible: (session: SessionEntry) => boolean): SessionEntry | null {
+    let oldest: SessionEntry | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.status !== "active") continue;
+      if (!eligible(session)) continue;
+      if (!oldest || session.lastActivity < oldest.lastActivity) oldest = session;
+    }
+    return oldest;
+  }
+
+  private queueForSlot(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind,
+    reason: "concurrency_limit" | "max_sessions_all_working",
+  ): void {
+    this.config.log.info({ chatId, deliveryKind, reason }, "session slot unavailable, queuing");
+    this.emitResilienceEvent(chatId, "resilience.session.queued", { reason, deliveryKind });
+    this.pendingQueue.push({ message, chatId, deliveryKind });
+  }
+
+  private emitResilienceEvent(chatId: string, eventName: string, payload: Record<string, unknown>): void {
+    try {
+      this.config.onSessionEvent?.(chatId, {
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: encodeResilienceMessage(eventName, payload),
+        },
+      });
+    } catch (err) {
+      this.config.log.warn({ chatId, eventName, err }, "resilience event emit failed");
+    }
   }
 
   private suspendSession(
     entry: SessionEntry,
-    opts: { reason: string; ackConsumedPrefix: boolean } = {
+    opts: { reason: string; ackConsumedPrefix: boolean; drainQueue?: boolean } = {
       reason: "session_suspended",
       ackConsumedPrefix: true,
+      drainQueue: true,
     },
   ): void {
     const prepare = opts.ackConsumedPrefix
@@ -1262,39 +1339,67 @@ export class SessionManager {
     this.persistRegistry();
     this.notifySessionState(entry.chatId, "suspended");
 
-    // Drain pending queue
-    this.drainPendingQueue();
+    if (opts.drainQueue !== false) this.drainPendingQueue();
   }
 
   private drainPendingQueue(): void {
     if (this.pendingQueue.length === 0) return;
-    if (this._activeCount >= this.config.concurrency) return;
-
-    const next = this.pendingQueue.shift();
+    const next = this.pendingQueue[0];
     if (!next) return;
+    if (
+      this._activeCount >= this.config.concurrency &&
+      !this.findOldestActiveSession(
+        (session) => session.chatId !== next.chatId && !this.inboxDelivery.hasUnsettledWork(session.chatId),
+      )
+    ) {
+      return;
+    }
+
+    this.pendingQueue.shift();
     // Route asynchronously — the delivery work is already tracked by the
     // coordinator from the original `dispatch`.
-    this.routeMessage(next.chatId, next.message).catch((err) => {
-      this.config.log.warn({ chatId: next.chatId, err }, "pending drain error");
+    this.routeMessage(next.chatId, next.message, next.deliveryKind).catch((err) => {
+      const hasInboxEntryId = next.message.inboxEntryId !== undefined;
+      this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
+      if (hasInboxEntryId) {
+        this.inboxDelivery.retryTurn(next.chatId, next.message, "pending_drain_failed");
+      } else {
+        this.pendingQueue.unshift(next);
+      }
     });
   }
 
-  private evictIfNeeded(): void {
+  private evictIfNeeded(chatId?: string, message?: SessionMessage, deliveryKind: SlotDeliveryKind = "fresh"): boolean {
     const { max_sessions } = this.config.session;
-    if (this.sessions.size < max_sessions) return;
+    if (this.sessions.size < max_sessions) return true;
 
-    // Single pass: find LRU session, preferring non-active over active
-    let candidate: { key: string; session: SessionEntry } | null = null;
+    // Prefer non-active sessions, then idle active sessions. Working active
+    // sessions are not memory-management victims: dropping them silently loses
+    // replies/tool side effects unless their work is explicitly recovered.
+    let nonActiveCandidate: { key: string; session: SessionEntry } | null = null;
+    let idleActiveCandidate: { key: string; session: SessionEntry } | null = null;
     for (const [key, session] of this.sessions) {
-      if (!candidate) {
-        candidate = { key, session };
+      if (session.status !== "active") {
+        if (!nonActiveCandidate || session.lastActivity < nonActiveCandidate.session.lastActivity) {
+          nonActiveCandidate = { key, session };
+        }
         continue;
       }
-      const preferNonActive = session.status !== "active" && candidate.session.status === "active";
-      const sameCategory = (session.status === "active") === (candidate.session.status === "active");
-      if (preferNonActive || (sameCategory && session.lastActivity < candidate.session.lastActivity)) {
-        candidate = { key, session };
+      if (!this.inboxDelivery.hasUnsettledWork(key)) {
+        if (!idleActiveCandidate || session.lastActivity < idleActiveCandidate.session.lastActivity) {
+          idleActiveCandidate = { key, session };
+        }
       }
+    }
+
+    const candidate = nonActiveCandidate ?? idleActiveCandidate;
+    if (!candidate) {
+      if (chatId && message) {
+        this.queueForSlot(chatId, message, deliveryKind, "max_sessions_all_working");
+      } else {
+        this.config.log.info({ maxSessions: max_sessions }, "max_sessions reached with no idle eviction candidate");
+      }
+      return false;
     }
 
     if (candidate) {
@@ -1328,6 +1433,7 @@ export class SessionManager {
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
+    return true;
   }
 
   /**
@@ -1523,10 +1629,12 @@ export class SessionManager {
       if (this.sessionRuntimeStates.delete(chatId)) this.recomputeRuntimeState();
       return;
     }
-    if (this.sessionRuntimeStates.get(chatId) === state) return;
+    const previous = this.sessionRuntimeStates.get(chatId);
+    if (previous === state) return;
     this.sessionRuntimeStates.set(chatId, state);
     this.config.onSessionRuntimeChange?.(chatId, state);
     this.recomputeRuntimeState();
+    if (state === "idle" && this.pendingQueue.length > 0) this.drainPendingQueue();
   }
 
   private projectedRuntimeState(chatId: string, session: SessionEntry | null): RuntimeState | null {

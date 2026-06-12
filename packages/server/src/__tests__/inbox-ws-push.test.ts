@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -492,6 +492,38 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(accepted.ackedCount).toBe(2);
     expect(accepted.ackedEntryIds).toEqual([first.id, second.id]);
     expect(accepted.throughEntry.id).toBe(second.id);
+
+    const after = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.id));
+    expect(after.map((row) => [row.id, row.status])).toEqual([
+      [first.id, "acked"],
+      [second.id, "acked"],
+    ]);
+  });
+
+  it("ackEntryByIdForBoundAgents accepts delivered rows reset to pending by recovery", async () => {
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[0] ?? "");
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "pending" })
+      .where(inArray(inboxEntries.id, [first.id, second.id]));
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.disposition).toBe("accepted_from_pending");
+    expect(accepted.ackedCount).toBe(2);
+    expect(accepted.ackedEntryIds).toEqual([first.id, second.id]);
 
     const after = await app.db
       .select({ id: inboxEntries.id, status: inboxEntries.status })
