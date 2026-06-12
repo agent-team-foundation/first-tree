@@ -63,6 +63,9 @@ export {
 export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
+// One-shot retirement of the stranded legacy github-scan launchd runner.
+export type { RetireGithubScanResult } from "./retire-github-scan-launchd.js";
+export { retireLegacyGithubScanLaunchd } from "./retire-github-scan-launchd.js";
 export type { PinnedAgentRuntimeRecord } from "./runtime-provider-reconcile.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)
 export {
