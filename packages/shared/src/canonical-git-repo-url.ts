@@ -31,7 +31,13 @@ export function canonicalGitRepoUrl(value: string | null | undefined): string | 
 }
 
 function normalizeGitRepoPath(rawPath: string): string | null {
-  let path = rawPath.replace(/^\/+/, "").replace(/\/+$/, "");
+  // Trim slashes without regex: CodeQL flags `/\/+$/`-style patterns as
+  // polynomial on adversarial many-slash inputs (js/polynomial-redos).
+  let start = 0;
+  let end = rawPath.length;
+  while (start < end && rawPath[start] === "/") start++;
+  while (end > start && rawPath[end - 1] === "/") end--;
+  let path = rawPath.slice(start, end);
   if (path.endsWith(".git")) path = path.slice(0, -4);
   return path.length > 0 ? path : null;
 }
