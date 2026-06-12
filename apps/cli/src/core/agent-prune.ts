@@ -140,7 +140,7 @@ export function formatStaleReason(reason: StaleAliasReason): string {
  * Remove an agent's local footprint: the YAML alias dir, the workspace
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
- * separately so prune and claim can share it.
+ * separately so prune and the post-rotation override cleanup can share it.
  */
 export function removeLocalAgent(name: string): void {
   rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });
