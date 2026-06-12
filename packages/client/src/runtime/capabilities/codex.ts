@@ -3,6 +3,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@first-tree/shared";
+import type { Codex, CodexOptions } from "@openai/codex-sdk";
+import {
+  type CodexBinaryFallbackResult,
+  createCodexClientWithBinaryFallback,
+  isCodexBinaryMissingError,
+} from "../codex-binary.js";
 
 function codexAuthPath(): string {
   const home = process.env.CODEX_HOME ?? join(homedir(), ".codex");
@@ -33,6 +39,10 @@ async function readSdkVersion(): Promise<string | null> {
   return null;
 }
 
+export type CodexCapabilityProbeDeps = {
+  createCodexClient?: () => CodexBinaryFallbackResult<unknown>;
+};
+
 function detectAuth(): { authenticated: boolean; method: "api_key" | "auth_json" | "none" } {
   if (process.env.CODEX_API_KEY && process.env.CODEX_API_KEY.length > 0) {
     return { authenticated: true, method: "api_key" };
@@ -48,18 +58,17 @@ function detectAuth(): { authenticated: boolean; method: "api_key" | "auth_json"
  * Treats `~/.codex/auth.json` (set by `codex login`) as the canonical local
  * auth source; CODEX_API_KEY env shortcuts that for ephemeral use.
  */
-export async function probeCodexCapability(): Promise<CapabilityEntry> {
+export async function probeCodexCapability(deps: CodexCapabilityProbeDeps = {}): Promise<CapabilityEntry> {
   const detectedAt = new Date().toISOString();
   try {
-    let sdkPresent = false;
+    let sdk: { Codex: new (options?: CodexOptions) => Codex } | null = null;
     try {
-      await import("@openai/codex-sdk");
-      sdkPresent = true;
+      sdk = await import("@openai/codex-sdk");
     } catch {
-      sdkPresent = false;
+      sdk = null;
     }
 
-    if (!sdkPresent) {
+    if (!sdk) {
       return {
         state: "missing",
         available: false,
@@ -71,6 +80,26 @@ export async function probeCodexCapability(): Promise<CapabilityEntry> {
     }
 
     const sdkVersion = await readSdkVersion();
+    let runtime: CodexBinaryFallbackResult<unknown>;
+    try {
+      runtime =
+        deps.createCodexClient?.() ??
+        createCodexClientWithBinaryFallback<CodexOptions, Codex>({}, (options) => new sdk.Codex(options));
+    } catch (err) {
+      if (isCodexBinaryMissingError(err)) {
+        return {
+          state: "missing",
+          available: false,
+          authenticated: false,
+          sdkVersion,
+          authMethod: "none",
+          error: err instanceof Error ? err.message : String(err),
+          detectedAt,
+        };
+      }
+      throw err;
+    }
+
     const auth = detectAuth();
     if (!auth.authenticated) {
       return {
@@ -79,6 +108,8 @@ export async function probeCodexCapability(): Promise<CapabilityEntry> {
         authenticated: false,
         sdkVersion,
         authMethod: "none",
+        runtimeSource: runtime.runtimeSource,
+        runtimePath: runtime.codexPathOverride ?? null,
         detectedAt,
       };
     }
@@ -88,6 +119,8 @@ export async function probeCodexCapability(): Promise<CapabilityEntry> {
       authenticated: true,
       sdkVersion,
       authMethod: auth.method,
+      runtimeSource: runtime.runtimeSource,
+      runtimePath: runtime.codexPathOverride ?? null,
       detectedAt,
     };
   } catch (err) {

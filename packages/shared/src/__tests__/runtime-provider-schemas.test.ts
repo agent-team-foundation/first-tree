@@ -53,10 +53,14 @@ describe("capabilityEntrySchema", () => {
       authenticated: true,
       sdkVersion: "0.2.84",
       authMethod: "oauth",
+      runtimeSource: "path",
+      runtimePath: "/usr/local/bin/codex",
       detectedAt: new Date().toISOString(),
     });
     expect(parsed.state).toBe("ok");
     expect(parsed.sdkVersion).toBe("0.2.84");
+    expect(parsed.runtimeSource).toBe("path");
+    expect(parsed.runtimePath).toBe("/usr/local/bin/codex");
   });
 
   it("accepts `missing` with null sdkVersion + auth_method=none", () => {
