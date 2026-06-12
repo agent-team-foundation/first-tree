@@ -59,6 +59,7 @@ export type CreateTestAppOptions = {
   channel?: Config["channel"];
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  inbox?: Partial<NonNullable<Config["inbox"]>>;
   allowedOrganizationId?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
@@ -128,6 +129,9 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     trustProxy: false,
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
+    ...(opts.inbox !== undefined
+      ? { inbox: { maxInFlightPerAgent: 8192, maxInFlightPerAgentChat: 8, ...opts.inbox } }
+      : {}),
     observability: {
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },

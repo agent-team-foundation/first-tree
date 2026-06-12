@@ -207,10 +207,12 @@ export const serverConfigSchema = defineConfig({
   }),
   inbox: optional({
     /**
-     * Backpressure cap on per-agent in-flight (un-acked) `inbox:deliver`
-     * frames. Once reached the server stops pushing for that agent until an
-     * ack arrives — leftover entries stay `pending` in the DB and get
-     * replayed via the post-ack backlog scan. See proposal §3.5.
+     * High-water fuse on per-agent in-flight (un-acked) `inbox:deliver`
+     * frames. Normal fairness is enforced per `(agent, chat)` below; this
+     * agent-wide value exists only to bound pathological recovery storms or a
+     * badly stalled client. Once reached the server stops pushing for that
+     * agent until an ack arrives — leftover entries stay `pending` in the DB
+     * and get replayed via later backlog scans.
      *
      * The WS data plane is the only delivery path on this server build. The
      * legacy `new_message` doorbell + HTTP poll fallback was removed in
@@ -220,8 +222,16 @@ export const serverConfigSchema = defineConfig({
      * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
      * poll path on bootstrap.
      */
-    maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
+    maxInFlightPerAgent: field(z.number().int().min(1).max(65_536).default(8192), {
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT",
+    }),
+    /**
+     * Fairness window for one agent in one chat. A stuck or very long turn may
+     * fill this chat-local window, but it must not consume delivery capacity
+     * for the same agent's other chats.
+     */
+    maxInFlightPerAgentChat: field(z.number().int().min(1).max(1024).default(8), {
+      env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
   }),
   feedback: optional(

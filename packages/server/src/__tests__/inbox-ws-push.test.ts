@@ -66,6 +66,29 @@ describe("inbox WS data-plane claim helpers", () => {
     return { a2, chatId, messageIds, rows };
   }
 
+  async function seedDeliverablesAcrossChats(app: FastifyInstance, messagesPerChat: number[]) {
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `wspf-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `wspf-a2-${uid}` });
+    const chatIds: string[] = [];
+    for (const [chatIndex, count] of messagesPerChat.entries()) {
+      const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [a2.agent.uuid],
+      });
+      const chatId = chatRes.json().id;
+      chatIds.push(chatId);
+      for (let i = 0; i < count; i++) {
+        await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+          format: "text",
+          content: `chat ${chatIndex} msg ${i}`,
+          receiverNames: [a2.agent.name],
+        });
+      }
+    }
+    return { a2, chatIds };
+  }
+
   async function loadSilentRows(app: FastifyInstance, inboxId: string, chatId: string) {
     return app.db
       .select({ id: inboxEntries.id, status: inboxEntries.status })
@@ -433,6 +456,131 @@ describe("inbox WS data-plane claim helpers", () => {
     // ever regresses to raw SQL, every push frame would be dropped client-
     // side as malformed. See issue #194.
     for (const e of drained) expect(typeof e.id).toBe("number");
+  });
+
+  it("claimBacklogForPushFair limits a single chat to its per-chat budget", async () => {
+    const app = getApp();
+    const { a2, chatId } = await seedDeliverables(app, 12);
+
+    const drained = await inboxService.claimBacklogForPushFair(app.db, a2.agent.inboxId, {
+      limit: 50,
+      defaultPerChatLimit: 8,
+      chatBudgets: [],
+    });
+
+    expect(drained).toHaveLength(8);
+    expect(drained.every((entry) => entry.chatId === chatId)).toBe(true);
+    expect(drained.map((entry) => entry.id)).toEqual([...drained].map((entry) => entry.id).sort((a, b) => a - b));
+
+    const rows = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(
+        and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)),
+      )
+      .orderBy(asc(inboxEntries.id));
+    expect(rows.filter((row) => row.status === "delivered")).toHaveLength(8);
+    expect(rows.filter((row) => row.status === "pending")).toHaveLength(4);
+  });
+
+  it("claimBacklogForPushFair skips a capped chat while claiming another eligible chat", async () => {
+    const app = getApp();
+    const { a2, chatIds } = await seedDeliverablesAcrossChats(app, [3, 2]);
+    const cappedChatId = chatIds[0];
+    const eligibleChatId = chatIds[1];
+    if (!cappedChatId || !eligibleChatId) throw new Error("expected two chats");
+
+    const drained = await inboxService.claimBacklogForPushFair(app.db, a2.agent.inboxId, {
+      limit: 10,
+      defaultPerChatLimit: 2,
+      chatBudgets: [{ chatId: cappedChatId, remaining: 0 }],
+    });
+
+    expect(drained).toHaveLength(2);
+    expect(drained.every((entry) => entry.chatId === eligibleChatId)).toBe(true);
+
+    const cappedRows = await app.db
+      .select({ status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, a2.agent.inboxId),
+          eq(inboxEntries.chatId, cappedChatId),
+          eq(inboxEntries.notify, true),
+        ),
+      );
+    expect(cappedRows.every((row) => row.status === "pending")).toBe(true);
+  });
+
+  it("claimBacklogForPushFair fills post-ack budget across eligible chats", async () => {
+    const app = getApp();
+    const { a2, chatIds } = await seedDeliverablesAcrossChats(app, [3, 3]);
+    const ackedChatId = chatIds[0];
+    const otherChatId = chatIds[1];
+    if (!ackedChatId || !otherChatId) throw new Error("expected two chats");
+
+    const drained = await inboxService.claimBacklogForPushFair(app.db, a2.agent.inboxId, {
+      limit: 3,
+      defaultPerChatLimit: 2,
+      chatBudgets: [{ chatId: ackedChatId, remaining: 1 }],
+    });
+
+    expect(drained).toHaveLength(3);
+    expect(drained.filter((entry) => entry.chatId === ackedChatId)).toHaveLength(1);
+    expect(drained.filter((entry) => entry.chatId === otherChatId)).toHaveLength(2);
+  });
+
+  it("claimBacklogForPushFair bundles silent context without spending extra per-chat slots", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `fairctx-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `fairctx-a-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "silent one" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "silent two" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "notify one",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+    await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "notify two",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const drained = await inboxService.claimBacklogForPushFair(app.db, observer.agent.inboxId, {
+      limit: 50,
+      defaultPerChatLimit: 1,
+      chatBudgets: [],
+    });
+
+    expect(drained).toHaveLength(1);
+    const entry = drained[0];
+    if (!entry) throw new Error("expected fair delivery");
+    expect(entry.message.content).toBe("notify one");
+    expect(entry.message.precedingMessages.map((p) => p.content)).toEqual(["silent one", "silent two"]);
+
+    const silentRows = await loadSilentRows(app, observer.agent.inboxId, chat.id);
+    expect(silentRows.every((row) => row.status === "pending")).toBe(true);
   });
 
   it("uses inbox id cursor order even when createdAt is reversed", async () => {

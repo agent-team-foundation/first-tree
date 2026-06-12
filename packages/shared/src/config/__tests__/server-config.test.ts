@@ -108,6 +108,29 @@ describe("server config", () => {
     expect(config.rateLimit).toEqual({ max: 1234 });
   });
 
+  it("uses inbox delivery fairness defaults when the inbox group is active", () => {
+    expect(serverConfigSchema.inbox.shape.maxInFlightPerAgent.schema.parse(undefined)).toBe(8192);
+    expect(serverConfigSchema.inbox.shape.maxInFlightPerAgentChat.schema.parse(undefined)).toBe(8);
+  });
+
+  it("resolves inbox delivery fairness env overrides", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT", "4096");
+    vi.stubEnv("FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT", "12");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.inbox).toEqual({
+      maxInFlightPerAgent: 4096,
+      maxInFlightPerAgentChat: 12,
+    });
+  });
+
   it("ignores removed per-route rate-limit env vars", async () => {
     const configDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
