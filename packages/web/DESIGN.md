@@ -289,11 +289,11 @@ const buttonVariants = cva("…base classes…", {
 
 **Selection state** (`OptionCard` and any radio/option cards): selected and
 unselected share the **same faint `--border` hairline** — selection is signalled
-by a **filled neutral dot (`--fg`) plus a very light `--fg` tint (~5%)**, never a
-heavier or colored border and never a saturated dot. Both cues are
-hue-independent (filled vs hollow dot, presence of tint), so it reads without
-relying on color. The real `<input>` is `sr-only`; focus follows the §13
-bordered-control rule (deepen the card's own border on `:focus-within`).
+by a **filled neutral dot (`--fg`) plus a light `--fg` tint (~10%) plus medium
+label weight**, never a heavier or colored border and never a saturated dot.
+Both cues are hue-independent (filled vs hollow dot, presence of tint), so it
+reads without relying on color. The real `<input>` is `sr-only`; focus follows
+the §13 bordered-control rule (deepen the card's own border on `:focus-within`).
 
 ---
 

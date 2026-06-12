@@ -27,6 +27,7 @@ import { type ComponentType, type KeyboardEvent, type ReactNode, useMemo, useSta
 import { sendChatMessage } from "../../api/chats.js";
 import { Button } from "../ui/button.js";
 import { OptionCard } from "../ui/option-card.js";
+import { QuestionPrompt } from "./question-prompt.js";
 import {
   defaultExpanded,
   deriveRequestState,
@@ -297,11 +298,13 @@ export function RequestCard({
 
           {payload.questions.map((q, i) => (
             <div key={q.id} style={{ marginTop: i === 0 ? 0 : "var(--sp-3)" }}>
-              <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                <span className="mono text-caption" style={{ color: "var(--fg-4)", marginRight: "var(--sp-1_5)" }}>
+              <div style={{ display: "flex", gap: "var(--sp-1_5)", alignItems: "baseline" }}>
+                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
                   {`Q${i + 1}`}
                 </span>
-                {q.prompt}
+                <div className="text-body font-medium" style={{ color: "var(--fg)", flex: 1, minWidth: 0 }}>
+                  <QuestionPrompt prompt={q.prompt} />
+                </div>
               </div>
               {q.kind === "single" ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-1_5)", marginTop: "var(--sp-1_5)" }}>

@@ -31,8 +31,9 @@
  * composer chrome.
  */
 import type { OpenQuestionRequest } from "@first-tree/shared";
-import { MessageCircleQuestion } from "lucide-react";
+import { ArrowUpRight, MessageCircleQuestion } from "lucide-react";
 import { OptionCard } from "../ui/option-card.js";
+import { QuestionPrompt } from "./question-prompt.js";
 
 export function RequestDock({
   requestId,
@@ -42,6 +43,7 @@ export function RequestDock({
   draftEmpty,
   askerName,
   onPick,
+  onJumpToOrigin,
 }: {
   requestId: string;
   payload: OpenQuestionRequest;
@@ -53,6 +55,12 @@ export function RequestDock({
   draftEmpty: boolean;
   askerName: string;
   onPick: (prompt: string, option: string) => void;
+  /**
+   * Scroll the timeline to the request's own card — the dock carries only the
+   * structured ask, so this is the way back to the full markdown context.
+   * Omitted (e.g. in the preview page) the affordance is hidden.
+   */
+  onJumpToOrigin?: () => void;
 }) {
   const questionCount = payload.questions.length;
   const subject = payload.subject ?? "Request";
@@ -82,15 +90,41 @@ export function RequestDock({
       >
         <MessageCircleQuestion size={12} className="shrink-0" />
         {`Awaiting your answer · ${subject} · ${questionCount} question${questionCount === 1 ? "" : "s"}`}
+        {onJumpToOrigin ? (
+          <button
+            type="button"
+            onClick={onJumpToOrigin}
+            className="mono text-caption rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--sp-0_5)",
+              background: "none",
+              border: "none",
+              padding: 0,
+              textTransform: "none",
+              letterSpacing: "normal",
+              fontWeight: 500,
+              color: "var(--fg-needs-you-strong)",
+              cursor: "pointer",
+            }}
+          >
+            View context
+            <ArrowUpRight size={11} className="shrink-0" />
+          </button>
+        ) : null}
       </div>
 
       {payload.questions.map((q, i) => (
         <div key={q.id} style={{ marginTop: i === 0 ? 0 : "var(--sp-3)" }}>
-          <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-            <span className="mono text-caption" style={{ color: "var(--fg-4)", marginRight: "var(--sp-1_5)" }}>
+          <div style={{ display: "flex", gap: "var(--sp-1_5)", alignItems: "baseline" }}>
+            <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
               {`Q${i + 1}`}
             </span>
-            {q.prompt}
+            <div className="text-body font-medium" style={{ color: "var(--fg)", flex: 1, minWidth: 0 }}>
+              <QuestionPrompt prompt={q.prompt} />
+            </div>
           </div>
           {q.kind === "single" ? (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-1_5)", marginTop: "var(--sp-1_5)" }}>
@@ -130,12 +164,7 @@ export function RequestDock({
           marginTop: "var(--sp-2_5)",
           paddingTop: "var(--sp-2)",
           borderTop: "var(--hairline) solid var(--border-faint)",
-          color:
-            sendKind === "resolve"
-              ? "var(--fg-success-strong)"
-              : sendKind === "judge"
-                ? "var(--fg-info-strong)"
-                : "var(--fg-4)",
+          color: "var(--fg-3)",
         }}
       >
         {sendKind === "resolve"

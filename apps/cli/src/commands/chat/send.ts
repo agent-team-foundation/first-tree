@@ -4,12 +4,14 @@ import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { readStdin } from "./_shared/io.js";
+import { buildRequestMetadata } from "./_shared/request.js";
 
 interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
   request?: boolean;
+  subject?: string;
   question?: string;
   option?: string[];
   replyTo?: string;
@@ -39,7 +41,11 @@ export function registerChatSendCommand(chat: Command): void {
       "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
         "background/context; --question carries only the ask",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
+    .option(
+      "--subject <text>",
+      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+    )
+    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
     .option(
       "--answer <requestId>",
@@ -113,25 +119,8 @@ export function registerChatSendCommand(chat: Command): void {
           if (!target) {
             fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human member.", 2);
           }
-          if (!options.question) {
-            fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
-          }
-          const opts = options.option ?? [];
           format = "request";
-          metadata = {
-            ...(metadata ?? {}),
-            request: {
-              questions: [
-                {
-                  id: "q1",
-                  prompt: options.question,
-                  kind: opts.length > 0 ? "single" : "free",
-                  options: opts,
-                  required: true,
-                },
-              ],
-            },
-          };
+          metadata = buildRequestMetadata(metadata, options);
         }
 
         // --answer / --close fold open-question resolution into `send`: they
