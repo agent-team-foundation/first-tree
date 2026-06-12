@@ -580,6 +580,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/\*\*Reaching a human in this chat\*\*/);
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
+    expect(briefing).toContain("chat invite <name>");
+    expect(briefing).toContain("stage or role handoff inside the same task stays in this chat");
+    expect(briefing).toMatch(/\*\*Starting separate work\*\*/);
+    expect(briefing).toMatch(/chat create --to <name>/);
     expect(briefing).toContain("After an agent handoff, continue only independent work");
     expect(briefing).toContain("do not poll status");
     expect(briefing).toContain("Don't fire a courtesy");

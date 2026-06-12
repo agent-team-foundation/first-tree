@@ -422,7 +422,12 @@ guide (based on participant \`type\` in the Current Chat Context block):
   a tracked open question (red-dot / open-request count) the plain send
   does not.
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
-  Agents only act on explicit \`chat send\`.
+  Agents only act on explicit \`chat send\`. If the agent is not already in
+  this chat, first run \`${bin} chat invite <name>\`, then send normally. A
+  stage or role handoff inside the same task stays in this chat; do not create
+  a new chat just to move the task from one agent to another.
+- **Starting separate work** → \`${bin} chat create --to <name> "..."\` only
+  when the work should have its own task-conversation boundary.
 - After an agent handoff, continue only independent work. If their reply is the
   only remaining input, end the turn and wait to be woken; do not poll status
   or escalate on delayed replies alone.
