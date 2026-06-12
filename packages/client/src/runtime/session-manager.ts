@@ -67,6 +67,13 @@ type SessionEntry = {
   /** Original message used to bootstrap this session, replayed on retry. */
   startMessage: SessionMessage | null;
   /**
+   * Messages that arrived while start/resume is in transient retry. They must
+   * not replace `startMessage`: the older accepted inbox entry is still ahead
+   * of them in the ACK prefix, so retry consumes the original trigger first and
+   * injects these only after the handler is live again.
+   */
+  retryQueuedMessages: SessionMessage[];
+  /**
    * When we entered transient-retry mode this is set to the evicted mapping
    * captured at startNewSession time. Lets a retry re-use the same resume
    * path (handler.resume) instead of regressing to handler.start.
@@ -378,7 +385,7 @@ export class SessionManager {
     if (
       this.inboxDelivery.shouldRecoverBeforeDispatch(
         chatId,
-        this.hasHealthyLiveHandler(chatId),
+        this.hasHealthyLiveHandler(chatId) || this.hasPendingTransientRetry(chatId),
         this.hasLocalSessionRecord(chatId),
       )
     ) {
@@ -676,31 +683,23 @@ export class SessionManager {
     return entry?.status === "active" && entry.suspending === null;
   }
 
+  private hasPendingTransientRetry(chatId: string): boolean {
+    const entry = this.sessions.get(chatId);
+    return Boolean(entry && entry.retryAttempt > 0);
+  }
+
   private hasLocalSessionRecord(chatId: string): boolean {
     return this.sessions.has(chatId) || this.evictedMappings.has(chatId);
   }
 
   private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
-    // Record the trigger BEFORE dispatching to any handler path (start /
-    // resume / inject) so the resultSink constructed in buildSessionContext
-    // sees the right messageId+senderId when this turn eventually produces a
-    // reply. The sink clears it on forward so an intervening inject() can
-    // overwrite it without the in-flight reply stealing the new trigger.
-    if (message.id) {
-      this.currentTrigger.set(chatId, { messageId: message.id, senderId: message.senderId });
-    }
-
     const existing = this.sessions.get(chatId);
 
-    // Transient retry path: an earlier handler.start / handler.resume failed
-    // with a classified-transient error and we kept the entry around. A new
-    // user message is a strong signal the user is waiting — replace the
-    // stored startMessage so the retry uses the fresher content, then fire
-    // an immediate retry. The new entry sits alongside any prior entries in
-    // the coordinator ledger; the retry's eventual finishTurn commits the
-    // concrete message/batch it consumed.
+    // Transient retry path: keep the original start/resume message at the head
+    // of the provider retry. Newer messages sit later in the inbox ACK prefix,
+    // so they are queued and injected only after retry succeeds.
     if (existing && existing.retryAttempt > 0) {
-      existing.startMessage = message;
+      existing.retryQueuedMessages.push(message);
       this.triggerImmediateRetry(chatId);
       return;
     }
@@ -708,6 +707,7 @@ export class SessionManager {
     if (existing) {
       switch (existing.status) {
         case "active":
+          this.setCurrentTrigger(chatId, message);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
           this.projectSessionRuntime(chatId);
@@ -793,6 +793,7 @@ export class SessionManager {
       lastRetryReason: null,
       lastRetryRawError: null,
       startMessage: message,
+      retryQueuedMessages: [],
       retryFromEvicted: evicted ?? null,
     };
 
@@ -806,6 +807,7 @@ export class SessionManager {
     this.notifySessionState(chatId, "active");
     this.projectSessionRuntime(chatId);
     try {
+      this.setCurrentTrigger(chatId, message);
       if (evicted) {
         const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
         entry.claudeSessionId = sessionId;
@@ -866,6 +868,7 @@ export class SessionManager {
     this.notifySessionState(entry.chatId, "active");
     this.projectSessionRuntime(entry.chatId);
     try {
+      if (message) this.setCurrentTrigger(entry.chatId, message);
       // Mirror the pattern in `startNewSession` (line 449): the handler may
       // return a DIFFERENT sessionId than the one passed in — e.g. when the
       // claude-code handler detects a stale SDK transcript and falls
@@ -1098,6 +1101,7 @@ export class SessionManager {
     try {
       const resumeMessage = entry.startMessage ?? null;
       const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+      if (resumeMessage) this.setCurrentTrigger(chatId, resumeMessage);
       if (previousSessionId) {
         const sid = await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
         entry.claudeSessionId = sid;
@@ -1133,6 +1137,7 @@ export class SessionManager {
       } catch (emitErr) {
         this.config.log.warn({ chatId, emitErr }, "resilience retry_succeeded emit failed");
       }
+      this.drainRetryQueuedMessages(entry);
       this.persistRegistry();
     } catch (err) {
       const classification = classify(err, { source: "session" });
@@ -1167,6 +1172,29 @@ export class SessionManager {
       entry.retryTimer = null;
     }
     void this.runRetry(chatId);
+  }
+
+  private drainRetryQueuedMessages(entry: SessionEntry): void {
+    if (entry.retryQueuedMessages.length === 0) return;
+
+    const queued = entry.retryQueuedMessages.splice(0);
+    for (const message of queued) {
+      this.setCurrentTrigger(entry.chatId, message);
+      try {
+        entry.handler.inject(message);
+        entry.lastActivity = Date.now();
+      } catch (err) {
+        this.config.log.warn({ chatId: entry.chatId, messageId: message.id, err }, "retry queued inject failed");
+        this.inboxDelivery.retryTurn(entry.chatId, message, "retry_queued_inject_failed");
+        break;
+      }
+    }
+    this.projectSessionRuntime(entry.chatId);
+  }
+
+  private setCurrentTrigger(chatId: string, message: SessionMessage): void {
+    if (!message.id) return;
+    this.currentTrigger.set(chatId, { messageId: message.id, senderId: message.senderId });
   }
 
   /**

@@ -1,6 +1,6 @@
 import type { SessionEvent, SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -29,6 +29,8 @@ function mockSdk(): { sdk: FirstTreeHubSDK; sendMessage: ReturnType<typeof vi.fn
 
 function makeManager(opts: {
   handlers: AgentHandler[];
+  ackEntry?: (entryId: number) => Promise<void>;
+  recoverChat?: (chatId: string) => Promise<void>;
   onStateChange?: (chatId: string, state: SessionState) => void;
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
 }): SessionManager {
@@ -53,7 +55,8 @@ function makeManager(opts: {
     },
     sdk: mockSdk().sdk,
     log: silentLogger(),
-    ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
+    ackEntry: opts.ackEntry ?? vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
+    recoverChat: opts.recoverChat,
     onStateChange: opts.onStateChange,
     onSessionEvent: opts.onSessionEvent,
   });
@@ -240,6 +243,51 @@ describe("SessionManager: transient retry on session start", () => {
     // First handler.start rejected (transient), so no claudeSessionId was
     // captured. The retry path falls back to start() on the new handler.
     expect(recovered.start).toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("queues newer retry-window messages behind the original unconsumed prefix", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const capturedCtx: SessionContext[] = [];
+    const startedMessages: SessionMessage[] = [];
+    const injected: SessionMessage[] = [];
+    const failing: AgentHandler = {
+      start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),
+      resume: vi.fn(),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const recovered: AgentHandler = {
+      start: vi.fn(async (message, ctx) => {
+        startedMessages.push(message);
+        capturedCtx.push(ctx);
+        return "session-after-retry";
+      }),
+      resume: vi.fn().mockResolvedValue("session-after-retry"),
+      inject: vi.fn((message) => {
+        injected.push(message);
+      }),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const sm = makeManager({ handlers: [failing, recovered], ackEntry, recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-prefix", messageId: "msg-1" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-prefix", messageId: "msg-2" }));
+    await vi.waitFor(() => expect(recovered.start).toHaveBeenCalledTimes(1));
+
+    expect(startedMessages[0]?.id).toBe("msg-1");
+    expect(injected.map((message) => message.id)).toEqual(["msg-2"]);
+
+    await capturedCtx[0]?.finishTurn(startedMessages[0] as SessionMessage, { status: "success", terminal: true });
+    await capturedCtx[0]?.finishTurn(injected[0] as SessionMessage, { status: "success", terminal: true });
+
+    expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
+    expect(recoverChat).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });
