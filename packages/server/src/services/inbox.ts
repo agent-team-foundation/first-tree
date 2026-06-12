@@ -37,8 +37,8 @@ type WideTxLike = PgDatabase<PgQueryResultHKT, any, any>;
  * Caps for the silent-context replay attached to an active delivery (proposal
  * §1). The window keeps stale chatter out of the prompt; the cap protects
  * against runaway batches if a chat is very chatty between two mentions of
- * the same agent. Older / overflow silent rows are still bulk-acked so they
- * don't accumulate forever.
+ * the same agent. Older / overflow silent rows are excluded from the prompt
+ * window but drained later when ACK-through commits the notify delivery.
  *
  * Exported (test-only) so the cap-overflow test doesn't have to spam 50+
  * silent messages — it pins the invariant by reading the constant.
@@ -170,7 +170,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
  *
  * Steps:
  *   1. Sort by `createdAt` ASC (PG `RETURNING` does not guarantee order).
- *   2. For each trigger, collect silent context & bulk-ack stale silent rows.
+ *   2. For each trigger, collect silent context without consuming silent rows.
  *   3. Fetch the trigger messages.
  *   4. Build wire payloads via the single dispatcher.
  *
@@ -354,10 +354,10 @@ export async function claimBacklogForPushForChat(
  * of time) and this trigger, capped by `PRECEDING_CONTEXT_MAX_ENTRIES` and
  * `PRECEDING_CONTEXT_WINDOW_SECONDS`. Returned messages are oldest-first.
  *
- * Side effect: bulk-ack ALL silent pending rows in each chat with
- * createdAt < latest_trigger.createdAt — including ones that fell outside
- * the window/cap. Otherwise stale silent rows would accumulate and re-load
- * on every poll.
+ * This function intentionally does not ACK silent rows. Bundling is not
+ * consumption: recovery must be able to reset the notify trigger and rebuild
+ * the same trigger-relative context window. Silent rows are drained only when
+ * the client ACKs the consumed notify entry.
  */
 async function collectPrecedingContext(
   tx: TxLike,
@@ -378,16 +378,33 @@ async function collectPrecedingContext(
   for (const [chatId, chatTriggers] of byChat) {
     chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
 
+    const firstTrigger = chatTriggers[0];
+    if (!firstTrigger) continue;
+    const [previousNotify] = await tx
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, inboxId),
+          eq(inboxEntries.chatId, chatId),
+          eq(inboxEntries.notify, true),
+          lt(inboxEntries.id, firstTrigger.id),
+        ),
+      )
+      .orderBy(desc(inboxEntries.id))
+      .limit(1);
+
     // For each trigger, fetch silent context strictly before it (and after
-    // the previous trigger in this batch). Window: 24h before the trigger.
+    // the previous notify trigger cursor, even if that trigger was delivered
+    // in an earlier unacked batch). Window: 24h before the trigger.
     //
     // Order matters: when there are MORE than `PRECEDING_CONTEXT_MAX_ENTRIES`
     // candidates, we want to keep the rows CLOSEST to the trigger (most
     // contextually relevant) and drop the oldest. So select DESC + LIMIT,
     // then reverse in JS to get chronological prompt-ready output. Selecting
-    // ASC + LIMIT would drop the recent rows — and the bulk-ack below would
-    // mark them acked anyway, so the agent would silently lose the messages
-    // that mattered most.
+    // ASC + LIMIT would drop the recent rows; ACK-through later drains every
+    // silent row behind the consumed notify cursor, including rows excluded by
+    // this cap, so this delivery must choose the most relevant window now.
     //
     // We sort by `messages.createdAt` rather than `inboxEntries.createdAt`
     // because `addParticipant`'s backfill writes 50 inbox rows in one
@@ -403,8 +420,9 @@ async function collectPrecedingContext(
     // (T2 > T1) would both include silent rows < T1 in their preceding
     // context. With SKIP LOCKED, the second poll skips the rows the first
     // has reserved.
-    let prevCreatedAt: Date | null = null;
+    let previousNotifyId: number | null = previousNotify?.id ?? null;
     for (const trigger of chatTriggers) {
+      const windowStart = new Date(trigger.createdAt.getTime() - PRECEDING_CONTEXT_WINDOW_SECONDS * 1000);
       const rows = await tx
         .select({
           messageId: messages.id,
@@ -422,9 +440,9 @@ async function collectPrecedingContext(
             eq(inboxEntries.chatId, chatId),
             eq(inboxEntries.status, "pending"),
             eq(inboxEntries.notify, false),
-            lt(inboxEntries.createdAt, trigger.createdAt),
-            prevCreatedAt === null ? undefined : gt(inboxEntries.createdAt, prevCreatedAt),
-            sql`${inboxEntries.createdAt} > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})`,
+            lt(inboxEntries.id, trigger.id),
+            previousNotifyId === null ? undefined : gt(inboxEntries.id, previousNotifyId),
+            gt(inboxEntries.createdAt, windowStart),
           ),
         )
         .orderBy(desc(messages.createdAt))
@@ -443,27 +461,7 @@ async function collectPrecedingContext(
         }))
         .reverse();
       result.set(trigger.id, preceding);
-      prevCreatedAt = trigger.createdAt;
-    }
-
-    // Bulk-ack ALL silent pending rows in this chat strictly before the
-    // latest trigger — covers both "included in preceding" and "dropped due
-    // to cap/window". Without this the cap-overflow rows would re-attach to
-    // the next trigger and grow forever.
-    const latestTrigger = chatTriggers[chatTriggers.length - 1];
-    if (latestTrigger) {
-      await tx
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
-        .where(
-          and(
-            eq(inboxEntries.inboxId, inboxId),
-            eq(inboxEntries.chatId, chatId),
-            eq(inboxEntries.status, "pending"),
-            eq(inboxEntries.notify, false),
-            lt(inboxEntries.createdAt, latestTrigger.createdAt),
-          ),
-        );
+      previousNotifyId = trigger.id;
     }
   }
 
@@ -520,7 +518,24 @@ export async function ackThroughEntryIdForBoundAgents(
       }
 
       const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
+      const ackedAt = new Date();
+      const drainPendingSilentRows = async (): Promise<void> => {
+        await tx
+          .update(inboxEntries)
+          .set({ status: "acked", ackedAt })
+          .where(
+            and(
+              eq(inboxEntries.inboxId, entry.inboxId),
+              chatPredicate,
+              eq(inboxEntries.status, "pending"),
+              eq(inboxEntries.notify, false),
+              sql`${inboxEntries.id} <= ${entryId}`,
+            ),
+          );
+      };
+
       if (deliveredIds.length === 0) {
+        await drainPendingSilentRows();
         return {
           ok: true,
           throughEntry: entry,
@@ -532,9 +547,10 @@ export async function ackThroughEntryIdForBoundAgents(
 
       const updated = await tx
         .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
+        .set({ status: "acked", ackedAt })
         .where(and(inArray(inboxEntries.id, deliveredIds), eq(inboxEntries.status, "delivered")))
         .returning();
+      await drainPendingSilentRows();
       const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
@@ -619,8 +635,7 @@ export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
  * Two cleanup paths:
  *
  *   1. `notify=false AND status='acked'` of any age — these are fully
- *      consumed (either bundled into a previous trigger or aged out via the
- *      bulk-ack in `collectPrecedingContext`); keep them only as long as
+ *      consumed by ACK-through after a notify trigger commits); keep them only as long as
  *      the corresponding message rows we link to. The unique constraint
  *      `(inbox_id, message_id, chat_id)` means leaving them around blocks
  *      legitimate retries with the same key.

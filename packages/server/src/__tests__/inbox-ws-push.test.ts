@@ -66,6 +66,14 @@ describe("inbox WS data-plane claim helpers", () => {
     return { a2, chatId, messageIds, rows };
   }
 
+  async function loadSilentRows(app: FastifyInstance, inboxId: string, chatId: string) {
+    return app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, false)))
+      .orderBy(asc(inboxEntries.id));
+  }
+
   it("claimAndBuildForPush atomically claims a pending entry and bundles it", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
@@ -122,7 +130,7 @@ describe("inbox WS data-plane claim helpers", () => {
     ]);
   });
 
-  it("claimAndBuildForPush bundles silent context for a mention_only trigger", async () => {
+  it("claimAndBuildForPush bundles silent context, then ACK-through drains it", async () => {
     // Mirror the silent-inbox-context test but on the push path. This is the
     // riskiest piece of the refactor — `bundleDeliveryWithSilentContext` was
     // extracted from `pollInboxInner` to be shared, so a divergence between
@@ -197,20 +205,201 @@ describe("inbox WS data-plane claim helpers", () => {
       "third silent",
     ]);
 
-    // Same side effect as the poll path: silent rows bulk-acked so they don't
-    // re-attach to a future trigger.
-    const silentRemaining = await app.db
-      .select({ status: inboxEntries.status })
-      .from(inboxEntries)
-      .where(
-        and(
-          eq(inboxEntries.inboxId, observer.inboxId),
-          eq(inboxEntries.chatId, chat.id),
-          eq(inboxEntries.notify, false),
-        ),
+    // Bundling is not consumption: same-socket recovery can still rebuild
+    // the preceding block until the notify trigger is ACKed.
+    const silentBeforeAck = await loadSilentRows(app, observer.inboxId, chat.id);
+    expect(silentBeforeAck.length).toBeGreaterThan(0);
+    expect(silentBeforeAck.every((r) => r.status === "pending")).toBe(true);
+
+    const acked = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [observer.inboxId]);
+    expect(acked.ok).toBe(true);
+    if (!acked.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(acked.ackedCount).toBe(1);
+    expect(acked.ackedEntryIds).toEqual([entry.id]);
+
+    const silentAfterAck = await loadSilentRows(app, observer.inboxId, chat.id);
+    expect(silentAfterAck.every((r) => r.status === "acked")).toBe(true);
+  });
+
+  it("ack-through drains silent rows only in the same inbox/chat up to the notify cursor", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `scope-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `scope-obs-${uid}` });
+    const peer = await createTestAgent(app, { type: "agent", name: `scope-peer-${uid}` });
+
+    const chat1 = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid, peer.agent.uuid],
+    });
+    const chat2 = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid, peer.agent.uuid],
+    });
+
+    await sendMessage(
+      app.db,
+      chat1.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "old chat1 context" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat2.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "old chat2 context" },
+      { allowRecipientlessSend: true },
+    );
+    const trigger = await sendMessage(app.db, chat1.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "observer trigger",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const claimed = await inboxService.claimAndBuildForPush(app.db, observer.agent.inboxId, trigger.message.id);
+    const entry = claimed[0];
+    if (!entry) throw new Error("expected trigger claim");
+
+    await sendMessage(
+      app.db,
+      chat1.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "later chat1 context" },
+      { allowRecipientlessSend: true },
+    );
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [observer.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.ackedEntryIds).toEqual([entry.id]);
+
+    const observerChat1 = await loadSilentRows(app, observer.agent.inboxId, chat1.id);
+    expect(observerChat1.some((row) => row.id < entry.id && row.status === "acked")).toBe(true);
+    expect(observerChat1.some((row) => row.id > entry.id && row.status === "pending")).toBe(true);
+
+    const observerChat2 = await loadSilentRows(app, observer.agent.inboxId, chat2.id);
+    expect(observerChat2.length).toBeGreaterThan(0);
+    expect(observerChat2.every((row) => row.status === "pending")).toBe(true);
+
+    const peerChat1 = await loadSilentRows(app, peer.agent.inboxId, chat1.id);
+    expect(peerChat1.length).toBeGreaterThan(0);
+    expect(peerChat1.every((row) => row.status === "pending")).toBe(true);
+  });
+
+  it("does not reuse silent context that belongs before an earlier unacked notify trigger", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `part-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `part-obs-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "before first trigger" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "first trigger",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const firstClaim = await inboxService.claimBacklogForPush(app.db, observer.agent.inboxId, 1);
+    const firstDelivery = firstClaim[0];
+    if (!firstDelivery) throw new Error("expected first delivery");
+    expect(firstDelivery.message.precedingMessages.map((p) => p.content)).toEqual(["before first trigger"]);
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "between triggers" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "second trigger",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const secondClaim = await inboxService.claimBacklogForPush(app.db, observer.agent.inboxId, 1);
+    const secondDelivery = secondClaim[0];
+    if (!secondDelivery) throw new Error("expected second delivery");
+    expect(secondDelivery.message.precedingMessages.map((p) => p.content)).toEqual(["between triggers"]);
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, secondDelivery.id, [observer.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.ackedEntryIds).toEqual([firstDelivery.id, secondDelivery.id]);
+
+    const afterAck = await loadSilentRows(app, observer.agent.inboxId, chat.id);
+    expect(afterAck.map((row) => row.status)).toEqual(["acked", "acked"]);
+  });
+
+  it("ack-through drains silent rows excluded from preceding context by cap or trigger-relative window", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `cap-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `cap-obs-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    const total = inboxService.PRECEDING_CONTEXT_MAX_ENTRIES + 2;
+    for (let i = 0; i < total; i++) {
+      await sendMessage(
+        app.db,
+        chat.id,
+        human.agent.uuid,
+        { source: "api", format: "text", content: `silent-${i}` },
+        { allowRecipientlessSend: true },
       );
-    expect(silentRemaining.length).toBeGreaterThan(0);
-    expect(silentRemaining.every((r) => r.status === "acked")).toBe(true);
+    }
+
+    const silentRows = await loadSilentRows(app, observer.agent.inboxId, chat.id);
+    expect(silentRows).toHaveLength(total);
+    const oldExcluded = silentRows[0];
+    if (!oldExcluded) throw new Error("expected silent rows");
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: new Date(Date.now() - (inboxService.PRECEDING_CONTEXT_WINDOW_SECONDS + 60) * 1000) })
+      .where(eq(inboxEntries.id, oldExcluded.id));
+
+    const trigger = await sendMessage(app.db, chat.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "cap trigger",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const claimed = await inboxService.claimAndBuildForPush(app.db, observer.agent.inboxId, trigger.message.id);
+    const entry = claimed[0];
+    if (!entry) throw new Error("expected trigger claim");
+    expect(entry.message.precedingMessages).toHaveLength(inboxService.PRECEDING_CONTEXT_MAX_ENTRIES);
+    const precedingContents = entry.message.precedingMessages.map((p) => p.content);
+    expect(precedingContents).not.toContain("silent-0");
+    expect(precedingContents).not.toContain("silent-1");
+    expect(precedingContents).toContain(`silent-${total - 1}`);
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [observer.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.ackedCount).toBe(1);
+    expect(accepted.ackedEntryIds).toEqual([entry.id]);
+
+    const afterAck = await loadSilentRows(app, observer.agent.inboxId, chat.id);
+    expect(afterAck).toHaveLength(total);
+    expect(afterAck.every((row) => row.status === "acked")).toBe(true);
   });
 
   it("claimBacklogForPush drains pending entries oldest-first up to the limit", async () => {
