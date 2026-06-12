@@ -1,5 +1,5 @@
 import { MENTION_REGEX, type SessionState, stripCode } from "@first-tree/shared";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -8,7 +8,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { NotFoundError } from "../errors.js";
+import { BadRequestError, NotFoundError } from "../errors.js";
 import type { Notifier } from "./notifier.js";
 
 export const SUMMARY_MAX_LENGTH = 50;
@@ -216,14 +216,21 @@ export async function getSession(db: Database, agentId: string, chatId: string):
   };
 }
 
-/** List all sessions across all agents, with pagination. Scoped to organization. */
+/**
+ * List all sessions across all agents in one organization, with pagination.
+ *
+ * `organizationId` is a required positional parameter, not an optional
+ * filter: it is the tenant boundary, and an omitted boundary must be a
+ * compile error rather than a silently unscoped query.
+ */
 export async function listAllSessions(
   db: Database,
+  organizationId: string,
   limit: number,
   cursor?: string,
-  filters?: { state?: string; agentId?: string; organizationId?: string },
+  filters?: { state?: string; agentId?: string },
 ): Promise<{ items: SessionListItem[]; nextCursor: string | null }> {
-  const conditions = [];
+  const conditions = [eq(agents.organizationId, organizationId)];
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
   } else {
@@ -233,11 +240,16 @@ export async function listAllSessions(
   if (filters?.agentId) {
     conditions.push(eq(agentChatSessions.agentId, filters.agentId));
   }
-  if (filters?.organizationId) {
-    conditions.push(eq(agents.organizationId, filters.organizationId));
-  }
   if (cursor) {
-    conditions.push(sql`${agentChatSessions.updatedAt} < ${new Date(cursor)}`);
+    const cursorDate = new Date(cursor);
+    if (Number.isNaN(cursorDate.getTime())) {
+      // An Invalid Date would otherwise reach Postgres as a malformed
+      // timestamp parameter and surface as a 500.
+      throw new BadRequestError(`Invalid cursor: ${cursor}`);
+    }
+    // `lt()` (not a raw sql`` fragment) so the Date goes through the
+    // column's driver mapping — postgres-js rejects raw Date parameters.
+    conditions.push(lt(agentChatSessions.updatedAt, cursorDate));
   }
 
   const rows = await db
@@ -252,7 +264,7 @@ export async function listAllSessions(
     .from(agentChatSessions)
     .innerJoin(chats, eq(agentChatSessions.chatId, chats.id))
     .innerJoin(agents, eq(agentChatSessions.agentId, agents.uuid))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(desc(agentChatSessions.updatedAt))
     .limit(limit + 1);
 
