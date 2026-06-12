@@ -29,25 +29,23 @@ state via `capture-pane`, and read results from the transcript.
 So the handler observes **two surfaces** and the contract between them is the
 thing under test:
 
-1. **Pane text** (`capture-pane -p`) — coarse state: is a turn in flight, is a
-   selection menu open, is the CLI ready. Matched against four magic strings in
-   `tui-markers.ts`.
+1. **Pane text** (`capture-pane -p`) — coarse state: is a turn in flight, is
+   the CLI ready. Matched against the magic strings in `tui-markers.ts`.
 2. **Transcript JSONL** (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)
-   — the authoritative event stream: assistant text, tool calls, the cancelled
-   AskUserQuestion. This is what gets forwarded to chat, never the pane scrape.
+   — the authoritative event stream: assistant text and tool calls. This is
+   what gets forwarded to chat, never the pane scrape.
 
 The fake (`packages/e2e/src/mocks/fake-claude-tui.mjs`) reproduces both
 surfaces so the handler's real logic runs unmodified against it.
 
 ---
 
-## Pane markers (the four magic strings)
+## Pane markers (the magic strings)
 
 | Marker | String | Meaning |
 | --- | --- | --- |
 | `READY_MARKER` | `bypass permissions on` | CLI booted; `waitForReady` also needs a `❯` prompt line |
 | `WORKING_MARKER` | `esc to interrupt` | a turn is in flight; its **disappearance** is the turn-end signal |
-| `ASKUSER_MENU_FOOTER` | `Enter to select` | the AskUserQuestion selection menu is open |
 | `USER_RE` | `^❯ ` (NBSP) | prompt line; the trailing glyph is U+00A0, not ASCII space |
 
 Two non-obvious facts the fake must honour (both learned the hard way and now
@@ -127,17 +125,19 @@ reliability-critical rule (PR #712 review round 3):
 
 ---
 
-## AskUserQuestion degradation
+## AskUserQuestion is disabled at spawn
 
-The tmux runtime can't navigate `claude`'s selection menu. The handler keeps
-the tool enabled and degrades each invocation to a plain-text round trip:
-detect the `Enter to select` footer → send one `Escape` → `claude` flushes the
-cancelled `tool_use(input)` to the transcript → the handler formats
-`input.questions` as markdown and forwards that. The next user reply is
-injected as a normal turn; `claude` sees its own cancelled tool call and
-continues. The fake keeps the working marker painted alongside the menu (the
-turn is still in flight) so the handler doesn't end the turn before sending
-Escape.
+The tmux runtime can't navigate `claude`'s selection menu — there is no human
+at the pane. The handler prevents the menu from ever appearing: it launches
+`claude` with `--disallowed-tools AskUserQuestion`, stripping the tool from
+the model's context entirely. `--dangerously-skip-permissions` bypasses the
+permission layer, so a permissions-based deny is not an option here.
+
+> History: an earlier design kept the tool enabled and *degraded* each
+> invocation — detect the `Enter to select` menu footer, send `Escape`, format
+> the cancelled `tool_use` input as markdown, and forward it as a plain-text
+> round trip. That path (and its `ASKUSER_MENU_FOOTER` marker) was removed
+> end-to-end in PR #747; `tui-askuser-disallowed` pins the current contract.
 
 ---
 
