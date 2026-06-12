@@ -24,8 +24,11 @@ import { createLogger } from "../observability/index.js";
 import { getOrgContextTree } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
-const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead"]);
-const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+// Grep/Glob count as reads at the granularity their refs carry: the client
+// emits one directory-level ref for the explicit search root, never one ref
+// per matched file (see the client's TREE_SEARCH_TOOL_NAMES).
+const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead", "Grep", "Glob"]);
+const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const log = createLogger("ContextTreeIo");
 
 export type ContextTreeIoViewer = {
