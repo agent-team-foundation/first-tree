@@ -34,7 +34,7 @@ export class Deduplicator {
   /**
    * Drop every recorded id that starts with `prefix`. Used by the runtime
    * when a chat is LRU-evicted: the in-flight entries for that chat won't
-   * be acked (no handler will run `markCompleted`), and the server will
+   * be acked (no handler will run `finishTurn`), and the server will
    * resend the same `(chatId, messageId)` pairs against a fresh session.
    * Leaving the keys in the dedup set would cause the resend to be
    * mis-classified as a duplicate — and (post-#1-fix) re-acked, which

@@ -402,7 +402,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(afterAck.every((row) => row.status === "acked")).toBe(true);
   });
 
-  it("claimBacklogForPush drains pending entries oldest-first up to the limit", async () => {
+  it("claimBacklogForPush drains pending entries by inbox id up to the limit", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const a1 = await createTestAgent(app, { name: `wspb-a1-${uid}` });
@@ -425,15 +425,7 @@ describe("inbox WS data-plane claim helpers", () => {
 
     const drained = await inboxService.claimBacklogForPush(app.db, a2.agent.inboxId, 10);
     expect(drained.length).toBe(3);
-    // FIFO invariant — proposal §3.3: reply chains and silent-context windows
-    // depend on chronological order; reordering here would silently break
-    // mention semantics in group chats.
-    for (let i = 1; i < drained.length; i++) {
-      const prev = drained[i - 1];
-      const curr = drained[i];
-      if (!prev || !curr) throw new Error("unreachable: drained array bounds");
-      expect(prev.createdAt <= curr.createdAt).toBe(true);
-    }
+    expect(drained.map((entry) => entry.id)).toEqual([...drained].map((entry) => entry.id).sort((a, b) => a - b));
     // Every drained entry must be marked delivered atomically with the claim.
     for (const e of drained) expect(e.status).toBe("delivered");
     // Pin the bigserial → number conversion on the backlog path too. The WS
@@ -441,6 +433,46 @@ describe("inbox WS data-plane claim helpers", () => {
     // ever regresses to raw SQL, every push frame would be dropped client-
     // side as malformed. See issue #194.
     for (const e of drained) expect(typeof e.id).toBe("number");
+  });
+
+  it("uses inbox id cursor order even when createdAt is reversed", async () => {
+    const app = getApp();
+    const { a2, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: new Date("2030-01-01T00:00:00.000Z") })
+      .where(eq(inboxEntries.id, first.id));
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: new Date("2020-01-01T00:00:00.000Z") })
+      .where(eq(inboxEntries.id, second.id));
+
+    const drained = await inboxService.claimBacklogForPush(app.db, a2.agent.inboxId, 10);
+    expect(drained.map((entry) => entry.id)).toEqual([first.id, second.id]);
+
+    const firstAck = await inboxService.ackEntryByIdForBoundAgents(app.db, first.id, [a2.agent.inboxId]);
+    expect(firstAck.ok).toBe(true);
+    if (!firstAck.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(firstAck.ackedEntryIds).toEqual([first.id]);
+
+    const afterFirstAck = await app.db
+      .select({ id: inboxEntries.id, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, a2.agent.inboxId), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.id));
+    expect(afterFirstAck.map((row) => [row.id, row.status])).toEqual([
+      [first.id, "acked"],
+      [second.id, "delivered"],
+    ]);
+
+    const secondAck = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(secondAck.ok).toBe(true);
+    if (!secondAck.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(secondAck.ackedEntryIds).toEqual([second.id]);
   });
 
   it("ackEntryByIdForBoundAgents commits delivered notify=true prefix through the target entry", async () => {

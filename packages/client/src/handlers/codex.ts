@@ -757,7 +757,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
     sessionCtx.markMessagesConsumed(messages);
     const abort = new AbortController();
     currentAbort = abort;
-    sessionCtx.setRuntimeState("working");
 
     // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
     // mirrors claude-code so admin events + completion bookkeeping reflect
@@ -801,7 +800,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
             for await (const event of streamed.events) {
               if (attemptAbort.signal.aborted) break;
-              sessionCtx.touch();
+              sessionCtx.recordProviderActivity();
               if (event.type === "thread.started") {
                 threadId = event.thread_id;
               } else if (event.type === "turn.started") {
@@ -967,7 +966,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // phantom `turn_end: success`. Mirrors the existing `turnFailed`
       // treatment — runtime state still goes `idle` below so a later message
       // can retry once the limit resets. We do NOT auto-redeliver THIS message
-      // (markMessagesCompleted still runs below); auto-redelivery is tracked
+      // (finishTurn still runs below); auto-redelivery is tracked
       // separately (see #971 discussion) because it needs a reset-aware
       // trigger + loop guard that the SDK's missing `rate_limits` can't supply.
       sessionCtx.emitEvent({
@@ -1038,12 +1037,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
       kind: "turn_end",
       payload: { status: succeeded ? "success" : "error" },
     });
-    sessionCtx.setRuntimeState("idle");
     // Ack the entries this turn consumed. All four turn outcomes (success,
     // silent / no-text, SDK turn.failed, forwardResult failure) are
     // terminal for this turn — redelivery would either replay an already-
     // delivered reply or re-hit the same failure.
-    sessionCtx.markMessagesCompleted(messages);
+    await sessionCtx.finishTurn(messages, { status: succeeded ? "success" : "error", terminal: true });
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1100,8 +1098,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // Every fused message failed `formatInboundContent` — semantically a
       // permanent failure for this batch (redelivery would re-hit the same
       // format errors). Ack the entries so they don't leak in
-      // `inFlightEntries` and pile up server-side as `delivered` rows.
-      sessionCtx.markMessagesCompleted(drained);
+      // the coordinator ledger and pile up server-side as `delivered` rows.
+      await sessionCtx.finishTurn(drained, { status: "error", terminal: true, errorKind: "deterministic" });
       return;
     }
     await runTurn(inputs.join("\n\n"), sessionCtx, drained);

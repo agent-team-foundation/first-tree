@@ -97,8 +97,7 @@ function buildSessionCtx(chatId: string, log: (msg: string) => void): SessionCon
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId,
     log,
-    touch: () => {},
-    setRuntimeState: () => {},
+    recordProviderActivity: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
