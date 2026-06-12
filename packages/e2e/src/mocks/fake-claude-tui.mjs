@@ -8,8 +8,7 @@
 //      includes `--session-id <uuid>` so we know which transcript file to
 //      write to (per real Claude's behaviour — see transcript-tail.ts).
 //   2. Polling `tmux capture-pane` for the `bypass permissions on` ready
-//      marker, the `❯ ` prompt, the `esc to interrupt` working marker, and the
-//      `Enter to select` AskUserQuestion footer.
+//      marker, the `❯ ` prompt, and the `esc to interrupt` working marker.
 //   3. Sending user text via `paste-buffer -p` + `send-keys Enter`.
 //   4. Reading transcript events from
 //      `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` to pick up
@@ -21,8 +20,7 @@
 //     — Enter terminates each user submission).
 //   * Append properly-shaped Anthropic message JSON to the transcript file
 //     on every turn, in the same path the handler computes.
-//   * React to ESC (handler sends one Escape after AskUser menu or to
-//     interrupt a hung turn).
+//   * React to ESC (handler sends one Escape to interrupt a hung turn).
 //
 // Behaviour env knobs (read once at startup; per-turn overrides via the
 // FAKE_TUI_LOG side channel are not needed — tests inject the right knob
@@ -36,17 +34,13 @@
 //                                   (probe TURN_TIMEOUT_MS path)
 //   FAKE_TUI_CRASH_AFTER_TURNS=N  — exit non-zero after N completed turns
 //                                   (probe crash-recovery scenarios)
-//   FAKE_TUI_EMIT_ASKUSER=1       — first turn emits an AskUserQuestion
-//                                   tool_use + paints the menu footer. The
-//                                   handler should Escape-cancel; subsequent
-//                                   turns are normal.
 //   FAKE_TUI_TOOL_CALL=1          — first turn emits a Bash tool_use + a
 //                                   matching tool_result (probe tool_call
 //                                   plumbing through the shared processor).
 //   FAKE_TUI_LOG_PATH             — append one JSON line per fake event
 //                                   (start, ready, turn:start, turn:end,
-//                                   askuser:cancelled, crash). Tests read
-//                                   this via fake-tui-log.ts.
+//                                   crash). Tests read this via
+//                                   fake-tui-log.ts.
 //
 // Why hand-rolled and not a fixture lib: the handler observes BOTH pane text
 // and transcript JSONL, and the contract between them is what we want to
@@ -80,7 +74,6 @@ const DELAY_MS = Number(process.env.FAKE_TUI_DELAY_MS ?? "0");
 const FAIL_READY = process.env.FAKE_TUI_FAIL_READY === "1";
 const HANG = process.env.FAKE_TUI_HANG === "1";
 const CRASH_AFTER = Number(process.env.FAKE_TUI_CRASH_AFTER_TURNS ?? "0");
-const EMIT_ASKUSER = process.env.FAKE_TUI_EMIT_ASKUSER === "1";
 const TOOL_CALL = process.env.FAKE_TUI_TOOL_CALL === "1";
 const LOG_PATH = process.env.FAKE_TUI_LOG_PATH ?? null;
 
@@ -88,7 +81,6 @@ const LOG_PATH = process.env.FAKE_TUI_LOG_PATH ?? null;
 // Keep these in sync if the handler markers ever change.
 const READY_MARKER = "bypass permissions on";
 const WORKING_MARKER = "esc to interrupt";
-const ASKUSER_MENU_FOOTER = "Enter to select";
 
 function logEvent(kind, extra) {
   if (!LOG_PATH) return;
@@ -170,7 +162,7 @@ function readNextInput() {
     // trailing lone ESC can't be distinguished from the first byte of a CSI
     // sequence (`\x1b[…`) by inspection alone. We arm a short grace timer:
     // if the ESC is still trailing + unaccompanied when it fires, it was a
-    // real Escape keypress (the handler's AskUser-cancel / interrupt).
+    // real Escape keypress (the handler's hung-turn interrupt).
     let escapeTimer = null;
     const armEscapeTimer = () => {
       if (escapeTimer) return;
@@ -328,71 +320,6 @@ async function runOneTurn(turnIndex, userText) {
     logEvent("turn:hang", { turn: turnIndex });
     await new Promise(() => {});
     return;
-  }
-
-  // Knob: emit an AskUserQuestion tool_use first turn, then paint the menu
-  // footer so the handler's Escape-cancel + degrade path kicks in. We DO
-  // produce the tool_use transcript entry up-front, matching real Claude's
-  // behaviour where the tool_use lands in the transcript even when the user
-  // cancels the menu (verified empirically in the PoC).
-  if (EMIT_ASKUSER && turnIndex === 1) {
-    const toolUseId = `toolu_${randomUUID().replace(/-/g, "")}`;
-    appendTranscript({
-      type: "assistant",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: toolUseId,
-            name: "AskUserQuestion",
-            input: {
-              questions: [
-                {
-                  question: "Which option do you want?",
-                  header: "Choose one",
-                  multiSelect: false,
-                  options: [
-                    { label: "Option A", description: "Picks A" },
-                    { label: "Option B", description: "Picks B" },
-                  ],
-                },
-              ],
-            },
-          },
-        ],
-      },
-      timestamp: nowIso(),
-      uuid: randomUUID(),
-      sessionId,
-    });
-    // Paint the selection menu. Crucially, KEEP the working marker on screen:
-    // during an AskUserQuestion the turn is still in flight (claude is blocked
-    // waiting for a selection), so real claude still shows `esc to interrupt`.
-    // If we dropped it, the handler would see "no working marker + produced
-    // output" and end the turn before ever sending its Escape-cancel — the
-    // degrade path would never fire. With the marker present the handler keeps
-    // polling, detects the footer, and sends Escape.
-    clearScreen();
-    paint(WORKING_MARKER);
-    paint("Choose one");
-    paint("Option A");
-    paint("Option B");
-    paint(ASKUSER_MENU_FOOTER);
-    logEvent("askuser:opened", { turn: turnIndex, toolUseId });
-    // Wait for the handler's Escape (or up to 30s — should be much faster).
-    const next = await Promise.race([readNextInput(), sleep(30_000).then(() => ({ kind: "timeout" }))]);
-    if (next.kind === "escape") {
-      logEvent("askuser:cancelled", { turn: turnIndex, toolUseId });
-      // Don't paint a final reply this turn — the degraded text is what the
-      // user sees, and it's derived from the transcript entry alone. Clear the
-      // menu footer away so the handler doesn't re-arm Escape on a stale pane.
-      clearScreen();
-      paint("❯ "); // NBSP: tmux capture-pane trims trailing ASCII space, NBSP survives — handler's USER_RE matches either
-      logEvent("turn:end", { turn: turnIndex, askUserCancelled: true });
-      return;
-    }
-    // No escape arrived — fall through to emit a normal assistant reply.
   }
 
   // Knob: emit a tool_call (Bash) + tool_result, then a normal text reply.

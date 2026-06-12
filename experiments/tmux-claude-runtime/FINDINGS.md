@@ -158,7 +158,7 @@ blanket sweep would tear down a live peer's pane.
 | Capability probe reports `claude-code-tui: ok` (claude + tmux + auth) | `tui-capability-probe` |
 | Happy turn: inject → drain transcript → forward → ack | `tui-runtime-basic` |
 | `tool_use`/`tool_result` flow through the shared processor to `session_events` | `tui-runtime-tool-call` |
-| AskUser menu → Escape-cancel → question lands as plain text | `tui-askuser-degrade` |
+| Spawn argv disables AskUserQuestion via `--disallowed-tools` (degrade path removed in PR #747) | `tui-askuser-disallowed` |
 | Session name = `deriveSessionName` (NUL digest); paste buffer cleaned up | `tui-tmux-lifecycle` |
 | Orphan sweep kills owned `ftth-<tag>-*`, leaves foreign sessions | `tui-orphan-sweep` |
 | Mid-turn daemon death → un-acked → redelivered + completed on restart | `tui-restart-resume` |

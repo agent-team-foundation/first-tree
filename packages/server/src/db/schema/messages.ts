@@ -12,7 +12,7 @@ export const messages = pgTable(
       .references(() => chats.id),
     /** No FK constraint — agents may be soft-deleted while messages are preserved. */
     senderId: text("sender_id").notNull(),
-    /** "text" | "markdown" | "card" | "reference" | "file" */
+    /** "text" | "markdown" | "card" | "reference" | "file" | "request" */
     format: text("format").notNull(),
     content: jsonb("content").$type<unknown>().notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
