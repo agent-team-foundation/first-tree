@@ -533,6 +533,32 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
+  it("keeps the recovery window open across multiple queued recovered frames", async () => {
+    const working = handler();
+    const recovered = handler();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [working, recovered],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery-1" }));
+    expect(recoverChat).toHaveBeenCalledTimes(1);
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery-1" }));
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-recovery", messageId: "msg-recovery-2" }));
+
+    expect(recoverChat).toHaveBeenCalledTimes(1);
+    expect(recovered.start).not.toHaveBeenCalled();
+    expect(internals(sm).pendingQueue.filter((item) => item.chatId === "chat-recovery")).toHaveLength(2);
+
+    await sm.shutdown();
+  });
+
   it("does not let a queued recovery steal a slot released for fresh preemption", async () => {
     const lifecycles: Array<{ chatId: string; phase: "start" | "resume" }> = [];
     const makeTrackedHandler = () =>

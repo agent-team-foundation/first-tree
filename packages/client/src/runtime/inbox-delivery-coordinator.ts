@@ -38,6 +38,9 @@ type ChatInboxLedger = {
   entries: TrackedDelivery[];
   recoveryDebt: RecoveryDebt;
   recoveryActivationReady: boolean;
+  // Server recovery can redeliver several frames after one accepted request;
+  // keep classifying that burst as recovery while any redelivered work is unsettled.
+  recoveryWindowOpen: boolean;
   admissionQueue: Promise<void> | null;
   ackQueue: Promise<void> | null;
 };
@@ -94,10 +97,13 @@ export class InboxDeliveryCoordinator {
 
   takeRecoveryActivationReady(chatId: string): boolean {
     const ledger = this.ledgers.get(chatId);
-    if (!ledger?.recoveryActivationReady) return false;
-    ledger.recoveryActivationReady = false;
-    this.cleanupLedger(chatId);
-    return true;
+    if (!ledger) return false;
+    if (ledger.recoveryActivationReady) {
+      ledger.recoveryActivationReady = false;
+      ledger.recoveryWindowOpen = true;
+      return true;
+    }
+    return ledger.recoveryWindowOpen && this.hasUnsettledWork(chatId);
   }
 
   async recoverIfNeeded(chatId: string, reason: string): Promise<void> {
@@ -133,6 +139,7 @@ export class InboxDeliveryCoordinator {
         const current = this.ledger(chatId);
         current.recoveryDebt = "none";
         current.recoveryActivationReady = true;
+        current.recoveryWindowOpen = false;
         this.config.log.debug({ chatId, reason }, "chat inbox recovery accepted before dispatch");
       })
       .catch((err) => {
@@ -444,6 +451,7 @@ export class InboxDeliveryCoordinator {
       entries: [],
       recoveryDebt: "none",
       recoveryActivationReady: false,
+      recoveryWindowOpen: false,
       admissionQueue: null,
       ackQueue: null,
     };
@@ -455,9 +463,19 @@ export class InboxDeliveryCoordinator {
     const ledger = this.ledgers.get(chatId);
     if (!ledger) return;
     if (
+      ledger.recoveryWindowOpen &&
+      ledger.entries.length === 0 &&
+      ledger.recoveryDebt === "none" &&
+      ledger.admissionQueue === null &&
+      ledger.ackQueue === null
+    ) {
+      ledger.recoveryWindowOpen = false;
+    }
+    if (
       ledger.entries.length === 0 &&
       ledger.recoveryDebt === "none" &&
       !ledger.recoveryActivationReady &&
+      !ledger.recoveryWindowOpen &&
       ledger.admissionQueue === null &&
       ledger.ackQueue === null
     ) {
