@@ -13,14 +13,41 @@ export type CapabilityState = z.infer<typeof capabilityStateSchema>;
 export const capabilityAuthMethodSchema = z.enum(["api_key", "oauth", "auth_json", "none"]);
 export type CapabilityAuthMethod = z.infer<typeof capabilityAuthMethodSchema>;
 
+/**
+ * How the entry was produced.
+ *   - "launch": launch-verified probe — the provider binary was really spawned
+ *     and `ok` means a real end-to-end session/handshake succeeded.
+ *   - "static": legacy heuristic probe (import/marker-file checks only). Old
+ *     daemons upload entries without `probeKind`; consumers treat absent as
+ *     "static".
+ */
+export const capabilityProbeKindSchema = z.enum(["launch", "static"]);
+export type CapabilityProbeKind = z.infer<typeof capabilityProbeKindSchema>;
+
 export const capabilityEntrySchema = z.object({
   state: capabilityStateSchema,
   available: z.boolean(),
   authenticated: z.boolean(),
   sdkVersion: z.string().nullable().optional(),
   authMethod: capabilityAuthMethodSchema,
+  /**
+   * Human-readable failure reason. Launch-verified probes always set this for
+   * every non-`ok` state, carrying the provider's own output verbatim
+   * (truncated) so the web UI can render the real error instead of a generic
+   * label. Optional in the schema for backward compatibility with entries
+   * uploaded by older daemons.
+   */
   error: z.string().nullable().optional(),
   detectedAt: z.string(),
+  probeKind: capabilityProbeKindSchema.optional(),
+  /** Wall-clock duration of the whole probe (all stages), milliseconds. */
+  latencyMs: z.number().nonnegative().optional(),
+  /**
+   * True when the probe could not run its full verification and fell back to
+   * a weaker check (e.g. codex without a `doctor` subcommand) — `ok` then
+   * means "launchable + credentials present", not "end-to-end verified".
+   */
+  degraded: z.boolean().optional(),
 });
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 

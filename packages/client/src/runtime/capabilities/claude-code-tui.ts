@@ -1,7 +1,18 @@
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import type { CapabilityEntry } from "@first-tree/shared";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "../../handlers/claude-executable.js";
+import { CLAUDE_SMOKE_PROMPT, CLAUDE_SMOKE_TIMEOUT_MS, classifyClaudeSmokeFailure } from "./claude-code.js";
 import { detectClaudeAuth } from "./claude-shared.js";
+import {
+  type AuthPrecheckOutcome,
+  commandFailureDigest,
+  type ResolveOutcome,
+  runCommand,
+  runLaunchProbe,
+  type SmokeOutcome,
+  verifyLaunchable,
+} from "./launch-probe.js";
 
 /**
  * Minimum tmux version the TUI runtime requires. 3.0 is the first release with
@@ -47,20 +58,24 @@ function defaultProbeTmux(): TmuxVersion | null {
 }
 
 /**
- * Real `claude --version` probe. Returns the version string (e.g. "1.0.42") or
- * null when the binary is absent / unreadable / prints no recognizable version.
- * Output shapes vary ("1.0.42 (Claude Code)", "claude 1.0.42"), so we extract
- * the first dotted-number triplet/pair.
+ * Real launch smoke for the TUI runtime: a headless 1-turn `claude -p` run of
+ * the resolved binary. This launches the exact binary the tmux handler would
+ * spawn with the exact credentials the session would use; tmux itself is
+ * infrastructure validated separately in the resolve stage (`tmux -V` +
+ * version gate), so the smoke does not need to drive a real pane to prove the
+ * provider end of the contract.
  */
-function defaultProbeClaudeVersion(binary: string): string | null {
-  try {
-    const res = spawnSync(binary, ["--version"], { encoding: "utf-8", timeout: 5000 });
-    if (res.error || res.status !== 0 || typeof res.stdout !== "string") return null;
-    const match = res.stdout.match(/\d+\.\d+(?:\.\d+)?/);
-    return match ? match[0] : null;
-  } catch {
-    return null;
-  }
+async function defaultTuiSmoke(binary: string): Promise<SmokeOutcome> {
+  const res = await runCommand(binary, ["-p", CLAUDE_SMOKE_PROMPT, "--model", "haiku"], {
+    timeoutMs: CLAUDE_SMOKE_TIMEOUT_MS,
+    // Neutral cwd — don't pick up repo-local .claude/ settings.
+    cwd: tmpdir(),
+  });
+  if (res.ok) return { state: "ok" };
+  // Verified on a real machine: an invalid API key exits 1 and prints
+  // "Invalid API key · Please run /login" on STDOUT, so classification reads
+  // both streams via the digest.
+  return classifyClaudeSmokeFailure(commandFailureDigest("`claude -p` smoke", res));
 }
 
 /**
@@ -70,102 +85,87 @@ function defaultProbeClaudeVersion(binary: string): string | null {
 export type ClaudeCodeTuiProbeDeps = {
   resolveExecutable?: (opts?: { env?: NodeJS.ProcessEnv }) => ClaudeExecutableResolution;
   probeTmux?: () => TmuxVersion | null;
-  probeClaudeVersion?: (binary: string) => string | null;
+  verifyBinary?: (binary: string) => Promise<{ ok: true; version: string | null } | { ok: false; error: string }>;
   detectAuth?: () => { authenticated: boolean; method: "api_key" | "oauth" | "none" };
+  runSmoke?: (binary: string) => Promise<SmokeOutcome>;
 };
 
 /**
- * Probe whether the `claude-code-tui` runtime is usable on this machine.
+ * Launch-verified probe for the `claude-code-tui` runtime.
  *
- * Unlike `claude-code` (which can fall back to the SDK's bundled native binary),
- * the TUI runtime spawns the real `claude` CLI inside a tmux pane — so it needs
- * BOTH a resolvable AND runnable `claude` executable (env override or PATH; the
- * SDK bundle's `source: "default"` does not count) AND tmux >= 3.0. Auth is the
- * same Claude login the SDK path uses, so it reuses the shared detector.
+ * Unlike `claude-code` (which can fall back to the SDK's bundled native
+ * binary), the TUI runtime spawns the real `claude` CLI inside a tmux pane —
+ * so the resolve stage requires BOTH a resolvable AND launch-verified `claude`
+ * executable (env override / PATH / well-known dirs; the SDK bundle's
+ * `source: "default"` does not count) AND tmux >= 3.0. Auth is the same
+ * Claude login the SDK path uses, so the precheck reuses the shared detector
+ * — as a negative gate only. `ok` comes exclusively from a real headless
+ * 1-turn run of the resolved binary.
  *
- * "Runnable" matters: `resolveClaudeCodeExecutable` only does `existsSync`, so a
- * present-but-broken binary (non-executable, wrong arch, or a
- * `CLAUDE_CODE_EXECUTABLE` pointing at a dud) still resolves. We require a
- * successful `claude --version` — if it cannot be executed the runtime would
- * fail to spawn at session time, so we report `missing` here rather than let the
- * server gate bind a machine that cannot actually run the CLI.
- *
- * `sdkVersion` carries the `claude` CLI version (the runtime engine), matching
- * how `claude-code` reports the SDK version — the web surface renders it as the
- * runtime version. tmux is infrastructure, so its version only surfaces in the
- * failure `error` reason when it is missing or too old.
- *
- * State precedence: missing (claude absent/not runnable / no tmux / tmux too old)
- * > unauthenticated (runtime present, not logged in) > ok.
+ * `sdkVersion` carries the `claude` CLI version (the runtime engine); tmux is
+ * infrastructure, so its version only surfaces in the failure `error` reason.
  */
 export async function probeClaudeCodeTuiCapability(deps: ClaudeCodeTuiProbeDeps = {}): Promise<CapabilityEntry> {
-  const detectedAt = new Date().toISOString();
   const resolveExecutable = deps.resolveExecutable ?? resolveClaudeCodeExecutable;
   const probeTmux = deps.probeTmux ?? defaultProbeTmux;
-  const probeClaudeVersion = deps.probeClaudeVersion ?? defaultProbeClaudeVersion;
+  const verifyBinary = deps.verifyBinary ?? ((binary: string) => verifyLaunchable("claude", binary));
   const detectAuth = deps.detectAuth ?? detectClaudeAuth;
+  const runSmoke = deps.runSmoke ?? defaultTuiSmoke;
 
-  try {
-    const resolution = resolveExecutable();
-    // `source: "default"` means no real binary was found — the SDK bundle is
-    // not usable by the tmux runtime, so treat it as missing.
-    const claudeBinary = resolution.source === "default" ? undefined : resolution.path;
-    // existsSync is not enough — confirm the binary actually runs. A null here
-    // (absent / non-executable / non-zero `--version`) means the CLI cannot be
-    // spawned, so it fails the gate rather than reporting a false-positive `ok`.
-    const claudeVersion = claudeBinary ? probeClaudeVersion(claudeBinary) : null;
-    const claudeRunnable = claudeBinary !== undefined && claudeVersion !== null;
+  let resolvedBinary: string | undefined;
 
-    const tmux = probeTmux();
-    const tmuxOk = tmux !== null && tmuxMeetsMinimum(tmux);
-
-    if (!claudeRunnable || !tmuxOk) {
+  return runLaunchProbe({
+    resolve: async (): Promise<ResolveOutcome> => {
       const reasons: string[] = [];
-      if (!claudeBinary) reasons.push("`claude` not found on PATH (and CLAUDE_CODE_EXECUTABLE unset)");
-      else if (claudeVersion === null)
-        reasons.push(`\`claude\` at ${claudeBinary} could not be executed (\`claude --version\` failed)`);
+      let version: string | null = null;
+
+      const resolution = resolveExecutable();
+      // `source: "default"` means no real binary was found — the SDK bundle is
+      // not usable by the tmux runtime, so treat it as missing.
+      const claudeBinary = resolution.source === "default" ? undefined : resolution.path;
+      if (!claudeBinary) {
+        reasons.push(
+          "`claude` not found (checked CLAUDE_CODE_EXECUTABLE, PATH, and well-known install dirs like ~/.local/bin)",
+        );
+      } else {
+        // existsSync is not enough — confirm the binary actually launches. A
+        // failure here (non-executable, wrong arch, dud override) means the
+        // runtime could not spawn the CLI at session time.
+        const verified = await verifyBinary(claudeBinary);
+        if (!verified.ok) {
+          reasons.push(`\`claude\` at ${claudeBinary} could not be executed (${verified.error})`);
+        } else {
+          version = verified.version;
+          resolvedBinary = claudeBinary;
+        }
+      }
+
+      const tmux = probeTmux();
       if (tmux === null) reasons.push("tmux not found");
-      else if (!tmuxOk) reasons.push(`tmux ${tmux.raw} is older than ${MIN_TMUX_MAJOR}.${MIN_TMUX_MINOR}`);
-      return {
-        state: "missing",
-        available: false,
-        authenticated: false,
-        sdkVersion: claudeVersion,
-        authMethod: "none",
-        error: reasons.join("; "),
-        detectedAt,
-      };
-    }
+      else if (!tmuxMeetsMinimum(tmux)) {
+        reasons.push(`tmux ${tmux.raw} is older than ${MIN_TMUX_MAJOR}.${MIN_TMUX_MINOR}`);
+      }
 
-    const auth = detectAuth();
-    if (!auth.authenticated) {
-      return {
-        state: "unauthenticated",
-        available: true,
-        authenticated: false,
-        sdkVersion: claudeVersion,
-        authMethod: "none",
-        detectedAt,
-      };
-    }
-
-    return {
-      state: "ok",
-      available: true,
-      authenticated: true,
-      sdkVersion: claudeVersion,
-      authMethod: auth.method,
-      detectedAt,
-    };
-  } catch (err) {
-    return {
-      state: "error",
-      available: false,
-      authenticated: false,
-      sdkVersion: null,
-      authMethod: "none",
-      error: err instanceof Error ? err.message : String(err),
-      detectedAt,
-    };
-  }
+      if (reasons.length > 0) return { ok: false, error: reasons.join("; ") };
+      return { ok: true, binary: resolvedBinary, version };
+    },
+    authPrecheck: async (): Promise<AuthPrecheckOutcome> => {
+      const auth = detectAuth();
+      if (!auth.authenticated) {
+        return {
+          ok: false,
+          error:
+            "no Claude credentials found (ANTHROPIC_API_KEY unset and ~/.claude.json has no OAuth account); run `claude login` on this machine",
+        };
+      }
+      return { ok: true, method: auth.method };
+    },
+    smoke: async (): Promise<SmokeOutcome> => {
+      if (!resolvedBinary) {
+        // Unreachable in practice: resolve fails when no binary verified.
+        return { state: "error", error: "no resolved claude binary for smoke" };
+      }
+      return runSmoke(resolvedBinary);
+    },
+  });
 }
