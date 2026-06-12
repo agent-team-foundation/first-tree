@@ -33,6 +33,8 @@ const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead", "Grep", "Glob"]);
 const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const log = createLogger("ContextTreeIo");
+const GIT_STATUS_DELTA_REF_ORIGIN = "git_status_delta";
+const GIT_STATUS_DELTA_DERIVATION: EventIoDerivation = { action: "write", source: "git_status_delta" };
 
 export type ContextTreeIoViewer = {
   humanAgentId: string;
@@ -73,6 +75,7 @@ type NormalizedFileRef = {
 type NormalizedFileRefRecord = {
   normalized: NormalizedFileRef;
   sourceIndex: number;
+  derivation: EventIoDerivation;
 };
 
 export type ContextTreeIoDecision =
@@ -246,6 +249,7 @@ function normalizeFileRef(
       targetKind,
       targetPath,
       metadata: {
+        ...(parsed.data.metadata ?? {}),
         origin: parsed.data.origin,
         ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
       },
@@ -262,21 +266,27 @@ function buildContextTreeIoDecision(input: {
 }): InternalContextTreeIoDecision {
   if (!input.bindingRepo) return { recordable: false, reason: "no_org_context_tree_binding" };
 
-  const derivation = deriveEventIo(input.event, input.runtimeProvider);
-  if (typeof derivation === "string") return { recordable: false, reason: derivation };
-
   const refs = extractFileRefs(input.event, input.bindingRepo, input.bindingBranch);
+  const hasGitStatusDeltaRef = refs.some(({ ref }) => ref.origin === GIT_STATUS_DELTA_REF_ORIGIN);
+  const derivation = deriveEventIo(input.event, input.runtimeProvider);
+  const baseDerivation = typeof derivation === "string" ? null : derivation;
+  const derivationSkipReason = typeof derivation === "string" ? derivation : null;
+  if (!baseDerivation && !hasGitStatusDeltaRef) {
+    return { recordable: false, reason: derivationSkipReason ?? "unsupported_tool" };
+  }
   if (refs.length === 0) return { recordable: false, reason: "no_tool_file_refs" };
 
   const normalizedRefs: NormalizedFileRefRecord[] = [];
   let firstRejectedReason: ContextTreeIoSkipReason | null = null;
   for (const { ref, sourceIndex } of refs) {
+    const refDerivation = ref.origin === GIT_STATUS_DELTA_REF_ORIGIN ? GIT_STATUS_DELTA_DERIVATION : baseDerivation;
+    if (!refDerivation) continue;
     const normalized = normalizeFileRef(ref, input.bindingRepo, input.bindingBranch);
     if (!normalized.ok) {
       firstRejectedReason ??= normalized.reason;
       continue;
     }
-    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex });
+    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex, derivation: refDerivation });
   }
 
   if (normalizedRefs.length === 0) {
@@ -284,7 +294,7 @@ function buildContextTreeIoDecision(input: {
   }
   if (input.chatInOrg === false) return { recordable: false, reason: "chat_not_in_org" };
 
-  return { recordable: true, derivation, refs: normalizedRefs };
+  return { recordable: true, derivation: baseDerivation ?? GIT_STATUS_DELTA_DERIVATION, refs: normalizedRefs };
 }
 
 function toolNameOf(event: SessionEvent): string | null {
@@ -467,7 +477,7 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
 
   const createdAt = new Date(input.sessionEvent.createdAt);
   const rows = [];
-  for (const { normalized, sourceIndex } of decision.refs) {
+  for (const { normalized, sourceIndex, derivation } of decision.refs) {
     rows.push({
       id: `${input.sessionEvent.id}:${sourceIndex}`,
       organizationId: input.organizationId,
@@ -476,8 +486,8 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
       sourceSessionEventId: input.sessionEvent.id,
       sourceIndex,
       runtimeProvider: input.runtimeProvider,
-      action: decision.derivation.action,
-      source: decision.derivation.source,
+      action: derivation.action,
+      source: derivation.source,
       treeRepoUrl: normalized.treeRepoUrl,
       treeBranch: normalized.treeBranch,
       targetKind: normalized.targetKind,

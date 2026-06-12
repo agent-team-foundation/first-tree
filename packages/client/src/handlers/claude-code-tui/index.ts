@@ -7,6 +7,7 @@ import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
+import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
 import {
@@ -304,7 +305,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       turnProcessor = createToolCallProcessor(
         (event) => sessionCtx.emitEvent(event),
         contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl, branch: contextTreeBranch } : undefined,
-        { cwd },
+        {
+          cwd,
+          gitWriteTracker: createContextTreeGitWriteTracker({
+            contextTreePath,
+            contextTreeRepoUrl,
+            contextTreeBranch,
+            log: (message) => sessionCtx.log(message),
+          }),
+        },
       );
     }
     return turnProcessor;

@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectCodexFileChangePaths, toolFileRefsFromCodexFileChange } from "../handlers/codex.js";
+import {
+  appendGitStatusDeltaRefs,
+  collectCodexFileChangePaths,
+  toolFileRefsForTerminalCodexTool,
+  toolFileRefsFromCodexFileChange,
+} from "../handlers/codex.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 
 describe("Codex Context Tree file refs", () => {
@@ -133,6 +138,74 @@ describe("Codex Context Tree file refs", () => {
     expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree-sibling/NODE.md" })).toEqual([]);
     expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree/NODE.md | head" })).toEqual([]);
     expect(toolFileRefsFromShellCommand({ ...base, command: "echo x > /home/op/context-tree/NODE.md" })).toEqual([]);
+  });
+
+  it("appends git status delta refs after ordinary Codex refs", () => {
+    const existingRefs = [
+      {
+        origin: "file_change" as const,
+        localPath: "/home/op/context-tree/NODE.md",
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoRelativePath: "NODE.md",
+        pathKind: "file" as const,
+      },
+    ];
+    const gitWriteTracker = {
+      captureBaseline() {},
+      refsForSuccessfulToolCall(input: { existingRefs?: readonly unknown[] }) {
+        expect(input.existingRefs).toEqual(existingRefs);
+        return [
+          {
+            origin: "git_status_delta" as const,
+            localPath: "/home/op/context-tree/domains/new.md",
+            repoUrl: "https://github.com/acme/first-tree-context.git",
+            repoRelativePath: "domains/new.md",
+            pathKind: "file" as const,
+          },
+        ];
+      },
+    };
+
+    expect(
+      appendGitStatusDeltaRefs({
+        existingRefs,
+        gitWriteTracker,
+        toolName: "file_change",
+        toolUseId: "fc-1",
+      }),
+    ).toEqual([
+      ...existingRefs,
+      {
+        origin: "git_status_delta",
+        localPath: "/home/op/context-tree/domains/new.md",
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoRelativePath: "domains/new.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
+  it("advances git status baseline without refs for failed Codex tools", () => {
+    let baselineCaptures = 0;
+    const gitWriteTracker = {
+      captureBaseline() {
+        baselineCaptures += 1;
+      },
+      refsForSuccessfulToolCall() {
+        throw new Error("failed tools must not emit git status refs");
+      },
+    };
+
+    expect(
+      toolFileRefsForTerminalCodexTool({
+        status: "error",
+        existingRefs: [],
+        gitWriteTracker,
+        toolName: "command",
+        toolUseId: "cmd-failed",
+      }),
+    ).toBeUndefined();
+    expect(baselineCaptures).toBe(1);
   });
 });
 

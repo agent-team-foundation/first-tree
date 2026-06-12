@@ -670,4 +670,70 @@ describe("context-tree IO service", () => {
     const io = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
     expect(io.skipped).toEqual(skipped);
   });
+
+  it("records git status delta refs as synthetic writes for unsupported shell commands", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const shellWrite = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write",
+        name: "Bash",
+        args: { command: "cat <<'EOF' > context-tree/NODE.md\nupdated\nEOF" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "git_status_delta",
+            localPath: "/context-tree/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+            metadata: {
+              origin: "spoofed_origin",
+              localPath: "/spoofed/NODE.md",
+              toolName: "Bash",
+              toolUseId: "tu-shell-write",
+              gitStatus: " M",
+            },
+          },
+        ],
+      },
+    });
+
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "claude-code",
+      sessionEvent: shellWrite,
+    });
+
+    const rows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, shellWrite.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "write",
+      source: "git_status_delta",
+      targetKind: "file",
+      targetPath: "NODE.md",
+      metadata: {
+        origin: "git_status_delta",
+        localPath: "/context-tree/NODE.md",
+        toolName: "Bash",
+        toolUseId: "tu-shell-write",
+        gitStatus: " M",
+      },
+    });
+
+    const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
+    expect(summary.recentEvents[0]).toMatchObject({
+      action: "write",
+      source: "git_status_delta",
+      targetPath: "NODE.md",
+    });
+  });
 });
