@@ -112,7 +112,10 @@ export class InboxDeliveryCoordinator {
     if (!recoverChat) {
       ledger.recoveryDebt = "required";
       this.emitWorkChanged(chatId);
-      this.config.log.error({ chatId, reason }, "chat requires inbox recovery but no recoverChat callback is configured");
+      this.config.log.error(
+        { chatId, reason },
+        "chat requires inbox recovery but no recoverChat callback is configured",
+      );
       return;
     }
 
@@ -317,7 +320,10 @@ export class InboxDeliveryCoordinator {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
     if (ledger.recoveryDebt !== "none") {
-      this.config.log.debug({ chatId, throughEntryId, reason }, "ACK-through deferred because chat recovery is required");
+      this.config.log.debug(
+        { chatId, throughEntryId, reason },
+        "ACK-through deferred because chat recovery is required",
+      );
       return;
     }
     const index = ledger.entries.findIndex((tracked) => tracked.entryId === throughEntryId);

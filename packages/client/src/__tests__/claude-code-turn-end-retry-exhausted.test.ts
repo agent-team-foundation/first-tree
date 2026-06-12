@@ -132,7 +132,6 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const errIdx = emitted.findIndex((e) => e.kind === "error");
     const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
     expect(errIdx).toBeLessThan(turnEndIdx);
-
   });
 
   it("still returns when emitEvent throws", async () => {

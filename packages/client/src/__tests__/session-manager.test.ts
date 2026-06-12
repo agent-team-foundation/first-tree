@@ -3,7 +3,13 @@ import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { ContextTreeBinding } from "../runtime/bootstrap.js";
-import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import type {
+  AgentHandler,
+  HandlerConfig,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -1138,10 +1144,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
   it("keeps recovery debt after recovery failure and retries on later dispatch", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const recoverChat = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("recover offline"))
-      .mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockRejectedValueOnce(new Error("recover offline")).mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
     const injectSpy = vi.fn();
