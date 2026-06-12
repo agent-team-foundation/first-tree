@@ -63,7 +63,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     if (!open) setSearch("");
   }, [open]);
 
-  const { data: orgAgents } = useOrgAgents();
+  const { data: orgAgents, isLoading: agentsLoading } = useOrgAgents();
   const agents = orgAgents?.items ?? [];
 
   const { data: chatsResp, isLoading: chatsLoading } = useQuery({
@@ -97,6 +97,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   const browsing = search.trim().length === 0;
   const visibleChats = browsing ? chats.slice(0, RECENT_CHAT_LIMIT) : chats;
+  const paletteLoading = chatsLoading || agentsLoading;
 
   const go = (url: string) => {
     onOpenChange(false);
@@ -107,7 +108,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     <CommandDialog open={open} onOpenChange={onOpenChange}>
       <CommandInput placeholder="Jump to chat or teammate…" value={search} onValueChange={setSearch} />
       <CommandList>
-        <CommandEmpty>No results</CommandEmpty>
+        {!paletteLoading && <CommandEmpty>No results</CommandEmpty>}
 
         {chatsLoading && (
           <CommandLoading>

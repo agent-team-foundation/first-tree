@@ -19,6 +19,7 @@ const routerMocks = vi.hoisted(() => ({
 
 const orgAgentsMock = vi.hoisted(() => ({
   value: { items: [] as Agent[], nextCursor: null as string | null },
+  isLoading: false,
 }));
 
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
@@ -32,7 +33,7 @@ vi.mock("../../../../lib/use-agent-name-map.js", () => ({
 }));
 
 vi.mock("../../../../lib/use-org-agents.js", () => ({
-  useOrgAgents: () => ({ data: orgAgentsMock.value }),
+  useOrgAgents: () => ({ data: orgAgentsMock.value, isLoading: orgAgentsMock.isLoading }),
 }));
 
 vi.mock("react-router", async (importOriginal) => ({
@@ -174,6 +175,7 @@ beforeEach(() => {
     items: [agent(), agent({ uuid: "agent-2", name: null, displayName: "No Handle" })],
     nextCursor: null,
   };
+  orgAgentsMock.isLoading = false;
   meChatMocks.listMeChats.mockResolvedValue({
     rows: [chatRow(), chatRow({ chatId: "chat-untitled", title: "", topic: null })],
     nextCursor: null,
@@ -328,6 +330,32 @@ describe("CommandPalette", () => {
 
     expect(document.body.querySelectorAll("[cmdk-item]")).toHaveLength(0);
     expect(meChatMocks.listMeChats).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not show the empty state while chat results are still loading", async () => {
+    orgAgentsMock.value = { items: [], nextCursor: null };
+    meChatMocks.listMeChats.mockReturnValue(new Promise(() => undefined));
+
+    const { CommandPalette } = await import("../command-palette.js");
+    const { root } = await renderDom(<CommandPalette open onOpenChange={vi.fn()} />);
+
+    expect(document.body.textContent).not.toContain("No results");
+    expect(document.body.querySelector(".animate-pulse")).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not show the empty state while teammates are still loading", async () => {
+    orgAgentsMock.value = { items: [], nextCursor: null };
+    orgAgentsMock.isLoading = true;
+    meChatMocks.listMeChats.mockResolvedValue({ rows: [], nextCursor: null });
+
+    const { CommandPalette } = await import("../command-palette.js");
+    const { root } = await renderDom(<CommandPalette open onOpenChange={vi.fn()} />);
+
+    expect(document.body.textContent).not.toContain("No results");
 
     await act(async () => root.unmount());
   });
