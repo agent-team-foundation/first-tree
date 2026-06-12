@@ -15,8 +15,8 @@ import {
  *   4. forwardResult posts the assistant text back to chat.
  *
  * Covers the "session start → pasteText → drainEntries → forwardResult → ack"
- * loop without crash, askuser, or tool-call detours. If this scenario fails,
- * none of the others matter — they layer on top of the same loop.
+ * loop without crash or tool-call detours. If this scenario fails, none of
+ * the others matter — they layer on top of the same loop.
  */
 
 let fixture: TuiAgentFixture;
