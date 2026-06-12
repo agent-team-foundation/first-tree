@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { Button } from "../../components/ui/button.js";
 import { useToast } from "../../components/ui/toast.js";
+import { UserMenu } from "../../components/user-menu.js";
 import { COPY, STEP_COPY } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 import { StepProgress } from "./step-progress.js";
@@ -26,10 +27,23 @@ import { StepProgress } from "./step-progress.js";
  */
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
-  const { logout } = useAuth();
+  const { logout, memberships } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const copy = STEP_COPY[activeStep];
+
+  // A multi-team user gets the full workspace UserMenu (team switching,
+  // create/join, invite, sign out) instead of the bare "Sign out" link. The
+  // workspace gate routes a returning user into onboarding whenever the
+  // SELECTED org has no usable agent, so a user who switches into a
+  // not-yet-set-up team lands here with no agent in THIS org ("finish later"
+  // hidden below) — without the menu they had no way back to the team they
+  // came from short of signing out. Switching teams via the menu is the same
+  // affordance they used to get here, and it carries no dismissal side effect
+  // (the account-level dismissal would suppress onboarding for every org).
+  // First-run users (single membership) keep the deliberately minimal chrome:
+  // the menu's only destinations would fork them into a second team mid-setup.
+  const isMultiTeam = memberships.length > 1;
 
   return (
     // h-screen + overflow-hidden pins the app to the viewport, so the page can
@@ -43,9 +57,8 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           <span className="text-label font-semibold">{COPY.productName}</span>
         </span>
         <div className="inline-flex items-center" style={{ gap: "var(--sp-4)" }}>
-          {/* "Finish later" only once a teammate exists — before that the
-              workspace is empty, so leaving is a dead end. Sign out is always
-              available so a user who can't finish right now isn't locked out. */}
+          {/* "Finish later" only once a teammate exists in THIS org — before
+              that the org's workspace is empty, so leaving is a dead end. */}
           {hasAgent && (
             <Button
               type="button"
@@ -66,9 +79,16 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
               {COPY.finishLater}
             </Button>
           )}
-          <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
-            Sign out
-          </Button>
+          {/* Multi-team: the full workspace UserMenu (sign out lives inside it).
+              First-run: a bare Sign out link, always available so a user who
+              can't finish right now isn't locked out. */}
+          {isMultiTeam ? (
+            <UserMenu />
+          ) : (
+            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
+              Sign out
+            </Button>
+          )}
         </div>
       </header>
 
