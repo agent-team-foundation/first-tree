@@ -230,7 +230,12 @@ export async function listAllSessions(
   cursor?: string,
   filters?: { state?: string; agentId?: string },
 ): Promise<{ items: SessionListItem[]; nextCursor: string | null }> {
-  const conditions = [eq(agents.organizationId, organizationId)];
+  // The boundary applies to BOTH tenant-owned tables this query exposes:
+  // agent_chat_sessions has independent FKs to agents and chats with no DB
+  // constraint tying their orgs together, so a stale or malicious client
+  // reporting session:state for a foreign chatId could otherwise leak that
+  // chat's topic/summary through the unconstrained chats join.
+  const conditions = [eq(agents.organizationId, organizationId), eq(chats.organizationId, organizationId)];
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
   } else {

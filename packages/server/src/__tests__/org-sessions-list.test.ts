@@ -107,6 +107,35 @@ describe("GET /orgs/:orgId/sessions — filter integrity", () => {
     expect(foreign.statusCode).toBe(403);
   });
 
+  it("excludes a session row that points an own-org agent at a foreign-org chat", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+
+    // agent_chat_sessions has independent FKs to agents and chats; nothing at
+    // the DB layer ties their orgs together. Simulate a stale/malicious
+    // client having reported session:state for a foreign chatId.
+    const foreignOrgId = `org-${randomUUID().slice(0, 6)}`;
+    await app.db.insert(organizations).values({
+      id: foreignOrgId,
+      name: foreignOrgId.slice(0, 30),
+      displayName: "Foreign Org",
+    });
+    const foreignChatId = await seedChat(app, foreignOrgId, "foreign secret topic");
+
+    const ownAgent = await createAgent(app.db, {
+      name: `xchat-${randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Cross-chat Agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    await seedSession(app, ownAgent.uuid, foreignChatId);
+
+    const res = await listSessions(app, admin.accessToken, admin.organizationId, `?agentId=${ownAgent.uuid}&limit=100`);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items).toEqual([]);
+  });
+
   it("agentId filter returns only that agent's sessions", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
