@@ -252,7 +252,7 @@ Day-to-day messaging.
 
 ```
 first-tree chat
-├── create [message]                               # create a task chat and write its first message
+├── create [message]                               # create a separate task chat and write its first message
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
@@ -262,7 +262,7 @@ first-tree chat
 │     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
 │     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
-├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
+├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
 ├── set-topic [topic]                                # set/clear topic + description (chat self-description)
@@ -273,9 +273,10 @@ first-tree chat
 ```
 
 ```bash
-# Split off a new task chat and write the first message. --to recipients are
-# mentioned and woken; --with participants are added for context but receive only
-# silent initial history. This is not an empty-chat tool.
+# Split off separate work into a new task chat and write the first message.
+# --to recipients are mentioned and woken; --with participants are added for
+# context but receive only silent initial history. This is not an empty-chat or
+# same-task handoff tool.
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
   --topic "rollout review" \
   --description "reviewing rollout plan; waiting on code-agent"
@@ -309,7 +310,8 @@ first-tree chat send alice "Ship it — go ahead with migration 0021." --answer 
 # Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
 first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
 
-# Pull a non-member into the current chat first, then send normally.
+# Pull a non-member into the current chat first, then send normally. Use this
+# for same-task stage / role handoffs.
 first-tree chat invite code-agent
 first-tree chat send code-agent "now we can talk"
 
@@ -341,7 +343,9 @@ environment. The recipient must be a participant of that chat; if not,
 `chat create` is different: it creates a new task chat and writes the first
 message in one command. Use it to split genuinely new work into a fresh chat.
 Use `chat send` for replies/status in the current chat, and `chat invite` when
-you want to add a non-member to the current chat before sending there.
+you want to add a non-member to the current chat before sending there. A
+same-task handoff, such as architect to developer or developer to reviewer,
+stays in the current chat; invite the next agent and send the handoff there.
 
 Task creation is intentionally not idempotent. There is no operation id, and
 the CLI does not automatically retry a create request. If the command reports

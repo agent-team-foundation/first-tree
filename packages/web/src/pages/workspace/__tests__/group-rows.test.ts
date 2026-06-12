@@ -165,13 +165,19 @@ describe("groupRows — source", () => {
       row({ id: "g1", source: "github", entityType: "issue", lastMessageAt: offsetIso(-1) }),
       row({ id: "m", source: "manual", lastMessageAt: offsetIso(-1) }),
       row({ id: "mine", source: "manual", createdByMe: true, lastMessageAt: offsetIso(-1) }),
+      row({ id: "agent", source: "agent", lastMessageAt: offsetIso(-1) }),
       row({ id: "g2", source: "github", entityType: "pull_request", lastMessageAt: offsetIso(-1) }),
     ];
     const buckets = groupRows(rows, "source", NOW);
     // Canonical order is the one declared inside `group-rows.ts`:
-    // created-by-me → manual → github.
-    expect(buckets.map((b) => b.key)).toEqual(["created-by-me", "manual", "github"]);
-    expect(buckets.map((b) => b.label)).toEqual(["Started by me", "Started by teammates", "From GitHub"]);
+    // created-by-me -> manual -> agent -> github.
+    expect(buckets.map((b) => b.key)).toEqual(["created-by-me", "manual", "agent", "github"]);
+    expect(buckets.map((b) => b.label)).toEqual([
+      "Started by me",
+      "Started by teammates",
+      "Started by agents",
+      "From GitHub",
+    ]);
     // Both github rows land in the single `github` bucket regardless
     // of inner entityType — the popover collapse is a per-origin axis,
     // not a per-entity one.

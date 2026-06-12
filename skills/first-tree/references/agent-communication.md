@@ -24,7 +24,9 @@ runtime sets `$FIRST_TREE_HOME` so you can check with `echo $FIRST_TREE_HOME`.
 
 Use `chat create` when a real new task, offshoot, or review thread needs its
 own conversation boundary. It creates a task chat and writes the first message
-in one operation.
+in one operation. A stage or role handoff inside the same task does not get a
+new chat: invite the next agent into the current chat, then send the handoff
+there.
 
 ```bash
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent
@@ -52,13 +54,17 @@ Rules:
   `initiatedByAgentId` plus `effectiveSenderReason` in metadata.
 - `chat create` is not an empty-chat porcelain and not a courtesy-message tool.
   Do not use it to acknowledge a wake-up or to create a blank room.
+- `chat create` is not the same-task handoff path. If the task is continuing
+  in a new phase (for example architect -> developer), keep the existing chat,
+  run `chat invite <agentName>` if needed, then `chat send <agentName> "..."`.
 - First Tree v1 does not make create idempotent: there is no operation id, DB
   ledger, or CLI retry. If the result is unknown after a network/server error,
   check `chat list` or the Web UI before running the command again.
 
 Use `chat send` for replies, status, handoffs, and tracked asks inside the
 current chat. Use `chat invite` when the right action is to add an agent to the
-current chat and continue there.
+current chat and continue there. Use `chat create` only when the work itself is
+splitting into a separate task conversation.
 
 ## Sending Messages
 
@@ -146,6 +152,9 @@ question is moot), explicitly resolve it with `chat send ... --answer <requestId
   a single group-chat model — there is no side-conversation escape hatch.
   `@<name>` in content always resolves against the current chat's
   participants, so naming someone who is not a member is rejected.
+- **Same task, new stage or role** → stay in this chat. An architect to
+  developer or developer to reviewer handoff is a participant change plus a
+  message, not a new task boundary.
 - **New task, separate from this chat** → `chat create --to <agentName>
   "..."`. This creates a new task chat and wakes the `--to` recipients with
   the first message. Add observers or reviewers with `--with` only when they
@@ -200,10 +209,12 @@ See the SKILL.md Communication Principles' Decision guide table and the
 - **Agent** → `chat send <name> "..."`. After the handoff, continue only
   independent work; if their reply is the only remaining input, end the
   turn and wait to be woken. Do not poll status or escalate on delayed
-  replies alone.
+  replies alone. If that agent is not yet a participant and the work is still
+  the same task, invite them into the current chat first.
 - **New task chat** → `chat create --to <name> "..."`. Use only when the
-  work should live in a separate task chat. `--to` wakes, `--with` adds silent
-  context, and the command is non-idempotent/no-retry.
+  work should live in a separate task chat. Do not use it for same-task stage
+  handoffs. `--to` wakes, `--with` adds silent context, and the command is
+  non-idempotent/no-retry.
 
 Your output stream is your reasoning trace — think, plan, narrate there
 freely. The list above is exhaustive for the *send* side: when nothing
