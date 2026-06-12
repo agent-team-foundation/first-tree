@@ -22,11 +22,7 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import {
-  canonicalizeFsPath,
-  contextTreeRelativePathOf,
-  toolFileRefsFromShellCommand,
-} from "../runtime/context-tree-file-refs.js";
+import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
@@ -374,12 +370,16 @@ function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTree
   if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  // Canonicalize both sides so a symlinked tree path (W1 cloud layout) still
-  // maps. Relative paths keep the fail-safe null mapping — canonicalizing
-  // them would resolve against the daemon's cwd and risk mis-attribution.
+  // Containment (canonical, symlink-safe) or repo identity (tree PR
+  // worktrees — any checkout whose origin remote IS the Context Tree repo).
+  // Relative paths keep the fail-safe null mapping — canonicalizing them
+  // would resolve against the daemon's cwd and risk mis-attribution.
   const repoRelativePath =
-    contextTree?.path && isAbsolute(filePath)
-      ? treeNodePathOf(canonicalizeFsPath(filePath), canonicalizeFsPath(contextTree.path))
+    contextTree && isAbsolute(filePath)
+      ? resolveContextTreeRelativePath(filePath, {
+          contextTreePath: contextTree.path,
+          contextTreeRepoUrl: contextTree.repoUrl,
+        })
       : null;
   return {
     origin: "tool_arg",
@@ -427,7 +427,12 @@ function searchToolFileRef(
   if (rawPath === null) return null;
   if (!isAbsolute(rawPath) && !cwd) return null;
   const absolutePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? "", rawPath);
-  const repoRelativePath = contextTree?.path ? contextTreeRelativePathOf(absolutePath, contextTree.path) : null;
+  const repoRelativePath = contextTree
+    ? resolveContextTreeRelativePath(absolutePath, {
+        contextTreePath: contextTree.path,
+        contextTreeRepoUrl: contextTree.repoUrl,
+      })
+    : null;
   return {
     origin: "tool_arg",
     localPath: absolutePath,
