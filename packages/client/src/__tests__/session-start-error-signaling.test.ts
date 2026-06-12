@@ -1,6 +1,6 @@
 import type { SessionEvent, SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -292,6 +292,8 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const events: Array<{ chatId: string; event: SessionEvent }> = [];
     const { sdk, sendMessage } = mockSdk();
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let chatBContext: SessionContext | undefined;
+    let chatBMessage: SessionMessage | undefined;
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
@@ -299,8 +301,14 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
+    const handlerB = workingHandler("session-B");
+    handlerB.start = vi.fn(async (message, ctx) => {
+      chatBMessage = message;
+      chatBContext = ctx;
+      return "session-B";
+    });
     const sm = makeSerializedManager({
-      handlerQueue: [handlerA, workingHandler("session-B")],
+      handlerQueue: [handlerA, handlerB],
       sdk,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       onSessionEvent: (chatId, event) => events.push({ chatId, event }),
@@ -309,12 +317,14 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
 
     const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
     const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
-    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
     await sm.dispatch(chatAStart); // starts chat-A
     await sm.dispatch(chatBStart); // starts chat-B and preempts chat-A
     await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
     await new Promise((resolve) => setImmediate(resolve));
-    await sm.dispatch(chatAResume); // recovery redelivery resumes chat-A -> throws
+    await sm.dispatch(chatAStart); // recovery redelivery queues behind working chat-B
+    if (!chatBContext || !chatBMessage) throw new Error("chat-B context missing");
+    await chatBContext.finishTurn(chatBMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(handlerA.resume).toHaveBeenCalledTimes(1));
 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
     expect(chatAStates.at(-1)).toBe("errored");
@@ -345,6 +355,8 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
   it("allows the next inbound message for the same chat to start a fresh session after a resume failure", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let chatBContext: SessionContext | undefined;
+    let chatBMessage: SessionMessage | undefined;
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("resume blew up")),
@@ -352,22 +364,31 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
+    const handlerB = workingHandler("session-B");
+    handlerB.start = vi.fn(async (message, ctx) => {
+      chatBMessage = message;
+      chatBContext = ctx;
+      return "session-B";
+    });
     const handlerARecovery = workingHandler("session-A-fresh");
     const sm = makeSerializedManager({
-      handlerQueue: [handlerA, workingHandler("session-B"), handlerARecovery],
+      handlerQueue: [handlerA, handlerB, handlerARecovery],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       recoverChat,
     });
 
     const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
     const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
-    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
     const chatARecovery = mockEntry({ id: 4, chatId: "chat-A" });
     await sm.dispatch(chatAStart);
     await sm.dispatch(chatBStart);
     await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
     await new Promise((resolve) => setImmediate(resolve));
-    await sm.dispatch(chatAResume); // resume → errored
+    await sm.dispatch(chatAStart); // recovery redelivery queues behind working chat-B
+    if (!chatBContext || !chatBMessage) throw new Error("chat-B context missing");
+    await chatBContext.finishTurn(chatBMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(handlerA.resume).toHaveBeenCalledTimes(1)); // resume → errored
+    await vi.waitFor(() => expect(sm.getSessionStates().some((session) => session.chatId === "chat-A")).toBe(false));
 
     // A fresh inbound for chat-A should route as start (entry was dropped
     // on resume failure — the resume catch tears down the same way the

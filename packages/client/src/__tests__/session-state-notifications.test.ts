@@ -1,7 +1,7 @@
 import type { RuntimeState, SessionState } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -29,6 +29,34 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
+}
+
+function createCapturingFactory() {
+  const contexts = new Map<string, SessionContext>();
+  const messages = new Map<string, SessionMessage>();
+  const factory: HandlerFactory = () => {
+    return createMockHandler({
+      async start(message, ctx) {
+        contexts.set(message.chatId, ctx);
+        messages.set(message.chatId, message);
+        return `session-${message.chatId}`;
+      },
+      async resume(message, _sessionId, ctx) {
+        if (message) {
+          contexts.set(message.chatId, ctx);
+          messages.set(message.chatId, message);
+        }
+        return `session-${message?.chatId ?? "unknown"}`;
+      },
+    });
+  };
+  const finish = async (chatId: string) => {
+    const ctx = contexts.get(chatId);
+    const message = messages.get(chatId);
+    if (!ctx || !message) throw new Error(`${chatId} context missing`);
+    await ctx.finishTurn(message, { status: "success", terminal: true });
+  };
+  return { factory, finish };
 }
 
 function createSessionManager(opts: {
@@ -123,20 +151,17 @@ describe("SessionManager: state notifications", () => {
     // or conflict with the server-authoritative `evicted` terminal. The row
     // stays as last reported; local `evictedMappings` handles resume.
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
-    const handlers: AgentHandler[] = [];
+    const capturing = createCapturingFactory();
     const sm = createSessionManager({
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
-      handlerFactory: () => {
-        const h = createMockHandler();
-        handlers.push(h);
-        return h;
-      },
+      handlerFactory: capturing.factory,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await capturing.finish("chat-a");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
-    // Third chat triggers eviction of chat-a (LRU)
+    // Third chat triggers eviction of idle chat-a (LRU)
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" }));
 
     const chatAChanges = stateChanges.filter((c) => c.chatId === "chat-a");
@@ -149,24 +174,39 @@ describe("SessionManager: state notifications", () => {
   it("fires onStateChange('active') on resume after suspension", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let chatBContext: SessionContext | undefined;
+    let chatBMessage: SessionMessage | undefined;
+    const handlerA = createMockHandler({
+      start: vi.fn().mockResolvedValue("session-chat-a"),
+      resume: vi.fn().mockResolvedValue("session-chat-a"),
+    });
+    const handlerB = createMockHandler({
+      async start(message, ctx) {
+        chatBMessage = message;
+        chatBContext = ctx;
+        return "session-chat-b";
+      },
+    });
+    const handlers = [handlerA, handlerB];
     const sm = createSessionManager({
       concurrency: 1,
+      handlerFactory: () => handlers.shift() ?? createMockHandler(),
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       recoverChat,
     });
 
-    // chat-a starts (active), chat-b preempts chat-a (suspended → active)
+    // chat-a starts, chat-b preempts it, then the redelivered chat-a frame
+    // waits until chat-b finishes and yields the only active slot.
     const chatA = mockEntry({ id: 1, chatId: "chat-a" });
     const chatB = mockEntry({ id: 2, chatId: "chat-b" });
-    const chatAResume = mockEntry({ id: 3, chatId: "chat-a" });
-    await sm.dispatch(chatA);
     await sm.dispatch(chatA);
     await sm.dispatch(chatB);
-    await sm.dispatch(chatB);
-    // Resume now goes through chat-scoped recovery first; the second dispatch
-    // represents the redelivered frame that can enter the resume branch.
-    await sm.dispatch(chatAResume);
-    await sm.dispatch(chatAResume);
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-a"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await sm.dispatch(chatA);
+    if (!chatBContext || !chatBMessage) throw new Error("chat-b context missing");
+    await chatBContext.finishTurn(chatBMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(handlerA.resume).toHaveBeenCalledTimes(1));
 
     const chatAChanges = stateChanges.filter((c) => c.chatId === "chat-a");
     expect(chatAChanges).toEqual([
@@ -294,13 +334,16 @@ describe("SessionManager: getEvictedChatIds()", () => {
   // them as "suspended" on the wire so the server's
   // `agent_chat_sessions.state` isn't stuck on a pre-restart snapshot.
   it("returns evictedMappings keys (LRU-evicted chats included)", async () => {
+    const capturing = createCapturingFactory();
     const sm = createSessionManager({
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+      handlerFactory: capturing.factory,
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await capturing.finish("chat-a");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
-    // chat-c forces LRU eviction of the older chat (chat-a is suspended-then-evicted
+    // chat-c forces LRU eviction of the older idle chat (chat-a is evicted
     // out of `sessions` into `evictedMappings`).
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" }));
 
@@ -400,12 +443,15 @@ describe("SessionManager: terminate + reconcile", () => {
 
   it("applyStaleChatIds() cleans up both live sessions and evicted mappings", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const capturing = createCapturingFactory();
     const sm = createSessionManager({
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+      handlerFactory: capturing.factory,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await capturing.finish("chat-a");
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" })); // chat-a → evictedMappings
 
