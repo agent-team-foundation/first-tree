@@ -1,9 +1,9 @@
 ---
 name: first-tree-github
-version: 0.1.0
+version: 0.1.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: "Follow / unfollow a GitHub entity (PR, Issue, Discussion, Commit) so its webhook events route into the current chat. Use IMMEDIATELY after you create a PR or issue through any path (`gh pr create`, curl, GitHub MCP, the web UI) — creation never follows for you; when the user asks to watch / track / follow / 关注 / 盯着 a PR or issue; when your current task is blocked on an upstream entity's progress; or when the task no longer concerns a followed entity and its events should stop (unfollow / 取消关注 / stop watching)."
+description: "Follow / unfollow a GitHub entity (PR, Issue, Discussion, Commit) so its webhook events route into the current chat. Following your own just-created PR or issue is the DEFAULT: use IMMEDIATELY after you create one through any path (`gh pr create`, curl, GitHub MCP, the web UI) — creation never follows for you. Also use when the user asks to watch / track / follow / 关注 / 盯着 a PR or issue; when your current task is blocked on an upstream entity's progress; or to unfollow when the user explicitly asks to stop tracking (unfollow / 取消关注 / stop watching) or the task no longer concerns a followed entity."
 ---
 
 # First Tree — Follow a GitHub Entity
@@ -55,9 +55,12 @@ is for terminal / cross-chat use.
 
 **Follow when — the task acquires a dependency on the entity:**
 
-1. You just created a PR / Issue — through ANY path. Follow it in the
-   same breath as creation; the `opened` webhook is already racing you
-   (see the `409` row below for when it wins).
+1. You just created a PR / Issue — through ANY path. **This is the
+   default, not a judgment call:** follow it in the same breath as
+   creation; the `opened` webhook is already racing you (see the `409`
+   row below for when it wins). The only reason to skip is that the
+   entity is clearly unrelated to this chat's task ("Do NOT follow"
+   rule 3 below).
 2. The user asks you to track / watch an entity.
 3. Your current task is blocked on an upstream entity and you need its
    progress signals (review submitted, CI finished, merged).

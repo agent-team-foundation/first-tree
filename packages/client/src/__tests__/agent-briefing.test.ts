@@ -77,6 +77,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Worktrees",
       "## Communication",
       "## Workspace Collaboration",
+      "## GitHub Entity Attention",
       "## Asking Humans",
       "## Chat Topic & Description",
       "## CLI Overview",
@@ -610,6 +611,36 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("at the\nbottom of this briefing");
   });
 
+  it("emits the GitHub Entity Attention block with the follow-after-create default inline (not skill-gated)", () => {
+    // Why inline: see the githubAttentionBlock comment in agent-briefing.ts.
+    const briefing = buildAgentBriefing(makeOpts()); // tree-less default
+    expect(briefing).toContain("## GitHub Entity Attention");
+    // Default posture: follow what you create, immediately.
+    expect(briefing).toContain("**Default: follow what you create.**");
+    expect(briefing).toContain("first-tree github follow <url>");
+    // The single exception: clearly unrelated to the chat's task.
+    expect(briefing).toMatch(/clearly unrelated to this\s+chat's task/);
+    // Unfollow is human-explicit-stop or closed attention span.
+    expect(briefing).toContain("first-tree github unfollow <entity>");
+    expect(briefing).toMatch(/human explicitly asks to stop tracking/);
+    // Creation never auto-follows — the extractor is gone (#979).
+    expect(briefing).toMatch(/there\s+is no auto-binding/);
+  });
+
+  it("gates the GitHub Entity Attention full-guide pointer: skill for tree-bound, --help for tree-less", () => {
+    // Tree-less agents have no First Tree skill payloads on disk
+    // (`installFirstTreeIntegration` is tree-gated), so the block must not
+    // point them at `first-tree-github` — same discipline as the gated
+    // # Required Reading and First Tree Family map.
+    const treeless = buildAgentBriefing(makeOpts());
+    expect(treeless).not.toContain("`first-tree-github` skill");
+    expect(treeless).toContain("first-tree github follow --help");
+
+    const treeBound = buildAgentBriefing(makeOpts({ contextTreePath: "/var/lib/context-trees/example" }));
+    expect(treeBound).toContain("`first-tree-github` skill");
+    expect(treeBound).not.toContain("github follow --help");
+  });
+
   it("uses the channel-resolved binary name in the surviving chat-send invariant", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     try {
@@ -642,6 +673,7 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     expect(overview).toContain("first-tree chat …");
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
+    expect(overview).toContain("first-tree github …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
 
