@@ -359,4 +359,43 @@ describe("CommandPalette", () => {
 
     await act(async () => root.unmount());
   });
+
+  it("renders injected demo data without fetching live chats", async () => {
+    orgAgentsMock.value = { items: [], nextCursor: null };
+
+    const { CommandPalette } = await import("../command-palette.js");
+    const { root } = await renderDom(
+      <CommandPalette
+        open
+        onOpenChange={vi.fn()}
+        demoData={{
+          chats: [
+            chatRow({ chatId: "demo-new", title: "Demo newest", lastMessageAt: "2026-05-28T12:00:00.000Z" }),
+            chatRow({
+              chatId: "demo-archived",
+              title: "Archived audit trail",
+              engagementStatus: "archived",
+              lastMessageAt: "2026-05-27T12:00:00.000Z",
+            }),
+          ],
+          agents: [
+            agent({ uuid: "demo-agent-a", name: "maya", displayName: "Maya Chen" }),
+            agent({ uuid: "demo-agent-b", name: "ops", displayName: "Ops Reviewer" }),
+          ],
+        }}
+      />,
+    );
+
+    await waitForText(document.body, "Demo newest");
+
+    expect(meChatMocks.listMeChats).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Recent");
+    expect(document.body.textContent).toContain("Archived audit trail");
+    expect(document.body.textContent).toContain("Archived");
+    expect(document.body.textContent).toContain("Teammates");
+    expect(document.body.textContent).toContain("Maya Chen");
+    expect(document.body.textContent).toContain("Ops Reviewer");
+
+    await act(async () => root.unmount());
+  });
 });

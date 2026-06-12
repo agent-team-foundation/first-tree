@@ -96,6 +96,12 @@ const AgentDetailPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/agent-detail-preview.js").then((module) => ({ default: module.AgentDetailPreviewPage })))
   : null;
 
+const CommandPalettePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/command-palette-preview.js").then((module) => ({ default: module.CommandPalettePreviewPage })),
+    )
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -174,6 +180,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <RequestDockPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {CommandPalettePreviewPage ? (
+                <Route
+                  path="/preview/command-palette"
+                  element={
+                    <Suspense fallback={null}>
+                      <CommandPalettePreviewPage />
                     </Suspense>
                   }
                 />
