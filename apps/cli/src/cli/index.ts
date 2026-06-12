@@ -15,6 +15,7 @@ import { registerChatCommands } from "../commands/chat/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { registerDoctorCommand } from "../commands/doctor.js";
+import { registerGithubCommands } from "../commands/github/index.js";
 import { registerLoginCommand } from "../commands/login.js";
 import { registerLogoutCommand } from "../commands/logout.js";
 import { registerOrgCommands } from "../commands/org/index.js";
@@ -70,6 +71,7 @@ registerUpgradeCommand(program);
 
 registerAgentCommands(program);
 registerChatCommands(program);
+registerGithubCommands(program);
 registerOrgCommands(program);
 registerDaemonCommands(program);
 registerConfigCommands(program);

@@ -321,6 +321,40 @@ environment. The recipient must be a participant of that chat; if not,
 
 ---
 
+## github
+
+GitHub entity attention for the current chat. `follow` wires an entity's
+webhook event stream into the chat (one routing line, chat-scoped);
+`unfollow` declares the task's attention over and severs every line wired
+into the chat for that entity, however it was created. Creating a PR or
+issue never follows it automatically — declare the dependency explicitly,
+immediately after creation. Decision guidance (when to follow / not
+follow / unfollow, 409 handling) lives in the `first-tree-github` skill.
+
+```
+first-tree github
+├── follow <entity> [--chat <chatId>] [--rebind]    # route the entity's events into the chat
+├── unfollow <entity> [--chat <chatId>]             # sever all of the chat's lines for the entity
+└── following [--chat <chatId>] [--json]            # list entities wired into the chat
+```
+
+```bash
+# Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
+first-tree github follow https://github.com/acme/api/pull/42
+first-tree github follow acme/api#42        # issue vs PR resolved automatically
+first-tree github follow acme/api@3f2a91c   # commit
+first-tree github following
+first-tree github unfollow acme/api#42
+```
+
+`<entity>` accepts a full GitHub URL, `owner/repo#N`, or `owner/repo@<sha>`.
+A `409` means the same (human, delegate) line already lives in another chat
+— `--rebind` MOVES it here (a line is never duplicated). `unfollow` is
+idempotent: `removed: 0` is success, not an error. Requires the org's
+GitHub App installation to cover the repo (`422` otherwise).
+
+---
+
 ## org
 
 ```

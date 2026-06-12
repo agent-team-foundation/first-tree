@@ -72,6 +72,14 @@ const ChatDescriptionPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const RequestDockPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/request-dock-preview.js").then((module) => ({
+        default: module.RequestDockPreviewPage,
+      })),
+    )
+  : null;
+
 const OnboardingPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
   : null;
@@ -156,6 +164,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatDescriptionPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {RequestDockPreviewPage ? (
+                <Route
+                  path="/preview/request-dock"
+                  element={
+                    <Suspense fallback={null}>
+                      <RequestDockPreviewPage />
                     </Suspense>
                   }
                 />

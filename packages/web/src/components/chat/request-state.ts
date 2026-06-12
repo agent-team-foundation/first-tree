@@ -1,4 +1,4 @@
-import type { Message, OpenQuestionRequest, RequestResolution } from "@first-tree/shared";
+import type { Message, OpenQuestionItem, OpenQuestionRequest, RequestResolution } from "@first-tree/shared";
 import { MENTION_REGEX, openQuestionRequestSchema, requestResolutionSchema } from "@first-tree/shared";
 
 /**
@@ -127,6 +127,31 @@ export function defaultExpanded(state: RequestState, related: boolean): boolean 
 }
 
 /**
+ * Core scan shared by `findThreadableRequestId` and `findDockableRequest`:
+ * the most recent OPEN or DISCUSSING `format="request"` directed at the
+ * viewer, optionally restricted to requests raised by `fromSenders`. One
+ * definition of "the live question" keeps the composer's thread-on-reply
+ * behavior and the dock's pin choice agreeing by construction.
+ */
+function findLiveRequest(
+  thread: readonly Message[],
+  viewerAgentId: string | null,
+  fromSenders?: ReadonlySet<string>,
+): Message | null {
+  if (!viewerAgentId) return null;
+  // `thread` is oldest-first; walk from the newest so the latest live question wins.
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i];
+    if (!m || m.format !== "request") continue;
+    if (fromSenders && !fromSenders.has(m.senderId)) continue;
+    if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
+    const st = deriveRequestState(m, thread);
+    if (st === "open" || st === "discussing") return m;
+  }
+  return null;
+}
+
+/**
  * When `viewer` is about to send a message mentioning `mentionedIds`, find the
  * most recent OPEN or DISCUSSING request directed at them and raised by one of
  * the mentioned agents — so a plain composer reply that @-mentions the asking
@@ -141,17 +166,74 @@ export function findThreadableRequestId(
   viewerAgentId: string | null,
   mentionedIds: readonly string[],
 ): string | null {
-  if (!viewerAgentId || mentionedIds.length === 0) return null;
-  const mentioned = new Set(mentionedIds);
-  // `thread` is oldest-first; walk from the newest so the latest live question wins.
-  for (let i = thread.length - 1; i >= 0; i--) {
-    const m = thread[i];
-    if (!m || m.format !== "request" || !mentioned.has(m.senderId)) continue;
-    if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
-    const st = deriveRequestState(m, thread);
-    if (st === "open" || st === "discussing") return m.id;
+  if (mentionedIds.length === 0) return null;
+  return findLiveRequest(thread, viewerAgentId, new Set(mentionedIds))?.id ?? null;
+}
+
+/**
+ * The request the composer dock pins: the most recent OPEN or DISCUSSING
+ * `format="request"` directed at the viewer. The dock owns answering for
+ * exactly this one (the timeline card suppresses its inline answer block via
+ * `suppressAnswerBlock`); any older live request keeps its inline block as
+ * the fallback. Returns `null` when nothing needs the viewer's answer.
+ */
+export function findDockableRequest(thread: readonly Message[], viewerAgentId: string | null): Message | null {
+  return findLiveRequest(thread, viewerAgentId);
+}
+
+/**
+ * The composer text a clean option selection produces. `selections` is keyed
+ * by PROMPT (the same shape `recoverAnswerSelections` returns, so draft ⇄
+ * selection round-trips losslessly). A single single-select question fills
+ * just the option text (what you click is exactly what you send); several
+ * questions fill one canonical `"<prompt> → <answer>"` line per answered
+ * single-select question so the sent content parses back via
+ * `parseAnswerSelections` for the resolved card's echo. Free-text questions
+ * never contribute — they are answered by typing, which goes through the
+ * agent-judgment path.
+ */
+export function buildAnswerDraft(payload: OpenQuestionRequest, selections: Record<string, string>): string {
+  const qs = payload.questions;
+  const only = qs.length === 1 ? qs[0] : undefined;
+  if (only && only.kind === "single") return selections[only.prompt] ?? "";
+  return qs
+    .filter((q) => q.kind === "single" && selections[q.prompt])
+    .map((q) => `${q.prompt} → ${selections[q.prompt]}`)
+    .join("\n");
+}
+
+/**
+ * Every required question is answered by an option selection (`selections`
+ * keyed by prompt). A required free-text question can never satisfy this — a
+ * typed answer is judged by the asking agent, not direct-resolved by the
+ * composer.
+ */
+export function allRequiredSelected(payload: OpenQuestionRequest, selections: Record<string, string>): boolean {
+  return payload.questions.every((q) => !q.required || (q.kind === "single" && Boolean(selections[q.prompt])));
+}
+
+/**
+ * Recover the chosen answers from a resolving message's content, keyed by
+ * prompt. Canonical `"<prompt> → <answer>"` lines parse first; the fallback
+ * accepts the bare option text the composer dock sends for a one-question
+ * request (the box shows exactly the clicked option, so that is what lands in
+ * history). Returns `{}` when nothing matches — callers render "answered".
+ */
+export function recoverAnswerSelections(
+  replyContent: unknown,
+  questions: readonly OpenQuestionItem[],
+): Record<string, string> {
+  const parsed = parseAnswerSelections(
+    replyContent,
+    questions.map((q) => q.prompt),
+  );
+  if (Object.keys(parsed).length > 0) return parsed;
+  const only = questions.length === 1 ? questions[0] : undefined;
+  if (only && only.kind === "single" && typeof replyContent === "string") {
+    const text = replyContent.trim();
+    if (only.options.includes(text)) return { [only.prompt]: text };
   }
-  return null;
+  return {};
 }
 
 /**
@@ -163,14 +245,23 @@ export function findThreadableRequestId(
  */
 export function parseAnswerSelections(replyContent: unknown, prompts: readonly string[]): Record<string, string> {
   if (typeof replyContent !== "string") return {};
-  const known = new Set(prompts);
+  // Match each line against the known prompts as PREFIXES (longest first),
+  // not by splitting on the first " → " — a prompt that itself contains
+  // " → " (e.g. "Migrate v1 → v2 now?") would otherwise break the
+  // buildAnswerDraft round-trip. The separator tolerates extra whitespace
+  // around the arrow, matching historical hand-formatted replies.
+  const byLength = [...prompts].sort((a, b) => b.length - a.length);
   const out: Record<string, string> = {};
-  for (const line of replyContent.split("\n")) {
-    const sep = line.indexOf(" → ");
-    if (sep < 0) continue;
-    const prompt = line.slice(0, sep).trim();
-    const answer = line.slice(sep + 3).trim();
-    if (known.has(prompt)) out[prompt] = answer;
+  for (const rawLine of replyContent.split("\n")) {
+    const line = rawLine.trim();
+    for (const prompt of byLength) {
+      if (!line.startsWith(prompt)) continue;
+      const sep = /^\s+→\s+(.*)$/.exec(line.slice(prompt.length));
+      if (sep?.[1] !== undefined) {
+        out[prompt] = sep[1].trim();
+        break;
+      }
+    }
   }
   return out;
 }

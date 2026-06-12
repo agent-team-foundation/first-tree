@@ -1,15 +1,19 @@
 import type { Message } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
+  allRequiredSelected,
+  buildAnswerDraft,
   contentStartsWithMention,
   defaultExpanded,
   deriveRequestState,
+  findDockableRequest,
   findThreadableRequestId,
   isRelatedViewer,
   parseAnswerSelections,
   readCloseReason,
   readRequestPayload,
   readResolution,
+  recoverAnswerSelections,
 } from "../request-state.js";
 
 const ASKER = "agent-asker";
@@ -179,6 +183,17 @@ describe("parseAnswerSelections", () => {
   it("ignores lines whose prompt is unknown", () => {
     expect(parseAnswerSelections("Other? → x", ["Ship?"])).toEqual({});
   });
+  it("handles a prompt that itself contains ' → ' — prefix matching, not first-separator split", () => {
+    const prompt = "Migrate v1 → v2 now?";
+    expect(parseAnswerSelections(`${prompt} → yes`, [prompt])).toEqual({ [prompt]: "yes" });
+  });
+
+  it("prefers the longest matching prompt when one prompt prefixes another", () => {
+    const short = "Deploy?";
+    const long = "Deploy? → to prod too?";
+    expect(parseAnswerSelections(`${long} → yes`, [short, long])).toEqual({ [long]: "yes" });
+  });
+
   it("returns {} for free-form (non-matching) content", () => {
     expect(parseAnswerSelections("let's just do 5%", ["Ship?"])).toEqual({});
     expect(parseAnswerSelections(42, ["Ship?"])).toEqual({});
@@ -211,5 +226,120 @@ describe("contentStartsWithMention", () => {
   it("is false for non-string content or empty names", () => {
     expect(contentStartsWithMention(42, ["gandy"])).toBe(false);
     expect(contentStartsWithMention("@gandy hi", [])).toBe(false);
+  });
+});
+
+describe("findDockableRequest", () => {
+  it("returns the newest live request directed at the viewer", () => {
+    const older = msg({
+      id: "req-old",
+      format: "request",
+      metadata: { mentions: [TARGET], request: { questions: [{ id: "q1", prompt: "Old?", options: ["a"] }] } },
+    });
+    const thread = [older, request];
+    expect(findDockableRequest(thread, TARGET)?.id).toBe("req");
+  });
+
+  it("skips resolved/closed requests and falls back to an older live one", () => {
+    const resolvedNewer = msg({
+      id: "req-new",
+      format: "request",
+      createdAt: "2026-06-02T01:00:00.000Z",
+      metadata: { mentions: [TARGET], request: { questions: [{ id: "q1", prompt: "New?", options: ["a"] }] } },
+    });
+    const answer = msg({
+      id: "ans",
+      senderId: TARGET,
+      inReplyTo: "req-new",
+      content: "a",
+      metadata: { resolves: { request: "req-new", kind: "answered" } },
+    });
+    expect(findDockableRequest([request, resolvedNewer, answer], TARGET)?.id).toBe("req");
+  });
+
+  it("still docks a DISCUSSING request — threading does not unpin it", () => {
+    const discuss = msg({ id: "d1", senderId: TARGET, inReplyTo: "req", content: "why?" });
+    expect(findDockableRequest([request, discuss], TARGET)?.id).toBe("req");
+  });
+
+  it("returns null for non-target viewers and signed-out viewers", () => {
+    expect(findDockableRequest([request], OTHER)).toBeNull();
+    expect(findDockableRequest([request], null)).toBeNull();
+  });
+});
+
+describe("buildAnswerDraft / allRequiredSelected", () => {
+  const single = {
+    subject: "Deploy",
+    questions: [{ id: "q1", prompt: "Ship?", kind: "single" as const, options: ["yes", "no"], required: true }],
+    allowExtra: false,
+  };
+  const multi = {
+    subject: "Release",
+    questions: [
+      { id: "q1", prompt: "Strategy?", kind: "single" as const, options: ["blue-green", "rolling"], required: true },
+      { id: "q2", prompt: "Window?", kind: "single" as const, options: ["friday", "monday"], required: true },
+    ],
+    allowExtra: false,
+  };
+  const withFree = {
+    subject: "Risk",
+    questions: [{ id: "q1", prompt: "Concerns?", kind: "free" as const, options: [], required: true }],
+    allowExtra: false,
+  };
+
+  it("single question fills just the option text — what you click is what you send", () => {
+    expect(buildAnswerDraft(single, { "Ship?": "yes" })).toBe("yes");
+    expect(buildAnswerDraft(single, {})).toBe("");
+  });
+
+  it("multi question fills canonical prompt → answer lines that parseAnswerSelections reads back", () => {
+    const draft = buildAnswerDraft(multi, { "Strategy?": "blue-green", "Window?": "friday" });
+    expect(draft).toBe("Strategy? → blue-green\nWindow? → friday");
+    expect(parseAnswerSelections(draft, ["Strategy?", "Window?"])).toEqual({
+      "Strategy?": "blue-green",
+      "Window?": "friday",
+    });
+  });
+
+  it("round-trips through recoverAnswerSelections — the derived-selection model's invariant", () => {
+    // chat-view derives selections FROM the draft; a clean draft must
+    // recover the same selections it was built from.
+    const sel = { "Strategy?": "blue-green", "Window?": "friday" };
+    const draft = buildAnswerDraft(multi, sel);
+    expect(recoverAnswerSelections(draft, multi.questions)).toEqual(sel);
+    expect(buildAnswerDraft(multi, recoverAnswerSelections(draft, multi.questions))).toBe(draft);
+  });
+
+  it("allRequiredSelected requires every required single answered; free-text never satisfies it", () => {
+    expect(allRequiredSelected(multi, { "Strategy?": "blue-green" })).toBe(false);
+    expect(allRequiredSelected(multi, { "Strategy?": "blue-green", "Window?": "friday" })).toBe(true);
+    // A required free-text question always routes through agent judgment.
+    expect(allRequiredSelected(withFree, {})).toBe(false);
+  });
+});
+
+describe("recoverAnswerSelections", () => {
+  const questions = [{ id: "q1", prompt: "Ship?", kind: "single" as const, options: ["yes", "no"], required: true }];
+
+  it("parses canonical prompt → answer lines first", () => {
+    expect(recoverAnswerSelections("Ship? → yes", questions)).toEqual({ "Ship?": "yes" });
+  });
+
+  it("accepts the bare option text the dock sends for a one-question request", () => {
+    expect(recoverAnswerSelections("yes", questions)).toEqual({ "Ship?": "yes" });
+  });
+
+  it("returns {} for free-form replies that match nothing", () => {
+    expect(recoverAnswerSelections("let me think about it", questions)).toEqual({});
+    expect(recoverAnswerSelections(42, questions)).toEqual({});
+  });
+
+  it("does not bare-option-match multi-question requests — ambiguous", () => {
+    const multiQ = [
+      { id: "q1", prompt: "A?", kind: "single" as const, options: ["x"], required: true },
+      { id: "q2", prompt: "B?", kind: "single" as const, options: ["x"], required: true },
+    ];
+    expect(recoverAnswerSelections("x", multiQ)).toEqual({});
   });
 });

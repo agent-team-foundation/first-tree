@@ -7,6 +7,7 @@ import {
   githubEntityBoundViaSchema,
 } from "@first-tree/shared";
 import { GITHUB_API_BASE } from "./github-api-base.js";
+import { canonicalizeGithubEntityKey } from "./github-entity-key.js";
 
 /**
  * Per-entity GitHub fetch timeout. GitHub's `api.github.com` is typically
@@ -29,6 +30,7 @@ type ParsedEntityKey =
   | null;
 
 const NUMERIC_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)#(\d+)$/;
+const LEGACY_DISCUSSION_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)#discussion-(\d+)$/;
 const SHA_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)@([0-9a-f]{6,40})$/;
 
 function parseEntityKey(entityType: GithubEntityType, entityKey: string): ParsedEntityKey {
@@ -38,6 +40,14 @@ function parseEntityKey(entityType: GithubEntityType, entityKey: string): Parsed
     const [, owner, repo, sha] = m;
     if (!owner || !repo || !sha) return null;
     return { kind: "sha", owner, repo, sha };
+  }
+  if (entityType === "discussion") {
+    const legacy = LEGACY_DISCUSSION_ENTITY_KEY.exec(entityKey);
+    if (legacy) {
+      const [, owner, repo, numberStr] = legacy;
+      if (!owner || !repo || !numberStr) return null;
+      return { kind: "numeric", owner, repo, number: Number(numberStr) };
+    }
   }
   const m = NUMERIC_ENTITY_KEY.exec(entityKey);
   if (!m) return null;
@@ -175,6 +185,7 @@ export async function resolveChatGithubEntity(
   // a touch on `shared/`, never this file.
   if (!GITHUB_ENTITY_TYPE_SET.has(row.entityType)) return null;
   const entityType: GithubEntityType = row.entityType as GithubEntityType; // safe: set membership just narrowed it
+  const entityKey = canonicalizeGithubEntityKey(entityType, row.entityKey);
   const boundViaParsed = githubEntityBoundViaSchema.safeParse(row.boundVia);
   if (!boundViaParsed.success) return null;
   const boundVia: GithubEntityBoundVia = boundViaParsed.data;
@@ -183,7 +194,7 @@ export async function resolveChatGithubEntity(
   const live = token ? await fetchEntityLiveFields(entityType, parsed, token, fetcher) : { title: null, state: null };
   return {
     entityType,
-    entityKey: row.entityKey,
+    entityKey,
     boundVia,
     htmlUrl: buildHtmlUrl(entityType, parsed),
     title: live.title,

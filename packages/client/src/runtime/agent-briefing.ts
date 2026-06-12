@@ -742,7 +742,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
-| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
+| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |
+| \`first-tree-github\`  | follow / unfollow a GitHub entity's event stream for the current chat — right after creating a PR/issue (creation never auto-follows), when tracking an upstream dependency, or when the task no longer concerns a followed entity |`;
 }
 
 /**
@@ -760,4 +761,5 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",
+  "first-tree-github",
 ] as const;

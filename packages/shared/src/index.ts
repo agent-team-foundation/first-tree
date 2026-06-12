@@ -175,10 +175,21 @@ export {
   type ChatGithubEntityListResponse,
   chatGithubEntityListResponseSchema,
   chatGithubEntitySchema,
+  DECLARED_BOUND_VIA,
+  type DeclaredBoundVia,
+  type FollowGithubEntityConflict,
+  type FollowGithubEntityRequest,
+  type FollowGithubEntityResponse,
+  followGithubEntityConflictSchema,
+  followGithubEntityRequestSchema,
+  followGithubEntityResponseSchema,
   type GithubEntityBoundVia,
   type GithubEntityLiveState,
   githubEntityBoundViaSchema,
   githubEntityLiveStateSchema,
+  isDeclaredBoundVia,
+  type UnfollowGithubEntityResponse,
+  unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";
 export {
   CHAT_SOURCES,
@@ -764,4 +775,5 @@ export {
   type ShellIoPathArg,
   type ShellIoPathKindHint,
   type ShellIoUnsupportedReason,
+  stripShellCommandDisplayWrapper,
 } from "./shell-command-io.js";

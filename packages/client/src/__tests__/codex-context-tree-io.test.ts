@@ -71,6 +71,55 @@ describe("Codex Context Tree file refs", () => {
     ]);
   });
 
+  // Codex CLI does not surface raw `sed` / `cat` — every command_execution
+  // lands as `/bin/<login-shell> -lc '<inner>'` (zsh on macOS, bash on Linux).
+  // This is the real wire shape pulled from a session_events row during the
+  // fix investigation. Without the shared `classifyShellCommandIo` wrapper
+  // unwrap, the outer `zsh` / `bash` falls into MUTATING_OR_AMBIGUOUS_TOOLS
+  // and the client never attaches file refs, so the Context tab dashboard
+  // records nothing for codex agents. Lock the wrapped form down end-to-end.
+  it("emits shell read refs for Codex's /bin/zsh -lc 'sed ...' wrapper (macOS form)", () => {
+    const refs = toolFileRefsFromShellCommand({
+      command: "/bin/zsh -lc \"sed -n '1,7p' /home/op/context-tree/NODE.md\"",
+      cwd: "/home/op/source",
+      contextTreePath: "/home/op/context-tree",
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    expect(refs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: "/home/op/context-tree/NODE.md",
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
+  it("emits shell read refs for Codex's /bin/bash -lc 'cat ...' wrapper (Linux form)", () => {
+    const refs = toolFileRefsFromShellCommand({
+      command: "/bin/bash -lc 'cat /home/op/context-tree/NODE.md'",
+      cwd: "/home/op/source",
+      contextTreePath: "/home/op/context-tree",
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    expect(refs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: "/home/op/context-tree/NODE.md",
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
   it("rejects Codex shell read candidates outside the Context Tree checkout or using write syntax", () => {
     const base = {
       cwd: "/home/op/source",
