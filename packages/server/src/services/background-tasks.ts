@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
+import * as authService from "./auth.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
@@ -17,6 +18,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let consumedTokenSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -85,6 +87,22 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
+      // Consumed-token ledger GC — rows are unreachable once the underlying
+      // token has expired (verification rejects expired tokens before the
+      // ledger is consulted), so this only frees dead weight. Connect tokens
+      // live minutes; a 10-minute cadence keeps the table within a few
+      // hundred rows without adding load.
+      consumedTokenSweepTimer = setInterval(async () => {
+        try {
+          const freed = await authService.sweepExpiredConsumedTokenIds(app.db);
+          if (freed > 0) {
+            log.debug({ freed }, "swept expired consumed token ids");
+          }
+        } catch (err) {
+          log.error({ err }, "failed to sweep consumed token ids");
+        }
+      }, 600_000);
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -103,6 +121,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (consumedTokenSweepTimer) {
+        clearInterval(consumedTokenSweepTimer);
+        consumedTokenSweepTimer = null;
       }
     },
   };

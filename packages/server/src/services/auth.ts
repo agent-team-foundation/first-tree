@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
+import { consumedTokenIds } from "../db/schema/consumed-token-ids.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
@@ -20,9 +21,12 @@ export type AuthTokenExpiries = {
   connectTokenExpiry: string;
 };
 
-/** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
-const consumedConnectJtis = new Map<string, number>();
-const CONNECT_JTI_TTL_MS = 600_000;
+/**
+ * Fallback retention for a consumed-JTI row when the token carries no `exp`
+ * claim (defensive only — `generateConnectToken` always sets one). Matches
+ * the longest configurable connect-token expiry order of magnitude.
+ */
+const CONNECT_JTI_FALLBACK_TTL_MS = 600_000;
 
 /**
  * JWT payload shape. Carries ONLY the user identity — no org / member /
@@ -257,13 +261,24 @@ export async function exchangeConnectToken(
 
   const jti = (payload as unknown as Record<string, unknown>).jti as string | undefined;
   if (jti) {
-    if (consumedConnectJtis.has(jti)) {
+    // Single-use enforcement, atomic across instances: the request that
+    // inserts the ledger row wins; a concurrent or later request carrying
+    // the same JTI loses the ON CONFLICT and is rejected. PostgreSQL
+    // serializes the race — no check-then-set window. Consumption is
+    // deliberately recorded BEFORE the user/membership checks below (same
+    // order as the previous in-process version): a token that reaches this
+    // point is burned even if the exchange then fails, so a failed attempt
+    // cannot be retried into a replay.
+    const exp = (payload as unknown as Record<string, unknown>).exp;
+    const expiresAt =
+      typeof exp === "number" ? new Date(exp * 1000) : new Date(Date.now() + CONNECT_JTI_FALLBACK_TTL_MS);
+    const inserted = await db
+      .insert(consumedTokenIds)
+      .values({ jti, expiresAt })
+      .onConflictDoNothing()
+      .returning({ jti: consumedTokenIds.jti });
+    if (inserted.length === 0) {
       throw new UnauthorizedError("Connect token has already been used");
-    }
-    consumedConnectJtis.set(jti, Date.now());
-    const cutoff = Date.now() - CONNECT_JTI_TTL_MS;
-    for (const [k, ts] of consumedConnectJtis) {
-      if (ts < cutoff) consumedConnectJtis.delete(k);
     }
   }
 
@@ -290,4 +305,18 @@ export async function exchangeConnectToken(
   }
 
   return signTokensForUser(jwtSecretKey, user.id, expiries);
+}
+
+/**
+ * Delete consumed-token ledger rows whose underlying token has expired —
+ * an expired token fails `jwtVerify` before the ledger is consulted, so the
+ * row no longer participates in any decision. Called from the background
+ * sweeper (services/background-tasks.ts). Returns the number of rows freed.
+ */
+export async function sweepExpiredConsumedTokenIds(db: Database): Promise<number> {
+  const deleted = await db
+    .delete(consumedTokenIds)
+    .where(lt(consumedTokenIds.expiresAt, new Date()))
+    .returning({ jti: consumedTokenIds.jti });
+  return deleted.length;
 }
