@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("TeamSetupModal", () => {
-  it("creates a team with a slugified name, selects it, navigates home, and closes", async () => {
+  it("creates a team with a slugified name, selects it, enters onboarding, and closes", async () => {
     const onClose = vi.fn();
     clientMocks.post.mockResolvedValue({
       organization: { id: "org-new", name: "acme-robotics", displayName: "ACME Robotics!!!", role: "admin" },
@@ -108,7 +108,7 @@ describe("TeamSetupModal", () => {
     });
     expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-new");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(routerMocks.navigate).toHaveBeenCalledWith("/", { replace: true });
+    expect(routerMocks.navigate).toHaveBeenCalledWith("/onboarding", { replace: true });
 
     await act(async () => root.unmount());
   });
@@ -127,7 +127,7 @@ describe("TeamSetupModal", () => {
     expect(clientMocks.post).toHaveBeenCalledWith("/me/organizations/join", { token: "token-123" });
     expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-joined");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(routerMocks.navigate).toHaveBeenCalledWith("/", { replace: true });
+    expect(routerMocks.navigate).toHaveBeenCalledWith("/onboarding", { replace: true });
 
     await act(async () => root.unmount());
   });
