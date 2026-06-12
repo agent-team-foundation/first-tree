@@ -27,7 +27,13 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
   return (
     <div
       className={cn(
-        "prose prose-sm max-w-none leading-[1.55] text-[color:inherit]",
+        // `break-words` lets unbreakable runs (bare URLs with embedded
+        // tokens, long file paths) wrap instead of widening the chat
+        // column — an overflowing message otherwise puts a horizontal
+        // scrollbar on the whole timeline, because the scroll container's
+        // `overflow-y: auto` makes the browser compute `overflow-x` as
+        // `auto` too.
+        "prose prose-sm max-w-none break-words leading-[1.55] text-[color:inherit]",
         "prose-headings:text-current prose-p:text-current prose-li:text-current prose-strong:text-current prose-em:text-current prose-blockquote:text-current",
         "prose-p:my-2 prose-headings:mt-3 prose-headings:mb-1.5 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-blockquote:my-2 prose-hr:my-3",
         "prose-a:text-[color:var(--primary)] prose-a:no-underline hover:prose-a:underline",
