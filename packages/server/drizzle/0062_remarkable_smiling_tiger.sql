@@ -1,0 +1,1 @@
+ALTER TABLE "agent_presence" ADD COLUMN "workspace_health" jsonb;
