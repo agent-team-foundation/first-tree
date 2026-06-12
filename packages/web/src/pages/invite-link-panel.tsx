@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, withOrgAt } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
+import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 
 /** Render the expiry timestamp as "in N days · 2026/5/6" — both relative
  *  and absolute, so the admin doesn't have to do arithmetic. */
@@ -33,7 +34,8 @@ export function InviteLinkPanel() {
   const [invite, setInvite] = useState<InvitationView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { status: copyStatus, copy } = useCopyFeedback();
+  const copied = copyStatus === "copied";
 
   useEffect(() => {
     if (!organizationId) return;
@@ -86,15 +88,7 @@ export function InviteLinkPanel() {
               className="flex-1 rounded-[var(--radius-panel)] border bg-muted px-2 py-1 text-label font-mono"
               value={invite.inviteUrl}
             />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                void navigator.clipboard.writeText(invite.inviteUrl);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
+            <Button size="sm" variant="outline" onClick={() => void copy(invite.inviteUrl)}>
               {copied ? "Copied!" : "Copy"}
             </Button>
             {isAdmin && (

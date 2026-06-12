@@ -53,14 +53,11 @@ export function AgentHovercard({
       placement={placement}
       ariaLabel={`${name} — view details`}
       triggerClassName={triggerClassName}
+      // Card chrome (background / border / shadow / padding) comes from the
+      // HoverCard primitive; only the width is this consumer's call.
       contentStyle={{
         width: "var(--sp-70)",
         maxWidth: "calc(100vw - var(--sp-4))",
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        boxShadow: "var(--shadow-md)",
-        padding: "var(--sp-3)",
       }}
       content={({ close }) => <AgentHovercardBody agentId={agentId} chatId={chatId} onAction={close} />}
     >

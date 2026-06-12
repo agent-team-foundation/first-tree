@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
+import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { Button } from "./ui/button.js";
 
 export type ConnectPhase = "loading" | "waiting" | "success" | "error";
@@ -31,8 +32,6 @@ type ConnectCommandPanelProps = {
   copyButtonPlacement?: "right" | "bottom";
 };
 
-const COPY_FEEDBACK_MS = 1_500;
-
 /**
  * Shared panel for "run this CLI command on the machine you want to pair"
  * surfaces. Used by the onboarding flow's connect step and the
@@ -59,13 +58,14 @@ export function ConnectCommandPanel({
   caption = "Single-use · regenerates the previous one.",
   copyButtonPlacement = "right",
 }: ConnectCommandPanelProps) {
-  const [copied, setCopied] = useState(false);
+  // Shared copy → transient-feedback machine. This panel only surfaces the
+  // success label (`copyLabel.done`); a clipboard failure quietly stays on
+  // the idle label — the command text is selectable above.
+  const { status, copy } = useCopyFeedback();
 
-  const handleCopy = async (): Promise<void> => {
+  const handleCopy = (): void => {
     if (!command) return;
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    void copy(command);
   };
 
   const expiryMinutes = expiresInSeconds !== undefined ? Math.max(1, Math.round(expiresInSeconds / 60)) : null;
@@ -108,8 +108,8 @@ export function ConnectCommandPanel({
       disabled={!command}
       style={{ alignSelf: "flex-start" }}
     >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? copyLabel.done : copyLabel.idle}
+      {status === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      {status === "copied" ? copyLabel.done : copyLabel.idle}
     </Button>
   );
 
