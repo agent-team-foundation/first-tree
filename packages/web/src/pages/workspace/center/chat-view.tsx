@@ -2411,11 +2411,11 @@ export function ChatView({
           <div
             className="shrink-0 flex items-center"
             style={{
-              // Min-height, not a fixed height: the topic + description flow
-              // inline in one cluster and wrap onto further lines as the
-              // description grows, so the header grows with them. Vertical
-              // padding keeps a single-line header (topic only, or topic +
-              // short description) sitting at the min-height floor.
+              // Min-height as a comfortable floor for a now-stable single-row
+              // header: the topic sits on one line (truncating with an ellipsis
+              // when long) and the description lives behind the ⓘ affordance, so
+              // the header no longer grows with content. Vertical padding
+              // centers that single row within the min-height.
               minHeight: 52,
               padding: "var(--sp-1_5) var(--sp-6)",
               gap: 10,
