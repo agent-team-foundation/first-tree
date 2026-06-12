@@ -9,6 +9,7 @@ ALTER TABLE "members" ADD CONSTRAINT "members_onboarding_suppress_reason_check" 
   )
   OR (
     "onboarding_suppressed_at" IS NOT NULL
+    AND "onboarding_suppressed_reason" IS NOT NULL
     AND "onboarding_suppressed_reason" IN ('finish_later', 'completed', 'invitee_skip')
   )
 );

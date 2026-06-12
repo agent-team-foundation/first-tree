@@ -285,8 +285,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return match ?? memberships[0] ?? null;
   }, [memberships, selectedOrgId]);
 
-  const currentOnboardingDismissedAt = currentMembership?.onboardingSuppressedAt ?? onboardingDismissedAt;
-  const currentOnboardingCompletedAt = currentMembership?.onboardingCompletedAt ?? onboardingCompletedAt;
+  const currentOnboardingDismissedAt = currentMembership
+    ? currentMembership.onboardingSuppressedAt
+    : onboardingDismissedAt;
+  const currentOnboardingCompletedAt = currentMembership
+    ? currentMembership.onboardingCompletedAt
+    : onboardingCompletedAt;
 
   const patchMembershipOnboarding = useCallback(
     (

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -137,6 +137,20 @@ describe("PATCH /me/onboarding", () => {
     expect(current?.onboardingCompletedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(current?.onboardingSuppressedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(current?.onboardingSuppressedReason).toBe("completed");
+  });
+
+  it("rejects a suppress timestamp without a suppress reason at the database boundary", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await expect(
+      app.db.execute(sql`
+        UPDATE members
+        SET onboarding_suppressed_at = NOW(),
+            onboarding_suppressed_reason = NULL
+        WHERE id = ${admin.memberId}
+      `),
+    ).rejects.toThrow(/members_onboarding_suppress_reason_check|check constraint/i);
   });
 
   it("rejects unauthenticated callers", async () => {

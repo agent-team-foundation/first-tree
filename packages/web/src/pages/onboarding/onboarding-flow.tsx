@@ -185,13 +185,10 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // write is idempotent and already flips optimistic client state, so
       // never let a transient failure strand the user — always navigate.
       //
-      // Deliberately NOT `dismissOnboarding()`: dismissal is the account-level
-      // "finish later" suppressor, and `shouldEnterOnboarding` consults it
-      // before the org-level readiness check. Stamping it on the normal finish
-      // path made the per-org re-entry gate unreachable for anyone who ever
-      // completed onboarding — joining a second/empty org landed them in a
-      // bare workspace with no way back (the original call's target, the
-      // retired inline workspace stepper, no longer exists).
+      // Deliberately NOT `dismissOnboarding()`: completion now writes a
+      // membership-scoped suppress stamp with reason="completed". Reusing the
+      // finish-later path here would blur the reason semantics that keep new
+      // memberships eligible for first-need onboarding.
       clearPersistedStep(path);
       // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
       // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
