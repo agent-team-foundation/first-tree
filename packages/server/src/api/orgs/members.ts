@@ -24,8 +24,8 @@ export async function orgMemberRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { orgId: string; id: string } }>("/:id", async (request, reply) => {
-    await requireOrgAdmin(request, app.db);
-    await memberService.deleteMember(app.db, request.params.id);
+    const scope = await requireOrgAdmin(request, app.db);
+    await memberService.deleteMember(app.db, request.params.id, scope.organizationId);
     return reply.status(204).send();
   });
 }

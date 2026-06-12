@@ -170,16 +170,16 @@ export async function getMember(db: Database, id: string) {
 }
 
 export async function updateMember(db: Database, id: string, data: UpdateMember, callerOrgId?: string) {
-  if (data.role === undefined && data.displayName === undefined) {
-    return getMember(db, id);
-  }
-
   const current = await getMember(db, id);
   // A cross-org admin should never be able to mutate a member in another
   // tenant. The route layer supplies its own org id; without a match we
   // 404 to avoid leaking that the member exists.
   if (callerOrgId && current.organizationId !== callerOrgId) {
     throw new NotFoundError(`Member "${id}" not found`);
+  }
+
+  if (data.role === undefined && data.displayName === undefined) {
+    return current;
   }
 
   // Prevent demoting the last admin — if the caller is turning the final
@@ -224,8 +224,13 @@ export async function updateOwnProfile(db: Database, userId: string, displayName
   return { id: userId, displayName };
 }
 
-export async function deleteMember(db: Database, id: string) {
+export async function deleteMember(db: Database, id: string, callerOrgId: string) {
   const member = await getMember(db, id);
+  // A cross-org admin should never be able to delete a member in another
+  // tenant. Return 404 to avoid leaking that the member exists.
+  if (member.organizationId !== callerOrgId) {
+    throw new NotFoundError(`Member "${id}" not found`);
+  }
 
   // Prevent deleting the last admin
   if (member.role === "admin") {
