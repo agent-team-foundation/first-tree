@@ -58,8 +58,9 @@ export function QuestionPrompt({ prompt, fadeColor = QUESTION_SURFACE_BG }: { pr
       </div>
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        className="mono text-caption"
+        className="mono text-caption rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         style={{
           background: "none",
           border: "none",

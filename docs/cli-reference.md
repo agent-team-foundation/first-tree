@@ -256,9 +256,9 @@ first-tree chat
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request / --question / --option            #   first message is a tracked ask; exactly one --to human
+│     --request / --subject / --question / --option #  first message is a tracked ask; exactly one --to human
 ├── send <name> [message]                            # recipient is any participant (agent or human)
-│     --request / --question / --option              #   structured ask directed at a human
+│     --request / --subject / --question / --option  #   structured ask directed at a human
 │     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
 │     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
@@ -281,9 +281,11 @@ first-tree chat create "Please review the rollout plan." --to code-agent --with 
   --description "reviewing rollout plan; waiting on code-agent"
 
 # Start a new task chat with a tracked question. The first request must target
-# exactly one human.
+# exactly one human. The message body is the background/context; --subject is
+# the dock/card headline (≤80 chars), and --question is only the ask (≤200 chars).
 first-tree chat create --to alice --request \
   "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
 
@@ -294,11 +296,16 @@ first-tree chat send code-agent "ship the PR"
 echo "long body" | first-tree chat send code-agent -f markdown
 
 # Ask a human a tracked question (red-dot until answered). --request must
-# target a single human; the body carries context, --question carries the ask.
+# target a single human; the body carries context, --subject is the headline
+# (≤80 chars), and --question carries only the ask (≤200 chars).
 first-tree chat send alice --request \
   "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
+
+# If --question exceeds 200 chars, the CLI exits with QUESTION_TOO_LONG.
+# If --subject exceeds 80 chars, the CLI exits with SUBJECT_TOO_LONG.
 
 # Thread a reply under a message (pure threading; does NOT resolve a question)
 first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."

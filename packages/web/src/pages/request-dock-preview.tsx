@@ -44,6 +44,22 @@ const MODES: Record<string, { label: string; payload: OpenQuestionRequest }> = {
       allowExtra: false,
     },
   },
+  context: {
+    label: "wired context jump + long subject",
+    payload: {
+      subject: "Long request subject that checks mobile header wrapping with context jump",
+      questions: [
+        {
+          id: "q1",
+          prompt: "Approve this rollout gate after reviewing the full request context?",
+          kind: "single",
+          options: ["Approve", "Hold"],
+          required: true,
+        },
+      ],
+      allowExtra: false,
+    },
+  },
   multi: {
     label: "multi-question",
     payload: {
@@ -138,6 +154,7 @@ function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestio
           draftEmpty={draft.trim().length === 0}
           askerName="deploy-agent"
           onPick={pick}
+          onJumpToOrigin={modeKey === "context" ? () => setSentAs("→ jumped to timeline request context") : undefined}
         />
         {/* mock composer — mirrors the wiring contract, not the real chrome */}
         <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "flex-end" }}>

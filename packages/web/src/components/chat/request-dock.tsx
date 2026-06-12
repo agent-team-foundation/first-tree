@@ -94,12 +94,12 @@ export function RequestDock({
           <button
             type="button"
             onClick={onJumpToOrigin}
-            className="mono text-caption"
+            className="mono text-caption rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             style={{
               marginLeft: "auto",
               display: "inline-flex",
               alignItems: "center",
-              gap: 2,
+              gap: "var(--sp-0_5)",
               background: "none",
               border: "none",
               padding: 0,
@@ -164,12 +164,7 @@ export function RequestDock({
           marginTop: "var(--sp-2_5)",
           paddingTop: "var(--sp-2)",
           borderTop: "var(--hairline) solid var(--border-faint)",
-          color:
-            sendKind === "resolve"
-              ? "var(--fg-success-strong)"
-              : sendKind === "judge"
-                ? "var(--fg-info-strong)"
-                : "var(--fg-4)",
+          color: "var(--fg-3)",
         }}
       >
         {sendKind === "resolve"

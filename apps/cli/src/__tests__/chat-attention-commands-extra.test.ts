@@ -282,6 +282,8 @@ describe("chat command behavior", () => {
       "--agent",
       "worker",
       "--request",
+      "--subject",
+      "Rollout gate",
       "--question",
       "Ship to 20%?",
       "--option",
@@ -299,6 +301,7 @@ describe("chat command behavior", () => {
           content: "stdin message",
           metadata: {
             request: {
+              subject: "Rollout gate",
               questions: [
                 {
                   id: "q1",
@@ -322,6 +325,12 @@ describe("chat command behavior", () => {
       code: "REQUEST_NEEDS_QUESTION",
       exitCode: 2,
     });
+    await expect(
+      runChat(["create", "body", "--request", "--to", "nova", "--question", "x".repeat(201)]),
+    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
+    await expect(
+      runChat(["create", "body", "--request", "--to", "nova", "--subject", "s".repeat(81), "--question", "Ship?"]),
+    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
   });
 
   it("validates chat create input and treats uncertain create outcomes as non-retryable", async () => {

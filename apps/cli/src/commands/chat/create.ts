@@ -5,6 +5,7 @@ import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { readStdin } from "./_shared/io.js";
+import { buildRequestMetadata } from "./_shared/request.js";
 
 interface CreateOptions {
   to: string[];
@@ -15,6 +16,7 @@ interface CreateOptions {
   metadata?: string;
   agent?: string;
   request?: boolean;
+  subject?: string;
   question?: string;
   option?: string[];
 }
@@ -91,7 +93,11 @@ export function registerChatCreateCommand(chat: Command): void {
       "--request",
       "Create the task with an open question. Requires exactly one --to recipient; the message body is context.",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
+    .option(
+      "--subject <text>",
+      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+    )
+    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collect, [])
     .action(async (message: string | undefined, options: CreateOptions) => {
       try {
@@ -119,25 +125,8 @@ export function registerChatCreateCommand(chat: Command): void {
           if (to.length !== 1) {
             fail("REQUEST_NEEDS_ONE_TARGET", "--request task creation requires exactly one --to recipient.", 2);
           }
-          if (!options.question) {
-            fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
-          }
-          const opts = options.option ?? [];
           format = "request";
-          metadata = {
-            ...(metadata ?? {}),
-            request: {
-              questions: [
-                {
-                  id: "q1",
-                  prompt: options.question,
-                  kind: opts.length > 0 ? "single" : "free",
-                  options: opts,
-                  required: true,
-                },
-              ],
-            },
-          };
+          metadata = buildRequestMetadata(metadata, options);
         }
 
         const sdk = createSdk(options.agent);

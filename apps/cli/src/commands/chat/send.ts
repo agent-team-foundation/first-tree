@@ -4,6 +4,7 @@ import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { readStdin } from "./_shared/io.js";
+import { buildRequestMetadata } from "./_shared/request.js";
 
 interface SendOptions {
   format: MessageFormat;
@@ -17,17 +18,6 @@ interface SendOptions {
   answer?: string;
   close?: string;
 }
-
-/**
- * Hard caps on the structured ask. `--question` is the ONE-LINE ask the web
- * pins above the composer (RequestDock); `--subject` is its headline. The
- * background/context belongs in the message body, which renders as the
- * request card's full markdown body. The caps exist because agents otherwise
- * cram the whole context into `--question`, producing an unreadable wall in
- * the dock.
- */
-const REQUEST_QUESTION_MAX_CHARS = 200;
-const REQUEST_SUBJECT_MAX_CHARS = 80;
 
 /** Commander collector for a repeatable flag (`--option a --option b`). */
 function collectOption(value: string, previous: string[]): string[] {
@@ -129,43 +119,8 @@ export function registerChatSendCommand(chat: Command): void {
           if (!target) {
             fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human member.", 2);
           }
-          if (!options.question) {
-            fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
-          }
-          if (options.question && options.question.length > REQUEST_QUESTION_MAX_CHARS) {
-            fail(
-              "QUESTION_TOO_LONG",
-              `--question must stay a short ask (≤${REQUEST_QUESTION_MAX_CHARS} chars, got ${options.question.length}). ` +
-                "Move the background/context into the message body — it renders as the request card's markdown body; " +
-                "the question is pinned verbatim above the composer.",
-              2,
-            );
-          }
-          if (options.subject && options.subject.length > REQUEST_SUBJECT_MAX_CHARS) {
-            fail(
-              "SUBJECT_TOO_LONG",
-              `--subject is a headline (≤${REQUEST_SUBJECT_MAX_CHARS} chars, got ${options.subject.length}). ` +
-                "Keep it to a few words; details belong in the body or --question.",
-              2,
-            );
-          }
-          const opts = options.option ?? [];
           format = "request";
-          metadata = {
-            ...(metadata ?? {}),
-            request: {
-              ...(options.subject ? { subject: options.subject } : {}),
-              questions: [
-                {
-                  id: "q1",
-                  prompt: options.question,
-                  kind: opts.length > 0 ? "single" : "free",
-                  options: opts,
-                  required: true,
-                },
-              ],
-            },
-          };
+          metadata = buildRequestMetadata(metadata, options);
         }
 
         // --answer / --close fold open-question resolution into `send`: they

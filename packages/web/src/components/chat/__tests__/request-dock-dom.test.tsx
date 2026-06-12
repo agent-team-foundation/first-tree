@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { OpenQuestionRequest } from "@first-tree/shared";
-import { act, type ReactElement } from "react";
+import { act, type ComponentProps, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestDock } from "../request-dock.js";
@@ -33,14 +33,18 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function dock(p: OpenQuestionRequest, onJumpToOrigin?: () => void): ReactElement {
+function dock(
+  p: OpenQuestionRequest,
+  onJumpToOrigin?: () => void,
+  overrides?: Partial<ComponentProps<typeof RequestDock>>,
+): ReactElement {
   return (
     <RequestDock
       requestId="req"
       payload={p}
-      selections={{}}
-      directResolve={false}
-      draftEmpty
+      selections={overrides?.selections ?? {}}
+      directResolve={overrides?.directResolve ?? false}
+      draftEmpty={overrides?.draftEmpty ?? true}
       askerName="asker"
       onPick={() => undefined}
       onJumpToOrigin={onJumpToOrigin}
@@ -71,10 +75,13 @@ describe("RequestDock prompt rendering", () => {
     const container = await renderDom(dock(payload(wall)));
     const showAll = findButton(container, "Show all");
     expect(showAll).toBeDefined();
+    expect(showAll?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => {
       showAll?.click();
     });
-    expect(findButton(container, "Show less")).toBeDefined();
+    const showLess = findButton(container, "Show less");
+    expect(showLess).toBeDefined();
+    expect(showLess?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("offers the way back to the request's timeline card when wired", async () => {
@@ -82,6 +89,7 @@ describe("RequestDock prompt rendering", () => {
     const container = await renderDom(dock(payload("Ship to 20%?"), jump));
     const view = findButton(container, "View context");
     expect(view).toBeDefined();
+    expect(view?.className).toContain("focus-visible:ring-1");
     await act(async () => {
       view?.click();
     });
@@ -89,5 +97,20 @@ describe("RequestDock prompt rendering", () => {
     // Without the wiring (e.g. preview page) the affordance is hidden.
     const bare = await renderDom(dock(payload("Ship to 20%?")));
     expect(findButton(bare, "View context")).toBeUndefined();
+  });
+
+  it("keeps pre-send helper copy neutral even when the draft will resolve", async () => {
+    const container = await renderDom(
+      dock(payload("Ship to 20%?"), undefined, {
+        selections: { "Ship to 20%?": "yes" },
+        directResolve: true,
+        draftEmpty: false,
+      }),
+    );
+    const helper = Array.from(container.querySelectorAll("div"))
+      .reverse()
+      .find((el) => el.textContent?.includes("Send answers and resolves this question"));
+    expect(helper).toBeDefined();
+    expect(helper?.getAttribute("style")).toContain("color: var(--fg-3)");
   });
 });
