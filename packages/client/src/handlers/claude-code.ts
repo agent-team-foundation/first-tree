@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type {
   EffortLevel,
   McpServerConfig,
@@ -22,7 +22,11 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import {
+  canonicalizeFsPath,
+  contextTreeRelativePathOf,
+  toolFileRefsFromShellCommand,
+} from "../runtime/context-tree-file-refs.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -312,18 +316,26 @@ function extractToolResultText(content: unknown): string {
   return parts.join("\n");
 }
 
-/**
- * Tools whose `file_path` argument names a single file. Search tools
- * (Grep/Glob) are excluded because they need server-side command/query
- * semantics before they can be treated as an explicit file IO fact.
- */
+/** Tools whose `file_path` / `notebook_path` argument names a single file. */
 const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
-const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
+const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+/**
+ * Search/discovery tools scan a search root rather than open one file. They
+ * carry directory-level evidence (the explicit `path` argument), deliberately
+ * NOT one ref per matched file — a recursive search "touching" every node
+ * would drown the Context tab feed in noise.
+ */
+const TREE_SEARCH_TOOL_NAMES: ReadonlySet<string> = new Set(["Grep", "Glob"]);
 
-/** Extract a string `file_path` argument from a tool_use input, if present. */
+/**
+ * Extract a string `file_path` argument from a tool_use input, if present.
+ * Notebook tools (NotebookRead / NotebookEdit) spell the same argument
+ * `notebook_path`; accept either so notebook IO carries refs too.
+ */
 function readFilePathArg(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
-  const fp = (input as { file_path?: unknown }).file_path;
+  const record = input as { file_path?: unknown; notebook_path?: unknown };
+  const fp = record.file_path ?? record.notebook_path;
   return typeof fp === "string" ? fp : null;
 }
 
@@ -337,6 +349,11 @@ function readFilePathArg(input: unknown): string | null {
  * Invariant: both `filePath` and `contextTreePath` are expected to be
  * absolute. A relative `filePath` will not match the absolute root and returns
  * null — i.e. it silently under-counts (fails safe) rather than mis-attributing.
+ *
+ * Callers that may receive symlink aliases of the tree (the W1 cloud layout
+ * exposes the shared clone as a `<workspace>/context-tree` link) must pass
+ * both arguments through `canonicalizeFsPath` first — this function compares
+ * strings only.
  */
 export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
   if (!filePath || !contextTreePath) return null;
@@ -353,11 +370,65 @@ function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTree
   if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  const repoRelativePath = contextTree?.path ? treeNodePathOf(filePath, contextTree.path) : null;
+  // Canonicalize both sides so a symlinked tree path (W1 cloud layout) still
+  // maps. Relative paths keep the fail-safe null mapping — canonicalizing
+  // them would resolve against the daemon's cwd and risk mis-attribution.
+  const repoRelativePath =
+    contextTree?.path && isAbsolute(filePath)
+      ? treeNodePathOf(canonicalizeFsPath(filePath), canonicalizeFsPath(contextTree.path))
+      : null;
   return {
     origin: "tool_arg",
     localPath: filePath,
     pathKind: "file",
+    ...(contextTree?.repoUrl && repoRelativePath !== null
+      ? {
+          repoUrl: contextTree.repoUrl,
+          ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
+          repoRelativePath,
+        }
+      : {}),
+  };
+}
+
+function statIsFile(absolutePath: string): boolean {
+  try {
+    return statSync(absolutePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Extract a string `path` argument from a search tool_use input, if present. */
+function searchPathArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const p = (input as { path?: unknown }).path;
+  return typeof p === "string" ? p : null;
+}
+
+/**
+ * Directory-level ref for a Grep/Glob call whose explicit `path` argument
+ * targets the Context Tree. Calls without a `path` argument default to the
+ * session cwd (the workspace root, not the tree) and carry no ref — fail-safe
+ * under-counting over mis-attribution, same stance as `toolFileRef`.
+ */
+function searchToolFileRef(
+  toolName: string,
+  input: unknown,
+  contextTree: ContextTreeBinding | undefined,
+  cwd: string | null | undefined,
+): ToolFileRef | null {
+  if (!TREE_SEARCH_TOOL_NAMES.has(toolName)) return null;
+  const rawPath = searchPathArg(input);
+  if (rawPath === null) return null;
+  if (!isAbsolute(rawPath) && !cwd) return null;
+  const absolutePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? "", rawPath);
+  const repoRelativePath = contextTree?.path ? contextTreeRelativePathOf(absolutePath, contextTree.path) : null;
+  return {
+    origin: "tool_arg",
+    localPath: absolutePath,
+    // Grep accepts a file as its search root; everything else is a directory.
+    pathKind: repoRelativePath === "/" ? "repo" : statIsFile(absolutePath) ? "file" : "directory",
     ...(contextTree?.repoUrl && repoRelativePath !== null
       ? {
           repoUrl: contextTree.repoUrl,
@@ -382,6 +453,8 @@ function toolFileRefs(
 ): ToolFileRef[] {
   const directRef = toolFileRef(toolName, input, contextTree);
   if (directRef) return [directRef];
+  const searchRef = searchToolFileRef(toolName, input, contextTree, cwd);
+  if (searchRef) return [searchRef];
   if (toolName !== "Bash" || !cwd) return [];
   const command = readCommandArg(input);
   if (command === null) return [];

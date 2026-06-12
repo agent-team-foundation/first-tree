@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -11,7 +11,7 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import { contextTreeRelativePathOf, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
@@ -362,10 +362,10 @@ function contextTreeTargetPathOf(
 ): string | null {
   if (!contextTreePath) return null;
   const absolutePath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceCwd, filePath);
-  const root = resolve(contextTreePath);
-  const rel = relative(root, absolutePath);
-  if (!rel || rel === "." || rel.startsWith("..") || isAbsolute(rel)) return null;
-  return rel.replaceAll("\\", "/");
+  // Canonical comparison so a symlink alias of the tree (W1 cloud layout's
+  // `<workspace>/context-tree` link) maps the same as the real clone path.
+  const rel = contextTreeRelativePathOf(absolutePath, contextTreePath);
+  return rel === null || rel === "/" ? null : rel;
 }
 
 export function collectCodexFileChangePaths(changes: unknown): string[] {

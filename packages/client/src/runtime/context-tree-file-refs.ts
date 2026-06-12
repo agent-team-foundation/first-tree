@@ -1,5 +1,5 @@
-import { statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { classifyShellCommandIo, type ShellIoPathKindHint, type ToolFileRef } from "@first-tree/shared";
 
 export type ShellCommandFileRefsInput = {
@@ -14,8 +14,44 @@ function toPosixPath(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
-function pathInsideContextTree(absolutePath: string, contextTreePath: string): string | null {
-  const relativePath = relative(contextTreePath, absolutePath);
+/**
+ * Resolve `path` to its canonical filesystem form (symlinks resolved),
+ * falling back lexically for segments that do not exist (yet).
+ *
+ * Cloud agent homes expose the shared Context Tree clone through a
+ * `<workspace>/context-tree` symlink (see `runtime/workspace-manifest.ts`),
+ * while the runtime config carries the external clone's real path. A pure
+ * string prefix match between the two spellings never agrees, so every ref
+ * that travels through the symlinked path silently loses its repo evidence.
+ * Canonicalizing both sides of the containment check makes the spellings
+ * equivalent.
+ *
+ * A not-yet-existing path (e.g. a Write creating a new file) canonicalizes
+ * its deepest existing ancestor and re-appends the remaining segments, so
+ * brand-new files under a symlinked root still map correctly.
+ */
+export function canonicalizeFsPath(path: string): string {
+  let current = resolve(path);
+  const pendingSegments: string[] = [];
+  for (;;) {
+    try {
+      return pendingSegments.length === 0 ? realpathSync(current) : join(realpathSync(current), ...pendingSegments);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(path);
+      pendingSegments.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Tree-root-relative posix path of `absolutePath` when it lives under
+ * `contextTreeRoot`, `"/"` when it IS the root, null otherwise. Both sides
+ * are compared in canonical form, so symlink aliases of the same tree agree.
+ */
+export function contextTreeRelativePathOf(absolutePath: string, contextTreeRoot: string): string | null {
+  const relativePath = relative(canonicalizeFsPath(contextTreeRoot), canonicalizeFsPath(absolutePath));
   if (relativePath === "") return "/";
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) return null;
   return toPosixPath(relativePath);
@@ -44,13 +80,12 @@ export function toolFileRefsFromShellCommand(input: ShellCommandFileRefsInput): 
 
   const refs: ToolFileRef[] = [];
   const seen = new Set<string>();
-  const contextTreeRoot = resolve(input.contextTreePath);
   for (const pathArg of classification.pathArgs) {
     const absolutePath = isAbsolute(pathArg.raw) ? resolve(pathArg.raw) : resolve(input.cwd, pathArg.raw);
     if (seen.has(absolutePath)) continue;
     seen.add(absolutePath);
 
-    const repoRelativePath = pathInsideContextTree(absolutePath, contextTreeRoot);
+    const repoRelativePath = contextTreeRelativePathOf(absolutePath, input.contextTreePath);
     if (repoRelativePath === null) continue;
 
     refs.push({

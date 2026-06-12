@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude-code.js";
 
 /**
@@ -557,6 +560,182 @@ describe("createToolCallProcessor — Context Tree file refs", () => {
       },
     ]);
     expect(usageEventCount(emit)).toBe(0);
+  });
+});
+
+/**
+ * W1 cloud layout: the shared external tree clone is exposed inside the agent
+ * home as a `<workspace>/context-tree` symlink (runtime/workspace-manifest.ts),
+ * while the binding carries the external clone's real path. Refs must map
+ * regardless of which spelling the tool call used.
+ */
+describe("createToolCallProcessor — symlinked Context Tree (W1 cloud layout)", () => {
+  let root: string;
+  let realTree: string;
+  let link: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "first-tree-symlink-refs-"));
+    realTree = join(root, "context-tree-repos", "abc123");
+    mkdirSync(join(realTree, "members"), { recursive: true });
+    writeFileSync(join(realTree, "NODE.md"), "root");
+    writeFileSync(join(realTree, "members", "NODE.md"), "members");
+    const workspace = join(root, "workspaces", "agent-home");
+    mkdirSync(workspace, { recursive: true });
+    link = join(workspace, "context-tree");
+    symlinkSync(realTree, link);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function bindingFor(path: string) {
+    return { path, repoUrl: "https://github.com/example/tree", branch: "main" } as const;
+  }
+
+  function finalRefs(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>, id: string) {
+    const final = emit.mock.calls
+      .map((c) => c[0])
+      .filter((ev) => ev.kind === "tool_call")
+      .find((event) => event.payload.toolUseId === id && event.payload.status === "ok");
+    return final?.payload.toolFileRefs;
+  }
+
+  it("maps a Read through the workspace symlink to the real-clone binding", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s1", "Read", { file_path: join(link, "members", "NODE.md") }));
+    processor.onMessage(userToolResult("s1", "contents"));
+
+    expect(finalRefs(emit, "s1")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: join(link, "members", "NODE.md"),
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "members/NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
+  it("maps a Write creating a NEW file through the symlink (no existing path to realpath)", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(
+      assistantToolUse("s2", "Write", { file_path: join(link, "domains", "new-leaf.md"), content: "x" }),
+    );
+    processor.onMessage(userToolResult("s2", "created"));
+
+    expect(finalRefs(emit, "s2")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "domains/new-leaf.md",
+    });
+  });
+
+  it("maps a Read of the real clone path when the binding is spelled as the symlink", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(link));
+
+    processor.onMessage(assistantToolUse("s3", "Read", { file_path: join(realTree, "NODE.md") }));
+    processor.onMessage(userToolResult("s3", "contents"));
+
+    expect(finalRefs(emit, "s3")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "NODE.md",
+    });
+  });
+
+  it("attaches a write ref for NotebookEdit via its notebook_path argument", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(
+      assistantToolUse("s4", "NotebookEdit", { notebook_path: join(realTree, "members", "NODE.md") }),
+    );
+    processor.onMessage(userToolResult("s4", "edited"));
+
+    expect(finalRefs(emit, "s4")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "members/NODE.md",
+      pathKind: "file",
+    });
+  });
+
+  it("attaches a directory-level ref for Grep with an explicit tree path", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s5", "Grep", { pattern: "owners", path: join(link, "members") }));
+    processor.onMessage(userToolResult("s5", "matches"));
+
+    expect(finalRefs(emit, "s5")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: join(link, "members"),
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "members",
+        pathKind: "directory",
+      },
+    ]);
+  });
+
+  it("attaches a repo-level ref for Glob rooted at the tree itself", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s6", "Glob", { pattern: "**/*.md", path: realTree }));
+    processor.onMessage(userToolResult("s6", "files"));
+
+    expect(finalRefs(emit, "s6")?.[0]).toMatchObject({
+      repoRelativePath: "/",
+      pathKind: "repo",
+    });
+  });
+
+  it("does NOT attach refs for Grep without an explicit path argument", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree), { cwd: realTree });
+
+    processor.onMessage(assistantToolUse("s7", "Grep", { pattern: "owners" }));
+    processor.onMessage(userToolResult("s7", "matches"));
+
+    expect(finalRefs(emit, "s7")).toBeUndefined();
+  });
+
+  it("attaches a local-only ref for Grep over a non-tree directory", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+    const outside = join(root, "workspaces", "agent-home");
+
+    processor.onMessage(assistantToolUse("s8", "Grep", { pattern: "x", path: outside }));
+    processor.onMessage(userToolResult("s8", "matches"));
+
+    expect(finalRefs(emit, "s8")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: outside,
+        pathKind: "directory",
+      },
+    ]);
+  });
+
+  it("maps a Bash read through the workspace symlink", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree), { cwd: root });
+
+    processor.onMessage(assistantToolUse("s9", "Bash", { command: `cat ${join(link, "NODE.md")}` }));
+    processor.onMessage(userToolResult("s9", "contents"));
+
+    expect(finalRefs(emit, "s9")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "NODE.md",
+      pathKind: "file",
+    });
   });
 });
 

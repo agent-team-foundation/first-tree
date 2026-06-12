@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectCodexFileChangePaths, toolFileRefsFromCodexFileChange } from "../handlers/codex.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 
@@ -130,5 +133,47 @@ describe("Codex Context Tree file refs", () => {
     expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree-sibling/NODE.md" })).toEqual([]);
     expect(toolFileRefsFromShellCommand({ ...base, command: "cat /home/op/context-tree/NODE.md | head" })).toEqual([]);
     expect(toolFileRefsFromShellCommand({ ...base, command: "echo x > /home/op/context-tree/NODE.md" })).toEqual([]);
+  });
+});
+
+describe("Codex file refs through the W1 workspace symlink", () => {
+  let root: string;
+  let realTree: string;
+  let link: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "first-tree-codex-symlink-"));
+    realTree = join(root, "context-tree-repos", "abc123");
+    mkdirSync(realTree, { recursive: true });
+    writeFileSync(join(realTree, "NODE.md"), "root");
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    link = join(workspace, "context-tree");
+    symlinkSync(realTree, link);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("maps file_change paths that travel through the symlink to the real-clone binding", () => {
+    const refs = toolFileRefsFromCodexFileChange({
+      changes: [{ path: join(link, "NODE.md") }],
+      workspaceCwd: join(root, "workspace"),
+      contextTreePath: realTree,
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    expect(refs).toEqual([
+      {
+        origin: "file_change",
+        localPath: join(link, "NODE.md"),
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
   });
 });
