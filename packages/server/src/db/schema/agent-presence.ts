@@ -1,4 +1,5 @@
-import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import type { WorkspaceHealth } from "@first-tree/shared";
+import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { clients } from "./clients.js";
 
@@ -30,4 +31,12 @@ export const agentPresence = pgTable("agent_presence", {
   totalSessions: integer("total_sessions"),
   /** When runtime_state was last updated */
   runtimeUpdatedAt: timestamp("runtime_updated_at", { withTimezone: true }),
+
+  /**
+   * Latest `workspace:health` report (per-agent repo/tree reachability),
+   * stamped with server receive time (`updatedAt`). Latest-wins; deliberately
+   * NOT cleared on offline/unbind so the console can still explain a degraded
+   * workspace after the client disconnects ("last reported X ago").
+   */
+  workspaceHealth: jsonb("workspace_health").$type<WorkspaceHealth>(),
 });

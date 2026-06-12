@@ -18,6 +18,7 @@ import {
   sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
+  workspaceHealthMessageSchema,
   wsAuthFrameSchema,
 } from "@first-tree/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
@@ -1135,6 +1136,20 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               } else if (payload.runtimeState === "idle" || payload.runtimeState === "working") {
                 notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
+            } else if (type === "workspace:health") {
+              // Per-agent repo/tree reachability report, sent by the client
+              // after session bootstrap materialises source repos + Context
+              // Tree. Persisted latest-wins on agent_presence.workspace_health
+              // (server stamps updatedAt); read by the web console to render
+              // the degraded-workspace warning chip.
+              const agentId = parsed.data.agentId;
+              if (!agentId || !isAgentStillRoutedHere(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payload = workspaceHealthMessageSchema.parse(msg);
+              await presenceService.setWorkspaceHealth(app.db, agentId, payload);
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
               if (!agentId || !isAgentStillRoutedHere(agentId)) {

@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { WorkspaceHealthReason } from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import { getChildProcessRegistry } from "./child-process-registry.js";
+import { redactErrorPreview } from "./redact-error-preview.js";
 import { isUnderManagedRoot, killProcessesHoldingPath } from "./worktree-cleanup.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -93,6 +95,18 @@ export type GitMirrorManagerOptions = {
  *                             error on an existing usable checkout — degraded to
  *                             the last-good local source instead of aborting the
  *                             session (see step (4) in `ensureSourceRepo`)
+ *   - `stale-unreachable`     left as-is: fetch failed with a PERMISSION-shaped
+ *                             error (auth rejected on both transports, or 404)
+ *                             on an existing usable checkout. Same freeze
+ *                             contract as `stale-offline`, but it will NOT
+ *                             self-heal — the checkout stays at its last-good
+ *                             commit until credentials are fixed on the host.
+ *                             Carries `degraded` for the workspace-health report.
+ *   - `skipped-unreachable`   no usable local clone AND the clone failed with a
+ *                             permission-shaped error — the repo is skipped
+ *                             entirely (nothing materialised on disk; `cloneRepo`
+ *                             removes any partial clone) so the session can
+ *                             still start degraded. Carries `degraded`.
  */
 export type SourceRepoOutcome =
   | "cloned"
@@ -102,7 +116,20 @@ export type SourceRepoOutcome =
   | "skipped-dirty"
   | "skipped-local-commits"
   | "skipped-in-use"
-  | "stale-offline";
+  | "stale-offline"
+  | "stale-unreachable"
+  | "skipped-unreachable";
+
+/**
+ * Degradation descriptor attached to the `*-unreachable` outcomes and consumed
+ * by the `workspace:health` report (see shared/src/schemas/workspace-health.ts).
+ * `errorPreview` has ALREADY been passed through `redactErrorPreview` — safe
+ * for chat-visible / DB-persisted surfaces.
+ */
+export type SourceRepoDegradedInfo = {
+  reasonCode: WorkspaceHealthReason;
+  errorPreview: string;
+};
 
 export interface GitMirrorManager {
   /**
@@ -122,10 +149,13 @@ export interface GitMirrorManager {
     activelyInUse?: boolean;
   }): Promise<{
     clonePath: string;
-    headCommit: string;
+    /** HEAD of the local checkout. Absent only for `skipped-unreachable` (nothing on disk). */
+    headCommit?: string;
     /** Short name of the checked-out branch, or undefined when detached (pinned SHA). */
     branch?: string;
     outcome: SourceRepoOutcome;
+    /** Present only on the `*-unreachable` outcomes (permission-shaped degradation). */
+    degraded?: SourceRepoDegradedInfo;
   }>;
 
   /** Remove a standalone source-repo clone (best-effort, kills holders first). */
@@ -658,6 +688,27 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           outcome,
         });
 
+        // Clone, or — when the failure is permission-shaped (host git identity
+        // cannot see the repo) — skip the repo so the session still starts
+        // degraded instead of aborting. `cloneRepo` already guarantees no
+        // half-written clone survives a failure, so a skip leaves nothing on
+        // disk. Every non-permission failure keeps today's fail-loud path.
+        const cloneOrSkip = async (): Promise<SourceRepoDegradedInfo | null> => {
+          try {
+            await cloneRepo(absTarget, url);
+            return null;
+          } catch (err) {
+            const degraded = classifyPermissionShapedGitError(err);
+            if (!degraded) throw err;
+            const stderr = err instanceof Error ? err.message : String(err);
+            log?.warn(
+              { gitUrl: url, clonePath: absTarget, reasonCode: degraded.reasonCode, stderr: stderr.slice(0, 1024) },
+              "source-repo clone failed (permission-shaped) — skipping repo, session starts degraded",
+            );
+            return degraded;
+          }
+        };
+
         // (0) A symlink at the target is never one of our clones — `existsSync`
         // / `statSync` follow links, so without this guard a symlink pointing at
         // some real `.git` dir would be adopted and fetched/`checkout -B`'d
@@ -677,7 +728,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         // replace in place with a standalone clone.
         if (existsSync(absTarget) && isLegacyWorktreeCheckout(absTarget)) {
           await reclaimTarget(absTarget, "legacy shared-mirror worktree");
-          await cloneRepo(absTarget, url);
+          {
+            const degraded = await cloneOrSkip();
+            if (degraded) return { clonePath: absTarget, outcome: "skipped-unreachable", degraded };
+          }
           if (ref) await updateToLatest(absTarget, ref);
           return finish("migrated-recloned");
         }
@@ -689,7 +743,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
 
         // (3) Fresh clone.
         if (!existsSync(absTarget)) {
-          await cloneRepo(absTarget, url);
+          {
+            const degraded = await cloneOrSkip();
+            if (degraded) return { clonePath: absTarget, outcome: "skipped-unreachable", degraded };
+          }
           if (ref) await updateToLatest(absTarget, ref);
           return finish("cloned");
         }
@@ -736,20 +793,48 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           //     closed (we cannot move to it safely without a confirmed fetch).
           // Silently serving a stale checkout otherwise would mask a real,
           // non-self-healing problem.
-          if (isLikelyTransientNetworkError(stderr) && isStandaloneClone(absTarget) && originMatchedBeforeFetch) {
+          // Shared safety gate for both stale degrades (`stale-offline` and
+          // `stale-unreachable` below): returns the frozen HEAD sha when ALL
+          // gates hold, null otherwise (fail closed → fall through to throw).
+          const frozenHeadIfSafe = async (): Promise<string | null> => {
+            if (!isStandaloneClone(absTarget) || !originMatchedBeforeFetch) return null;
             let headSha: string | null = null;
             try {
               headSha = await headCommit(absTarget);
             } catch {
               headSha = null;
             }
-            const refSatisfiedByHead = !ref || (headSha !== null && (await localRefCommit(absTarget, ref)) === headSha);
-            if (headSha !== null && refSatisfiedByHead) {
+            if (headSha === null) return null;
+            const refSatisfiedByHead = !ref || (await localRefCommit(absTarget, ref)) === headSha;
+            return refSatisfiedByHead ? headSha : null;
+          };
+
+          if (isLikelyTransientNetworkError(stderr) && (await frozenHeadIfSafe()) !== null) {
+            log?.warn(
+              { gitUrl: url, clonePath: absTarget, stderr: stderr.slice(0, 1024) },
+              "source-repo fetch failed (transient network) — using existing local checkout, left at current commit (stale)",
+            );
+            return finish("stale-offline");
+          }
+
+          // Degrade-on-permission-shaped-fetch-failure: the host's git identity
+          // cannot see the repo anymore (credentials revoked / expired, or the
+          // repo went private-invisible — GitHub serves 404 for those). Unlike
+          // the transient branch above this will NOT self-heal, so the outcome
+          // is distinct (`stale-unreachable`) and carries `degraded` for the
+          // workspace-health report: the checkout is served frozen at its
+          // last-good commit until credentials are fixed on the host. Same
+          // strict safety gates as `stale-offline`; any gate failing falls
+          // through to the fail-loud throw below (error-taxonomy fallback).
+          const degraded = classifyPermissionShapedGitError(err);
+          if (degraded) {
+            const headSha = await frozenHeadIfSafe();
+            if (headSha !== null) {
               log?.warn(
-                { gitUrl: url, clonePath: absTarget, stderr: stderr.slice(0, 1024) },
-                "source-repo fetch failed (transient network) — using existing local checkout, left at current commit (stale)",
+                { gitUrl: url, clonePath: absTarget, reasonCode: degraded.reasonCode, stderr: stderr.slice(0, 1024) },
+                "source-repo fetch failed (permission-shaped) — serving existing checkout frozen at current commit (stale-unreachable)",
               );
-              return finish("stale-offline");
+              return { ...(await finish("stale-unreachable")), degraded };
             }
           }
 
@@ -994,6 +1079,47 @@ export function isLikelyRepoNotFound(message: string): boolean {
 }
 
 /**
+ * Classify a clone/fetch failure as "permission-shaped" — the host's git
+ * identity cannot see the repo. This is the (deliberately conservative)
+ * skippable set behind the degraded-workspace start: only these two shapes
+ * degrade to `skipped-unreachable` / `stale-unreachable`; every other failure
+ * keeps today's fail-loud behaviour with the error-taxonomy as fallback.
+ *
+ *  - `GitMirrorAuthError` → `git_clone_auth_failed`. Thrown only when BOTH the
+ *    primary protocol and the peer-protocol fallback failed with credential-
+ *    shaped errors — checked FIRST since it extends `GitMirrorError`.
+ *  - plain `GitMirrorError` matching `isLikelyRepoNotFound` →
+ *    `git_repo_not_found`. GitHub deliberately serves 404 for private repos
+ *    the identity cannot see, so "no permission" usually LOOKS like not-found.
+ *    `GitMirrorTimeoutError` is excluded (a timeout is never permission-shaped,
+ *    even if its message happened to quote a 404).
+ *  - spawn-level `ENOENT` (NOT a `GitMirrorError` — the `git` binary itself is
+ *    missing from the host) → `git_not_installed`. The single most common
+ *    all-repos-unreachable cause: a fresh machine where gh/git was never
+ *    installed. Caveat: `spawn` also reports ENOENT for a missing *cwd*, but
+ *    every caller verifies the cwd exists (or passes none) before spawning.
+ *
+ * The returned `errorPreview` is already passed through `redactErrorPreview`
+ * (host-side redaction contract: credentials never reach the DB / console).
+ * Exported for unit testing.
+ */
+export function classifyPermissionShapedGitError(err: unknown): SourceRepoDegradedInfo | null {
+  if (err instanceof GitMirrorAuthError) {
+    return { reasonCode: "git_clone_auth_failed", errorPreview: redactErrorPreview(err.message) };
+  }
+  if (err instanceof GitMirrorError) {
+    if (!(err instanceof GitMirrorTimeoutError) && isLikelyRepoNotFound(err.message)) {
+      return { reasonCode: "git_repo_not_found", errorPreview: redactErrorPreview(err.message) };
+    }
+    return null;
+  }
+  if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+    return { reasonCode: "git_not_installed", errorPreview: redactErrorPreview(err.message) };
+  }
+  return null;
+}
+
+/**
  * Heuristic for "the repository is reachable but the configured branch / tag /
  * commit does not exist on it". Permanent for the same reason as
  * `isLikelyRepoNotFound`: only an operator can fix the ref, retrying churns.
@@ -1112,6 +1238,10 @@ export function isLikelyTransientNetworkError(message: string): boolean {
     // `Couldn't connect to server` — a server unreachable / connect timeout.
     /Failed to connect to\s+\S+\s+port\s+\d+/i.test(message) ||
     /Couldn't connect to server/i.test(message) ||
+    // curl 56 via a local proxy (Surge / Clash): the proxy accepted the
+    // connection but tore down the CONNECT tunnel — same bounce class as
+    // the localhost ECONNREFUSED case above.
+    /Proxy CONNECT aborted/i.test(message) ||
     // HTTP/2 transport framing fault (libcurl `CURLE_HTTP2`) seen as a
     // mid-handshake `Error in the HTTP2 framing layer` against github.com.
     /Error in the HTTP[/]?2 framing layer/i.test(message) ||

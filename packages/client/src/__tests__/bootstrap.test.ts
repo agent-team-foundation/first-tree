@@ -18,6 +18,7 @@ import {
   bootstrapWorkspace,
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
+  type ContextTreeSyncResult,
   deepEqualIdentity,
   FIRST_TREE_RUNTIME_DIR,
   IDENTITY_JSON_REL,
@@ -95,10 +96,10 @@ describe("withContextTreeSyncLock", () => {
     // share that pair (the common case — one Context Tree per org), all N
     // must share one in-flight sync instead of queuing N sequential pulls.
     let invocations = 0;
-    let resolveSync: ((value: ContextTreeBinding) => void) | undefined;
-    const fn = (): Promise<ContextTreeBinding | null> => {
+    let resolveSync: ((value: ContextTreeSyncResult) => void) | undefined;
+    const fn = (): Promise<ContextTreeSyncResult> => {
       invocations++;
-      return new Promise<ContextTreeBinding>((resolve) => {
+      return new Promise<ContextTreeSyncResult>((resolve) => {
         resolveSync = resolve;
       });
     };
@@ -113,17 +114,21 @@ describe("withContextTreeSyncLock", () => {
     expect(p2).toBe(p3);
 
     const binding: ContextTreeBinding = { path: key, repoUrl: "git@example/x", branch: "main" };
-    resolveSync?.(binding);
-    await expect(p1).resolves.toBe(binding);
-    await expect(p2).resolves.toBe(binding);
-    await expect(p3).resolves.toBe(binding);
+    const result: ContextTreeSyncResult = {
+      binding,
+      health: { status: "ok", repoUrl: binding.repoUrl, branch: binding.branch },
+    };
+    resolveSync?.(result);
+    await expect(p1).resolves.toBe(result);
+    await expect(p2).resolves.toBe(result);
+    await expect(p3).resolves.toBe(result);
   });
 
   it("isolates locks across distinct keys (different repos sync in parallel)", async () => {
     let invocations = 0;
-    const fn = (): Promise<ContextTreeBinding | null> => {
+    const fn = (): Promise<ContextTreeSyncResult> => {
       invocations++;
-      return Promise.resolve(null);
+      return Promise.resolve({ binding: null, health: null });
     };
 
     await Promise.all([withContextTreeSyncLock("/tmp/clone-A", fn), withContextTreeSyncLock("/tmp/clone-B", fn)]);
@@ -133,9 +138,9 @@ describe("withContextTreeSyncLock", () => {
 
   it("clears the slot after settle so a later call triggers a fresh sync", async () => {
     let invocations = 0;
-    const fn = (): Promise<ContextTreeBinding | null> => {
+    const fn = (): Promise<ContextTreeSyncResult> => {
       invocations++;
-      return Promise.resolve(null);
+      return Promise.resolve({ binding: null, health: null });
     };
 
     await withContextTreeSyncLock("/tmp/clone-C", fn);
@@ -147,16 +152,16 @@ describe("withContextTreeSyncLock", () => {
   it("propagates rejection to all concurrent callers and clears the slot", async () => {
     let invocations = 0;
     let rejectSync: ((reason: Error) => void) | undefined;
-    const fn = (): Promise<ContextTreeBinding | null> => {
+    const fn = (): Promise<ContextTreeSyncResult> => {
       invocations++;
       if (invocations === 1) {
-        return new Promise<ContextTreeBinding>((_, reject) => {
+        return new Promise<ContextTreeSyncResult>((_, reject) => {
           rejectSync = reject;
         });
       }
       // Later retries succeed immediately so the test can observe that the
       // slot was cleared without hanging on a second pending promise.
-      return Promise.resolve(null);
+      return Promise.resolve({ binding: null, health: null });
     };
 
     const key = "/tmp/clone-D";
@@ -173,7 +178,7 @@ describe("withContextTreeSyncLock", () => {
     // After the failed sync clears the slot, a new caller is allowed to
     // retry — important so the next agent's bind isn't poisoned by an
     // earlier transient network failure.
-    await expect(withContextTreeSyncLock(key, fn)).resolves.toBeNull();
+    await expect(withContextTreeSyncLock(key, fn)).resolves.toEqual({ binding: null, health: null });
     expect(invocations).toBe(2);
   });
 });

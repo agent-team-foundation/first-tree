@@ -22,6 +22,7 @@ import {
   type SessionState,
   serverWelcomeFrameSchema,
   type UpdateAttempt,
+  type WorkspaceHealthMessage,
 } from "@first-tree/shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
@@ -873,6 +874,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   reportRuntimeState(agentId: string, runtimeState: RuntimeState): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
+  }
+
+  /**
+   * Report the agent's workspace health (degraded-workspace startup): the
+   * tree-side verdict plus per-repo verdicts from the latest source-repo
+   * materialisation. Latest-wins on the server (`agent_presence.workspace_health`);
+   * fire-and-forget like the other report* frames — a dropped frame is
+   * re-sent naturally at the next session start.
+   */
+  reportWorkspaceHealth(agentId: string, health: WorkspaceHealthMessage): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "workspace:health", agentId, ...health }));
   }
 
   /**

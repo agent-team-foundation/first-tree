@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type AgentRuntimeConfigPayload, deriveRepoLocalPath } from "@first-tree/shared";
+import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type WorkspaceRepoHealth } from "@first-tree/shared";
 import { type PredeclaredSourceRepo, resolveBundledCliVersion } from "./bootstrap.js";
 import { resolveGitRepoTargetPath } from "./git-local-path.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
@@ -146,19 +146,40 @@ export function releaseSourceReposForSession(sessionCtx: SessionContext): void {
  * it to the latest default branch. Concurrency for the same path is serialised
  * inside the manager (`withPathLock`).
  *
- * Fail-fast, with one degrade: a transient *network* fetch failure on an
- * already-existing usable checkout does NOT abort — the manager leaves the
- * clone at its current commit (`stale-offline`) so the agent stays answerable
- * on the last-good source. Every other failure (first-clone failure, auth,
- * corrupt, wrong origin, TLS trust) still aborts the session and bubbles up.
+ * Fail-fast, with three degrades:
+ *  - transient *network* fetch failure on an already-existing usable checkout
+ *    → `stale-offline`: the manager leaves the clone at its current commit so
+ *    the agent stays answerable on the last-good source. Self-heals.
+ *  - PERMISSION-shaped fetch failure on an existing usable checkout
+ *    → `stale-unreachable`: same freeze, but reported as degraded health (it
+ *    will not self-heal until host credentials are fixed).
+ *  - PERMISSION-shaped clone failure with no usable local clone
+ *    → `skipped-unreachable`: the repo is skipped (excluded from the returned
+ *    `sourceRepos`) so the session still starts on a partial workspace.
+ * Every other failure (corrupt, wrong origin, TLS trust, ref-not-found) still
+ * aborts the session and bubbles up — see `classifyPermissionShapedGitError`.
+ *
+ * `repoHealth` carries one entry per configured repo (healthy ones included)
+ * for the post-bootstrap `workspace:health` report. Transient `stale-offline`
+ * is deliberately reported as `ok` — the warning surface is credential-
+ * targeted and a network blip heals on the next session by itself.
  */
-export async function prepareSourceRepos(params: PrepareSourceReposParams): Promise<PredeclaredSourceRepo[]> {
+export type PrepareSourceReposResult = {
+  sourceRepos: PredeclaredSourceRepo[];
+  repoHealth: WorkspaceRepoHealth[];
+};
+
+export async function prepareSourceRepos(params: PrepareSourceReposParams): Promise<PrepareSourceReposResult> {
   const { workspace, payload, sessionCtx, gitMirrorManager, payloadResolved } = params;
   const sourceRepos: PredeclaredSourceRepo[] = [];
+  const repoHealth: WorkspaceRepoHealth[] = [];
 
-  // No git capability → no source-repo prep AND no cleanup (we can't safely
-  // probe for clean state without git). Returns early before any state read.
-  if (!gitMirrorManager) return sourceRepos;
+  // No git capability handle at all (test-only construction; the production
+  // runtime always injects a manager) → no source-repo prep AND no cleanup
+  // (we can't safely probe for clean state without git). Returns early before
+  // any state read. The git-binary-missing case on a REAL host goes through
+  // the manager and is classified `git_not_installed` per repo below.
+  if (!gitMirrorManager) return { sourceRepos, repoHealth };
 
   // Build the set of `localPath`s the current config wants materialised.
   // `payload?.gitRepos` may legitimately be empty (config exists, just no
@@ -195,6 +216,24 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
         activelyInUse,
       });
 
+      // Degraded-workspace start: a permission-shaped clone failure skips the
+      // repo instead of aborting the whole loop. Nothing was materialised on
+      // disk (no `localPath` in the health entry), so the live-use
+      // registration THIS call created is released right away — a skipped
+      // repo must not pin the path into skip-update mode for other chats.
+      if (result.outcome === "skipped-unreachable") {
+        sessionCtx.log(
+          `Git: ${localPath} could not be cloned (${result.degraded?.reasonCode ?? "permission-shaped failure"}) — repo skipped, session starts on a partial workspace`,
+        );
+        repoHealth.push({
+          url: repo.url,
+          status: "unreachable",
+          ...(result.degraded ?? {}),
+        });
+        if (firstRegistration) releaseChatFromPath(sessionCtx.chatId, targetPath);
+        continue;
+      }
+
       if (result.outcome === "cloned") {
         sessionCtx.log(`Git: cloned ${repo.url}`);
       } else if (result.outcome === "migrated-recloned") {
@@ -209,7 +248,23 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
         sessionCtx.log(
           `Git: ${localPath} could not be fetched (transient network) — using existing local checkout, left at current commit (stale)`,
         );
+      } else if (result.outcome === "stale-unreachable") {
+        sessionCtx.log(
+          `Git: ${localPath} could not be fetched (${result.degraded?.reasonCode ?? "permission-shaped failure"}) — using existing local checkout FROZEN at its last-good commit until host git credentials are fixed`,
+        );
       }
+
+      repoHealth.push(
+        result.outcome === "stale-unreachable"
+          ? {
+              url: repo.url,
+              localPath,
+              status: "stale",
+              ...(result.degraded ?? {}),
+              ...(result.headCommit ? { headCommit: result.headCommit } : {}),
+            }
+          : { url: repo.url, localPath, status: "ok" },
+      );
 
       // Per agent-session-cwd-redesign: predeclared source repos are agent-scoped
       // persistent resources. They survive shutdown so the next chat finds them
@@ -251,7 +306,7 @@ export async function prepareSourceRepos(params: PrepareSourceReposParams): Prom
     throw err;
   }
 
-  return sourceRepos;
+  return { sourceRepos, repoHealth };
 }
 
 /**

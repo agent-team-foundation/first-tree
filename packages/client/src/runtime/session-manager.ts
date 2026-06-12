@@ -7,13 +7,20 @@ import type {
   RuntimeState,
   SessionEvent,
   SessionState,
+  WorkspaceHealthMessage,
+  WorkspaceRepoHealth,
 } from "@first-tree/shared";
-import { deriveRepoLocalPath, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  workspaceTreeHealthSchema,
+} from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
-import { type ContextTreeBinding, syncAgentContextTree } from "./bootstrap.js";
+import { type ContextTreeSyncResult, syncAgentContextTreeWithHealth } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
 import { Deduplicator } from "./deduplicator.js";
@@ -222,10 +229,20 @@ type SessionManagerConfig = {
    * Resolver for the agent's Context Tree binding, used to lazily upgrade a
    * tree-LESS slot to tree-bound at session start (new-tree onboarding sets the
    * org `context_tree` only after the slot starts). Defaults to a live
-   * `syncAgentContextTree(sdk)`; injected as a stub in tests to avoid spawning
-   * real git.
+   * `syncAgentContextTreeWithHealth(sdk)`; injected as a stub in tests to
+   * avoid spawning real git. The result's `health` half refreshes
+   * `handlerConfig.contextTreeHealth` so the next `workspace:health` frame
+   * carries the freshest tree verdict.
    */
-  resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
+  resolveContextTreeBinding?: () => Promise<ContextTreeSyncResult>;
+  /**
+   * Callback fired when a handler finishes materialising its source repos and
+   * reports per-repo workspace health (degraded-workspace startup). The
+   * SessionManager composes the frame's tree half from
+   * `handlerConfig.contextTreeHealth`; wired by AgentSlot to
+   * `clientConnection.reportWorkspaceHealth`.
+   */
+  onWorkspaceHealth?: (health: WorkspaceHealthMessage) => void;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
@@ -869,8 +886,16 @@ export class SessionManager {
 
     const resolve =
       this.config.resolveContextTreeBinding ??
-      (() => syncAgentContextTree(this.config.sdk, (msg) => this.config.log.info(msg)));
-    const binding = await reresolveUnboundTree(cfg.contextTreePath, resolve);
+      (() => syncAgentContextTreeWithHealth(this.config.sdk, (msg) => this.config.log.info(msg)));
+    const result = await reresolveUnboundTree(cfg.contextTreePath, resolve);
+    if (!result) return;
+    // Record the freshest tree-side health verdict even when the slot stays
+    // tree-less — a re-resolution distinguishes "org has no tree" (unbound)
+    // from "bound but this machine can't reach it" (unreachable), and the
+    // next `workspace:health` frame should carry whichever it found.
+    // `health === null` = config fetch failed (unknown) → keep the prior value.
+    if (result.health !== null) cfg.contextTreeHealth = result.health;
+    const binding = result.binding;
     if (!binding) return;
     cfg.contextTreePath = binding.path;
     cfg.contextTreeRepoUrl = binding.repoUrl;
@@ -879,6 +904,28 @@ export class SessionManager {
       { path: binding.path, repoUrl: binding.repoUrl },
       "context tree binding resolved lazily (agent was unbound at slot start)",
     );
+  }
+
+  /**
+   * Compose and emit a `workspace:health` report: the handler's per-repo
+   * verdicts plus the tree half read from `handlerConfig.contextTreeHealth`
+   * (set by AgentSlot at bind, refreshed by `ensureContextTreeBinding`).
+   *
+   * Skipped entirely when the tree half is unknown (slot bind couldn't fetch
+   * the tree config) — the server keeps the last good latest-wins report
+   * rather than having it overwritten by a half-blind one.
+   */
+  private reportWorkspaceHealth(repos: WorkspaceRepoHealth[]): void {
+    if (!this.config.onWorkspaceHealth) return;
+    const parsed = workspaceTreeHealthSchema.safeParse(this.config.handlerConfig.contextTreeHealth);
+    if (!parsed.success) {
+      this.config.log.debug(
+        { repoCount: repos.length },
+        "workspace:health report skipped — tree health unknown (context tree config not resolved)",
+      );
+      return;
+    }
+    this.config.onWorkspaceHealth({ tree: parsed.data, repos });
   }
 
   private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
@@ -1735,6 +1782,9 @@ export class SessionManager {
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
+      reportRepoHealth: (repos) => {
+        this.reportWorkspaceHealth(repos);
+      },
     };
   }
 

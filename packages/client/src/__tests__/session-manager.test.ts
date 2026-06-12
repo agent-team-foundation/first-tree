@@ -2,7 +2,7 @@ import type { AgentRuntimeConfig } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import type { ContextTreeBinding } from "../runtime/bootstrap.js";
+import type { ContextTreeBinding, ContextTreeSyncResult } from "../runtime/bootstrap.js";
 import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -48,7 +48,7 @@ function createSessionManager(opts: {
   handler?: AgentHandler;
   handlerConfig?: HandlerConfig;
   handlerFactory?: HandlerFactory;
-  resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
+  resolveContextTreeBinding?: () => Promise<ContextTreeSyncResult>;
   ackEntry?: (entryId: number) => Promise<void>;
   session?: {
     idle_timeout: number;
@@ -77,7 +77,7 @@ function createSessionManager(opts: {
     handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
     // Tests never want the live git-backed resolver — default to a no-op so a
     // tree-less handlerConfig stays tree-less unless a test opts in.
-    resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
+    resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => ({ binding: null, health: null })),
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -1209,6 +1209,10 @@ describe("SessionManager lazy Context Tree binding", () => {
     repoUrl: "https://github.com/acme/context-tree",
     branch: "main",
   };
+  const BINDING_RESULT: ContextTreeSyncResult = {
+    binding: BINDING,
+    health: { status: "ok", repoUrl: BINDING.repoUrl, branch: BINDING.branch },
+  };
 
   it("upgrades a tree-less handler config to tree-bound on a new session", async () => {
     const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
@@ -1219,7 +1223,7 @@ describe("SessionManager lazy Context Tree binding", () => {
         builtWith = cfg;
         return createMockHandler();
       },
-      resolveContextTreeBinding: async () => BINDING,
+      resolveContextTreeBinding: async () => BINDING_RESULT,
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "c-bind", messageId: "m1" }));
@@ -1235,7 +1239,7 @@ describe("SessionManager lazy Context Tree binding", () => {
   });
 
   it("does not re-resolve when already bound (steady state pays nothing)", async () => {
-    const resolve = vi.fn(async () => BINDING);
+    const resolve = vi.fn(async () => BINDING_RESULT);
     const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test", contextTreePath: "/already/bound" };
     const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
 
@@ -1248,7 +1252,7 @@ describe("SessionManager lazy Context Tree binding", () => {
   });
 
   it("re-resolves once for the new session, not again for a same-chat inject", async () => {
-    const resolve = vi.fn(async () => null);
+    const resolve = vi.fn(async (): Promise<ContextTreeSyncResult> => ({ binding: null, health: null }));
     const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
     const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
 

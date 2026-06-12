@@ -11,7 +11,14 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime, ToolFileRef } from "@first-tree/shared";
+import type {
+  AgentRuntimeConfigPayload,
+  SessionEvent,
+  SupportedImageMime,
+  ToolFileRef,
+  WorkspaceRepoHealth,
+  WorkspaceTreeHealth,
+} from "@first-tree/shared";
 import {
   isImageBatchRefContent,
   isImageRefContent,
@@ -699,6 +706,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * — those are runtime-opaque (created by the agent, not by First Tree).
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  /**
+   * Per-repo workspace-health entries from the latest `prepareSourceRepos`
+   * run (healthy repos included). Consumed by the post-bootstrap
+   * `workspace:health` report and the briefing's degraded-workspace warning.
+   */
+  let repoHealthForReport: WorkspaceRepoHealth[] = [];
   /**
    * The most recently pushed SDK user message, kept around as the replay
    * payload for the transient stream-API retry path. Stashed at every
@@ -1445,6 +1458,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
+  // Tree-side workspace health from the slot's Context Tree sync (degraded-
+  // workspace startup). Drives the briefing's bound-but-unreachable / frozen
+  // tree variants and the tree row of the `workspace:health` report.
+  const contextTreeHealth = (config.contextTreeHealth as WorkspaceTreeHealth | null | undefined) ?? null;
   // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
   // `agents.<name>` key). Carried through to the per-session bootstrap so a
   // single agent's multi-chat workspaces share the same workspace identity
@@ -1471,10 +1488,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    *
    * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
    * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
-   * list absolute paths + upstream coordinates for the LLM.
+   * list absolute paths + upstream coordinates for the LLM, and
+   * `repoHealthForReport` for the `workspace:health` report.
    *
-   * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
-   * and the error bubbles up to the caller (SessionManager).
+   * Fail-fast semantics per PRD D10/D13/D14, with the degraded-workspace
+   * exception: permission-shaped failures degrade per repo
+   * (`skipped-unreachable` / `stale-unreachable`, see source-repos.ts)
+   * instead of aborting; every other failure still bubbles up to the caller
+   * (SessionManager).
    */
   async function prepareSourceRepos(
     workspace: string,
@@ -1490,7 +1511,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Without this gate, a cache miss would compute an empty current-repo
     // set and the state-reconcile path would `rm` every previously-managed
     // clone. See `PrepareSourceReposParams.payloadResolved`.
-    sourceReposForPrompt = await prepareSourceReposShared({
+    const prepared = await prepareSourceReposShared({
       workspace,
       payload,
       sessionCtx,
@@ -1498,6 +1519,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       agentName,
       payloadResolved: payload !== undefined,
     });
+    sourceReposForPrompt = prepared.sourceRepos;
+    repoHealthForReport = prepared.repoHealth;
+    // Report workspace health only when the repo set is authoritative — an
+    // unresolved payload (config cache miss) yields an empty repoHealth that
+    // would overwrite a real degraded report with a false green.
+    if (payload !== undefined) sessionCtx.reportRepoHealth?.(prepared.repoHealth);
   }
 
   /** Tear down all worktrees this session owns; best-effort. */
@@ -1589,6 +1616,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       workspacePath: workspace,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      repoHealth: repoHealthForReport,
+      treeHealth: contextTreeHealth,
     });
   }
 

@@ -387,6 +387,7 @@ export {
   type ChatMessageFrame,
   type ChatSourceCount,
   type CreateMeChat,
+  type CreateMeChatResponse,
   chatEngagementViewSchema,
   chatMessageFrameSchema,
   chatSourceCountSchema,
@@ -421,6 +422,7 @@ export {
   meChatRowSchema,
   meChatSourceCountsSchema,
   meChatUnreadResponseSchema,
+  WORKSPACE_FIX_CHAT_PURPOSE,
 } from "./schemas/me-chat.js";
 export {
   type DocSnapshotFailReason,
@@ -741,6 +743,24 @@ export {
   userStatusSchema,
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
+export {
+  isWorkspaceHealthDegraded,
+  WORKSPACE_REPO_STATUSES,
+  type WorkspaceHealth,
+  type WorkspaceHealthMessage,
+  type WorkspaceHealthReason,
+  type WorkspaceRepoHealth,
+  type WorkspaceRepoStatus,
+  type WorkspaceTreeHealth,
+  type WorkspaceTreeStatus,
+  workspaceHealthMessageSchema,
+  workspaceHealthReasonSchema,
+  workspaceHealthSchema,
+  workspaceRepoHealthSchema,
+  workspaceRepoStatusSchema,
+  workspaceTreeHealthSchema,
+  workspaceTreeStatusSchema,
+} from "./schemas/workspace-health.js";
 export {
   WORKSPACE_MANIFEST_FILENAME,
   WORKSPACE_STATE_DIRNAME,

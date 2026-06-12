@@ -143,7 +143,7 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
     createLogger: () => state.logger,
   }));
   vi.doMock("../runtime/bootstrap.js", () => ({
-    syncAgentContextTree: vi.fn(async (sdk: unknown, log: (msg: string) => void) => {
+    syncAgentContextTreeWithHealth: vi.fn(async (sdk: unknown, log: (msg: string) => void) => {
       const messages: string[] = [];
       log("sync log");
       messages.push("sync log");
@@ -151,7 +151,12 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
       if (options.syncDelayMs && options.syncDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, options.syncDelayMs));
       }
-      return state.syncResult;
+      return {
+        binding: state.syncResult,
+        health: state.syncResult
+          ? { status: "ok", repoUrl: state.syncResult.repoUrl, branch: state.syncResult.branch }
+          : null,
+      };
     }),
   }));
   vi.doMock("../runtime/session-manager.js", () => ({

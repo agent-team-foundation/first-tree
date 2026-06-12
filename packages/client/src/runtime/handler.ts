@@ -1,4 +1,4 @@
-import type { AgentVisibility, SessionEvent } from "@first-tree/shared";
+import type { AgentVisibility, SessionEvent, WorkspaceRepoHealth } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 
@@ -123,6 +123,17 @@ export type SessionContext = HandlerContext & {
    * to keep `[From: ...]` attribution consistent with the text path.
    */
   resolveSenderLabel: (senderId: string) => Promise<string>;
+
+  /**
+   * Report per-repo workspace health after `prepareSourceRepos` completes
+   * (degraded-workspace startup). Include EVERY configured repo — healthy
+   * ones as `status: "ok"` — so a recovered repo flips the stored report
+   * back to green. The runtime composes the tree half and forwards the
+   * frame to the server (`workspace:health` → `agent_presence`).
+   * Optional so handler tests with minimal contexts don't have to stub it;
+   * call via `sessionCtx.reportRepoHealth?.(...)`.
+   */
+  reportRepoHealth?: (repos: WorkspaceRepoHealth[]) => void;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

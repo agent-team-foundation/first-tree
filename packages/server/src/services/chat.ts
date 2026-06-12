@@ -39,6 +39,9 @@ export type CreateLegacyEmptyWebChatInput = {
   participantAgentIds: readonly string[];
   topic?: string | null;
   description?: string | null;
+  // Optional purpose tag (e.g. the degraded-workspace fix chat) — written
+  // into `chats.metadata` so purpose-scoped dedup can find the chat later.
+  metadata?: Record<string, unknown>;
 };
 
 type CreateLegacyEmptyAgentChatInput = {
@@ -183,7 +186,7 @@ async function createLegacyEmptyChat(
         type: "group",
         topic: input.topic ?? null,
         description: input.description ?? null,
-        metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
+        metadata: input.metadata ?? {},
       })
       .returning();
 

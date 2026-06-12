@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
+import { DegradedWorkspaceChip } from "./degraded-workspace-chip.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
@@ -118,6 +119,7 @@ export function Layout() {
               </span>
             </a>
             <DisconnectChip />
+            <DegradedWorkspaceChip />
           </div>
         )}
 

@@ -334,11 +334,37 @@ export const listMeChatsResponseSchema = z.object({
 });
 export type ListMeChatsResponse = z.infer<typeof listMeChatsResponseSchema>;
 
+/**
+ * `chats.metadata.purpose` value marking a dedicated degraded-workspace fix
+ * chat (web topbar chip → Fix button). The dedup key is (purpose, fixAgentId):
+ * clicking Fix twice for the same agent reuses the existing chat instead of
+ * minting a second one.
+ */
+export const WORKSPACE_FIX_CHAT_PURPOSE = "workspace-fix";
+
 export const createMeChatSchema = z.object({
   participantIds: z.array(z.string().min(1)).min(1),
   topic: z.string().trim().max(500).optional().nullable(),
+  /**
+   * Optional structured purpose persisted to `chats.metadata` as
+   * `{ purpose, fixAgentId }`. Deliberately a closed enum-of-one rather than
+   * free-form metadata — the create route is caller-facing, so each purpose
+   * must be opted in here. When present, creation dedups: an existing chat in
+   * the org with the same (purpose, fixAgentId) that the caller participates
+   * in is returned (`reused: true`) instead of creating a new chat.
+   */
+  purpose: z
+    .object({
+      kind: z.literal(WORKSPACE_FIX_CHAT_PURPOSE),
+      /** The degraded agent this fix chat is about (dedup key with `kind`). */
+      agentId: z.string().min(1),
+    })
+    .optional(),
 });
 export type CreateMeChat = z.infer<typeof createMeChatSchema>;
+
+/** Response of `POST /orgs/:orgId/chats` — `reused` marks a purpose-dedup hit. */
+export type CreateMeChatResponse = { chatId: string; reused?: boolean };
 
 export const addMeChatParticipantsSchema = z.object({
   participantIds: z.array(z.string().min(1)).min(1),

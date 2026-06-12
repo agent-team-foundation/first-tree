@@ -11,7 +11,7 @@ import type { ClientConnection, SessionReconcileResult } from "../client-connect
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
-import { syncAgentContextTree } from "./bootstrap.js";
+import { syncAgentContextTreeWithHealth } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
@@ -193,7 +193,8 @@ export class AgentSlot {
       }
 
       this.inboxId = agent.inboxId;
-      const contextTreeBinding = await syncAgentContextTree(sdk, (msg) => this.logger.info(msg));
+      const contextTreeSync = await syncAgentContextTreeWithHealth(sdk, (msg) => this.logger.info(msg));
+      const contextTreeBinding = contextTreeSync.binding;
       if (!contextTreeBinding) {
         this.logger.info(
           "context tree not configured or sync skipped — agent will start without organizational context",
@@ -220,6 +221,11 @@ export class AgentSlot {
           contextTreePath: contextTreeBinding?.path,
           contextTreeRepoUrl: contextTreeBinding?.repoUrl,
           contextTreeBranch: contextTreeBinding?.branch,
+          // Tree-side workspace health (degraded-workspace startup). Read by
+          // handlers for the briefing's degraded-tree variants and by the
+          // SessionManager when composing `workspace:health` frames; refreshed
+          // in place by the lazy tree re-resolution (`ensureContextTreeBinding`).
+          contextTreeHealth: contextTreeSync.health,
           gitMirrorManager,
           // Identifies the owning client process. The claude-code-tui handler
           // uses it to scope tmux session ownership (orphan sweep / names) so
@@ -246,6 +252,7 @@ export class AgentSlot {
         onRuntimeStateChange: (state) => this.reportRuntimeState(state),
         onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
         onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
+        onWorkspaceHealth: (health) => this.clientConnection.reportWorkspaceHealth(agent.agentId, health),
       });
 
       const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
@@ -264,7 +271,7 @@ export class AgentSlot {
       // during init. With the bind-time reset+drain path (see design §4)
       // the server pushes pending entries the instant it processes the
       // `agent:bind` frame, but the surrounding `sdk.register` +
-      // `agentConfigCache.refresh` + `syncAgentContextTree` chain above
+      // `agentConfigCache.refresh` + `syncAgentContextTreeWithHealth` chain above
       // can take anywhere from ~100ms (no Context Tree) to 15s
       // (cold-clone Context Tree). Without this flush every restart with
       // an un-acked in-flight message lost the recovery push and the

@@ -1,5 +1,3 @@
-import type { ContextTreeBinding } from "./bootstrap.js";
-
 /**
  * Lazily re-resolve an agent's Context Tree binding when it started its slot
  * tree-LESS.
@@ -19,11 +17,15 @@ import type { ContextTreeBinding } from "./bootstrap.js";
  * Never throws — a failed re-resolution just leaves the session unbound for
  * this turn (the next new session retries). The caller owns applying the
  * returned binding to its (mutable) handler config.
+ *
+ * Generic over the resolver's result so callers can thread richer shapes
+ * (e.g. `ContextTreeSyncResult` = binding + workspace-health verdict) through
+ * the same already-bound short-circuit without this helper knowing about them.
  */
-export async function reresolveUnboundTree(
+export async function reresolveUnboundTree<T>(
   currentPath: unknown,
-  resolve: () => Promise<ContextTreeBinding | null>,
-): Promise<ContextTreeBinding | null> {
+  resolve: () => Promise<T | null>,
+): Promise<T | null> {
   if (typeof currentPath === "string" && currentPath.length > 0) return null;
   try {
     return await resolve();

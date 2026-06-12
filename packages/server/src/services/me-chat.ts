@@ -22,6 +22,7 @@ import {
   type ChatEngagementView,
   type ChatSource,
   type CreateMeChat,
+  type CreateMeChatResponse,
   GITHUB_ENTITY_TYPES,
   type GithubEntityType,
   type ListMeChatSourceCountsQuery,
@@ -39,6 +40,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
+import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, CallerNotSpeakerError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
@@ -610,17 +612,43 @@ export async function createMeChat(
   humanAgentId: string,
   organizationId: string,
   body: CreateMeChat,
-): Promise<{ chatId: string }> {
+): Promise<CreateMeChatResponse> {
   const distinctIds = [...new Set(body.participantIds)].filter((id) => id !== humanAgentId);
   if (distinctIds.length === 0) {
     throw new BadRequestError("At least one non-self participant required");
   }
+  // Purpose dedup (today: the degraded-workspace fix chat). A second Fix
+  // click for the same agent must land in the existing fix chat, not mint a
+  // sibling — the chat IS the dedup unit, keyed on
+  // `chats.metadata (purpose, fixAgentId)` scoped to chats the caller
+  // participates in. Best-effort (no unique index): a true double-submit race
+  // can still create two chats, which is harmless — both work, and the next
+  // click converges on one.
+  if (body.purpose) {
+    const [existing] = await db
+      .select({ chatId: chats.id })
+      .from(chats)
+      .innerJoin(chatMembership, and(eq(chatMembership.chatId, chats.id), eq(chatMembership.agentId, humanAgentId)))
+      .where(
+        and(
+          eq(chats.organizationId, organizationId),
+          sql`${chats.metadata}->>'purpose' = ${body.purpose.kind}`,
+          sql`${chats.metadata}->>'fixAgentId' = ${body.purpose.agentId}`,
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      return { chatId: existing.chatId, reused: true };
+    }
+  }
+
   const result = await createChat(db, {
     mode: "legacy-empty-web",
     creatorAgentId: humanAgentId,
     organizationId,
     participantAgentIds: distinctIds,
     topic: body.topic ?? null,
+    ...(body.purpose ? { metadata: { purpose: body.purpose.kind, fixAgentId: body.purpose.agentId } } : {}),
   });
   invalidateChatAudience(result.id);
   return { chatId: result.id };

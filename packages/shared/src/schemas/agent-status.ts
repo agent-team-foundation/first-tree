@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type LiveActivity, liveActivitySchema } from "./me-chat.js";
+import { type WorkspaceHealth, workspaceHealthSchema } from "./workspace-health.js";
 
 /**
  * Composite "main" status — the single value a compact surface (a status
@@ -137,6 +138,21 @@ export const agentChatStatusSchema = z
      * a second round-trip. Not an input to `main` — purely descriptive.
      */
     activity: liveActivitySchema.nullable(),
+    /**
+     * Latest `workspace:health` report for this agent (repo/tree reachability,
+     * from `agent_presence.workspace_health`), or null when the agent has
+     * never reported. Descriptive only — NOT an input to `main`; a degraded
+     * workspace renders as the topbar warning chip, not as a status token.
+     * `.nullish()` so payloads from servers predating the field still parse.
+     */
+    workspaceHealth: workspaceHealthSchema.nullish(),
+    /**
+     * Hostname of the client currently hosting this agent (from `clients.hostname`
+     * via `agent_presence.client_id`), or null when unbound/unknown. Carried for
+     * the degraded-workspace popover ("configure credentials on <hostname>") and
+     * the fix-chat template, sparing those surfaces a second round-trip.
+     */
+    clientHostname: z.string().nullish(),
   })
   .superRefine((val, ctx) => {
     const expected = deriveMainStatus(val);
@@ -151,8 +167,13 @@ export const agentChatStatusSchema = z
 export type AgentChatStatus = z.infer<typeof agentChatStatusSchema>;
 
 /** Inputs to `buildAgentChatStatus` — the axis fields plus the agent id and
- * the optional descriptive live activity. */
-export type AgentChatStatusInput = DeriveMainStatusInput & { agentId: string; activity?: LiveActivity | null };
+ * the optional descriptive fields (live activity, workspace health, hostname). */
+export type AgentChatStatusInput = DeriveMainStatusInput & {
+  agentId: string;
+  activity?: LiveActivity | null;
+  workspaceHealth?: WorkspaceHealth | null;
+  clientHostname?: string | null;
+};
 
 /**
  * Construct an `AgentChatStatus` with `main` always derived from the axes
@@ -168,5 +189,7 @@ export function buildAgentChatStatus(input: AgentChatStatusInput): AgentChatStat
     errored: input.errored,
     main: deriveMainStatus(input),
     activity: input.activity ?? null,
+    workspaceHealth: input.workspaceHealth ?? null,
+    clientHostname: input.clientHostname ?? null,
   };
 }

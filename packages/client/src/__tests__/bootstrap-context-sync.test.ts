@@ -136,14 +136,21 @@ function installContextSyncMocks(overrides: Partial<MockState> = {}): MockState 
   vi.doMock("@first-tree/shared/config", () => ({
     defaultDataDir: () => "/tmp/first-tree-data",
   }));
-  vi.doMock("../runtime/git-mirror-manager.js", () => ({
-    httpsToSshBaseRewrite: vi.fn((url: string) => {
-      if (!url.startsWith("https://github.com/")) return null;
-      return state.rewriteMismatch
-        ? { httpsBase: "https://gitlab.com/", sshBase: "git@gitlab.com:" }
-        : { httpsBase: "https://github.com/", sshBase: "git@github.com:" };
-    }),
-  }));
+  // Spread the real module so bootstrap's permission-shape classifier helpers
+  // (`isLikelyRepoNotFound` / `isLikely*AuthFailure`) keep their production
+  // behavior — only the SSH-rewrite table is stubbed for URL control.
+  vi.doMock("../runtime/git-mirror-manager.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../runtime/git-mirror-manager.js")>();
+    return {
+      ...actual,
+      httpsToSshBaseRewrite: vi.fn((url: string) => {
+        if (!url.startsWith("https://github.com/")) return null;
+        return state.rewriteMismatch
+          ? { httpsBase: "https://gitlab.com/", sshBase: "git@gitlab.com:" }
+          : { httpsBase: "https://github.com/", sshBase: "git@github.com:" };
+      }),
+    };
+  });
   vi.doMock("../sdk.js", () => ({
     FirstTreeHubSDK: class {
       serverUrl: string;

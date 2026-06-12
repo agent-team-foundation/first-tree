@@ -1,4 +1,4 @@
-import type { RuntimeState } from "@first-tree/shared";
+import type { RuntimeState, WorkspaceHealthMessage } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -142,6 +142,23 @@ export async function setRuntimeState(
   if (options?.notifier && options.organizationId) {
     options.notifier.notifyRuntimeStateChange(agentId, runtimeState, options.organizationId).catch(() => {});
   }
+}
+
+/**
+ * Persist the latest `workspace:health` report (latest-wins). The server
+ * stamps `updatedAt` here so "last reported X ago" never trusts the client
+ * clock. Deliberately not cleared on offline/unbind — the console keeps
+ * explaining a degraded workspace after the client disconnects.
+ */
+export async function setWorkspaceHealth(db: Database, agentId: string, health: WorkspaceHealthMessage): Promise<void> {
+  const now = new Date();
+  await db
+    .update(agentPresence)
+    .set({
+      workspaceHealth: { ...health, updatedAt: now.toISOString() },
+      lastSeenAt: now,
+    })
+    .where(eq(agentPresence.agentId, agentId));
 }
 
 /** Touch agent last_seen_at on heartbeat (per-agent liveness). */

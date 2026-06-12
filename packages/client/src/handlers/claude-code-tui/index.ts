@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type AgentRuntimeConfigPayload, DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD } from "@first-tree/shared";
+import {
+  type AgentRuntimeConfigPayload,
+  DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
+  type WorkspaceRepoHealth,
+  type WorkspaceTreeHealth,
+} from "@first-tree/shared";
 import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
@@ -86,6 +91,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
+  // Tree-side workspace health from the slot's Context Tree sync (degraded-
+  // workspace startup). Drives the briefing's bound-but-unreachable / frozen
+  // tree variants and the tree row of the `workspace:health` report.
+  const contextTreeHealth = (config.contextTreeHealth as WorkspaceTreeHealth | null | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
   // Identifies this client process; scopes tmux session ownership so the orphan
   // sweep and session names never collide with another live client / QA slot
@@ -117,6 +126,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   // contents in memory), so we snapshot once per startClaude().
   let chatContextForPrompt: ChatContext | undefined;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  /**
+   * Per-repo workspace-health entries from the latest `prepareSourceRepos`
+   * run (healthy repos included). Consumed by the post-bootstrap
+   * `workspace:health` report and the briefing's degraded-workspace warning.
+   */
+  let repoHealthForReport: WorkspaceRepoHealth[] = [];
 
   function buildEnv(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload): Record<string, string> {
     const env: Record<string, string> = {};
@@ -147,6 +162,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      repoHealth: repoHealthForReport,
+      treeHealth: contextTreeHealth,
     });
   }
 
@@ -547,7 +564,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // shared `ensureAgentBootstrap` materialises is fully populated; claude
         // then reads CLAUDE.md once on spawn via `--setting-sources project`.
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
+        const preparedStart = await prepareSourceRepos({
           workspace: cwd,
           payload,
           sessionCtx,
@@ -558,6 +575,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           // cleanup is suppressed for this session (see PR #869 P0-2).
           payloadResolved: resolvedPayload !== null && resolvedPayload !== undefined,
         });
+        sourceReposForPrompt = preparedStart.sourceRepos;
+        repoHealthForReport = preparedStart.repoHealth;
+        // Report workspace health only when the repo set is authoritative —
+        // a defaultPayload() fallback yields an empty repoHealth that would
+        // overwrite a real degraded report with a false green.
+        if (resolvedPayload !== null && resolvedPayload !== undefined) {
+          sessionCtx.reportRepoHealth?.(preparedStart.repoHealth);
+        }
         ensureAgentBootstrap({
           workspace: cwd,
           sessionCtx,
@@ -602,7 +627,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const payload = resumePayloadResolved ?? defaultPayload();
 
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        sourceReposForPrompt = await prepareSourceRepos({
+        const preparedResume = await prepareSourceRepos({
           workspace: cwd,
           payload,
           sessionCtx,
@@ -611,6 +636,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           // See PR #869 P0-2: same gate as the start() path.
           payloadResolved: resumePayloadResolved !== null && resumePayloadResolved !== undefined,
         });
+        sourceReposForPrompt = preparedResume.sourceRepos;
+        repoHealthForReport = preparedResume.repoHealth;
+        // Same authoritative-only gate as the start() path.
+        if (resumePayloadResolved !== null && resumePayloadResolved !== undefined) {
+          sessionCtx.reportRepoHealth?.(preparedResume.repoHealth);
+        }
         // Same shared bootstrap as start(): ensureAgentBootstrap handles the
         // sentinel + Context-Tree/CLI drift internally, so a stale or failed
         // integration is re-run on resume instead of being skipped.

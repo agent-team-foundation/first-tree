@@ -17,13 +17,20 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import type { WorkspaceTreeHealth } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import { getCliBinding } from "./cli-binding.js";
 import { installCoreSkills as installCoreSkillsImpl, installFirstTreeSkills } from "./first-tree-skills/installer.js";
-import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
+import {
+  httpsToSshBaseRewrite,
+  isLikelyHttpsAuthFailure,
+  isLikelyRepoNotFound,
+  isLikelySshAuthFailure,
+} from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
+import { redactErrorPreview } from "./redact-error-preview.js";
 
 /**
  * Promisified `execFile` used by the Context Tree sync path. The sync path
@@ -61,7 +68,7 @@ function contextTreeReposDir(): string {
   return join(defaultDataDir(), "context-tree-repos");
 }
 
-const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>();
+const contextTreeSyncLocks = new Map<string, Promise<ContextTreeSyncResult>>();
 
 /**
  * Resolved Context Tree binding the runtime threads through every layer:
@@ -74,6 +81,29 @@ export type ContextTreeBinding = {
   path: string;
   repoUrl: string;
   branch: string;
+};
+
+/**
+ * Binding + the workspace-health view of the same sync (degraded-workspace
+ * design). The two move together but answer different questions:
+ *  - `binding` — "is there a local checkout the runtime can serve?" (null =
+ *    tree-less start, exactly the silent degradation that always existed)
+ *  - `health`  — "WHY is the tree in this state?", distinguishing the four
+ *    cases the binding alone collapses: `ok` (synced, or served from an
+ *    existing clone after a transient failure — self-heals next sync),
+ *    `stale` (served from an existing clone after a PERMISSION-shaped
+ *    failure — frozen until host credentials are fixed), `unreachable`
+ *    (bound but no usable local clone), `unbound` (the org has no Context
+ *    Tree configured at all).
+ *
+ * `health: null` = unknown — the agent config could not be fetched, so bound
+ * cannot be told apart from unbound. The reporting layer skips the
+ * `workspace:health` frame entirely in that case rather than overwrite the
+ * last good report with junk (persistence is latest-wins).
+ */
+export type ContextTreeSyncResult = {
+  binding: ContextTreeBinding | null;
+  health: WorkspaceTreeHealth | null;
 };
 
 export function contextTreeCloneDir(repo: string, branch: string): string {
@@ -114,8 +144,8 @@ function toSshGitUrl(httpsRepo: string): string | null {
  */
 export function withContextTreeSyncLock(
   key: string,
-  fn: () => Promise<ContextTreeBinding | null>,
-): Promise<ContextTreeBinding | null> {
+  fn: () => Promise<ContextTreeSyncResult>,
+): Promise<ContextTreeSyncResult> {
   const inFlight = contextTreeSyncLocks.get(key);
   if (inFlight) return inFlight;
   const next = fn().finally(() => {
@@ -130,34 +160,55 @@ export function withContextTreeSyncLock(
 async function resolveContextTreeBinding(
   fetchConfig: () => Promise<ContextTreeConfig>,
   log: (msg: string) => void,
-): Promise<ContextTreeBinding | null> {
-  // 1. Check git is available
-  try {
-    await execFileAsync("git", ["--version"]);
-  } catch {
-    log("Context Tree sync skipped: git is not installed");
-    return null;
-  }
-
-  // 2. Fetch repo config from server
+): Promise<ContextTreeSyncResult> {
+  // 1. Fetch repo config from server. Runs BEFORE the git probe (it needs no
+  //    git) so a host without git can still tell `unbound` (org has no tree)
+  //    apart from `unreachable` (bound but unusable) in the health report.
   let repo: string;
   let branch: string;
   try {
     const config = await fetchConfig();
     if (!config.repo) {
       log("Context Tree sync skipped: not configured on server");
-      return null;
+      return { binding: null, health: { status: "unbound" } };
     }
     repo = config.repo;
     branch = config.branch ?? "main";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync skipped: failed to fetch config from server (${msg})`);
-    return null;
+    // Server unreachable — bound vs unbound is unknowable, so health stays
+    // null and the workspace:health frame is skipped (see ContextTreeSyncResult).
+    return { binding: null, health: null };
+  }
+
+  // 2. Check git is available
+  try {
+    await execFileAsync("git", ["--version"]);
+  } catch {
+    log("Context Tree sync skipped: git is not installed");
+    return {
+      binding: null,
+      health: { status: "unreachable", repoUrl: repo, branch, reasonCode: "git_not_installed" },
+    };
   }
 
   const cloneDir = contextTreeCloneDir(repo, branch);
   return withContextTreeSyncLock(cloneDir, () => syncContextTreeRepo(repo, branch, cloneDir, log));
+}
+
+/**
+ * Permission-shaped classification for the Context Tree sync path, which works
+ * on `execFile` error strings rather than `GitMirrorError` instances (the tree
+ * path predates the manager and shells out directly). Same skippable-set
+ * semantics as `classifyPermissionShapedGitError`: 404 first (GitHub serves it
+ * for private repos the identity cannot see), then credential failures on
+ * either transport. Anything else → null (treated as transient / self-healing).
+ */
+function classifyTreeSyncFailure(message: string): "git_clone_auth_failed" | "git_repo_not_found" | null {
+  if (isLikelyRepoNotFound(message)) return "git_repo_not_found";
+  if (isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message)) return "git_clone_auth_failed";
+  return null;
 }
 
 async function syncContextTreeRepo(
@@ -165,7 +216,7 @@ async function syncContextTreeRepo(
   branch: string,
   cloneDir: string,
   log: (msg: string) => void,
-): Promise<ContextTreeBinding | null> {
+): Promise<ContextTreeSyncResult> {
   // 3. Clone or pull
   try {
     if (existsSync(join(cloneDir, ".git"))) {
@@ -198,7 +249,10 @@ async function syncContextTreeRepo(
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
-    return { path: cloneDir, repoUrl: repo, branch };
+    return {
+      binding: { path: cloneDir, repoUrl: repo, branch },
+      health: { status: "ok", repoUrl: repo, branch },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync failed: ${msg}`);
@@ -212,6 +266,11 @@ async function syncContextTreeRepo(
     // Pull failures (existing .git present) skip this — the existing remote
     // is whatever clone last succeeded; switching it mid-flight is messier
     // than letting the "use existing clone" fallback below take over.
+    // Accumulates every failed attempt's message for the health
+    // classification below — an HTTPS auth failure followed by an SSH
+    // `Permission denied (publickey)` should classify on EITHER line.
+    let combinedFailure = msg;
+
     const sshRepo = !existsSync(join(cloneDir, ".git")) ? toSshGitUrl(repo) : null;
     if (sshRepo) {
       log(`Retrying Context Tree clone via SSH: ${sshRepo}`);
@@ -227,10 +286,14 @@ async function syncContextTreeRepo(
         // on this checkout will be the SSH form, and downstream consumers
         // (telemetry, future tree wiring) should match the actual remote
         // rather than the configured-but-unusable HTTPS.
-        return { path: cloneDir, repoUrl: sshRepo, branch };
+        return {
+          binding: { path: cloneDir, repoUrl: sshRepo, branch },
+          health: { status: "ok", repoUrl: sshRepo, branch },
+        };
       } catch (sshErr) {
         const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);
         log(`Context Tree SSH fallback also failed: ${sshMsg}`);
+        combinedFailure = `${combinedFailure}\n${sshMsg}`;
       }
     }
 
@@ -250,7 +313,10 @@ async function syncContextTreeRepo(
           maxBuffer: GIT_CLONE_MAX_BUFFER,
         });
         log("Context Tree re-cloned successfully");
-        return { path: cloneDir, repoUrl: repo, branch };
+        return {
+          binding: { path: cloneDir, repoUrl: repo, branch },
+          health: { status: "ok", repoUrl: repo, branch },
+        };
       } catch {
         log("Context Tree re-clone also failed, continuing without context");
       }
@@ -259,10 +325,41 @@ async function syncContextTreeRepo(
     // Return existing clone path if available (preserves local work on transient errors)
     if (existsSync(join(cloneDir, ".git"))) {
       log("Using existing Context Tree clone despite sync failure");
-      return { path: cloneDir, repoUrl: repo, branch };
+      // Permission-shaped failure → the checkout is frozen until credentials
+      // are fixed: report "stale" so the warning surface lights up. Anything
+      // else (network blip, timeout) self-heals on the next sync, so it
+      // reports "ok" — mirroring the stale-offline → "ok" policy for source
+      // repos: the warning surface is credential-targeted, not a general
+      // connectivity monitor.
+      const reason = classifyTreeSyncFailure(msg);
+      return {
+        binding: { path: cloneDir, repoUrl: repo, branch },
+        health: reason
+          ? {
+              status: "stale",
+              repoUrl: repo,
+              branch,
+              reasonCode: reason,
+              errorPreview: redactErrorPreview(msg),
+            }
+          : { status: "ok", repoUrl: repo, branch },
+      };
     }
 
-    return null;
+    // No clone on disk and every attempt failed — the tree is bound but
+    // unreachable from this host. Classify on the combined failure text so an
+    // HTTPS auth error followed by an SSH publickey error matches on either.
+    const reason = classifyTreeSyncFailure(combinedFailure);
+    return {
+      binding: null,
+      health: {
+        status: "unreachable",
+        repoUrl: repo,
+        branch,
+        ...(reason ? { reasonCode: reason } : {}),
+        errorPreview: redactErrorPreview(combinedFailure),
+      },
+    };
   }
 }
 
@@ -281,7 +378,7 @@ export async function syncContextTree(
   userAgent?: string,
 ): Promise<ContextTreeBinding | null> {
   const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken, userAgent });
-  return resolveContextTreeBinding(() => sdk.getContextTreeConfig(), log);
+  return (await resolveContextTreeBinding(() => sdk.getContextTreeConfig(), log)).binding;
 }
 
 /**
@@ -295,6 +392,20 @@ export async function syncAgentContextTree(
   sdk: FirstTreeHubSDK,
   log: (msg: string) => void,
 ): Promise<ContextTreeBinding | null> {
+  return (await syncAgentContextTreeWithHealth(sdk, log)).binding;
+}
+
+/**
+ * Same as {@link syncAgentContextTree}, but also surfaces the tree-side
+ * workspace-health verdict (ok / stale / unreachable / unbound, or null when
+ * the server config could not be fetched). Used by the runtime to feed the
+ * `workspace:health` report alongside source-repo health; callers that only
+ * need the binding should keep using `syncAgentContextTree`.
+ */
+export async function syncAgentContextTreeWithHealth(
+  sdk: FirstTreeHubSDK,
+  log: (msg: string) => void,
+): Promise<ContextTreeSyncResult> {
   return resolveContextTreeBinding(() => sdk.getAgentContextTreeConfig(), log);
 }
 

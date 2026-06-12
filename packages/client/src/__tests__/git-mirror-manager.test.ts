@@ -606,6 +606,9 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     "fatal: unable to access 'https://github.com/foo/bar/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 54",
     "fatal: unable to access 'https://github.com/x/y/': Recv failure: Connection reset by peer",
     "fatal: unable to access 'https://github.com/x/y/': Failed to connect to 127.0.0.1 port 6152: Connection refused",
+    // curl 56 when a local proxy (Surge / Clash) tears down the CONNECT
+    // tunnel — same bounce class as the localhost Connection-refused case.
+    "fatal: unable to access 'https://github.com/x/y/': Proxy CONNECT aborted",
     "fatal: unable to access 'https://github.com/x/y/': Operation timed out after 30000 milliseconds",
     "fatal: unable to access 'https://github.com/x/y/': Could not resolve host: github.com",
     "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",

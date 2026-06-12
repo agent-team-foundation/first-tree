@@ -4,6 +4,8 @@ import {
   deriveRepoLocalPath,
   type SessionEvent,
   type ToolFileRef,
+  type WorkspaceRepoHealth,
+  type WorkspaceTreeHealth,
 } from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
@@ -448,6 +450,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
+  // Tree-side workspace health from the slot's Context Tree sync (degraded-
+  // workspace startup). Drives the briefing's bound-but-unreachable / frozen
+  // tree variants and the tree row of the `workspace:health` report.
+  const contextTreeHealth = (config.contextTreeHealth as WorkspaceTreeHealth | null | undefined) ?? null;
   const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
@@ -480,6 +486,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * in the per-session AGENTS.md so the LLM knows the absolute paths.
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  /**
+   * Per-repo workspace-health entries from the latest `prepareSourceRepos`
+   * run (healthy repos included). Consumed by the post-bootstrap
+   * `workspace:health` report and the briefing's degraded-workspace warning.
+   */
+  let repoHealthForReport: WorkspaceRepoHealth[] = [];
 
   function buildEnv(sessionCtx: SessionContext): Record<string, string> {
     // Footgun F1: when `CodexOptions.env` is provided the SDK does NOT
@@ -540,6 +552,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      repoHealth: repoHealthForReport,
+      treeHealth: contextTreeHealth,
     });
   }
 
@@ -575,7 +589,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // `payloadResolved` is forwarded so the shared helper can decide whether
     // its empty `gitRepos: []` is authoritative — see
     // `PrepareSourceReposParams.payloadResolved` and PR #869 P0-2.
-    sourceReposForPrompt = await prepareSourceReposShared({
+    const prepared = await prepareSourceReposShared({
       workspace: workspaceCwd,
       payload,
       sessionCtx,
@@ -583,6 +597,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
       agentName,
       payloadResolved,
     });
+    sourceReposForPrompt = prepared.sourceRepos;
+    repoHealthForReport = prepared.repoHealth;
+    // Report workspace health only when the repo set is authoritative — an
+    // unresolved payload yields an empty repoHealth that would overwrite a
+    // real degraded report with a false green.
+    if (payloadResolved) sessionCtx.reportRepoHealth?.(prepared.repoHealth);
   }
 
   function emitToolCall(

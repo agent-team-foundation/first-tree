@@ -2,6 +2,9 @@ import {
   AGENT_BRIEFING_GENERATED_MARKER,
   type AgentRuntimeConfigPayload,
   type PromptSection,
+  type WorkspaceHealthReason,
+  type WorkspaceRepoHealth,
+  type WorkspaceTreeHealth,
 } from "@first-tree/shared";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import type { ChatContext } from "./chat-context.js";
@@ -17,6 +20,23 @@ export type BuildAgentBriefingOptions = {
   workspacePath: string;
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
   contextTreePath: string | null;
+  /**
+   * Per-repo workspace-health entries from `prepareSourceRepos` (degraded
+   * startup, design docs/degraded-workspace-design.md §4.3). Entries with
+   * status `unreachable` (skipped, not on disk) or `stale` (frozen checkout)
+   * render a prominent warning block under `## Source Repositories`.
+   * Optional — callers that don't track health omit it and get the legacy
+   * rendering (warnings simply absent).
+   */
+  repoHealth?: ReadonlyArray<WorkspaceRepoHealth>;
+  /**
+   * Tree-side health from the Context Tree sync. Drives the
+   * bound-but-unreachable variant of `## Tree Location` — which MUST read
+   * differently from the neutral tree-less stub, so an agent can tell
+   * "this org has no tree" from "this machine cannot reach the tree".
+   * `null`/`undefined` = unknown or not tracked → legacy rendering.
+   */
+  treeHealth?: WorkspaceTreeHealth | null;
 };
 
 /**
@@ -84,6 +104,7 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
       agentHome: opts.workspacePath,
       sourceRepos: opts.sourceRepos,
       contextTreePath: opts.contextTreePath,
+      repoHealth: opts.repoHealth ?? [],
     }),
   );
 
@@ -102,7 +123,7 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const requiredReading = requiredReadingSection(opts.contextTreePath);
   if (requiredReading) sections.push(requiredReading);
 
-  sections.push(contextTreeSection(opts.contextTreePath));
+  sections.push(contextTreeSection(opts.contextTreePath, opts.treeHealth ?? null));
 
   const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
   if (skillsBlock) sections.push(skillsBlock);
@@ -301,6 +322,7 @@ type WorkingInFirstTreeOpts = {
   agentHome: string;
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
   contextTreePath: string | null;
+  repoHealth: ReadonlyArray<WorkspaceRepoHealth>;
 };
 
 function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
@@ -336,8 +358,15 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 
   blocks.push(workingDirectoryBlock(opts.agentHome));
 
+  const degradedRepos = opts.repoHealth.filter((entry) => entry.status !== "ok");
   if (opts.sourceRepos.length > 0) {
     blocks.push(sourceRepositoriesBlock(opts.sourceRepos));
+  }
+  // Degraded-repo warning sits right after the repo list (or where the list
+  // would be, when EVERY configured repo got skipped and `sourceRepos` came
+  // back empty — the common "git/gh not installed or logged in" case).
+  if (degradedRepos.length > 0) {
+    blocks.push(degradedSourceReposBlock(degradedRepos));
   }
 
   blocks.push(worktreesBlock(opts.agentHome, opts.sourceRepos));
@@ -385,6 +414,78 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     if (repo.branch) coords.push(`branch=${repo.branch}`);
     lines.push(`- \`${repo.absolutePath}\`  (${coords.join(", ")})`);
   }
+  return lines.join("\n");
+}
+
+/**
+ * Human-readable cause line for a permission-shaped degrade. Keep these
+ * descriptions in sync with `workspaceHealthReasonSchema` — every enum
+ * member must have a stable rendering here (the `default` arm is a guard
+ * for forward-compat, not a license to skip new members).
+ */
+function describeWorkspaceHealthReason(reason: WorkspaceHealthReason | undefined): string {
+  switch (reason) {
+    case "git_clone_auth_failed":
+      return "git authentication failed — the credentials on this machine cannot access the repository";
+    case "git_repo_not_found":
+      return "repository not found (404) — this machine's git identity has no permission, or the repo was moved/renamed";
+    case "git_not_installed":
+      return "git is not installed (or not on PATH) on this machine";
+    default:
+      return "permission-shaped git failure";
+  }
+}
+
+/**
+ * Prominent warning block for repos the runtime could not bring up healthy
+ * at session start (degraded-workspace design §4.3). Two flavors:
+ *
+ *  - `unreachable` — clone was skipped entirely; the repo is NOT on disk.
+ *  - `stale` — an existing checkout is being served frozen at its last
+ *    synced commit; it no longer tracks `origin/<default>`.
+ *
+ * The behavioral constraints are the actual payload: an agent on a partial
+ * workspace must not guess repo contents, must surface the gap to humans
+ * when a task touches a missing repo, and must NOT try to self-serve
+ * credentials (that is the human-driven Fix flow's job).
+ */
+function degradedSourceReposBlock(degraded: ReadonlyArray<WorkspaceRepoHealth>): string {
+  const lines: string[] = [
+    "### ⚠️ DEGRADED: unavailable source repositories",
+    "",
+    "This machine's git setup could not reach the following configured",
+    "repositories at session start. The session was started anyway on a",
+    "**partial workspace**:",
+    "",
+  ];
+  for (const entry of degraded) {
+    const cause = describeWorkspaceHealthReason(entry.reasonCode);
+    if (entry.status === "unreachable") {
+      lines.push(`- \`${entry.url}\` — **NOT available on disk** (clone skipped). Cause: ${cause}.`);
+    } else {
+      const where = entry.localPath ? `\`${entry.localPath}\`` : `\`${entry.url}\``;
+      lines.push(
+        `- ${where} — present but **FROZEN** at its last synced commit${
+          entry.headCommit ? ` (\`${entry.headCommit.slice(0, 12)}\`)` : ""
+        }; it is NOT being updated. Cause: ${cause}.`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    "While degraded, you MUST:",
+    "",
+    "- **Not guess or fabricate** the contents of an unavailable repository.",
+    "- **Tell the human about the gap** before proceeding whenever a task",
+    "  involves one of these repositories (frozen checkouts may be out of",
+    "  date; skipped ones are simply absent).",
+    "- **Not attempt to obtain or configure git credentials yourself** —",
+    "  fixing credentials on this machine is a human-driven action.",
+    "",
+    "The runtime re-checks at every session start; once the machine's git",
+    "access is fixed, the repositories materialise automatically and this",
+    "warning disappears.",
+  );
   return lines.join("\n");
 }
 
@@ -642,7 +743,7 @@ workspace ↔ tree binding) runs from the web console or a human terminal
 
 // --- # Context Tree ---------------------------------------------------------
 
-function contextTreeSection(contextTreePath: string | null): string {
+function contextTreeSection(contextTreePath: string | null, treeHealth: WorkspaceTreeHealth | null): string {
   const blocks: string[] = [];
 
   blocks.push(`# Context Tree (First Tree Managed)
@@ -711,13 +812,46 @@ operating guide covers staging, review routing, and ownership rules
 you will not remember by default.`);
 
   if (contextTreePath) {
+    // Bound-and-on-disk. When the latest sync failed permission-shaped, the
+    // checkout is frozen — append a staleness warning so the agent treats
+    // tree content as possibly outdated rather than current truth.
+    const staleNote =
+      treeHealth?.status === "stale"
+        ? `
+
+⚠️ **The tree checkout is currently FROZEN**: the latest sync failed
+(${describeWorkspaceHealthReason(treeHealth.reasonCode)}), so this copy
+no longer updates and may be behind the team's current state. Treat its
+content as possibly outdated; for decisions that depend on very recent
+changes, confirm with a human. Do not attempt to fix git credentials
+yourself — this clears automatically once the machine's git access is
+repaired.`
+        : "";
     blocks.push(`## Tree Location
 
 The Context Tree for this workspace is at:
 
     ${contextTreePath}
 
-Read its root \`NODE.md\` first to map the domains before you act.`);
+Read its root \`NODE.md\` first to map the domains before you act.${staleNote}`);
+  } else if (treeHealth?.status === "unreachable") {
+    // Bound-but-unreachable — MUST read differently from the neutral
+    // tree-less stub below (design §4.3): the org HAS organizational
+    // context; this machine just cannot fetch it.
+    blocks.push(`## Tree Location
+
+⚠️ **DEGRADED: this organization HAS a Context Tree, but this machine
+cannot reach its repository** (${describeWorkspaceHealthReason(treeHealth.reasonCode)}).
+You are running WITHOUT organizational context — decisions, constraints,
+and ownership recorded in the tree are invisible to you right now.
+
+- Before acting on any non-trivial instruction, confirm background and
+  constraints with a human instead of assuming the instruction is fully
+  specified.
+- Do not attempt to obtain or configure git credentials yourself —
+  fixing this machine's git access is a human-driven action.
+- The runtime retries at every session start; once access is repaired
+  the tree loads automatically and this warning disappears.`);
   } else {
     // Tree-less stub. Binding a workspace to a tree is an operator
     // action (web console / human at the terminal), not something an

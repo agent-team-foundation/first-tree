@@ -17,6 +17,7 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { clients } from "../db/schema/clients.js";
 
 /**
  * Single source of truth for per-(agent,chat) composite status.
@@ -346,13 +347,19 @@ export async function resolveAgentChatStatuses(
   //    OR-fold for errored, for one release cycle. Matches the approved
   //    spec (proposals/hub-agent-status-working-freshness.20260525.md
   //    §6.1 §10).
+  //    Also carries the descriptive degraded-workspace fields: the latest
+  //    `workspace:health` report plus the hosting client's hostname (left
+  //    join — PK seek per row, fine on the chat-list hot path).
   const presenceRows = await db
     .select({
       agentId: agentPresence.agentId,
       clientId: agentPresence.clientId,
       runtimeState: agentPresence.runtimeState,
+      workspaceHealth: agentPresence.workspaceHealth,
+      clientHostname: clients.hostname,
     })
     .from(agentPresence)
+    .leftJoin(clients, eq(agentPresence.clientId, clients.id))
     .where(inArray(agentPresence.agentId, allAgentIds));
   const presenceById = new Map(presenceRows.map((p) => [p.agentId, p]));
 
@@ -393,6 +400,8 @@ export async function resolveAgentChatStatuses(
           // aren't in chainSessionOp) briefly emits activity=null; the next
           // runtime frame self-heals.
           activity: working ? activity : null,
+          workspaceHealth: p?.workspaceHealth ?? null,
+          clientHostname: p?.clientHostname ?? null,
         }),
       );
     }
