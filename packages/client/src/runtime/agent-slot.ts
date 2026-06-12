@@ -52,6 +52,7 @@ export class AgentSlot {
   private logger: pino.Logger;
   private agentConfigCache: AgentConfigCache | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private postBindReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners: ConnectionListener[] = [];
   private stopping: Promise<void> | null = null;
   /**
@@ -126,16 +127,19 @@ export class AgentSlot {
         if (typeof this.sessionManager?.noteBindRecoveryComplete === "function") {
           this.sessionManager.noteBindRecoveryComplete();
         }
-        // `fullStateSync` short-circuits when `sessionManager` is null,
-        // so it's safe to fire on the FIRST `agent:bound` (which now
-        // reaches this listener because we attached it pre-bind) — the
-        // explicit `fullStateSync()` after sessionManager construction
-        // covers the initial-startup case, and this listener handles
-        // reconnects.
+        // The first `agent:bound` can arrive while startup is still inside
+        // sdk.register / config load / Context Tree sync, before
+        // SessionManager exists. In that case the explicit startup
+        // fullStateSync below owns both the state report and the delayed
+        // reconcile. Reconnects with an existing SessionManager are handled
+        // here.
+        if (!this.sessionManager) return;
         this.fullStateSync();
         // One-shot post-bind reconcile catches operator-terminates that
-        // landed while this client was offline; a duplicate tick is harmless.
-        setTimeout(() => this.reconcileNow(), 5000);
+        // landed while this client was offline. It is deliberately scheduled
+        // after fullStateSync, so just-hydrated registry mappings are first
+        // advertised as suspended before the server is asked for stale rows.
+        this.schedulePostBindReconcile();
       }
     };
     const onReconcileResult = (result: SessionReconcileResult) => {
@@ -285,6 +289,7 @@ export class AgentSlot {
       // `fullStateSync()` call was a no-op. Run it explicitly now that
       // the manager exists.
       this.fullStateSync();
+      this.schedulePostBindReconcile();
 
       this.startReconcileLoop();
 
@@ -310,6 +315,10 @@ export class AgentSlot {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
+    if (this.postBindReconcileTimer) {
+      clearTimeout(this.postBindReconcileTimer);
+      this.postBindReconcileTimer = null;
+    }
     for (const entry of this.listeners) {
       this.clientConnection.off(entry.event, entry.fn);
     }
@@ -326,6 +335,10 @@ export class AgentSlot {
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
+    }
+    if (this.postBindReconcileTimer) {
+      clearTimeout(this.postBindReconcileTimer);
+      this.postBindReconcileTimer = null;
     }
     for (const entry of this.listeners) {
       this.clientConnection.off(entry.event, entry.fn);
@@ -438,6 +451,14 @@ export class AgentSlot {
   private startReconcileLoop(): void {
     const intervalSec = this.config.session.reconcile_interval_seconds ?? 300;
     this.reconcileTimer = setInterval(() => this.reconcileNow(), intervalSec * 1000);
+  }
+
+  private schedulePostBindReconcile(): void {
+    if (this.postBindReconcileTimer) clearTimeout(this.postBindReconcileTimer);
+    this.postBindReconcileTimer = setTimeout(() => {
+      this.postBindReconcileTimer = null;
+      this.reconcileNow();
+    }, 5000);
   }
 
   private reconcileNow(): void {
