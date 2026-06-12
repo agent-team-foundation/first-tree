@@ -123,7 +123,7 @@ function makeFrame(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function installMocks(options: { syncResult?: MockState["syncResult"] } = {}): MockState {
+function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelayMs?: number } = {}): MockState {
   vi.resetModules();
   const state: MockState = {
     logger: makeLogger(),
@@ -148,6 +148,9 @@ function installMocks(options: { syncResult?: MockState["syncResult"] } = {}): M
       log("sync log");
       messages.push("sync log");
       state.syncCalls.push({ sdk, messages });
+      if (options.syncDelayMs && options.syncDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.syncDelayMs));
+      }
       return state.syncResult;
     }),
   }));
@@ -223,6 +226,7 @@ async function makeSlot(options?: {
   configError?: unknown;
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
+  syncDelayMs?: number;
   omitReconcileInterval?: boolean;
 }): Promise<{
   slot: import("../runtime/agent-slot.js").AgentSlot;
@@ -230,7 +234,7 @@ async function makeSlot(options?: {
   sdk: FirstTreeHubSDK;
   state: MockState;
 }> {
-  const state = installMocks({ syncResult: options?.syncResult });
+  const state = installMocks({ syncResult: options?.syncResult, syncDelayMs: options?.syncDelayMs });
   const sdk = makeSdk({ agent: options?.agent, configError: options?.configError });
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
@@ -457,6 +461,32 @@ describe("AgentSlot", () => {
 
     connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
     expect(session.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the bind-time reconcile grace window after startup full state sync", async () => {
+    vi.useFakeTimers();
+    const { slot, connection, sdk } = await makeSlot({ syncDelayMs: 4_900, omitReconcileInterval: true });
+    connection.bindAgent.mockImplementationOnce(async () => {
+      connection.emit("agent:bound", { agentId: "agent-1" });
+      return { sdk };
+    });
+
+    const startPromise = slot.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(4_900);
+    await expect(startPromise).resolves.toMatchObject({ agentId: "agent-1" });
+
+    expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-evicted", "suspended");
+    expect(connection.sendSessionReconcile).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(connection.sendSessionReconcile).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(connection.sendSessionReconcile).toHaveBeenCalledWith("agent-1", ["chat-1", "chat-2"]);
+
+    await slot.stop();
   });
 
   it("stops only the matching slot when the server force-unbounds an agent", async () => {
