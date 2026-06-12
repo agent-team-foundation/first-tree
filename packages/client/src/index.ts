@@ -59,6 +59,8 @@ export type {
 } from "./runtime/handler.js";
 export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
 export { InputController } from "./runtime/input-controller.js";
+export type { RepairAction } from "./runtime/repair.js";
+export { decideRepairForBindReject } from "./runtime/repair.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 export { SessionManager } from "./runtime/session-manager.js";

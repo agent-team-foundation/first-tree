@@ -7,14 +7,16 @@ import { AGENT_BIND_REJECT_REASONS, type AgentBindRejectReason } from "@first-tr
 export type RepairAction = { kind: "restart" } | { kind: "ignore" };
 
 /**
- * P2 minimal repair: when a bind is rejected with `runtime_provider_mismatch`,
- * the connecting client is running the wrong handler for the agent. The full
- * fix requires re-fetching the authoritative provider, rewriting the local
- * agent YAML, and respawning the slot with the right handler factory.
+ * Decide whether a bind rejection is repairable by rebuilding the slot from
+ * authoritative state. A `runtime_provider_mismatch` means the connecting
+ * client bound with a handler/provider the server no longer agrees with —
+ * `restart` asks the caller to re-fetch the authoritative provider, rewrite
+ * the local agent YAML, and respawn the slot with the right handler factory.
  *
- * For now (P2), we surface a `restart` action so the operator restarts the
- * client process. Auto-repair (yaml rewrite + slot swap) lives behind a
- * follow-up that needs handler-factory hot-swap support.
+ * The command layer implements the `restart` action in
+ * `ClientRuntime.repairRuntimeProviderMismatch` (apps/cli, issue #552); every
+ * other rejection reason is handled by the connection's own retry taxonomy
+ * and is `ignore` here.
  */
 export function decideRepairForBindReject(reason: AgentBindRejectReason): RepairAction {
   if (reason === AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH) {

@@ -125,6 +125,9 @@ vi.mock("@first-tree/client", () => {
       fatal: vi.fn(),
       child: vi.fn().mockReturnThis(),
     })),
+    decideRepairForBindReject: vi.fn((reason: string) =>
+      reason === "runtime_provider_mismatch" ? { kind: "restart" } : { kind: "ignore" },
+    ),
     getChildProcessRegistry: vi.fn(() => ({ killAll: killAllMock })),
     getHandlerFactory: vi.fn(() => vi.fn()),
     // Mirror the real registry: only the built-in providers have a handler.

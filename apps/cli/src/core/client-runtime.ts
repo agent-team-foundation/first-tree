@@ -6,6 +6,7 @@ import {
   ClientConnection,
   createGitMirrorManager,
   createLogger,
+  decideRepairForBindReject,
   type GitMirrorManager,
   getChildProcessRegistry,
   getHandlerFactory,
@@ -17,10 +18,11 @@ import {
 import type { AgentPinnedMessage, ClientPausedReason } from "@first-tree/shared";
 import type { AgentConfig } from "@first-tree/shared/config";
 import { agentConfigSchema, defaultConfigDir, defaultDataDir, loadAgents } from "@first-tree/shared/config";
-import { stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
+import { listPinnedAgents } from "./runtime-provider-reconcile.js";
 import { readUpdateState } from "./update-state.js";
 import { CLI_USER_AGENT } from "./version.js";
 
@@ -28,11 +30,26 @@ type AgentEntry = {
   name: string;
   slot: AgentSlot;
   state: AgentStartState;
+  /**
+   * The validated local config the current slot was built from. `runtime` is
+   * the provider whose handler the slot is serving — the value the
+   * `agent:pinned` hot-swap path (issue #552) compares against the server's
+   * authoritative `runtimeProvider`.
+   */
+  config: AgentConfig;
 };
 
 type AgentStartState = "idle" | "starting" | "running" | "suspended-skipped" | "failed";
 
 const CLIENT_RUNTIME_AGENT_UNBOUND_LISTENER_COUNT = 1;
+
+/**
+ * Floor between two bind-reject repair attempts for the same agent. A repair
+ * that fails to converge (server still rejects after the yaml rewrite) must
+ * not turn into a tight reject → repair → rebind loop; one attempt per window
+ * is plenty since each reconnect/pin push retriggers the path anyway.
+ */
+const MISMATCH_REPAIR_MIN_INTERVAL_MS = 30_000;
 
 export function isAgentSuspendedBindError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
@@ -86,6 +103,18 @@ export class ClientRuntime {
   private readonly agents: AgentEntry[] = [];
   private readonly agentNames = new Set<string>();
   private readonly agentIds = new Set<string>();
+  /**
+   * Agents whose runtime provider has no handler in this client build
+   * (recorded by `addAgent`'s unsupported-runtime guard). Kept so a later
+   * `agent:pinned` push that switches them to a supported provider can
+   * promote them to a real slot instead of falling through to the
+   * auto-register path and writing a duplicate config directory.
+   */
+  private readonly unsupportedAgents = new Map<string, { name: string; config: AgentConfig }>();
+  /** Per-agent re-entrancy guard for {@link switchAgentRuntime}. */
+  private readonly runtimeSwitchesInFlight = new Set<string>();
+  /** Per-agent timestamp throttle for {@link repairRuntimeProviderMismatch}. */
+  private readonly lastMismatchRepairAt = new Map<string, number>();
   private readonly options: ClientRuntimeOptions;
   private updateManager: UpdateManager | null = null;
   private watcher: FSWatcher | null = null;
@@ -191,6 +220,20 @@ export class ClientRuntime {
       if (!entry || !reason) return;
       entry.state = reason === "agent_suspended" ? "suspended-skipped" : "idle";
     });
+
+    // Issue #552 (Fix B): a bind rejected with `runtime_provider_mismatch`
+    // means our slot bound with a provider the server no longer agrees with
+    // (missed `agent:pinned` push, or the startup reconcile hit a transient
+    // server error). Without repair the connection layer permanently disables
+    // the bind (`resilience.bind.disabled`) until an operator restarts the
+    // daemon. Re-fetch the authoritative provider and hot-swap instead.
+    this.connection.on("agent:bind:rejected", (reason, agentId) => {
+      if (decideRepairForBindReject(reason).kind !== "restart") return;
+      this.repairRuntimeProviderMismatch(agentId).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        print.status("⚠️", `agent ${agentId}: runtime mismatch repair failed: ${msg}`);
+      });
+    });
   }
 
   addAgent(name: string, config: AgentConfig): void {
@@ -209,10 +252,26 @@ export class ClientRuntime {
       );
       this.agentNames.add(name);
       this.agentIds.add(config.agentId);
+      // Remember it so a later `agent:pinned` push that switches the agent to
+      // a supported provider can promote it to a real slot (issue #552).
+      this.unsupportedAgents.set(config.agentId, { name, config });
       return;
     }
+    const slot = this.buildSlot(name, config);
+    this.agents.push({ name, slot, state: "idle", config });
+    this.agentNames.add(name);
+    this.agentIds.add(config.agentId);
+    this.refreshConnectionListenerLimit();
+  }
+
+  /**
+   * Construct an AgentSlot for a validated local config. AgentSlot pins its
+   * `type` + `handlerFactory` at construction time, so both `addAgent` and the
+   * runtime-provider hot-swap path build slots through this single helper.
+   */
+  private buildSlot(name: string, config: AgentConfig): AgentSlot {
     const handlerFactory = getHandlerFactory(config.runtime);
-    const slot = new AgentSlot({
+    return new AgentSlot({
       name,
       agentId: config.agentId,
       serverUrl: this.serverUrl,
@@ -230,10 +289,6 @@ export class ClientRuntime {
       clientConnection: this.connection,
       gitMirrorManager: this.gitMirrorManager,
     });
-    this.agents.push({ name, slot, state: "idle" });
-    this.agentNames.add(name);
-    this.agentIds.add(config.agentId);
-    this.refreshConnectionListenerLimit();
   }
 
   private refreshConnectionListenerLimit(): void {
@@ -461,14 +516,49 @@ export class ClientRuntime {
    * (same shape `agent add` produces) and scheduling the new
    * slot — so the operator doesn't have to run `agent add` manually after
    * creating an agent from the admin UI or API.
+   *
+   * For an agent we already run, the push is also the hot-swap signal for a
+   * runtime-provider change (issue #552, Fix A): the server re-pins on every
+   * `PATCH /agents/:uuid/rebind`, and `agents.runtime_provider` is
+   * authoritative — when it differs from the local slot, rewrite agent.yaml
+   * and rebuild the slot with the new handler instead of ignoring the push.
    */
   private handleAgentPinned(message: AgentPinnedMessage): void {
     const existing = this.agents.find((agent) => agent.slot.agentId === message.agentId);
     if (existing) {
+      if (existing.config.runtime !== message.runtimeProvider) {
+        this.switchAgentRuntime(existing, message.runtimeProvider, "server push").catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `agent "${existing.name}": runtime switch failed: ${msg}`);
+        });
+        return;
+      }
       if (existing.state === "suspended-skipped") {
         print.status("", `agent reactivated: ${existing.name}`);
         this.startAgent(existing.name);
       }
+      return;
+    }
+
+    const unsupported = this.unsupportedAgents.get(message.agentId);
+    if (unsupported) {
+      if (unsupported.config.runtime !== message.runtimeProvider) {
+        this.rewriteAgentYamlRuntime(unsupported.name, message.runtimeProvider);
+        unsupported.config = { ...unsupported.config, runtime: message.runtimeProvider };
+      }
+      if (!hasHandler(message.runtimeProvider)) return; // still unsupported — wait for a client update
+      // The operator switched the agent to a provider this build CAN run —
+      // promote it to a real slot. Release the name/id reservations so
+      // addAgent's duplicate guards let it through.
+      this.unsupportedAgents.delete(message.agentId);
+      this.agentNames.delete(unsupported.name);
+      this.agentIds.delete(unsupported.config.agentId);
+      print.status(
+        "",
+        `agent "${unsupported.name}": runtime switched to supported "${message.runtimeProvider}" — starting`,
+      );
+      this.addAgent(unsupported.name, unsupported.config);
+      this.startAgent(unsupported.name);
       return;
     }
 
@@ -555,5 +645,132 @@ export class ClientRuntime {
       print.check(false, `${entry.name}: connection failed`, msg);
       return "failed";
     }
+  }
+
+  /**
+   * Hot-swap an agent's runtime provider (issue #552, Fix A). The server is
+   * authoritative for `runtime_provider`; when an `agent:pinned` push (or a
+   * bind-reject repair) carries a provider that differs from the running
+   * slot, persist the change to `agents/<name>/agent.yaml`, stop the old
+   * slot, and rebuild + restart it with the new handler factory. AgentSlot
+   * pins `type`/`handlerFactory` at construction, so a swap always builds a
+   * fresh slot.
+   *
+   * Re-entrancy: one switch per agent at a time. A push landing mid-swap is
+   * dropped — if it carried an even newer provider, the rebuilt slot's bind
+   * fails with `runtime_provider_mismatch` and the repair path (Fix B)
+   * converges on the authoritative value.
+   */
+  private async switchAgentRuntime(entry: AgentEntry, to: string, source: string): Promise<void> {
+    const agentId = entry.slot.agentId;
+    if (this.runtimeSwitchesInFlight.has(agentId)) {
+      print.status("", `agent "${entry.name}": runtime switch already in progress — ignoring ${source}`);
+      return;
+    }
+    this.runtimeSwitchesInFlight.add(agentId);
+    try {
+      const from = entry.config.runtime;
+      print.status("", `agent "${entry.name}": runtime provider change ${from} → ${to} (${source})`);
+      this.rewriteAgentYamlRuntime(entry.name, to);
+      entry.config = { ...entry.config, runtime: to };
+      try {
+        await entry.slot.stop();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        print.status("⚠️", `agent "${entry.name}": stop before runtime switch failed: ${msg}`);
+      }
+      if (!hasHandler(to)) {
+        entry.state = "failed";
+        print.status(
+          "⚠️",
+          `agent "${entry.name}" now uses runtime "${to}" which this client build does not support yet — stopped. Update the client to run it.`,
+        );
+        return;
+      }
+      entry.slot = this.buildSlot(entry.name, entry.config);
+      entry.state = "idle";
+      await this.startAgentEntry(entry);
+    } finally {
+      this.runtimeSwitchesInFlight.delete(agentId);
+    }
+  }
+
+  /**
+   * Best-effort rewrite of `agents/<name>/agent.yaml::runtime` to the
+   * server's authoritative provider, preserving every other field. Failure
+   * (no agents dir recorded, unreadable/unparseable yaml) only warns: the
+   * in-memory swap still applies, and the daemon-start reconcile
+   * (`reconcileLocalRuntimeProviders`) or the bind-reject repair catches the
+   * persisted drift after the next restart.
+   */
+  private rewriteAgentYamlRuntime(name: string, runtime: string): void {
+    if (!this.agentsDir) {
+      print.status("⚠️", `agent "${name}": no agents dir set — runtime change not persisted to agent.yaml.`);
+      return;
+    }
+    const yamlPath = join(this.agentsDir, name, "agent.yaml");
+    try {
+      const raw = readFileSync(yamlPath, "utf-8");
+      const parsed: Record<string, unknown> = parseYaml(raw) ?? {};
+      writeFileSync(yamlPath, stringifyYaml({ ...parsed, runtime }), { mode: 0o600 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      print.status("⚠️", `agent "${name}": failed to rewrite agent.yaml runtime: ${msg}`);
+    }
+  }
+
+  /**
+   * Issue #552, Fix B — in-band repair for `runtime_provider_mismatch` bind
+   * rejections. Re-fetches the authoritative provider from
+   * `/me/pinned-agents` and runs the same hot-swap as the push path; the
+   * rebuilt slot's explicit `bindAgent` clears the per-agent backoff record
+   * (including the permanent `resilience.bind.disabled` state) on its own.
+   *
+   * Throttled per agent so a repair that fails to converge cannot loop.
+   */
+  private async repairRuntimeProviderMismatch(agentId: string): Promise<void> {
+    const now = Date.now();
+    const last = this.lastMismatchRepairAt.get(agentId) ?? 0;
+    if (now - last < MISMATCH_REPAIR_MIN_INTERVAL_MS) {
+      print.status(
+        "⚠️",
+        `agent ${agentId}: runtime mismatch repair attempted recently — skipping (next reconnect retries).`,
+      );
+      return;
+    }
+    this.lastMismatchRepairAt.set(agentId, now);
+
+    const entry = this.agents.find((agent) => agent.slot.agentId === agentId);
+    if (!entry) return;
+
+    print.status(
+      "",
+      `agent "${entry.name}": bind rejected (runtime_provider_mismatch) — fetching authoritative runtime provider`,
+    );
+    let authoritative: string | undefined;
+    try {
+      const accessToken = await ensureFreshAccessToken();
+      const pinned = await listPinnedAgents({ serverUrl: this.serverUrl, accessToken });
+      authoritative = pinned.find((item) => item.agentId === agentId)?.runtimeProvider;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      print.status("⚠️", `agent "${entry.name}": mismatch repair could not fetch pinned agents: ${msg}`);
+      return;
+    }
+    if (!authoritative) {
+      print.status("⚠️", `agent "${entry.name}": not in this user's pinned-agent list — mismatch repair skipped.`);
+      return;
+    }
+    if (authoritative === entry.config.runtime) {
+      // We bound with the provider the server itself reports yet still got
+      // rejected — nothing local to repair. Most likely a rebind raced this
+      // fetch; the accompanying `agent:pinned` push handles that case.
+      print.status(
+        "⚠️",
+        `agent "${entry.name}": server reports runtime "${authoritative}" matching the local config — mismatch repair skipped.`,
+      );
+      return;
+    }
+    await this.switchAgentRuntime(entry, authoritative, "bind-reject repair");
   }
 }
