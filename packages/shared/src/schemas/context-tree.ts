@@ -182,6 +182,7 @@ export const contextTreeIoSourceSchema = z.enum([
   "claude_write_tool",
   "codex_file_change",
   "shell_command",
+  "git_status_delta",
 ]);
 export type ContextTreeIoSource = z.infer<typeof contextTreeIoSourceSchema>;
 

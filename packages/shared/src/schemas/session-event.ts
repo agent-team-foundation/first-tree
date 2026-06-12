@@ -14,7 +14,7 @@ export type SessionEventKind = z.infer<typeof sessionEventKind>;
 export const toolFileRefPathKindSchema = z.enum(["file", "directory", "repo"]);
 export type ToolFileRefPathKind = z.infer<typeof toolFileRefPathKindSchema>;
 
-export const toolFileRefOriginSchema = z.enum(["tool_arg", "file_change", "runtime_metadata"]);
+export const toolFileRefOriginSchema = z.enum(["tool_arg", "file_change", "runtime_metadata", "git_status_delta"]);
 export type ToolFileRefOrigin = z.infer<typeof toolFileRefOriginSchema>;
 
 export const toolFileRefSchema = z.object({
@@ -24,6 +24,7 @@ export const toolFileRefSchema = z.object({
   repoRelativePath: z.string().min(1).optional(),
   pathKind: toolFileRefPathKindSchema.optional(),
   origin: toolFileRefOriginSchema,
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type ToolFileRef = z.infer<typeof toolFileRefSchema>;
 

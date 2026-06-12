@@ -27,6 +27,10 @@ import {
   contextTreeRelativePathOf,
   toolFileRefsFromShellCommand,
 } from "../runtime/context-tree-file-refs.js";
+import {
+  type ContextTreeGitWriteTracker,
+  createContextTreeGitWriteTracker,
+} from "../runtime/context-tree-git-status.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -484,7 +488,7 @@ export type ToolCallProcessor = {
 export function createToolCallProcessor(
   emit: (event: SessionEvent) => void,
   contextTree?: ContextTreeBinding,
-  options: { cwd?: string | null } = {},
+  options: { cwd?: string | null; gitWriteTracker?: ContextTreeGitWriteTracker } = {},
 ): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
@@ -496,7 +500,17 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    if (status === "error") options.gitWriteTracker?.captureBaseline();
     const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
+    const gitStatusRefs =
+      status === "ok"
+        ? (options.gitWriteTracker?.refsForSuccessfulToolCall({
+            toolName: entry.name,
+            toolUseId: entry.toolUseId,
+            existingRefs: refs,
+          }) ?? [])
+        : [];
+    const allRefs = [...refs, ...gitStatusRefs];
 
     emit({
       kind: "tool_call",
@@ -507,7 +521,7 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(refs.length > 0 ? { toolFileRefs: refs } : {}),
+        ...(allRefs.length > 0 ? { toolFileRefs: allRefs } : {}),
       },
     });
 
@@ -521,6 +535,7 @@ export function createToolCallProcessor(
       if (type === "assistant") {
         for (const block of extractContentBlocks(message)) {
           if (isToolUseBlock(block)) {
+            options.gitWriteTracker?.captureBaseline();
             pending.set(block.id, {
               toolUseId: block.id,
               name: block.name,
@@ -1143,7 +1158,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         repoUrl: contextTreeRepoUrl,
         branch: contextTreeBranch,
       },
-      { cwd },
+      {
+        cwd,
+        gitWriteTracker: createContextTreeGitWriteTracker({
+          contextTreePath,
+          contextTreeRepoUrl,
+          contextTreeBranch,
+          log: (message) => sessionCtx.log(message),
+        }),
+      },
     );
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted

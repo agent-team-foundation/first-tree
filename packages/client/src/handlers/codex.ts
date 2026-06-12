@@ -12,6 +12,10 @@ import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { contextTreeRelativePathOf, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import {
+  type ContextTreeGitWriteTracker,
+  createContextTreeGitWriteTracker,
+} from "../runtime/context-tree-git-status.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
@@ -423,6 +427,37 @@ export function toolFileRefsFromCodexFileChange(input: {
   return refs;
 }
 
+export function appendGitStatusDeltaRefs(input: {
+  existingRefs?: readonly ToolFileRef[];
+  gitWriteTracker?: ContextTreeGitWriteTracker | null;
+  toolName: string;
+  toolUseId: string;
+}): ToolFileRef[] | undefined {
+  const existingRefs = [...(input.existingRefs ?? [])];
+  const gitStatusRefs =
+    input.gitWriteTracker?.refsForSuccessfulToolCall({
+      toolName: input.toolName,
+      toolUseId: input.toolUseId,
+      existingRefs,
+    }) ?? [];
+  const refs = [...existingRefs, ...gitStatusRefs];
+  return refs.length > 0 ? refs : undefined;
+}
+
+export function toolFileRefsForTerminalCodexTool(input: {
+  status: "ok" | "error" | "pending";
+  existingRefs?: readonly ToolFileRef[];
+  gitWriteTracker?: ContextTreeGitWriteTracker | null;
+  toolName: string;
+  toolUseId: string;
+}): ToolFileRef[] | undefined {
+  if (input.status !== "ok") {
+    if (input.status === "error") input.gitWriteTracker?.captureBaseline();
+    return undefined;
+  }
+  return appendGitStatusDeltaRefs(input);
+}
+
 /**
  * Codex Handler — session-oriented handler using `@openai/codex-sdk`.
  *
@@ -471,6 +506,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
+  const gitWriteTracker = createContextTreeGitWriteTracker({
+    contextTreePath,
+    contextTreeRepoUrl,
+    contextTreeBranch,
+    log: (message) => ctx?.log(message),
+  });
   let drainScheduled = false;
   let drainInProgress = false;
   const queuedMessages: SessionMessage[] = [];
@@ -635,7 +676,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             : item.status === "failed"
               ? ("error" as const)
               : ("pending" as const);
-        const toolFileRefs =
+        const shellRefs =
           status === "ok" && cwd
             ? toolFileRefsFromShellCommand({
                 command: item.command,
@@ -645,6 +686,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 contextTreeBranch,
               })
             : undefined;
+        const toolFileRefs = toolFileRefsForTerminalCodexTool({
+          status,
+          existingRefs: shellRefs,
+          gitWriteTracker,
+          toolName: "command",
+          toolUseId: item.id,
+        });
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "command",
@@ -657,7 +705,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
       case "file_change": {
         const status = item.status === "completed" ? ("ok" as const) : ("error" as const);
-        const toolFileRefs =
+        const fileChangeRefs =
           status === "ok" && cwd
             ? toolFileRefsFromCodexFileChange({
                 changes: item.changes,
@@ -667,6 +715,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 contextTreeBranch,
               })
             : undefined;
+        const toolFileRefs = toolFileRefsForTerminalCodexTool({
+          status,
+          existingRefs: fileChangeRefs,
+          gitWriteTracker,
+          toolName: "file_change",
+          toolUseId: item.id,
+        });
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "file_change",
@@ -757,6 +812,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     sessionCtx.markMessagesConsumed(messages);
     const abort = new AbortController();
     currentAbort = abort;
+    gitWriteTracker.captureBaseline();
 
     // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
     // mirrors claude-code so admin events + completion bookkeeping reflect
