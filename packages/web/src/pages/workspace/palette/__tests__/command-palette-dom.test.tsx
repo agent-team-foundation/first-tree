@@ -186,7 +186,7 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
-  it("fetches open-only data while visible and navigates from chat, agent, and page items", async () => {
+  it("fetches open-only data while visible and navigates from chat and teammate items", async () => {
     const onOpenChange = vi.fn();
     const { CommandPalette } = await import("../command-palette.js");
     const { root } = await renderDom(<CommandPalette open onOpenChange={onOpenChange} />);
@@ -195,7 +195,6 @@ describe("CommandPalette", () => {
     await waitForText(document.body, "(untitled)");
     await waitForText(document.body, "Nova");
     await waitForText(document.body, "No Handle");
-    await waitForText(document.body, "Workspace");
 
     expect(meChatMocks.listMeChats).toHaveBeenCalledWith({ limit: 100, engagement: "all" });
 
@@ -205,15 +204,19 @@ describe("CommandPalette", () => {
     expect(document.body.textContent).not.toContain("Release train");
     expect(document.body.textContent).not.toContain("chat-123");
 
+    // The roster group is "Teammates" (humans + agents), and the static
+    // "Pages" group is gone — both by design.
+    expect(document.body.textContent).toContain("Teammates");
+    expect(document.body.textContent).not.toContain("Agents");
+    expect(document.body.textContent).not.toContain("Pages");
+    expect(document.body.textContent).not.toContain("Workspace");
+
     await click(commandItemByText(document.body, "Launch planning"));
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
     expect(routerMocks.navigate).toHaveBeenLastCalledWith("/?c=chat-123456789");
 
     await click(commandItemByText(document.body, "Nova"));
     expect(routerMocks.navigate).toHaveBeenLastCalledWith("/agents/agent-1/profile");
-
-    await click(commandItemByText(document.body, "Settings"));
-    expect(routerMocks.navigate).toHaveBeenLastCalledWith("/settings");
 
     await act(async () => root.unmount());
   });
@@ -308,14 +311,14 @@ describe("CommandPalette", () => {
     await act(async () => root.unmount());
   });
 
-  it("keeps async palette queries disabled while closed and still renders static pages", async () => {
+  it("keeps async palette queries disabled while closed and renders nothing", async () => {
     orgAgentsMock.value = { items: [], nextCursor: null };
     meChatMocks.listMeChats.mockResolvedValue({ rows: [], nextCursor: null });
 
     const { CommandPalette } = await import("../command-palette.js");
     const { root } = await renderDom(<CommandPalette open={false} onOpenChange={vi.fn()} />);
 
-    expect(document.body.textContent).not.toContain("Workspace");
+    expect(document.body.querySelectorAll("[cmdk-item]")).toHaveLength(0);
     expect(meChatMocks.listMeChats).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
