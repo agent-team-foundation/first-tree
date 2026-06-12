@@ -623,6 +623,9 @@ export async function buildApp(config: Config) {
           return reply.status(404).send({ error: "Not found" });
         }
         const requestPath = request.url.split("?")[0] ?? request.url;
+        if (requestPath.startsWith("/feedback/")) {
+          return reply.status(501).send({ error: "Feedback is not configured" });
+        }
         if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });
         }
