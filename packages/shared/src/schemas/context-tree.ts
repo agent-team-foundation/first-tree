@@ -185,6 +185,20 @@ export const contextTreeIoSourceSchema = z.enum([
 ]);
 export type ContextTreeIoSource = z.infer<typeof contextTreeIoSourceSchema>;
 
+export const contextTreeIoSkipReasonSchema = z.enum([
+  "no_org_context_tree_binding",
+  "event_kind_not_io",
+  "status_not_ok",
+  "unsupported_tool",
+  "unsupported_shell_command",
+  "no_tool_file_refs",
+  "ref_schema_invalid",
+  "ref_repo_mismatch",
+  "ref_path_invalid",
+  "chat_not_in_org",
+]);
+export type ContextTreeIoSkipReason = z.infer<typeof contextTreeIoSkipReasonSchema>;
+
 export const contextTreeIoBucketSchema = z.object({
   agentCount: z.number().int().nonnegative(),
   eventCount: z.number().int().nonnegative(),
@@ -221,6 +235,32 @@ export const contextTreeIoEventSchema = z.object({
 });
 export type ContextTreeIoEvent = z.infer<typeof contextTreeIoEventSchema>;
 
+export const contextTreeIoSkipBreakdownSchema = z.object({
+  reason: contextTreeIoSkipReasonSchema,
+  eventCount: z.number().int().nonnegative(),
+  agentCount: z.number().int().nonnegative(),
+  runtimeProviders: z.array(
+    z.object({
+      runtimeProvider: z.string(),
+      eventCount: z.number().int().nonnegative(),
+    }),
+  ),
+  toolNames: z.array(
+    z.object({
+      toolName: z.string(),
+      eventCount: z.number().int().nonnegative(),
+    }),
+  ),
+});
+export type ContextTreeIoSkipBreakdown = z.infer<typeof contextTreeIoSkipBreakdownSchema>;
+
+export const contextTreeIoSkipSummarySchema = z.object({
+  windowDays: z.number().int().positive(),
+  totalEventCount: z.number().int().nonnegative(),
+  reasons: z.array(contextTreeIoSkipBreakdownSchema),
+});
+export type ContextTreeIoSkipSummary = z.infer<typeof contextTreeIoSkipSummarySchema>;
+
 export const contextTreeIoSummarySchema = z.object({
   windowDays: z.number().int().positive(),
   summary: z.object({
@@ -229,6 +269,7 @@ export const contextTreeIoSummarySchema = z.object({
   }),
   agents: z.array(contextTreeIoAgentSummarySchema),
   recentEvents: z.array(contextTreeIoEventSchema),
+  skipped: contextTreeIoSkipSummarySchema,
 });
 export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
 

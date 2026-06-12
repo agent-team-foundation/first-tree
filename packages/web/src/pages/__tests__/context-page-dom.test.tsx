@@ -232,6 +232,7 @@ describe("ContextPage DOM behavior", () => {
         },
         agents: [],
         recentEvents: [],
+        skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
       },
       nodes: MOCK_CONTEXT_SNAPSHOT.nodes.map((node) => ({ ...node, changeType: null, changedAtCommit: null })),
       updates: [],

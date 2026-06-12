@@ -497,6 +497,7 @@ function emptyIoSummary(window: ContextTreeSnapshotWindow): ContextTreeIoSummary
     },
     agents: [],
     recentEvents: [],
+    skipped: { windowDays: WINDOW_DAYS[window], totalEventCount: 0, reasons: [] },
   };
 }
 
