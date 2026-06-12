@@ -81,3 +81,44 @@ describe("git-repo-identity", () => {
     expect(gitRepoRootMatchingRemote(join(source, "src", "index.ts"), TREE_URL_HTTPS)).toBeNull();
   });
 });
+
+describe("git-repo-identity — recycled checkout paths", () => {
+  it("re-resolves the remote after the same path is recreated as a different repo", () => {
+    const root = mkdtempSync(join(tmpdir(), "first-tree-repo-recycle-"));
+    try {
+      const checkout = join(root, "worktrees", "task");
+      mkdirSync(checkout, { recursive: true });
+      execFileSync("git", ["-C", root, "init", join("worktrees", "task")]);
+      execFileSync("git", ["-C", checkout, "remote", "add", "origin", "git@github.com:acme/first-tree-context.git"]);
+
+      // Warm the cache with the tree remote.
+      expect(
+        gitRepoRootMatchingRemote(join(checkout, "NODE.md"), "https://github.com/acme/first-tree-context.git"),
+      ).toBe(checkout);
+
+      // Operator cleans the worktree; a later task recreates the SAME path
+      // as a checkout of a DIFFERENT repo — without a daemon restart.
+      rmSync(checkout, { recursive: true, force: true });
+      mkdirSync(checkout, { recursive: true });
+      execFileSync("git", ["-C", root, "init", join("worktrees", "task")]);
+      execFileSync("git", ["-C", checkout, "remote", "add", "origin", "https://github.com/acme/other-repo.git"]);
+
+      // A stale path-keyed cache would still claim the tree remote here.
+      expect(
+        gitRepoRootMatchingRemote(join(checkout, "NODE.md"), "https://github.com/acme/first-tree-context.git"),
+      ).toBeNull();
+
+      // And the reverse direction: recycled path gains tree identity.
+      rmSync(checkout, { recursive: true, force: true });
+      mkdirSync(checkout, { recursive: true });
+      execFileSync("git", ["-C", root, "init", join("worktrees", "task")]);
+      execFileSync("git", ["-C", checkout, "remote", "add", "origin", "git@github.com:acme/first-tree-context.git"]);
+      expect(
+        gitRepoRootMatchingRemote(join(checkout, "NODE.md"), "https://github.com/acme/first-tree-context.git"),
+      ).toBe(checkout);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      clearGitRepoIdentityCacheForTests();
+    }
+  });
+});
