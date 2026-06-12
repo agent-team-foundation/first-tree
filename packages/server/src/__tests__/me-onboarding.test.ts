@@ -139,18 +139,73 @@ describe("PATCH /me/onboarding", () => {
     expect(current?.onboardingSuppressedReason).toBe("completed");
   });
 
+  it("rejoin starts a fresh onboarding lifecycle — reactivation clears all three stamps", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { ensureMembership } = await import("../services/membership.js");
+
+    // Live through a full prior lifecycle: complete onboarding (stamps
+    // completed + suppressed(reason='completed')), then leave the org.
+    await app.db
+      .update(members)
+      .set({
+        onboardingCompletedAt: new Date(),
+        onboardingSuppressedAt: new Date(),
+        onboardingSuppressedReason: "completed",
+        status: "left",
+      })
+      .where(eq(members.id, admin.memberId));
+
+    // Rejoin (the invite-join / OAuth-invite path funnels through
+    // ensureMembership): the row is reactivated, not recreated…
+    const rejoined = await ensureMembership(app.db, {
+      userId: admin.userId,
+      organizationId: admin.organizationId,
+      role: "member",
+      displayName: "Test Admin",
+      username: admin.username,
+    });
+    expect(rejoined.id).toBe(admin.memberId);
+    expect(rejoined.status).toBe("active");
+    // …and the onboarding lifecycle starts FRESH: a stale suppress stamp
+    // must not hide setup for what is effectively a newly joined team.
+    expect(rejoined.onboardingSuppressedAt).toBeNull();
+    expect(rejoined.onboardingSuppressedReason).toBeNull();
+    expect(rejoined.onboardingCompletedAt).toBeNull();
+
+    const [row] = await app.db
+      .select({
+        suppressedAt: members.onboardingSuppressedAt,
+        suppressedReason: members.onboardingSuppressedReason,
+        completedAt: members.onboardingCompletedAt,
+        status: members.status,
+      })
+      .from(members)
+      .where(eq(members.id, admin.memberId));
+    expect(row).toEqual({ suppressedAt: null, suppressedReason: null, completedAt: null, status: "active" });
+  });
+
   it("rejects a suppress timestamp without a suppress reason at the database boundary", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    await expect(
-      app.db.execute(sql`
+    // Drizzle wraps the postgres error ("Failed query: …") and keeps the
+    // CHECK-violation detail on the error's `cause`, so assert against the
+    // full chain rather than the wrapper message alone.
+    const violation = await app.db
+      .execute(sql`
         UPDATE members
         SET onboarding_suppressed_at = NOW(),
             onboarding_suppressed_reason = NULL
         WHERE id = ${admin.memberId}
-      `),
-    ).rejects.toThrow(/members_onboarding_suppress_reason_check|check constraint/i);
+      `)
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+    expect(violation).not.toBeNull();
+    const chain = `${violation}\n${violation instanceof Error ? String(violation.cause ?? "") : ""}`;
+    expect(chain).toMatch(/members_onboarding_suppress_reason_check|check constraint/i);
   });
 
   it("rejects unauthenticated callers", async () => {
