@@ -3,6 +3,7 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
+import { runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { FlowHint, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
@@ -60,7 +61,7 @@ export function StepCreateAgent() {
   if (agentPhase === "timeout") {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        {/* One plain paragraph — the shell's step h1 ("Create your first agent")
+        {/* One plain paragraph — the shell's step h1 ("Add your agent to the team")
             already heads the screen, so no second bold title here — then retry. */}
         <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {COPY.createAgent.timeoutBody}
@@ -87,6 +88,19 @@ export function StepCreateAgent() {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+      {/* Dynamic opener: grounds the abstract "agent" in the concrete coding
+          agent the user already runs ("Claude Code on gandys-macbook is about
+          to join your team."). Shown only when both a runtime and a connected
+          client are known; the computer-disconnected hint below covers the
+          gap otherwise. */}
+      {computer.connectedClient && computer.selectedRuntime ? (
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          {COPY.createAgent.joining(
+            runtimeProviderLabel(computer.selectedRuntime),
+            computer.connectedClient.hostname ?? computer.connectedClient.id,
+          )}
+        </p>
+      ) : null}
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <label htmlFor="onboarding-agent-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
           {COPY.createAgent.nameLabel}
@@ -150,7 +164,7 @@ export function StepCreateAgent() {
 
       <div className="flex">
         <Button type="button" variant="cta" onClick={handleCreate} disabled={!canCreate}>
-          <span>Create {trimmed || "an agent"}</span>
+          <span>Add {trimmed || "your agent"} to the team</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

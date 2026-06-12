@@ -21,6 +21,26 @@ export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   codex: "Codex",
 };
 
+const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
+
+/**
+ * Narrow a wire-string provider to the `RuntimeProvider` enum, or null when it
+ * isn't one we recognise. The enum has no runtime type guard, so this
+ * includes-check is the single sanctioned narrowing point — callers get a
+ * typed value or null instead of sprinkling `as` at each use site.
+ */
+export function asRuntimeProvider(provider: string): RuntimeProvider | null {
+  // Single `as` after an includes-guard, matching the accepted pattern in
+  // bound-agents-list / new-agent-dialog (the enum has no runtime type guard).
+  return KNOWN_RUNTIME_PROVIDERS.includes(provider) ? (provider as RuntimeProvider) : null;
+}
+
+/** Friendly runtime label, falling back to the raw id if it isn't a known one. */
+export function runtimeProviderLabel(provider: string): string {
+  const known = asRuntimeProvider(provider);
+  return known ? PROVIDER_LABEL[known] : provider;
+}
+
 /**
  * `npm install -g` package spec per runtime. The CLI canonical install
  * command lives here so the Setup-incomplete card body can render the
