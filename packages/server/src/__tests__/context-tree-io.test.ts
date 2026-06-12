@@ -6,6 +6,7 @@ import {
   explainContextTreeIoDecision,
   recordFromSessionEvent,
   summarizeContextTreeIo,
+  summarizeContextTreeIoSkippedEvents,
 } from "../services/context-tree-io.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { appendEvent } from "../services/session-event.js";
@@ -578,5 +579,95 @@ describe("context-tree IO service", () => {
         bindingRepo: TREE_REPO,
       }),
     ).toEqual({ recordable: false, reason: "no_tool_file_refs" });
+  });
+
+  it("summarizes skipped context-tree IO candidates by reason", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "assistant_text",
+      payload: { text: "not a tool call" },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-no-refs",
+        name: "Bash",
+        args: { command: "cat /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-repo-mismatch",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: "https://github.com/acme/other.git",
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-valid",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7);
+
+    expect(skipped.totalEventCount).toBe(3);
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_tool_file_refs", eventCount: 1 },
+      { reason: "ref_repo_mismatch", eventCount: 1 },
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(skipped.reasons.find((row) => row.reason === "unsupported_shell_command")).toMatchObject({
+      agentCount: 1,
+      runtimeProviders: [{ runtimeProvider: "claude-code", eventCount: 1 }],
+      toolNames: [{ toolName: "Bash", eventCount: 1 }],
+    });
+
+    const io = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
+    expect(io.skipped).toEqual(skipped);
   });
 });

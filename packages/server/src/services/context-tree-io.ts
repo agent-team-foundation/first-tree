@@ -3,6 +3,9 @@ import {
   type ContextTreeIoAction,
   type ContextTreeIoBucket,
   type ContextTreeIoEvent,
+  type ContextTreeIoSkipBreakdown,
+  type ContextTreeIoSkipReason,
+  type ContextTreeIoSkipSummary,
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
@@ -71,18 +74,6 @@ type NormalizedFileRefRecord = {
   normalized: NormalizedFileRef;
   sourceIndex: number;
 };
-
-export type ContextTreeIoSkipReason =
-  | "no_org_context_tree_binding"
-  | "event_kind_not_io"
-  | "status_not_ok"
-  | "unsupported_tool"
-  | "unsupported_shell_command"
-  | "no_tool_file_refs"
-  | "ref_schema_invalid"
-  | "ref_repo_mismatch"
-  | "ref_path_invalid"
-  | "chat_not_in_org";
 
 export type ContextTreeIoDecision =
   | {
@@ -300,6 +291,21 @@ function toolNameOf(event: SessionEvent): string | null {
   return event.kind === "tool_call" ? event.payload.name : null;
 }
 
+function incrementCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function sortedCountEntries(
+  map: Map<string, number>,
+  keyName: "runtimeProvider" | "toolName",
+): Array<{ runtimeProvider: string; eventCount: number } | { toolName: string; eventCount: number }> {
+  return [...map.entries()]
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) => rightCount - leftCount || leftKey.localeCompare(rightKey))
+    .map(([key, eventCount]) => ({ [keyName]: key, eventCount })) as Array<
+    { runtimeProvider: string; eventCount: number } | { toolName: string; eventCount: number }
+  >;
+}
+
 export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecisionInput): ContextTreeIoDecision {
   const parsed = sessionEventSchema.safeParse({
     kind: input.sessionEvent.kind,
@@ -315,6 +321,98 @@ export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecision
     chatInOrg: input.chatInOrg,
   });
   return decision.recordable ? { recordable: true } : { recordable: false, reason: decision.reason };
+}
+
+export async function summarizeContextTreeIoSkippedEvents(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+): Promise<ContextTreeIoSkipSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const binding = await getOrgContextTree(db, organizationId);
+  const bindingBranch = binding.branch ?? "main";
+  const rows = await db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      runtimeProvider: agents.runtimeProvider,
+      chatOrganizationId: chats.organizationId,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .leftJoin(chats, eq(chats.id, sessionEvents.chatId))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        gte(sessionEvents.createdAt, since),
+        or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+      ),
+    );
+
+  const byReason = new Map<
+    ContextTreeIoSkipReason,
+    {
+      eventCount: number;
+      agentIds: Set<string>;
+      runtimeProviders: Map<string, number>;
+      toolNames: Map<string, number>;
+    }
+  >();
+
+  for (const row of rows) {
+    const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
+    const event = parsed.success ? parsed.data : null;
+    const decision = event
+      ? buildContextTreeIoDecision({
+          event,
+          runtimeProvider: row.runtimeProvider,
+          bindingRepo: binding.repo,
+          bindingBranch,
+          chatInOrg: row.chatOrganizationId === organizationId,
+        })
+      : ({ recordable: false, reason: "event_kind_not_io" } as const);
+    if (decision.recordable) continue;
+
+    const bucket = byReason.get(decision.reason) ?? {
+      eventCount: 0,
+      agentIds: new Set<string>(),
+      runtimeProviders: new Map<string, number>(),
+      toolNames: new Map<string, number>(),
+    };
+    bucket.eventCount += 1;
+    bucket.agentIds.add(row.agentId);
+    incrementCount(bucket.runtimeProviders, row.runtimeProvider);
+    const toolName = event ? toolNameOf(event) : null;
+    if (toolName) incrementCount(bucket.toolNames, toolName);
+    byReason.set(decision.reason, bucket);
+  }
+
+  const reasons = [...byReason.entries()]
+    .sort(
+      ([leftReason, left], [rightReason, right]) =>
+        right.eventCount - left.eventCount || leftReason.localeCompare(rightReason),
+    )
+    .map(
+      ([reason, bucket]): ContextTreeIoSkipBreakdown => ({
+        reason,
+        eventCount: bucket.eventCount,
+        agentCount: bucket.agentIds.size,
+        runtimeProviders: sortedCountEntries(bucket.runtimeProviders, "runtimeProvider") as Array<{
+          runtimeProvider: string;
+          eventCount: number;
+        }>,
+        toolNames: sortedCountEntries(bucket.toolNames, "toolName") as Array<{ toolName: string; eventCount: number }>,
+      }),
+    );
+
+  return {
+    windowDays,
+    totalEventCount: reasons.reduce((sum, row) => sum + row.eventCount, 0),
+    reasons,
+  };
 }
 
 export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
@@ -644,6 +742,7 @@ export async function summarizeContextTreeIo(
       createdAt: isoOrNull(row.created_at) ?? new Date().toISOString(),
     };
   });
+  const skipped = await summarizeContextTreeIoSkippedEvents(db, organizationId, windowDays);
 
   return {
     windowDays,
@@ -659,5 +758,6 @@ export async function summarizeContextTreeIo(
       lastWriteAt: isoOrNull(row.last_write_at),
     })),
     recentEvents,
+    skipped,
   };
 }
