@@ -7,7 +7,13 @@ import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { CenterPanel } from "./center/index.js";
-import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
+import {
+  DEFAULT_GROUP_MODE,
+  type GroupMode,
+  parseGroupMode,
+  readStoredGroupMode,
+  storeGroupMode,
+} from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID, type RailFilter } from "./conversations/index.js";
 
 /**
@@ -20,7 +26,8 @@ import { ConversationList, DRAFT_CHAT_ID, type RailFilter } from "./conversation
  *   - `?watching=1` (default off) — chats where the caller is a watcher
  *   - `?origin=manual,pr,issue,…` (default empty = unfiltered) — multi-select
  *   - `?with=agent-x,agent-y` (default empty = unfiltered) — participants
- *   - `?group=recency|source` (default `source`) — list grouping
+ *   - `?group=recency|source` — list grouping; when absent, falls back to
+ *     the remembered per-device choice (`localStorage`), then `recency`
  *
  * Phase B replaces the Phase A single-value `?source=` with the multi-select
  * `?origin=`; the legacy key is still accepted on first load and upgraded
@@ -109,7 +116,9 @@ export function WorkspacePage() {
   const { unread, watching } = parseUnreadWatching(searchParams);
   const origin = parseOriginList(searchParams);
   const participants = parseParticipantList(searchParams);
-  const group = parseGroupMode(searchParams.get("group"));
+  // Explicit URL value wins (shareable links); otherwise restore the
+  // remembered per-device choice, which itself defaults to `recency`.
+  const group = parseGroupMode(searchParams.get("group")) ?? readStoredGroupMode();
 
   useAdminWs();
 
@@ -226,6 +235,8 @@ export function WorkspacePage() {
 
   const setGroup = useCallback(
     (next: GroupMode) => {
+      // Remember the choice for future visits, then mirror it in the URL.
+      storeGroupMode(next);
       setSearchParams(nextParamsForGroup(searchParams, next), { replace: true });
     },
     [searchParams, setSearchParams],
@@ -443,7 +454,7 @@ export function nextParamsForParticipants(current: URLSearchParams, agents: Read
  */
 export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (mode === "source") next.delete("group");
+  if (mode === DEFAULT_GROUP_MODE) next.delete("group");
   else next.set("group", mode);
   return next;
 }

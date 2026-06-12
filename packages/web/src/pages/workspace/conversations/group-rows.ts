@@ -2,15 +2,45 @@ import type { MeChatRow } from "@first-tree/shared";
 
 export type GroupMode = "recency" | "source";
 
+/** Default grouping when neither the URL nor the stored preference says otherwise. */
+export const DEFAULT_GROUP_MODE: GroupMode = "recency";
+
+const GROUP_MODE_STORAGE_KEY = "first-tree:chat-list-group";
+
 /**
- * Parse a `?group=` URL value into a `GroupMode`. Unknown / missing
- * values fall back to `source` (the default). Exported so both the
- * URL-state side (`WorkspacePage`) and the headless dropdown
- * (`ConversationList`) share one canonical parser.
+ * Parse a raw `?group=` URL (or storage) value into a `GroupMode`.
+ * Returns `null` for unknown / missing values so the caller can fall
+ * back to the remembered preference (`readStoredGroupMode`). Exported
+ * so the URL-state side (`WorkspacePage`) and tests share one
+ * canonical parser.
  */
-export function parseGroupMode(raw: string | null): GroupMode {
-  if (raw === "recency") return raw;
-  return "source";
+export function parseGroupMode(raw: string | null): GroupMode | null {
+  if (raw === "recency" || raw === "source") return raw;
+  return null;
+}
+
+/**
+ * Read the remembered `Group by` choice. The selection is a per-device
+ * view preference, so it lives in `localStorage` (same pattern as the
+ * doc-preview drawer width) rather than in server-side user settings.
+ */
+export function readStoredGroupMode(): GroupMode {
+  try {
+    return parseGroupMode(window.localStorage.getItem(GROUP_MODE_STORAGE_KEY)) ?? DEFAULT_GROUP_MODE;
+  } catch {
+    // localStorage may be unavailable (private mode, sandboxed iframe);
+    // fall back to the default rather than breaking the rail.
+    return DEFAULT_GROUP_MODE;
+  }
+}
+
+/** Persist the `Group by` choice so the next visit restores it. */
+export function storeGroupMode(mode: GroupMode): void {
+  try {
+    window.localStorage.setItem(GROUP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Best-effort persistence — losing the preference is acceptable.
+  }
 }
 
 export type GroupBucket = {
@@ -112,15 +142,23 @@ function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArra
 // Source
 // ---------------------------------------------------------------------------
 
+// Labels are phrased around "who started this work stream" — the user's
+// mental model for this grouping — rather than the creation mechanism
+// (the old MINE/MANUAL/GITHUB/AGENT set read as two mixed dimensions).
+// Header rendering uppercases via CSS, so labels stay normal case here.
 const SOURCE_BUCKETS: ReadonlyArray<{ key: string; label: string; match: (row: MeChatRow) => boolean }> = [
   {
     key: "created-by-me",
-    label: "MINE",
+    label: "Started by me",
     match: (row) => row.createdByMe === true && (row.source ?? "manual") === "manual",
   },
-  { key: "manual", label: "MANUAL", match: (row) => row.createdByMe !== true && (row.source ?? "manual") === "manual" },
-  { key: "github", label: "GITHUB", match: (row) => row.source === "github" },
-  { key: "agent", label: "AGENT", match: (row) => row.source === "agent" },
+  {
+    key: "manual",
+    label: "Started by teammates",
+    match: (row) => row.createdByMe !== true && (row.source ?? "manual") === "manual",
+  },
+  { key: "github", label: "From GitHub", match: (row) => row.source === "github" },
+  { key: "agent", label: "Started by agents", match: (row) => row.source === "agent" },
 ];
 
 function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket> {

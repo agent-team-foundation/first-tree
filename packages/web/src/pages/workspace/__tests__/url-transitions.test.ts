@@ -219,18 +219,18 @@ describe("nextParamsForClearFilters", () => {
 });
 
 describe("nextParamsForGroup", () => {
-  it("drops the param for the default `source` mode", () => {
+  it("drops the param for the default `recency` mode", () => {
     // Default omitted from URL so the canonical home page stays `/`.
-    const result = nextParamsForGroup(paramsOf("group=recency"), "source");
+    const result = nextParamsForGroup(paramsOf("group=source"), "recency");
     expect(result.has("group")).toBe(false);
   });
 
   it("sets non-default modes", () => {
-    expect(nextParamsForGroup(paramsOf(""), "recency").get("group")).toBe("recency");
+    expect(nextParamsForGroup(paramsOf(""), "source").get("group")).toBe("source");
   });
 
   it("preserves the chat selection (grouping is purely visual)", () => {
-    const result = nextParamsForGroup(paramsOf("c=abc"), "recency");
+    const result = nextParamsForGroup(paramsOf("c=abc"), "source");
     expect(result.get("c")).toBe("abc");
   });
 });

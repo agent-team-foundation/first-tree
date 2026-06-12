@@ -45,7 +45,7 @@ const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
 };
 
 const SOURCE_LABEL_MAP: Record<ChatSource, string> = {
-  manual: "Manual chat",
+  manual: "Human-created chat",
   github: "GitHub",
   agent: "Agent-created task",
 };
