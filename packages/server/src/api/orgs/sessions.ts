@@ -14,10 +14,9 @@ export async function orgSessionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
     const query = sessionListFilter.parse(request.query);
-    return sessionService.listAllSessions(app.db, query.limit, query.cursor, {
+    return sessionService.listAllSessions(app.db, scope.organizationId, query.limit, query.cursor, {
       state: query.state,
       agentId: query.agentId,
-      organizationId: scope.organizationId,
     });
   });
 }
