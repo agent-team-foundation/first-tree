@@ -413,6 +413,74 @@ describe("optional groups", () => {
     expect(config.extra?.repo).toBe("org/repo");
     expect(config.extra?.branch).toBe("main");
   });
+
+  const schemaWithExplicitActivation = defineConfig({
+    feature: optional(
+      {
+        required: field(z.string(), { env: "TEST_FEATURE_REQUIRED" }),
+        sidecar: field(z.string().optional(), { env: "TEST_FEATURE_SIDECAR" }),
+        nested: optional({
+          apiKey: field(z.string(), { env: "TEST_FEATURE_NESTED_API_KEY" }),
+        }),
+      },
+      { activateBy: ["required"] },
+    ),
+  });
+
+  it("does not activate an explicitly gated optional group from a non-activating field", async () => {
+    vi.stubEnv("TEST_FEATURE_SIDECAR", "sidecar");
+
+    const config = await initConfig({
+      schema: schemaWithExplicitActivation,
+      role: "test",
+      configDir: testDir,
+    });
+
+    expect(config.feature).toBeUndefined();
+  });
+
+  it("does not resolve a nested optional group when its parent optional group is inactive", async () => {
+    vi.stubEnv("TEST_FEATURE_NESTED_API_KEY", "sk-test");
+
+    const config = await initConfig({
+      schema: schemaWithExplicitActivation,
+      role: "test",
+      configDir: testDir,
+    });
+
+    expect(config.feature).toBeUndefined();
+  });
+
+  it("resolves nested optional fields after the explicit parent activator is set", async () => {
+    vi.stubEnv("TEST_FEATURE_REQUIRED", "enabled");
+    vi.stubEnv("TEST_FEATURE_NESTED_API_KEY", "sk-test");
+
+    const config = await initConfig({
+      schema: schemaWithExplicitActivation,
+      role: "test",
+      configDir: testDir,
+    });
+
+    expect(config.feature).toEqual({
+      required: "enabled",
+      nested: { apiKey: "sk-test" },
+    });
+  });
+
+  it("fails fast when activateBy references an unknown field", async () => {
+    const schema = defineConfig({
+      feature: optional(
+        {
+          required: field(z.string(), { env: "TEST_FEATURE_REQUIRED" }),
+        },
+        { activateBy: ["missing"] },
+      ),
+    });
+
+    await expect(initConfig({ schema, role: "test", configDir: testDir })).rejects.toThrow(
+      'Unknown activateBy field "missing" for optional group "feature"',
+    );
+  });
 });
 
 describe("setConfigValue / getConfigValue / readConfigFile", () => {
@@ -658,6 +726,32 @@ describe("resolveConfigReadonly", () => {
       feature: { enabled: true },
     });
     expect(readFileSync(join(testDir, "test.yaml"), "utf-8")).not.toContain("secret:");
+  });
+
+  it("uses optional group activation rules during readonly resolution", () => {
+    const schema = defineConfig({
+      feature: optional(
+        {
+          enabled: field(z.string(), { env: "READONLY_FEATURE_ENABLED" }),
+          nested: optional({
+            apiKey: field(z.string(), { env: "READONLY_FEATURE_API_KEY" }),
+          }),
+        },
+        { activateBy: ["enabled"] },
+      ),
+    });
+    vi.stubEnv("READONLY_FEATURE_API_KEY", "sk-readonly");
+
+    expect(resolveConfigReadonly({ schema, role: "test", configDir: testDir })).toEqual({});
+
+    vi.stubEnv("READONLY_FEATURE_ENABLED", "true");
+
+    expect(resolveConfigReadonly({ schema, role: "test", configDir: testDir })).toEqual({
+      feature: {
+        enabled: "true",
+        nested: { apiKey: "sk-readonly" },
+      },
+    });
   });
 
   it("uses default config directory and ignores non-object YAML", () => {
