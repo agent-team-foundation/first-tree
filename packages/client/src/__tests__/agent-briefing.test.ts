@@ -757,12 +757,13 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(briefing).toContain("eagerly, not lazily");
 
     // Writing discipline anchors — fresh vs persistent context framing and
-    // the tree-PR-before-code-PR ordering rule. The prose wraps the
-    // emphasised phrases across lines, so allow either single-line or
-    // wrapped forms.
+    // the co-open + cross-link PR coordination rule (the tree PR need not
+    // merge before the code PR). The prose wraps the emphasised phrases
+    // across lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
-    expect(briefing).toMatch(/tree PR opens first, then the code[\s\n]+PR/);
+    expect(briefing).toMatch(/open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them/);
+    expect(briefing).toMatch(/with[\s\n]+the code PR or shortly after/);
     expect(briefing).toContain("Implementation-only changes skip the tree");
 
     // Tree path interpolated under Tree Location.
