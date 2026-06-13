@@ -9,6 +9,10 @@ on:
   release:
     types: [published]
 
+# This job only POSTs to an external Vercel hook — it never needs the
+# repo GITHUB_TOKEN, so drop all default token permissions.
+permissions: {}
+
 jobs:
   trigger-website-rebuild:
     runs-on: ubuntu-latest
