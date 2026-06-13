@@ -3,6 +3,7 @@ import {
   getRepoLocalPathSafetyError,
   gitRepoSchema,
   mcpStdioServerSchema,
+  normalizeRepoLocalPath,
   PROMPT_APPEND_MAX_LENGTH,
 } from "./agent-runtime-config.js";
 import { repoUrlSchema } from "./org-settings.js";
@@ -192,6 +193,9 @@ export const agentResourceBindingInputSchema = z
     repoLocalPath: z
       .string()
       .min(1)
+      // Collapse a legacy clean nested path to its basename before validating,
+      // so a persisted nested binding reads cleanly (see normalizeRepoLocalPath).
+      .transform(normalizeRepoLocalPath)
       .superRefine((value, ctx) => {
         const err = getRepoLocalPathSafetyError(value);
         if (!err) return;

@@ -140,6 +140,41 @@ export function isSafeRepoLocalPath(localPath: string): boolean {
   return getRepoLocalPathSafetyError(localPath) === null;
 }
 
+/**
+ * Normalize a configured localPath to a single workspace-immediate directory
+ * name, tolerating a legacy *clean nested* path by collapsing it to its
+ * basename.
+ *
+ * Source repos must be immediate children of the workspace — the W1
+ * `workspace.json.sources` manifest records single-segment names and the
+ * bare-clone/worktree layout assumes top-level dirs. New config is narrowed to
+ * single-segment, but `agent_configs.payload` and
+ * `agent_resource_bindings.repo_local_path` are persisted data: a value that
+ * was legal under the old (nesting-permitted) schema, e.g. `repos/repo-1`,
+ * must still READ cleanly rather than throwing in
+ * `agentRuntimeConfigPayloadSchema.parse` on every config read / agent bind
+ * (PR #1048 — baixiaohang persisted-data blocker). So a clean nested path is
+ * coerced to its last segment here and the safety check then validates that
+ * single segment. A path with any hard-unsafe shape (absolute, backslash,
+ * control char, `.`/`..` or empty segment, surrounding whitespace) is returned
+ * unchanged so the safety check still rejects it — those shapes were never
+ * legal and so were never persisted.
+ */
+export function normalizeRepoLocalPath(localPath: string): string {
+  if (!localPath.includes("/")) return localPath;
+  if (localPath.trim() !== localPath) return localPath;
+  if (hasControlCharacters(localPath)) return localPath;
+  if (localPath.includes("\\")) return localPath;
+  if (localPath.startsWith("/") || WINDOWS_DRIVE_PATH_PATTERN.test(localPath)) return localPath;
+  const segments = localPath.split("/");
+  for (const segment of segments) {
+    if (!segment || segment === "." || segment === ".." || segment.trim() !== segment) {
+      return localPath;
+    }
+  }
+  return segments[segments.length - 1] ?? localPath;
+}
+
 export const gitRepoSchema = z.object({
   url: z.string().min(1),
   ref: z.string().min(1).optional(),
@@ -147,6 +182,10 @@ export const gitRepoSchema = z.object({
   localPath: z
     .string()
     .min(1)
+    // Collapse a legacy clean nested path to its basename BEFORE validating, so
+    // persisted nested values read cleanly; the safety check then enforces a
+    // single safe segment. See {@link normalizeRepoLocalPath}.
+    .transform(normalizeRepoLocalPath)
     .superRefine((localPath, ctx) => {
       const safetyError = getRepoLocalPathSafetyError(localPath);
       if (!safetyError) return;

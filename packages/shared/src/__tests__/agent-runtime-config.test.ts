@@ -15,6 +15,7 @@ import {
   gitRepoSchema,
   isRedactedEnvValue,
   isSafeRepoLocalPath,
+  normalizeRepoLocalPath,
   updateAgentRuntimeConfigSchema,
 } from "../schemas/agent-runtime-config.js";
 
@@ -192,14 +193,31 @@ describe("agent runtime config — git repo localPath safety", () => {
     });
   });
 
+  it("coerces a legacy clean nested localPath down to its basename", () => {
+    // Source repos must be immediate children of the workspace, but
+    // `agent_configs.payload` is persisted data: a value that was legal under
+    // the old (nesting-permitted) schema must still READ cleanly rather than
+    // throw on every config read / agent bind. A clean nested path collapses
+    // to its basename instead of erroring (PR #1048 — baixiaohang
+    // persisted-data blocker).
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
+      url: "https://github.com/acme/repo.git",
+      localPath: "repo-1",
+    });
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "services/api" })).toEqual({
+      url: "https://github.com/acme/repo.git",
+      localPath: "api",
+    });
+  });
+
   it.each([
     [""],
     ["/tmp/repo"],
     ["../repo"],
-    // Clean multi-segment paths are now rejected too: source repos are
-    // immediate children of the workspace and W1 `sources` records only
-    // single-segment names (PR #1048 — yuezengwu nested-localPath blocker).
-    ["repos/repo-1"],
+    // Only HARD-unsafe shapes are rejected (absolute, escape / dot / empty /
+    // whitespace segment, backslash, control char). A *clean* nested path like
+    // `repos/repo-1` is NOT here — it coerces to its basename (see the
+    // coercion test above), per PR #1048.
     ["."],
     [".."],
     ["repos/../repo"],
@@ -230,6 +248,18 @@ describe("agent runtime config — git repo localPath safety", () => {
     expect(getRepoLocalPathSafetyError(".")).toBe("Git repo local path must not be a dot segment");
     // A clean single segment still passes.
     expect(getRepoLocalPathSafetyError("repo-1")).toBeNull();
+  });
+
+  it("normalizeRepoLocalPath collapses clean nested paths, leaves unsafe shapes untouched", () => {
+    expect(normalizeRepoLocalPath("repo-1")).toBe("repo-1");
+    expect(normalizeRepoLocalPath("repos/repo-1")).toBe("repo-1");
+    expect(normalizeRepoLocalPath("services/api")).toBe("api");
+    // Hard-unsafe shapes pass through unchanged so the safety check rejects them.
+    expect(normalizeRepoLocalPath("repos/../repo")).toBe("repos/../repo");
+    expect(normalizeRepoLocalPath("/tmp/repo")).toBe("/tmp/repo");
+    expect(normalizeRepoLocalPath(" repos/repo")).toBe(" repos/repo");
+    expect(normalizeRepoLocalPath("repos//repo")).toBe("repos//repo");
+    expect(normalizeRepoLocalPath("repos\\repo")).toBe("repos\\repo");
   });
 
   it("preserves derived repo local path behavior for repo URLs", () => {
