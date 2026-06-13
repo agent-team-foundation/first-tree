@@ -108,6 +108,22 @@ add agent-driven repo creation.
 
 ## 5. Design
 
+> **Superseded mechanism (§5.2 + §5.3) — agent-managed-repos refactor (#1048).**
+> The client-runtime *implementation* below — a sibling **symlink**
+> `<workspace>/<TREE_DIR>` → a shared `context-tree-repos/<hash>/` clone, plus
+> lazy re-resolution that calls `syncAgentContextTree(sdk)` to clone/refresh the
+> tree — no longer exists. The runtime now does **declaration + observation
+> only**: it resolves the tree binding as pure config
+> (`bootstrap.ts::resolveAgentContextTreeBinding`, no git side effects) and
+> writes `<workspace>/.first-tree/workspace.json` via
+> `workspace-manifest.ts::ensureWorkspaceManifest`, naming the tree subdirectory
+> `context-tree`. The tree itself is a **per-agent clone the agent creates and
+> pulls itself** at `<workspace>/context-tree`, following its `AGENTS.md`
+> `## Tree Location` block (`first-tree tree tree` pulls before every read).
+> `syncAgentContextTree`, `contextTreeCloneDir`, and the symlink step were all
+> removed. §5.1 (onboarding prose) and the goals in §1–§4 still hold; only the
+> §5.2/§5.3 *how-the-runtime-binds-the-tree* mechanism is historical.
+
 ### 5.1 Web / onboarding
 
 - **No gitRepos write (断点1 withdrawn).** Sources already flow to the admin
