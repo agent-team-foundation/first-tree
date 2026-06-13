@@ -185,10 +185,10 @@ describe("agent runtime config — reasoning effort", () => {
 });
 
 describe("agent runtime config — git repo localPath safety", () => {
-  it("accepts safe relative local paths", () => {
-    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
+  it("accepts a safe single-segment local path", () => {
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repo-1" })).toEqual({
       url: "https://github.com/acme/repo.git",
-      localPath: "repos/repo-1",
+      localPath: "repo-1",
     });
   });
 
@@ -196,6 +196,12 @@ describe("agent runtime config — git repo localPath safety", () => {
     [""],
     ["/tmp/repo"],
     ["../repo"],
+    // Clean multi-segment paths are now rejected too: source repos are
+    // immediate children of the workspace and W1 `sources` records only
+    // single-segment names (PR #1048 — yuezengwu nested-localPath blocker).
+    ["repos/repo-1"],
+    ["."],
+    [".."],
     ["repos/../repo"],
     ["repos//repo"],
     ["repos/./repo"],
@@ -212,10 +218,18 @@ describe("agent runtime config — git repo localPath safety", () => {
 
   it("returns specific localPath safety errors", () => {
     expect(getRepoLocalPathSafetyError("")).toBe("Git repo local path must not be empty");
+    // A nested path is rejected at the single-segment check (which runs before
+    // per-segment inspection), so even `repos/ repo` reports the
+    // single-directory-name error rather than the whitespace one.
     expect(getRepoLocalPathSafetyError("repos/ repo")).toBe(
-      "Git repo local path segments must not have leading or trailing whitespace",
+      "Git repo local path must be a single directory name (no '/'): source repos are immediate children of the workspace",
     );
-    expect(getRepoLocalPathSafetyError("repos/repo")).toBeNull();
+    expect(getRepoLocalPathSafetyError("repos/repo")).toBe(
+      "Git repo local path must be a single directory name (no '/'): source repos are immediate children of the workspace",
+    );
+    expect(getRepoLocalPathSafetyError(".")).toBe("Git repo local path must not be a dot segment");
+    // A clean single segment still passes.
+    expect(getRepoLocalPathSafetyError("repo-1")).toBeNull();
   });
 
   it("preserves derived repo local path behavior for repo URLs", () => {
@@ -268,11 +282,11 @@ describe("agent runtime config — git repo localPath safety", () => {
 
   it("formats a repo coordinate, surfacing a non-default branch and mount path", () => {
     expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "staging" })).toBe("acme/repo@staging");
-    expect(formatRepoCoordinate({ url: "https://github.com/acme/design-system", localPath: "packages/ui" })).toBe(
-      "acme/design-system → packages/ui",
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/design-system", localPath: "ui" })).toBe(
+      "acme/design-system → ui",
     );
-    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "dev", localPath: "libs/x" })).toBe(
-      "acme/repo@dev → libs/x",
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "dev", localPath: "libs-x" })).toBe(
+      "acme/repo@dev → libs-x",
     );
   });
 });

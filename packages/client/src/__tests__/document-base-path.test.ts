@@ -50,8 +50,8 @@ describe("documentBasePathFromRuntimeConfig", () => {
 
   it("honours an explicit localPath for a single repo", () => {
     expect(
-      documentBasePathFromRuntimeConfig(payload([{ url: "https://x/y.git", localPath: "nested/repo" }]), PER_CHAT),
-    ).toBe(`${PER_CHAT}/nested/repo`);
+      documentBasePathFromRuntimeConfig(payload([{ url: "https://x/y.git", localPath: "custom-dir" }]), PER_CHAT),
+    ).toBe(`${PER_CHAT}/custom-dir`);
   });
 
   it("falls back to the session doc root when a single repo's localPath is blank", () => {
@@ -117,8 +117,8 @@ describe("singleRepoLocalPathFromPayload + selfFenceFromRuntimeConfig", () => {
   });
 
   it("honours an explicit localPath; treats a blank string as no promotion", () => {
-    expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "nested/repo" }]))).toBe(
-      "nested/repo",
+    expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "custom-dir" }]))).toBe(
+      "custom-dir",
     );
     expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "   " }]))).toBeNull();
   });

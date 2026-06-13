@@ -52,13 +52,33 @@ Convert each verify failure into a candidate drift:
 Other verify failures are _structural_, not drift — fix them as
 `tree-wrong` only if a human review confirms the node never made sense.
 
+### Code-side phases read through worktrees
+
+Phases 2, 3, and 4 all read source code. Each bound source is a **bare**
+clone (no working tree) under the agent-managed repo model, so before any
+code-side read, materialize one read worktree per source off its latest
+default branch — following the **Worktrees** protocol in your `AGENTS.md`
+/ `CLAUDE.md` briefing — and remove it when the audit is done:
+
+```bash
+# for each <source> in manifest.sources:
+git -C <workspaceRoot>/<source> fetch origin
+git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
+# ... all Phase 2–4 reads below use this worktree as <source-root> ...
+git -C <workspaceRoot>/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
+```
+
+Throughout Phases 2–4, `<source-root>` / `<source-path>` resolve **inside
+the read worktree**, never the bare clone path.
+
 ### Phase 2: Code-Vs-Tree Read-Through
 
 For each `NODE.md` in the tree:
 
 1. Identify the source-repo path the node describes (use the domain
    directory name as a hint; cross-check against the binding entries).
-2. Read the matching code-side directory.
+2. Read the matching code-side directory **in that source's read
+   worktree** (see *Code-side phases read through worktrees*).
 3. For each fact stated in the node, check whether code still supports it.
 4. Classify any disagreement using `references/drift-taxonomy.md`.
 
@@ -66,10 +86,11 @@ This phase is read-only and human-paced. Do not write tree updates here.
 
 ### Phase 3: Recent-Change Sweep
 
-If `--since <ref>` is set or the user wants a focused audit:
+If `--since <ref>` is set or the user wants a focused audit, run inside
+the source's read worktree:
 
 ```bash
-git log --oneline <ref>..HEAD -- <source-path>
+git -C <source-root> log --oneline <ref>..HEAD -- <source-path>
 ```
 
 For each commit in the range:
@@ -86,21 +107,9 @@ The reverse of Phase 2: walk source structure and ask "does the tree
 register this?". This is where `code-not-synced` drift is discovered on
 its own (not just as a side-effect of reading the tree).
 
-Each bound source is a **bare** clone. Materialize one read worktree per
-source off its latest default branch before sweeping it, following the
-**Worktrees** protocol in your `AGENTS.md` / `CLAUDE.md` briefing, and
-remove it when the sweep is done:
-
-```bash
-# for each <source> in manifest.sources:
-git -C <workspaceRoot>/<source> fetch origin
-git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
-# ... sweep inside the worktree (this is <source-root> below) ...
-git -C <workspaceRoot>/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
-```
-
 For each source repo in `sources` (from `<workspaceRoot>/.first-tree/workspace.json`),
-with `<source-root>` = its read worktree:
+with `<source-root>` = its read worktree (see *Code-side phases read
+through worktrees*):
 
 1. **Top-level directories**
 

@@ -118,14 +118,19 @@ export function getRepoLocalPathSafetyError(localPath: string): string | null {
   if (localPath.startsWith("/") || WINDOWS_DRIVE_PATH_PATTERN.test(localPath)) {
     return "Git repo local path must be relative";
   }
-
-  const segments = localPath.split("/");
-  for (const segment of segments) {
-    if (!segment) return "Git repo local path must not contain empty path segments";
-    if (segment === "." || segment === "..") return "Git repo local path must not contain dot segments";
-    if (segment.trim() !== segment) {
-      return "Git repo local path segments must not have leading or trailing whitespace";
-    }
+  // Single directory name only: source repos materialize as immediate
+  // children of the agent workspace (`<workspace>/<localPath>/`), and the W1
+  // `workspace.json.sources` manifest records immediate-subdirectory names.
+  // A nested path like `services/api` cannot be expressed in that manifest, so
+  // shipped skills (first-tree-seed / first-tree-sync) that discover bound
+  // repos through it would never see the source. localPath's only job is to
+  // override the URL-derived directory name (e.g. to de-duplicate two repos
+  // that derive the same name); that override stays a single segment.
+  if (localPath.includes("/")) {
+    return "Git repo local path must be a single directory name (no '/'): source repos are immediate children of the workspace";
+  }
+  if (localPath === "." || localPath === "..") {
+    return "Git repo local path must not be a dot segment";
   }
 
   return null;

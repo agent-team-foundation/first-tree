@@ -139,7 +139,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e2-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
 
-    const cache = buildCache([{ url: fixtureBareRepo, localPath: "repos/first-tree" }]);
+    const cache = buildCache([{ url: fixtureBareRepo, localPath: "first-tree" }]);
     await cache.refresh(AGENT_ID);
 
     const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
@@ -147,9 +147,9 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
 
     // `worktrees/` subdir is reserved for agent's on-demand worktrees only;
     // runtime must never pre-create it. Use both negation forms (the subdir
-    // itself + the old-design-style path) to lock down regression risk.
+    // itself + a per-repo path) to lock down regression risk.
     expect(existsSync(join(workspaceRoot, "worktrees"))).toBe(false);
-    expect(existsSync(join(workspaceRoot, "worktrees", "repos", "first-tree"))).toBe(false);
+    expect(existsSync(join(workspaceRoot, "worktrees", "first-tree"))).toBe(false);
 
     await handler.shutdown();
     rmSync(dataDir, { recursive: true, force: true });

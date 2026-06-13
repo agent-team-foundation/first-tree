@@ -565,9 +565,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("git clone --bare <url> <path>");
     // refspec config makes refs/remotes/origin/* available for worktrees.
     expect(briefing).toContain("git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'");
-    // mkdir -p the parent directory for nested localPaths (yuezengwu #2 on
-    // PR #1048 — `git clone` does not create missing parents).
-    expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
+    // localPath is a single directory name (nested paths are rejected at the
+    // schema layer), so the clone needs no `mkdir -p` of a parent.
+    expect(briefing).toContain("single directory name directly under your workspace");
+    expect(briefing).not.toContain("mkdir -p");
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
     expect(briefing).toContain("first-tree-seed");
