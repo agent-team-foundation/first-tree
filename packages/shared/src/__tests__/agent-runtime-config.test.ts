@@ -213,9 +213,8 @@ describe("agent runtime config — git repo localPath safety", () => {
   it("keeps a legacy nested basename-collision config parseable (services/api + libs/api → distinct)", () => {
     // The exact class of configs nesting was useful for: two repos with the
     // same basename kept apart by directory. Joining (not taking the basename)
-    // preserves the distinction so the payload duplicate-localPath check still
-    // passes on read, rather than collapsing both to `api` and throwing
-    // (PR #1048 — yuezengwu collision blocker).
+    // preserves the distinction (`services-api` vs `libs-api`) rather than
+    // collapsing both to `api` (PR #1048 — yuezengwu collision blocker).
     const parsed = agentRuntimeConfigPayloadSchema.parse({
       kind: "claude-code",
       prompt: { append: "" },
@@ -386,24 +385,39 @@ describe("agent runtime config — duplicate validation", () => {
     );
   });
 
-  it("rejects duplicate git repo local paths, including derived paths", () => {
-    const result = agentRuntimeConfigPayloadSchema.safeParse({
+  it("tolerates colliding git repo local paths on read (no fatal duplicate check)", () => {
+    // gitRepos is no longer writable through the config payload (the PATCH path
+    // rejects it with `legacy_resource_config_disabled`), so this read-side
+    // schema only ever sees gitRepos as carried-forward legacy data — and
+    // `commitWrite` re-parses the whole payload on every unrelated edit. A
+    // legacy localPath collision must therefore NOT throw here; runtime
+    // uniqueness is enforced gracefully by the resources service's
+    // `applyRepoLocalPathDedup`. See `payloadDuplicatesRefinement` (PR #1048 —
+    // no pure normalization is both injective and identity-preserving on common
+    // single-segment names, so tolerate-on-read is the correct contract).
+
+    // (a) The reviewer collision class: a nested path joins to the same single
+    // segment as an existing single-segment path. This previously threw on read.
+    const collidingNested = agentRuntimeConfigPayloadSchema.safeParse({
+      kind: "claude-code",
+      gitRepos: [
+        { url: "https://github.com/acme/a.git", localPath: "services/api" },
+        { url: "https://github.com/acme/b.git", localPath: "services-api" },
+      ],
+    });
+    expect(collidingNested.success).toBe(true);
+    expect(collidingNested.data?.gitRepos.map((repo) => repo.localPath)).toEqual(["services-api", "services-api"]);
+
+    // (b) Two URLs that derive the same name also read cleanly now.
+    const collidingDerived = agentRuntimeConfigPayloadSchema.safeParse({
       kind: "claude-code",
       gitRepos: [{ url: "https://github.com/acme/repo.git" }, { url: "git@github.com:other/repo.git" }],
     });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: ["gitRepos", 1, "localPath"],
-          message: 'Duplicate git repo local path "repo"',
-        }),
-      ]),
-    );
+    expect(collidingDerived.success).toBe(true);
+    expect(collidingDerived.data?.gitRepos).toHaveLength(2);
   });
 
-  it("ignores empty derived git repo paths during duplicate validation", () => {
+  it("reads gitRepos with empty derived paths cleanly", () => {
     const parsed = agentRuntimeConfigPayloadSchema.parse({
       kind: "claude-code",
       gitRepos: [{ url: "   " }, { url: "https://github.com/acme/repo.git" }],

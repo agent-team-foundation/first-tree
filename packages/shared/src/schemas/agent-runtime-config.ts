@@ -157,12 +157,18 @@ export function isSafeRepoLocalPath(localPath: string): boolean {
  *
  * So a clean nested path is joined into a single segment with `-`
  * (`repos/repo-1` → `repos-repo-1`) and the safety check then validates that
- * segment. Joining rather than taking the basename is deliberate: nesting was
- * useful precisely to keep two repos with the same basename apart
- * (`services/api` + `libs/api`), so a basename collapse would map both to
- * `api` and trip the payload's duplicate-localPath check on read — exactly
- * the previously-valid configs that must keep parsing. Joining preserves the
- * distinction (`services-api` vs `libs-api`).
+ * segment. Joining rather than taking the basename is the faithful default:
+ * nesting was used to keep two repos with the same basename apart
+ * (`services/api` + `libs/api`), and joining preserves that distinction
+ * (`services-api` vs `libs-api`) instead of collapsing both to `api`.
+ *
+ * Joining is NOT injective — `services/api` and a single-segment `services-api`
+ * both reduce to `services-api` — and no pure transform that leaves common
+ * single-segment names untouched can be. That is fine: a localPath collision is
+ * tolerated on read and de-duplicated gracefully where the value is consumed
+ * (the resources service's `applyRepoLocalPathDedup` marks the later repo
+ * `unavailable`), not enforced as a fatal parse failure. See the removed
+ * gitRepos duplicate check in `payloadDuplicatesRefinement`.
  *
  * A path with any hard-unsafe shape (absolute, backslash, control char,
  * `.`/`..` or empty segment, surrounding whitespace) is returned unchanged so
@@ -191,7 +197,7 @@ export const gitRepoSchema = z.object({
   localPath: z
     .string()
     .min(1)
-    // Collapse a legacy clean nested path to its basename BEFORE validating, so
+    // Join a legacy clean nested path into one segment BEFORE validating, so
     // persisted nested values read cleanly; the safety check then enforces a
     // single safe segment. See {@link normalizeRepoLocalPath}.
     .transform(normalizeRepoLocalPath)
@@ -295,19 +301,25 @@ const payloadDuplicatesRefinement = (payload: TaggedPayload, ctx: z.RefinementCt
     seenEnv.add(entry.key);
   });
 
-  const seenPaths = new Set<string>();
-  payload.gitRepos.forEach((repo, idx) => {
-    const path = repo.localPath ?? deriveRepoLocalPath(repo.url);
-    if (!path) return;
-    if (seenPaths.has(path)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["gitRepos", idx, "localPath"],
-        message: `Duplicate git repo local path "${path}"`,
-      });
-    }
-    seenPaths.add(path);
-  });
+  // No gitRepos duplicate-localPath check here, by design (PR #1048).
+  //
+  // `gitRepos` is no longer writable through the config payload — the PATCH
+  // path rejects it with `legacy_resource_config_disabled` — so this read-side
+  // schema only ever sees `gitRepos` as carried-forward legacy data
+  // (`applyPatch` preserves `current.gitRepos`, then `commitWrite` re-parses
+  // the whole merged payload on EVERY config edit). A hard duplicate-localPath
+  // failure here would therefore brick reads AND unrelated edits (e.g. a model
+  // change) of any pre-narrowing config whose nested localPaths now normalize
+  // to the same single segment (`services/api` + `services-api` → `services-api`).
+  //
+  // Runtime uniqueness is enforced where it actually matters: `resolveRuntimeConfig`
+  // REPLACES `payload.gitRepos` with the resource-derived repos before the client
+  // ever sees them, and `applyRepoLocalPathDedup` resolves a collision gracefully
+  // (marks the later repo `unavailable` with reason `duplicate_local_path` — the
+  // operator-visible audit signal) instead of throwing. No pure normalization can
+  // be both injective and identity-preserving on common single-segment names, so
+  // tolerating collisions on read (and de-duping gracefully at resolution) is the
+  // correct contract rather than chasing a collision-free mapping.
 };
 
 /**

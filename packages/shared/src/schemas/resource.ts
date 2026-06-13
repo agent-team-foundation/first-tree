@@ -193,7 +193,7 @@ export const agentResourceBindingInputSchema = z
     repoLocalPath: z
       .string()
       .min(1)
-      // Collapse a legacy clean nested path to its basename before validating,
+      // Join a legacy clean nested path into one segment before validating,
       // so a persisted nested binding reads cleanly (see normalizeRepoLocalPath).
       .transform(normalizeRepoLocalPath)
       .superRefine((value, ctx) => {
