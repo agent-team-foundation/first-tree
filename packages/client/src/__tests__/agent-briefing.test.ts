@@ -762,7 +762,9 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // across lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
-    expect(briefing).toMatch(/open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them/);
+    expect(briefing).toMatch(
+      /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
+    );
     expect(briefing).toMatch(/with[\s\n]+the code PR or shortly after/);
     expect(briefing).toContain("Implementation-only changes skip the tree");
 
