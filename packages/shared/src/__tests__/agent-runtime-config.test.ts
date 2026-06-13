@@ -193,21 +193,43 @@ describe("agent runtime config — git repo localPath safety", () => {
     });
   });
 
-  it("coerces a legacy clean nested localPath down to its basename", () => {
+  it("coerces a legacy clean nested localPath into a joined single segment", () => {
     // Source repos must be immediate children of the workspace, but
     // `agent_configs.payload` is persisted data: a value that was legal under
     // the old (nesting-permitted) schema must still READ cleanly rather than
-    // throw on every config read / agent bind. A clean nested path collapses
-    // to its basename instead of erroring (PR #1048 — baixiaohang
+    // throw on every config read / agent bind. A clean nested path joins its
+    // segments with `-` instead of erroring (PR #1048 — baixiaohang
     // persisted-data blocker).
     expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
       url: "https://github.com/acme/repo.git",
-      localPath: "repo-1",
+      localPath: "repos-repo-1",
     });
     expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "services/api" })).toEqual({
       url: "https://github.com/acme/repo.git",
-      localPath: "api",
+      localPath: "services-api",
     });
+  });
+
+  it("keeps a legacy nested basename-collision config parseable (services/api + libs/api → distinct)", () => {
+    // The exact class of configs nesting was useful for: two repos with the
+    // same basename kept apart by directory. Joining (not taking the basename)
+    // preserves the distinction so the payload duplicate-localPath check still
+    // passes on read, rather than collapsing both to `api` and throwing
+    // (PR #1048 — yuezengwu collision blocker).
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "claude-code",
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [
+        { url: "https://github.com/acme/services.git", localPath: "services/api" },
+        { url: "https://github.com/acme/libs.git", localPath: "libs/api" },
+      ],
+      resourceSkills: [],
+      reasoningEffort: "",
+    });
+    expect(parsed.gitRepos.map((repo) => repo.localPath)).toEqual(["services-api", "libs-api"]);
   });
 
   it.each([
@@ -250,10 +272,12 @@ describe("agent runtime config — git repo localPath safety", () => {
     expect(getRepoLocalPathSafetyError("repo-1")).toBeNull();
   });
 
-  it("normalizeRepoLocalPath collapses clean nested paths, leaves unsafe shapes untouched", () => {
+  it("normalizeRepoLocalPath joins clean nested paths, leaves unsafe shapes untouched", () => {
     expect(normalizeRepoLocalPath("repo-1")).toBe("repo-1");
-    expect(normalizeRepoLocalPath("repos/repo-1")).toBe("repo-1");
-    expect(normalizeRepoLocalPath("services/api")).toBe("api");
+    expect(normalizeRepoLocalPath("repos/repo-1")).toBe("repos-repo-1");
+    expect(normalizeRepoLocalPath("services/api")).toBe("services-api");
+    // Distinct nested paths that share a basename stay distinct after joining.
+    expect(normalizeRepoLocalPath("libs/api")).toBe("libs-api");
     // Hard-unsafe shapes pass through unchanged so the safety check rejects them.
     expect(normalizeRepoLocalPath("repos/../repo")).toBe("repos/../repo");
     expect(normalizeRepoLocalPath("/tmp/repo")).toBe("/tmp/repo");

@@ -142,8 +142,8 @@ export function isSafeRepoLocalPath(localPath: string): boolean {
 
 /**
  * Normalize a configured localPath to a single workspace-immediate directory
- * name, tolerating a legacy *clean nested* path by collapsing it to its
- * basename.
+ * name, tolerating a legacy *clean nested* path by joining its segments into
+ * one collision-safe segment.
  *
  * Source repos must be immediate children of the workspace — the W1
  * `workspace.json.sources` manifest records single-segment names and the
@@ -153,12 +153,21 @@ export function isSafeRepoLocalPath(localPath: string): boolean {
  * was legal under the old (nesting-permitted) schema, e.g. `repos/repo-1`,
  * must still READ cleanly rather than throwing in
  * `agentRuntimeConfigPayloadSchema.parse` on every config read / agent bind
- * (PR #1048 — baixiaohang persisted-data blocker). So a clean nested path is
- * coerced to its last segment here and the safety check then validates that
- * single segment. A path with any hard-unsafe shape (absolute, backslash,
- * control char, `.`/`..` or empty segment, surrounding whitespace) is returned
- * unchanged so the safety check still rejects it — those shapes were never
- * legal and so were never persisted.
+ * (PR #1048 — baixiaohang persisted-data blocker).
+ *
+ * So a clean nested path is joined into a single segment with `-`
+ * (`repos/repo-1` → `repos-repo-1`) and the safety check then validates that
+ * segment. Joining rather than taking the basename is deliberate: nesting was
+ * useful precisely to keep two repos with the same basename apart
+ * (`services/api` + `libs/api`), so a basename collapse would map both to
+ * `api` and trip the payload's duplicate-localPath check on read — exactly
+ * the previously-valid configs that must keep parsing. Joining preserves the
+ * distinction (`services-api` vs `libs-api`).
+ *
+ * A path with any hard-unsafe shape (absolute, backslash, control char,
+ * `.`/`..` or empty segment, surrounding whitespace) is returned unchanged so
+ * the safety check still rejects it — those shapes were never legal and so
+ * were never persisted.
  */
 export function normalizeRepoLocalPath(localPath: string): string {
   if (!localPath.includes("/")) return localPath;
@@ -172,7 +181,7 @@ export function normalizeRepoLocalPath(localPath: string): string {
       return localPath;
     }
   }
-  return segments[segments.length - 1] ?? localPath;
+  return segments.join("-");
 }
 
 export const gitRepoSchema = z.object({
