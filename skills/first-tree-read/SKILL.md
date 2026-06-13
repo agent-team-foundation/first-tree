@@ -44,22 +44,15 @@ disk**, the workspace is agent-managed and this is the agent's job to
 materialise: follow the **Tree Location** block in your `AGENTS.md` /
 `CLAUDE.md` briefing to clone the upstream tree repo into the resolved
 path (the briefing carries the upstream URL, branch, and a ready
-`git clone` command). Once the directory exists, continue with the
-freshness step below. (If the path exists as a **symlink**, treat it
-as the legacy shared-pool layout — remove only the symlink, then
-clone per the briefing.)
+`git clone` command). Once the directory exists, continue below. (If the
+path exists as a **symlink**, treat it as the legacy shared-pool layout —
+remove only the symlink, then clone per the briefing.)
 
-Before reading content, make the context repo fresh enough for a read:
-
-```bash
-git -C "$CONTEXT_REPO" fetch origin
-git -C "$CONTEXT_REPO" pull --ff-only
-```
-
-If the pull cannot complete cleanly, report the git state and continue only if
-the user explicitly accepts reading stale or conflicted context. On a
-credential failure, report the failure to a human in the chat and read the
-local copy as-is.
+You do **not** need a separate `git pull` step before reading: the
+`first-tree tree tree` command in step 2 runs `git pull --ff-only` on the
+context repo for you (a built-in freshness guarantee), degrading to the
+local copy with a warning if the remote is unreachable. Pass `--no-pull`
+only when you deliberately want a stable snapshot or are working offline.
 
 ### 2. Inspect the reader command every time
 
@@ -72,7 +65,8 @@ first-tree tree tree --help
 ```
 
 Treat this help output as the source of truth for flags and filtering modes.
-Do not invent flags from memory.
+Do not invent flags from memory. Note `first-tree tree tree` refreshes the
+repo with `git pull --ff-only` before listing (use `--no-pull` to skip).
 
 ### 3. Build the read query from the user's signal
 

@@ -127,7 +127,7 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
-    expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--pattern"]);
+    expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
   });
 
   it("exposes help for the Context Tree browser command", () => {
