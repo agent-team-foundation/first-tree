@@ -16,7 +16,9 @@ channel (`first-tree` on prod, `first-tree-staging` on staging,
   `{ tree: "<dir>", sources: [...] }`). The `<binName> tree status`
   CLI was retired in 2026-06 — the manifest is small JSON, `cat` it.
 - one or more source repos at `<workspaceRoot>/<name>` for each
-  `name` in `sources`.
+  `name` in `sources`. Under the agent-managed repo model these are
+  **bare** clones (no working tree) — Phase 4 reads them through a
+  read worktree, never the bare path directly (see Phase 4).
   Phase 4 iterates over **every** bound source; for multi-source
   trees this fans out serially per repo.
 - optional `--since <ref>` to scope Phases 2–3 to changes since a commit
@@ -84,7 +86,21 @@ The reverse of Phase 2: walk source structure and ask "does the tree
 register this?". This is where `code-not-synced` drift is discovered on
 its own (not just as a side-effect of reading the tree).
 
-For each source repo in `sources` (from `<workspaceRoot>/.first-tree/workspace.json`):
+Each bound source is a **bare** clone. Materialize one read worktree per
+source off its latest default branch before sweeping it, following the
+**Worktrees** protocol in your `AGENTS.md` / `CLAUDE.md` briefing, and
+remove it when the sweep is done:
+
+```bash
+# for each <source> in manifest.sources:
+git -C <workspaceRoot>/<source> fetch origin
+git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
+# ... sweep inside the worktree (this is <source-root> below) ...
+git -C <workspaceRoot>/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
+```
+
+For each source repo in `sources` (from `<workspaceRoot>/.first-tree/workspace.json`),
+with `<source-root>` = its read worktree:
 
 1. **Top-level directories**
 

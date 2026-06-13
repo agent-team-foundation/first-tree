@@ -74,7 +74,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "# Identity",
       "# Working in First Tree (First Tree Managed)",
       "## Working Directory",
-      "## Worktrees (one per task — you create AND clean up)",
+      "## Worktrees (how you read AND write a bare source repo)",
       "## Communication",
       "## Workspace Collaboration",
       "## GitHub Entity Attention",
@@ -516,14 +516,18 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("persistent state");
   });
 
-  it("emits the Worktrees block (on-demand convention) regardless of source repos presence", () => {
+  it("emits the Worktrees block (read + write worktree convention) regardless of source repos presence", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Worktrees");
     expect(briefing).toContain("No worktrees are pre-created");
-    expect(briefing).toContain("git worktree add");
-    // The on-demand path must use the agent home as the prefix; only
-    // `<task-name>` / `<new-branch>` are literal placeholders.
+    // Bare-clone worktree commands run against the clone with `git -C <source>`.
+    expect(briefing).toContain("worktree add");
+    // Bare-clone model: both a read worktree and a task (write) worktree are
+    // documented. Only `<name>` / `<task-name>` / `<new-branch>` are literal
+    // placeholders; the home prefix is interpolated.
+    expect(briefing).toContain(`${AGENT_HOME}/worktrees/<name>-read`);
     expect(briefing).toContain(`${AGENT_HOME}/worktrees/<task-name>`);
+    expect(briefing).toContain("worktree remove");
     // No literal `<placeholder>` for the home prefix — LLMs sometimes copy
     // those verbatim.
     expect(briefing).not.toContain("<agent-home>/worktrees/");
@@ -544,7 +548,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     ];
     const briefing = buildAgentBriefing(makeOpts({ sourceRepos }));
 
-    expect(briefing).toContain("## Source Repositories (agent-managed)");
+    expect(briefing).toContain("## Source Repositories (agent-managed, bare)");
     // Top-level paths — no `worktrees/` prefix.
     expect(briefing).toContain(`\`${AGENT_HOME}/api\``);
     expect(briefing).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
@@ -554,20 +558,21 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
-    // Agent-managed protocol: the agent maintains the clones itself —
-    // regular (working-tree) clones, agent-discipline-read-only, refreshed
-    // with a plain `git fetch origin` before each new task worktree.
+    // Agent-managed bare protocol: the agent maintains bare clones itself
+    // and reads/writes only through worktrees.
     expect(briefing).toContain("**You manage these clones yourself**");
-    expect(briefing).toContain("git clone <url> <path>");
+    expect(briefing).toContain("bare");
+    expect(briefing).toContain("git clone --bare <url> <path>");
+    // refspec config makes refs/remotes/origin/* available for worktrees.
+    expect(briefing).toContain("git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'");
     // mkdir -p the parent directory for nested localPaths (yuezengwu #2 on
     // PR #1048 — `git clone` does not create missing parents).
     expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
-    expect(briefing).toContain("The clone is read-only.");
-    expect(briefing).toContain("Reading is allowed");
-    expect(briefing).toContain("Writing is **forbidden**");
+    // Read goes through a worktree, not the clone path; skills scan there too.
+    expect(briefing).toContain("Read through a worktree, not the clone path.");
     expect(briefing).toContain("first-tree-seed");
     expect(briefing).toContain("first-tree-sync");
-    expect(briefing).toContain("git fetch origin");
+    expect(briefing).toContain("fetch origin");
     expect(briefing).toContain("origin/main");
   });
 

@@ -23,8 +23,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  *       for the agent's on-demand worktrees.
  *   E3  Second chat on same agent skips bootstrap (sentinel guard); the
  *       runtime never clones declared repos onto disk.
- *   E4  Briefing contains "Source Repositories (agent-managed)" +
- *       "Worktrees (one per task — you create AND clean up)"; does NOT
+ *   E4  Briefing contains "Source Repositories (agent-managed, bare)" +
+ *       "Worktrees (how you read AND write a bare source repo)"; does NOT
  *       contain legacy "Predeclared worktrees".
  *   E6  `.first-tree-workspace/identity.json` carries agent-level stable fields only —
  *       no `chatId` / `chatContext`.
@@ -223,9 +223,9 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     // new `# Working in First Tree` umbrella, etc.)
     expect(briefing).toContain("# Working in First Tree");
     expect(briefing).toContain("## Working Directory");
-    expect(briefing).toContain("## Source Repositories (agent-managed)");
-    expect(briefing).toContain("## Worktrees (one per task — you create AND clean up)");
-    expect(briefing).toContain("git worktree add");
+    expect(briefing).toContain("## Source Repositories (agent-managed, bare)");
+    expect(briefing).toContain("## Worktrees (how you read AND write a bare source repo)");
+    expect(briefing).toContain("worktree add");
     expect(briefing).toContain("No worktrees are pre-created");
 
     // Top-level path of the declared repo surfaces in the briefing even

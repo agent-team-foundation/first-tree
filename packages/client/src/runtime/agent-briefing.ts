@@ -388,7 +388,7 @@ chat are visible from another. Operate accordingly:
 }
 
 function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
-  const lines: string[] = ["## Source Repositories (agent-managed)", ""];
+  const lines: string[] = ["## Source Repositories (agent-managed, bare)", ""];
   lines.push(
     "The following repositories are declared for this agent at the listed",
     "paths. **You manage these clones yourself** — First Tree never runs git",
@@ -403,32 +403,38 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
   }
   lines.push("");
   lines.push(
+    "Each path is a **bare** clone — a git object store with no working",
+    "tree. You never read or write files at the clone path directly;",
+    "**every read AND write happens inside a worktree** you create off it",
+    "(see `## Worktrees`). Bare is deliberate: with no checked-out files",
+    "the clone can never go stale-mislead or dirty, and concurrent chats",
+    "can't trip over a shared working tree.",
+    "",
     "Management protocol (shared by every chat of this agent):",
     "",
-    "1. **Ensure** — if a listed path is missing, create it as a regular",
-    "   clone with a working tree. Multi-segment `localPath`s (e.g.",
-    "   `services/api`) need their parent directory created first;",
-    "   `git clone` itself does not create missing parents:",
+    "1. **Ensure** — if a listed path is missing, create it as a bare clone.",
+    "   Multi-segment `localPath`s (e.g. `services/api`) need their parent",
+    "   created first; `git clone` does not create missing parents:",
     "",
     "   ```bash",
     '   mkdir -p "$(dirname <path>)"',
-    "   git clone <url> <path>",
+    "   git clone --bare <url> <path>",
+    "   git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
+    "   git -C <path> fetch origin",
     "   ```",
     "",
-    "   An existing directory at the path is reused as-is; never delete or",
-    "   re-clone it (sibling chats may hold worktrees rooted in it).",
+    "   The refspec + fetch populate `refs/remotes/origin/*` so worktrees can",
+    "   branch off `origin/<default>`. An existing directory at the path is",
+    "   reused as-is; never delete or re-clone it (sibling chats may hold",
+    "   worktrees rooted in it).",
     "2. **Refresh** — before creating any worktree, `git -C <path> fetch",
-    "   origin` so `origin/<default>` is current. Do NOT pull / merge / reset",
-    "   the clone itself; let the worktree carry the new ref.",
-    "3. **The clone is read-only.** Reading is allowed: `grep`, `git log`,",
-    "   `cat README.md`, and any shipped agent skill that scans the source",
-    "   tree (e.g. `first-tree-seed`, `first-tree-sync`) operate against the",
-    "   clone path directly. Writing is **forbidden**: never edit files in",
-    "   the clone, never `git checkout` a different branch in it, never",
-    "   commit. All writing happens in a per-task worktree under",
-    "   `<agentHome>/worktrees/<task>/` (see `## Worktrees`). A pinned `ref`,",
-    "   when listed above, is the base your worktrees should branch from",
-    "   instead of `origin/<default>`.",
+    "   origin` so `origin/<default>` is current.",
+    "3. **Read through a worktree, not the clone path.** A bare clone has no",
+    "   files to read. To read source — `grep`, `cat`, `git log`, or a",
+    "   shipped skill scan (`first-tree-seed`, `first-tree-sync`) — create a",
+    "   read worktree off `origin/<default>` (or the pinned `ref`), read",
+    "   inside it, and remove it when done. To write, create a task worktree",
+    "   on a new branch. Both flows are in `## Worktrees`.",
     "4. **Credential failures are reportable events** — if clone/fetch fails",
     "   with an auth error, tell a human in the chat what failed and continue",
     "   with what you have locally; do not retry silently.",
@@ -437,35 +443,48 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
 }
 
 function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
-  // Per proposal §⑧ R3: use absolute paths in the snippet. LLMs sometimes
-  // literal-copy `<placeholder>` strings, so only `<task-name>` and
-  // `<new-branch>` are placeholders here — the home prefix is interpolated.
-  // Every interpolated absolute path is shell-quoted so a path with spaces or
-  // `$` does not break a literal copy-paste into a shell.
+  // LLMs sometimes literal-copy `<placeholder>` strings, so the source path
+  // and worktree paths are shell-quoted real values; only `<name>`,
+  // `<task-name>`, `<new-branch>`, `origin/main` stay as placeholders.
   const quotedHome = shellQuote(agentHome);
   const exampleSource = sourceRepos[0] ? shellQuote(sourceRepos[0].absolutePath) : `${quotedHome}/<source-repo>`;
-  const quotedWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
-  return `## Worktrees (one per task — you create AND clean up)
+  const readWorktreePath = shellQuote(`${agentHome}/worktrees/<name>-read`);
+  const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
+  return `## Worktrees (how you read AND write a bare source repo)
 
-**No worktrees are pre-created.** Every task works in its own worktree
-under \`${agentHome}/worktrees/<task-name>/\`, branched off a freshly-fetched
-\`origin/<base>\`:
+The source clones are **bare**, so every read and every write goes
+through a worktree you create off the bare clone and remove when done.
+**No worktrees are pre-created.**
+
+**Read worktree** — grep / browse / a skill scan, off the latest default
+branch:
 
 \`\`\`bash
-# from a source repo, e.g. ${exampleSource}
-git fetch origin
-git worktree add ${quotedWorktreePath} -b <new-branch> origin/main
+# <source> is one of the bare clone paths listed under Source Repositories, e.g. ${exampleSource}
+git -C <source> fetch origin
+git -C <source> worktree add ${readWorktreePath} origin/main
+# read inside the worktree, then remove it:
+git -C <source> worktree remove ${readWorktreePath}
 \`\`\`
 
-Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit.
+**Task (write) worktree** — one per task, frozen for the PR's life:
 
-- **Frozen for the task's life**: the worktree stays on its branch point
-  for the whole PR — do not rebase/merge \`origin/main\` into it mid-task
-  unless a human asks.
-- **Cleanup is yours**: when the task closes — typically when its PR is
-  merged or abandoned — remove the worktree:
-  \`git -C <source-repo-path> worktree remove ${quotedWorktreePath}\`.
-  Also sweep stale worktrees of finished tasks when you notice them.`;
+\`\`\`bash
+git -C <source> fetch origin
+git -C <source> worktree add ${taskWorktreePath} -b <new-branch> origin/main
+\`\`\`
+
+Replace \`<source>\`, \`<name>\`, \`<task-name>\`, \`<new-branch>\`, and
+\`origin/main\` to fit. A pinned \`ref\` (when listed in Source Repositories)
+is the base to branch from instead of \`origin/main\`.
+
+- **Frozen for the task's life**: a task worktree stays on its branch
+  point for the whole PR — do not rebase/merge \`origin/main\` into it
+  mid-task unless a human asks.
+- **Cleanup is yours**: remove a read worktree as soon as the read is
+  done; remove a task worktree when the task closes (PR merged or
+  abandoned) with \`git -C <source> worktree remove <path>\`. Sweep stale
+  worktrees of finished tasks when you notice them.`;
 }
 
 function communicationBlock(bin: string): string {
