@@ -554,11 +554,19 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
-    // Agent-managed protocol: the agent maintains the clones itself (bare,
-    // fetch-only) — the runtime never runs git on its behalf.
+    // Agent-managed protocol: the agent maintains the clones itself —
+    // regular (working-tree) clones, agent-discipline-read-only, refreshed
+    // with a plain `git fetch origin` before each new task worktree.
     expect(briefing).toContain("**You manage these clones yourself**");
-    expect(briefing).toContain("git clone --bare <url> <path>");
-    expect(briefing).toContain("**Never read or write a clone path directly.**");
+    expect(briefing).toContain("git clone <url> <path>");
+    // mkdir -p the parent directory for nested localPaths (yuezengwu #2 on
+    // PR #1048 — `git clone` does not create missing parents).
+    expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
+    expect(briefing).toContain("The clone is read-only.");
+    expect(briefing).toContain("Reading is allowed");
+    expect(briefing).toContain("Writing is **forbidden**");
+    expect(briefing).toContain("first-tree-seed");
+    expect(briefing).toContain("first-tree-sync");
     expect(briefing).toContain("git fetch origin");
     expect(briefing).toContain("origin/main");
   });
