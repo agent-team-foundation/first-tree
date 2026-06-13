@@ -36,8 +36,18 @@ cat "$WS/.first-tree/workspace.json"
 ```
 
 Resolve the context repo as `<workspaceRoot>/<manifest.tree>`. If the
-manifest is missing, malformed, or the tree directory does not exist, stop and
-report the binding gap. Do not guess a context repo.
+manifest is missing or malformed, stop and report the binding gap — do
+not guess a context repo.
+
+If the manifest is present but the resolved path **does not exist on
+disk**, the workspace is agent-managed and this is the agent's job to
+materialise: follow the **Tree Location** block in your `AGENTS.md` /
+`CLAUDE.md` briefing to clone the upstream tree repo into the resolved
+path (the briefing carries the upstream URL, branch, and a ready
+`git clone` command). Once the directory exists, continue with the
+freshness step below. (If the path exists as a **symlink**, treat it
+as the legacy shared-pool layout — remove only the symlink, then
+clone per the briefing.)
 
 Before reading content, make the context repo fresh enough for a read:
 
@@ -47,7 +57,9 @@ git -C "$CONTEXT_REPO" pull --ff-only
 ```
 
 If the pull cannot complete cleanly, report the git state and continue only if
-the user explicitly accepts reading stale or conflicted context.
+the user explicitly accepts reading stale or conflicted context. On a
+credential failure, report the failure to a human in the chat and read the
+local copy as-is.
 
 ### 2. Inspect the reader command every time
 

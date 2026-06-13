@@ -803,6 +803,50 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // in-agent flow to bind a workspace anymore.
     expect(stub).not.toContain("first-tree-onboarding");
   });
+
+  it("shell-quotes interpolated branch / URL / path in the Tree Location clone command (S5)", () => {
+    // baixiaohang #4 / S5: branch / URL / tree path can legitimately carry
+    // spaces, `$`, or other shell metacharacters (e.g. a `feature with space`
+    // branch, a `release/$VERSION` branch, a path under a username with a
+    // dot). Without quoting, a literal copy-paste of the briefing's `git
+    // clone` line either parses wrong (extra positional args) or expands a
+    // shell variable that is empty / wrong on the agent's host.
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: "/var/lib/context trees/example",
+        contextTreeRepoUrl: "https://example.com/release/$VERSION.git",
+        contextTreeBranch: "feature with space",
+      }),
+    );
+    const treeLocation = briefing.slice(briefing.indexOf("## Tree Location"));
+
+    // The clone command lives inside an indented code block — match against
+    // its single-quoted form. The interpolated branch must NOT appear bare
+    // (which would let the shell split on the space).
+    expect(treeLocation).toContain(
+      "git clone --branch 'feature with space' --single-branch 'https://example.com/release/$VERSION.git' '/var/lib/context trees/example'",
+    );
+    // The path also flows into the `rm` / `pull` / `worktree add` snippets —
+    // every interpolated absolute path must be single-quoted there too.
+    expect(treeLocation).toContain("rm '/var/lib/context trees/example'");
+    expect(treeLocation).toContain("git -C '/var/lib/context trees/example' pull --ff-only");
+    expect(treeLocation).toContain("git -C '/var/lib/context trees/example' worktree add");
+  });
+
+  it("escapes an embedded single quote in the Tree Location quoted values (S5 edge)", () => {
+    // POSIX-safe single quoting closes the quoted block, inserts an escaped
+    // quote, then reopens — verify the canonical `'\''` form lands in the
+    // briefing for a branch / path that already contains a quote.
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: "/tmp/it's-fine",
+        contextTreeRepoUrl: "https://example.com/x.git",
+        contextTreeBranch: "main",
+      }),
+    );
+    const treeLocation = briefing.slice(briefing.indexOf("## Tree Location"));
+    expect(treeLocation).toContain("'/tmp/it'\\''s-fine'");
+  });
 });
 
 describe("buildAgentBriefing — # Skills (Skill Map)", () => {

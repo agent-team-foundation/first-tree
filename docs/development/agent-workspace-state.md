@@ -161,8 +161,14 @@ sweep:
 2. The `apply` function MUST be idempotent (re-running on an already-
    clean workspace is a noop) and SHOULD short-circuit when there's
    nothing to do.
-3. If the migration deletes clones, use `tryRemoveCloneSafely` so the
-   dirty / ahead-of-upstream / worktree guards apply uniformly.
+3. **Migrations no longer delete repo clones, period.** Source repos
+   and the Context Tree clone are agent-managed; sibling chats may hold
+   worktrees rooted in any clone, so a runtime-initiated deletion is
+   never safe. The retired `v1-retired-source-repo-first-tree-hub` and
+   `v1-orphan-ft-clones` migrations are the cautionary example — both
+   used to delete repo clones and both were removed with the
+   agent-managed-repos refactor. New migrations may sweep non-repo
+   residue (legacy snapshots, retired skill payloads, symlinks) only.
 4. If the migration deletes symlinks, use `lstat().isSymbolicLink()` to
    confirm the entry type before unlinking — never delete a user-authored
    regular file.
@@ -176,8 +182,7 @@ sweep:
 
 - `runtime/managed-state.ts` — state-file I/O and read-modify-write helper
 - `runtime/workspace-migrations.ts` — migration registry and applier
-- `runtime/source-repo-cleanup.ts` — `tryRemoveCloneSafely` + probe helpers
-- `runtime/source-repos.ts` — state-based source-repo reconcile
+- `runtime/source-repos.ts` — pure declaration of `gitRepos` coordinates (no git side effects)
 - `runtime/first-tree-skills/installer.ts` — state-based skill reconcile
 - `runtime/agent-bootstrap.ts` — wires migrations into session start
 - `packages/shared/src/schemas/workspace-manifest.ts` — the W1 binding

@@ -10,6 +10,19 @@ import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 import { buildResourceSkillsBriefing } from "./resource-skills.js";
 
+/**
+ * Wrap an arbitrary string in POSIX-safe single quotes so it can be pasted
+ * into a shell verbatim. Embedded single quotes are escaped by closing the
+ * quoted block, inserting an escaped quote, and reopening — the canonical
+ * shell-quoting form. Used everywhere a runtime-resolved value (path, URL,
+ * branch) gets interpolated into a command the agent is told to run; without
+ * this a branch name with a space or `$`, or a path with shell metacharacters,
+ * would render a broken command (PR #1048 review — baixiaohang #4 / S5).
+ */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export type BuildAgentBriefingOptions = {
   identity: AgentIdentity;
   payload: AgentRuntimeConfigPayload | null;
@@ -422,6 +435,11 @@ function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<Predeclare
   // Per proposal §⑧ R3: use absolute paths in the snippet. LLMs sometimes
   // literal-copy `<placeholder>` strings, so only `<task-name>` and
   // `<new-branch>` are placeholders here — the home prefix is interpolated.
+  // Every interpolated absolute path is shell-quoted so a path with spaces or
+  // `$` does not break a literal copy-paste into a shell.
+  const quotedHome = shellQuote(agentHome);
+  const exampleSource = sourceRepos[0] ? shellQuote(sourceRepos[0].absolutePath) : `${quotedHome}/<source-repo>`;
+  const quotedWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
   return `## Worktrees (one per task — you create AND clean up)
 
 **No worktrees are pre-created.** Every task works in its own worktree
@@ -429,9 +447,9 @@ under \`${agentHome}/worktrees/<task-name>/\`, branched off a freshly-fetched
 \`origin/<base>\`:
 
 \`\`\`bash
-# from a source repo, e.g. ${sourceRepos[0]?.absolutePath ?? `${agentHome}/<source-repo>`}
+# from a source repo, e.g. ${exampleSource}
 git fetch origin
-git worktree add ${agentHome}/worktrees/<task-name> -b <new-branch> origin/main
+git worktree add ${quotedWorktreePath} -b <new-branch> origin/main
 \`\`\`
 
 Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit.
@@ -441,7 +459,7 @@ Replace \`<task-name>\`, \`<new-branch>\`, and \`origin/main\` to fit.
   unless a human asks.
 - **Cleanup is yours**: when the task closes — typically when its PR is
   merged or abandoned — remove the worktree:
-  \`git -C <source-repo-path> worktree remove ${agentHome}/worktrees/<task-name>\`.
+  \`git -C <source-repo-path> worktree remove ${quotedWorktreePath}\`.
   Also sweep stale worktrees of finished tasks when you notice them.`;
 }
 
@@ -762,12 +780,18 @@ operating guide covers staging, review routing, and ownership rules
 you will not remember by default.`);
 
   if (contextTreePath) {
-    const upstream = contextTreeRepoUrl
-      ? `\n\nUpstream: \`${contextTreeRepoUrl}\` (branch \`${contextTreeBranch ?? "main"}\`).`
-      : "";
+    const branch = contextTreeBranch ?? "main";
+    const upstream = contextTreeRepoUrl ? `\n\nUpstream: \`${contextTreeRepoUrl}\` (branch \`${branch}\`).` : "";
+    // Shell-quote every interpolated value: branch / URL / path may legitimately
+    // contain spaces, `$`, backticks, or other shell metacharacters that would
+    // break a literal copy-paste into a shell. Single-quote each value and
+    // escape any embedded single quotes by closing the quote, inserting an
+    // escaped quote, and reopening — the canonical POSIX-safe form.
+    const quotedBranch = shellQuote(branch);
+    const quotedPath = shellQuote(contextTreePath);
     const cloneCmd = contextTreeRepoUrl
-      ? `git clone --branch ${contextTreeBranch ?? "main"} --single-branch ${contextTreeRepoUrl} ${contextTreePath}`
-      : `git clone --branch <branch> --single-branch <tree-repo-url> ${contextTreePath}`;
+      ? `git clone --branch ${quotedBranch} --single-branch ${shellQuote(contextTreeRepoUrl)} ${quotedPath}`
+      : `git clone --branch <branch> --single-branch <tree-repo-url> ${quotedPath}`;
     blocks.push(`## Tree Location (agent-managed clone)
 
 The Context Tree for this workspace lives at:
@@ -781,14 +805,14 @@ The Context Tree for this workspace lives at:
       ${cloneCmd}
 
 - **A symlink at this path** (legacy shared-pool layout) → remove the
-  symlink itself (\`rm ${contextTreePath}\` — this deletes only the link,
+  symlink itself (\`rm ${quotedPath}\` — this deletes only the link,
   never its target), then clone as above.
-- **Before every tree read** → \`git -C ${contextTreePath} pull --ff-only\`.
+- **Before every tree read** → \`git -C ${quotedPath} pull --ff-only\`.
   On network/credential failure: use the local copy, and report the
   failure to a human in the chat. On a dirty-tree failure: the read-only
   rule below was violated — stash or re-clone, then report.
 - **Read-only**: never edit this clone in place. Tree writes branch a
-  worktree off it (\`git -C ${contextTreePath} worktree add …\`) and go
+  worktree off it (\`git -C ${quotedPath} worktree add …\`) and go
   through a PR, per the Writing the Tree rules above.
 
 Read the root \`NODE.md\` first to map the domains before you act.`);
