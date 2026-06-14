@@ -179,6 +179,12 @@ describe("probeClaudeCodeCapability", () => {
 describe("probeCodexCapability", () => {
   let tmpHome: string;
   let prev: Record<string, string | undefined>;
+  const bundledCodexClient = () => ({ client: {}, runtimeSource: "bundled" as const });
+  const pathCodexClient = () => ({
+    client: {},
+    runtimeSource: "path" as const,
+    codexPathOverride: "/usr/local/bin/codex",
+  });
 
   beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), "ft-cap-codex-"));
@@ -194,24 +200,52 @@ describe("probeCodexCapability", () => {
 
   it("`ok` + api_key when CODEX_API_KEY is set", async () => {
     process.env.CODEX_API_KEY = "ck-test-12345";
-    const entry = await probeCodexCapability();
+    const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
     expect(entry.state).toBe("ok");
     expect(entry.authMethod).toBe("api_key");
+    expect(entry.runtimeSource).toBe("bundled");
   });
 
   it("`ok` + auth_json when $CODEX_HOME/auth.json exists", async () => {
     writeFileSync(join(tmpHome, "auth.json"), JSON.stringify({ token: "x" }));
-    const entry = await probeCodexCapability();
+    const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
     expect(entry.state).toBe("ok");
     expect(entry.authMethod).toBe("auth_json");
   });
 
   it("`unauthenticated` when neither env nor auth.json is present", async () => {
     // tmpHome is empty by default.
-    const entry = await probeCodexCapability();
+    const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
     expect(entry.state).toBe("unauthenticated");
     expect(entry.available).toBe(true);
     expect(entry.authMethod).toBe("none");
+  });
+
+  it("reports system CLI fallback metadata when bundled binary is missing but PATH codex is usable", async () => {
+    process.env.CODEX_API_KEY = "ck-test-12345";
+    const entry = await probeCodexCapability({ createCodexClient: pathCodexClient });
+    expect(entry).toMatchObject({
+      state: "ok",
+      runtimeSource: "path",
+      runtimePath: "/usr/local/bin/codex",
+    });
+  });
+
+  it("reports missing when binary resolution fails after SDK import succeeds", async () => {
+    const entry = await probeCodexCapability({
+      createCodexClient: () => {
+        throw new Error(
+          "Codex runtime binary is missing on this machine. Original error: Unable to locate Codex CLI binaries.",
+        );
+      },
+    });
+    expect(entry).toMatchObject({
+      state: "missing",
+      available: false,
+      authenticated: false,
+      authMethod: "none",
+      error: expect.stringContaining("Codex runtime binary is missing"),
+    });
   });
 
   it("falls back to ~/.codex/auth.json when CODEX_HOME is unset", async () => {
@@ -223,7 +257,7 @@ describe("probeCodexCapability", () => {
     try {
       mkdirSync(join(fakeHome, ".codex"), { recursive: true });
       writeFileSync(join(fakeHome, ".codex", "auth.json"), "{}");
-      const entry = await probeCodexCapability();
+      const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
       expect(entry.state).toBe("ok");
       expect(entry.authMethod).toBe("auth_json");
     } finally {
@@ -268,7 +302,7 @@ describe("probeCodexCapability", () => {
         }),
       });
 
-      const entry = await probeCodexCapability();
+      const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
 
       expect(entry).toMatchObject({
         state: "error",
@@ -294,7 +328,7 @@ describe("probeCodexCapability", () => {
         }),
       });
 
-      const entry = await probeCodexCapability();
+      const entry = await probeCodexCapability({ createCodexClient: bundledCodexClient });
 
       expect(entry.error).toBe("codex env error");
     } finally {

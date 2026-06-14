@@ -13,12 +13,17 @@ export type CapabilityState = z.infer<typeof capabilityStateSchema>;
 export const capabilityAuthMethodSchema = z.enum(["api_key", "oauth", "auth_json", "none"]);
 export type CapabilityAuthMethod = z.infer<typeof capabilityAuthMethodSchema>;
 
+export const capabilityRuntimeSourceSchema = z.enum(["bundled", "path"]);
+export type CapabilityRuntimeSource = z.infer<typeof capabilityRuntimeSourceSchema>;
+
 export const capabilityEntrySchema = z.object({
   state: capabilityStateSchema,
   available: z.boolean(),
   authenticated: z.boolean(),
   sdkVersion: z.string().nullable().optional(),
   authMethod: capabilityAuthMethodSchema,
+  runtimeSource: capabilityRuntimeSourceSchema.optional(),
+  runtimePath: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   detectedAt: z.string(),
 });

@@ -5,12 +5,25 @@ import {
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
+import {
+  Codex,
+  type CodexOptions,
+  type Input,
+  type Thread,
+  type ThreadItem,
+  type ThreadOptions,
+  type Usage,
+} from "@openai/codex-sdk";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import {
+  createCodexClientWithBinaryFallback,
+  formatCodexBinaryMissingMessage,
+  isCodexBinaryMissingError,
+} from "../runtime/codex-binary.js";
 import { contextTreeRelativePathOf, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
@@ -568,6 +581,21 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return cfg;
   }
 
+  function createCodexClient(options: CodexOptions, sessionCtx: SessionContext): Codex {
+    const resolved = createCodexClientWithBinaryFallback<CodexOptions, Codex>(
+      options,
+      (nextOptions) => new Codex(nextOptions),
+      { log: (message) => sessionCtx.log(message) },
+    );
+    return resolved.client;
+  }
+
+  function formatCodexSdkError(message: string): string {
+    if (isCodexAuthError(message)) return formatAuthHint("codex", message);
+    if (isCodexBinaryMissingError(message)) return formatCodexBinaryMissingMessage(message);
+    return message;
+  }
+
   function buildBriefing(
     sessionCtx: SessionContext,
     payload: AgentRuntimeConfigPayload,
@@ -785,7 +813,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         // because your refresh token was revoked. Please log out and sign in
         // again." — opaque to a First Tree user. Reframe at the boundary so
         // the next step (run `codex login` in their own terminal) is obvious.
-        const message = isCodexAuthError(item.message) ? formatAuthHint("codex", item.message) : item.message;
+        const message = formatCodexSdkError(item.message);
         sessionCtx.emitEvent({
           kind: "error",
           payload: { source: "tool", message },
@@ -885,9 +913,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   break;
                 }
                 turnFailed = true;
-                const message = isCodexAuthError(event.error.message)
-                  ? formatAuthHint("codex", event.error.message)
-                  : event.error.message;
+                const message = formatCodexSdkError(event.error.message);
                 sessionCtx.emitEvent({
                   kind: "error",
                   payload: { source: "sdk", message },
@@ -900,9 +926,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   break;
                 }
                 turnFailed = true;
-                const message = isCodexAuthError(event.message)
-                  ? formatAuthHint("codex", event.message)
-                  : event.message;
+                const message = formatCodexSdkError(event.message);
                 sessionCtx.emitEvent({
                   kind: "error",
                   payload: { source: "sdk", message },
@@ -918,7 +942,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
               retryReason = `runStreamed threw (transient): ${msg}`;
             } else {
               turnFailed = true;
-              const message = isCodexAuthError(msg) ? formatAuthHint("codex", msg) : msg;
+              const message = formatCodexSdkError(msg);
               sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
             }
           }
@@ -1233,7 +1257,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
       // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
@@ -1291,7 +1315,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
