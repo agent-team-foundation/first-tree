@@ -79,6 +79,7 @@ let runtimeInstance: {
   addAgent: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
+  onReconnect: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -127,6 +128,7 @@ beforeEach(() => {
     watchAgentsDir: vi.fn(() => {
       throw new Error("stop after watch");
     }),
+    onReconnect: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
 });
