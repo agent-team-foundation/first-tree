@@ -567,11 +567,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("git clone --bare <url> <path>");
     // refspec config makes refs/remotes/origin/* available for worktrees.
     expect(briefing).toContain("git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'");
-    // Clones live under the workspace's `source-repos/` directory; `git clone`
-    // creates that parent, so the briefing needs no `mkdir -p`.
+    // Clones live under the workspace's `source-repos/` directory. `git clone`
+    // does create the missing parent on its own (verified), but the protocol
+    // makes it explicit with `mkdir -p` so an agent that deviates from the exact
+    // clone command can't trip over a missing `source-repos/` parent.
     expect(briefing).toContain("source-repos/");
     expect(briefing).toContain("immediate child of your workspace's");
-    expect(briefing).not.toContain("mkdir -p");
+    expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
     expect(briefing).toContain("first-tree-seed");
