@@ -4,7 +4,7 @@ import type { Agent, MeMembership } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient, RuntimeAgent } from "../../api/activity.js";
 import { ToastProvider } from "../../components/ui/toast.js";
@@ -418,6 +418,11 @@ async function renderDom(
   });
   await flush();
   return { container, root };
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{`${location.pathname}${location.hash}`}</div>;
 }
 
 async function unmountRoot(root: Root): Promise<void> {
@@ -1342,6 +1347,38 @@ describe("web DOM interaction coverage", () => {
       [...menu.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ?? null,
     );
     expect(logout).toHaveBeenCalled();
+    api.get = originalGet;
+  });
+
+  it("routes admins from UserMenu to the team deletion danger zone", async () => {
+    const { UserMenu } = await import("../../components/user-menu.js");
+    authMock.value = {
+      ...authMock.value,
+      organizationId: "org-1",
+      role: "admin",
+      selectOrganization: vi.fn(async () => undefined),
+    };
+    const { api } = await import("../../api/client.js");
+    const originalGet = api.get;
+    api.get = async <T,>(): Promise<T> => [{ id: "org-1", displayName: "Acme", role: "admin" }] as T;
+
+    const menu = await renderDom(
+      <>
+        <UserMenu />
+        <LocationProbe />
+      </>,
+    );
+    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
+    await waitForText("Delete current team", menu.container);
+    await click(
+      [...menu.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Delete current team"),
+      ) ?? null,
+    );
+
+    expect(menu.container.querySelector('[data-testid="location-probe"]')?.textContent).toBe(
+      "/settings/team#team-danger-zone",
+    );
     api.get = originalGet;
   });
 

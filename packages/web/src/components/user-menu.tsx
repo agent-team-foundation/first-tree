@@ -1,5 +1,5 @@
 import type { OrgBrief } from "@first-tree/shared";
-import { Check, ChevronDown, ChevronUp, Link2, LogOut, Plus, UserPlus } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Link2, LogOut, Plus, Trash2, UserPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
@@ -99,6 +99,10 @@ export function UserMenu() {
   const openInvite = () => {
     setOpen(false);
     setInviteOpen(true);
+  };
+  const openDeleteTeam = () => {
+    setOpen(false);
+    navigate("/settings/team#team-danger-zone");
   };
 
   return (
@@ -235,6 +239,18 @@ export function UserMenu() {
                 >
                   <Link2 className="h-3.5 w-3.5" />
                   <span>Invite teammates</span>
+                </button>
+              )}
+              {organizationId && currentRole === "admin" && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={openDeleteTeam}
+                  className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                  style={{ color: "var(--state-error)" }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete current team</span>
                 </button>
               )}
             </div>

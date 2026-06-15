@@ -135,62 +135,64 @@ export function TeamIdentityPanel() {
       </Section>
 
       {orgQuery.data && (
-        <Section title="Danger zone" description="Deleting a team removes it from active access for every member.">
-          <div style={{ paddingTop: "var(--sp-3)" }}>
-            <div className="text-body" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-4)" }}>
-              {deletePreviewQuery.isLoading
-                ? "Loading deletion impact…"
-                : deletePreviewQuery.error instanceof Error
-                  ? deletePreviewQuery.error.message
-                  : impactSummary}
-            </div>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={!canOpenDeleteDialog || mutation.isPending}
-              onClick={() => handleDeleteDialogOpenChange(true)}
-            >
-              Delete team…
-            </Button>
-          </div>
-          <Dialog open={deleteDialogOpen} onOpenChange={handleDeleteDialogOpenChange}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Delete "{orgQuery.data.displayName}"?</DialogTitle>
-                <DialogDescription>
-                  This removes the team from active access. Historical records are retained.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="text-body" style={{ color: "var(--fg-2)" }}>
-                {impactSummary}
+        <div id="team-danger-zone">
+          <Section title="Danger zone" description="Deleting a team removes it from active access for every member.">
+            <div style={{ paddingTop: "var(--sp-3)" }}>
+              <div className="text-body" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-4)" }}>
+                {deletePreviewQuery.isLoading
+                  ? "Loading deletion impact…"
+                  : deletePreviewQuery.error instanceof Error
+                    ? deletePreviewQuery.error.message
+                    : impactSummary}
               </div>
-              <SettingsField
-                label="Team name"
-                hint={`Type ${orgQuery.data.displayName} to confirm.`}
-                value={deleteConfirmation}
-                onChange={setDeleteConfirmation}
-              />
-              {deleteMutation.error instanceof Error && (
-                <div className="text-body" style={{ color: "var(--state-error)" }}>
-                  {deleteMutation.error.message}
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={!canOpenDeleteDialog || mutation.isPending}
+                onClick={() => handleDeleteDialogOpenChange(true)}
+              >
+                Delete team…
+              </Button>
+            </div>
+            <Dialog open={deleteDialogOpen} onOpenChange={handleDeleteDialogOpenChange}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete "{orgQuery.data.displayName}"?</DialogTitle>
+                  <DialogDescription>
+                    This removes the team from active access. Historical records are retained.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="text-body" style={{ color: "var(--fg-2)" }}>
+                  {impactSummary}
                 </div>
-              )}
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => handleDeleteDialogOpenChange(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={!canDelete}
-                  onClick={() => deleteMutation.mutate()}
-                >
-                  Delete team
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </Section>
+                <SettingsField
+                  label="Team name"
+                  hint={`Type ${orgQuery.data.displayName} to confirm.`}
+                  value={deleteConfirmation}
+                  onChange={setDeleteConfirmation}
+                />
+                {deleteMutation.error instanceof Error && (
+                  <div className="text-body" style={{ color: "var(--state-error)" }}>
+                    {deleteMutation.error.message}
+                  </div>
+                )}
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => handleDeleteDialogOpenChange(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={!canDelete}
+                    onClick={() => deleteMutation.mutate()}
+                  >
+                    Delete team
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </Section>
+        </div>
       )}
     </>
   );
