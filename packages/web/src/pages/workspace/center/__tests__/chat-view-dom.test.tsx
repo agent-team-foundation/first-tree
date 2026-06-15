@@ -4,7 +4,7 @@ import type { Agent, ChatDetail, ChatParticipantDetail } from "@first-tree/share
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -1144,6 +1144,74 @@ describe("ChatView", () => {
       await waitForText(container, "Launch planning");
       await flush();
       expect(sidebarOpen(container)).toBe(false);
+
+      await act(async () => root.unmount());
+    });
+
+    // The doc-preview-deep-link regression: a described chat entered while a
+    // doc-preview already owns the right rail (params present on first mount)
+    // must STILL auto-open its DescriptionSection once the preview closes. The
+    // pre-fix ordering marked the chat "applied" before the `hasDocPreview`
+    // bail, so closing the preview hit the per-chat guard and the rail never
+    // opened. The fix bails WITHOUT marking, so the preview-close re-run applies
+    // the default. ChatView must NOT remount across the close — navigation is
+    // driven through the live router so `descriptionDefaultChatRef` survives.
+    it("auto-opens a described chat's rail after a doc-preview deep link closes (no remount)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const withDescription = chatDetail({ description: DESCRIPTION_MD });
+      chatMocks.getChat.mockResolvedValue(withDescription);
+
+      // Capture the live router's navigate so the test can clear the
+      // doc-preview params on the SAME mounted tree (simulating the preview
+      // closing) without remounting ChatView.
+      let navigate: ((to: string) => void) | null = null;
+      function NavProbe(): null {
+        navigate = useNavigate();
+        return null;
+      }
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const queryClient = createClient();
+      seedChat(queryClient, withDescription);
+
+      // First mount carries doc-preview params → `hasDocPreview` is true, so the
+      // auto-open is suppressed and (crucially) the chat is NOT marked applied.
+      await act(async () => {
+        root.render(
+          <MemoryRouter
+            initialEntries={["/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001"]}
+          >
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <NavProbe />
+                <ChatView agentId="agent-1" chatId="chat-1" />
+              </ToastProvider>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flush();
+      await waitForText(container, "Launch planning");
+      await flush();
+      // Preview owns the rail → DescriptionSection / chat-details aside hidden.
+      expect(sidebarOpen(container)).toBe(false);
+
+      // Close the preview by clearing the doc params on the live router. This
+      // flips `hasDocPreview` to false and re-runs the auto-open effect WITHOUT
+      // remounting ChatView.
+      if (!navigate) throw new Error("NavProbe did not capture navigate");
+      await act(async () => {
+        navigate?.("/");
+      });
+      await waitForCondition(
+        () => sidebarOpen(container),
+        "Expected the described chat's rail to auto-open after the doc-preview closed (regression: mark-before-docPreview-guard)",
+      );
+      const aside = container.querySelector('aside[aria-label="Chat details"]');
+      expect(aside?.textContent).toContain("Description");
+      expect([...(aside?.querySelectorAll("strong") ?? [])].some((el) => el.textContent === "DescBody")).toBe(true);
 
       await act(async () => root.unmount());
     });

@@ -1015,13 +1015,17 @@ export function ChatView({
   // with a non-empty description auto-opens the rail so the summary is visible
   // by default; a chat without one collapses it (so a previous chat's transient
   // auto-open doesn't leak across navigation). This auto-open does NOT persist,
-  // so only a later explicit toggle creates a sticky preference. Skipped while a
-  // doc-preview owns the right rail — its own stash/restore logic manages it.
+  // so only a later explicit toggle creates a sticky preference. While a
+  // doc-preview owns the right rail we bail out WITHOUT marking the chat
+  // applied — otherwise a chat entered via a doc-preview deep link would be
+  // marked done while the open was skipped, and closing the preview (which
+  // re-runs this effect via `hasDocPreview`) would hit the per-chat guard and
+  // never apply the default. Leaving it unmarked lets the close re-evaluate.
   useEffect(() => {
     if (chatDetailLoading || !chatDetail || chatDetail.id !== chatId) return;
     if (descriptionDefaultChatRef.current === chatId) return;
-    descriptionDefaultChatRef.current = chatId;
     if (hasDocPreview) return;
+    descriptionDefaultChatRef.current = chatId;
     if (storedSidebarPref.current !== null) return;
     const hasDescription = Boolean(chatDetail.description && chatDetail.description.trim().length > 0);
     setShowSidebar(hasDescription);
