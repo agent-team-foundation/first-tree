@@ -43,14 +43,20 @@ export const MESSAGE_FORMATS = {
    * (`content`); the specific question + optional subject live in
    * `metadata.request`. No lifecycle state is stored on the message.
    *
-   * Lifecycle is driven by an EXPLICIT resolution signal, not by threading:
-   * a question is answered/closed only by a later message carrying
-   * `metadata.resolves` (see `requestResolutionSchema`) — which drives
-   * `chat_user_state.open_request_count` down. `inReplyTo` is pure
-   * conversation threading and never changes a question's lifecycle, so a
-   * human ↔ asking-agent back-and-forth ("chat about this") can thread under
-   * the question without prematurely resolving it. See
-   * proposals/group-chat-unified-send §D1.
+   * BLOCKING: while such a question is unresolved, the web UI blocks that chat
+   * for the target human — it pins the question and hides every message after
+   * it until the human answers (several open questions are worked
+   * oldest-first / FIFO). The block is viewer-local: only the target is
+   * blocked; other participants see the full timeline with a read-only card.
+   *
+   * Lifecycle is driven by an EXPLICIT resolution signal: a question is
+   * answered/closed only by a later message carrying `metadata.resolves` (see
+   * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
+   * down. The target's answer ALWAYS resolves it — picking an option OR typing
+   * free text both write `resolves` (kind="answered"). `inReplyTo` itself is
+   * pure threading and never changes a question's lifecycle; the asking agent
+   * may still thread a follow-up that adds context without resolving, but the
+   * human cannot (their answer is a resolution).
    */
   REQUEST: "request",
 } as const;
@@ -95,12 +101,13 @@ export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
  * an open question — `inReplyTo` no longer does (it is pure threading now).
  *
  * Written by:
- *   - the human's web UI when they pick an option cleanly and send it as-is
- *     (a direct answer), or
- *   - the asking agent via `chat send --answer`/`--close` after judging an
- *     incoming human reply.
- * A plain reply with no `resolves` is a discussion turn and leaves the
- * question open.
+ *   - the human's web UI on ANY answer — picking an option OR typing free text
+ *     both attach `resolves` (kind="answered"); the blocking answer surface has
+ *     no "reply without resolving" path, so every human answer resolves, or
+ *   - the asking agent via `chat send --answer`/`--close` (resolve on the
+ *     human's behalf when answered out-of-band, or withdraw a moot question).
+ * A bare threaded reply with no `resolves` (e.g. the asking agent adding
+ * context) leaves the question open.
  *
  *   - kind="answered" — the question is answered. The readable
  *     `"<prompt> → <answer>"` lines stay in the message `content`.

@@ -213,6 +213,85 @@ export function allRequiredSelected(payload: OpenQuestionRequest, selections: Re
 }
 
 /**
+ * The request the viewer is BLOCKED on: the OLDEST (FIFO) `open` or
+ * `discussing` `format="request"` directed at the viewer. The blocking UI pins
+ * this one, hides every timeline item after it, and only lifts once it
+ * resolves — then the next-oldest unresolved question becomes the block.
+ * Returns `null` when nothing needs the viewer's answer. Watchers /
+ * non-targets never block (they aren't in `metadata.mentions`).
+ *
+ * Oldest-first is the deliberate contrast with `findDockableRequest`'s
+ * newest-first scan: a block is a queue the human works front-to-back, so the
+ * earliest unanswered question must come up first.
+ */
+export function findBlockingRequest(thread: readonly Message[], viewerAgentId: string | null): Message | null {
+  if (!viewerAgentId) return null;
+  // `thread` is oldest-first; walk forward so the earliest live question wins.
+  for (const m of thread) {
+    if (m.format !== "request") continue;
+    if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
+    // Skip a request whose structured payload doesn't parse: it has no usable
+    // answer surface (the dock renders nothing), so blocking on it would hide
+    // the timeline with no way to answer. Skipping lets the next parseable live
+    // question become the block instead of stranding the viewer.
+    if (!readRequestPayload(m.metadata)) continue;
+    const st = deriveRequestState(m, thread);
+    if (st === "open" || st === "discussing") return m;
+  }
+  return null;
+}
+
+/**
+ * Whether every REQUIRED question is answered, treating the blocking surface's
+ * two answer channels as equals: a single-select question is answered by an
+ * option `selection` (keyed by prompt), a free-text question by the composer's
+ * `freeText`. Drives the send button's enabled state. Unlike
+ * `allRequiredSelected`, a required free-text question CAN be satisfied here —
+ * a typed answer now resolves rather than going to the asking agent to judge.
+ */
+export function allRequiredAnswered(
+  payload: OpenQuestionRequest,
+  selections: Record<string, string>,
+  freeText: string,
+): boolean {
+  const hasFree = freeText.trim().length > 0;
+  return payload.questions.every((q) =>
+    !q.required ? true : q.kind === "single" ? Boolean(selections[q.prompt]) : hasFree,
+  );
+}
+
+/**
+ * Build the resolving reply's content from the two answer channels — option
+ * `selections` (keyed by prompt) and the composer's `freeText`. Emits one
+ * canonical `"<prompt> → <answer>"` line per question — the same shape
+ * `recoverAnswerSelections` parses back for the resolved card's echo — using
+ * the selection for single-select questions and the free text for free-text
+ * questions. When the request carries no free-text question but the viewer
+ * typed an extra note (`allowExtra`), the note is appended as a trailing line.
+ *
+ * This makes the blocking dock send byte-identical to the inline
+ * `RequestCard` answer block, so both surfaces resolve and echo the same way.
+ */
+export function buildResolveAnswer(
+  payload: OpenQuestionRequest,
+  selections: Record<string, string>,
+  freeText: string,
+): string {
+  const note = freeText.trim();
+  const lines = payload.questions
+    .map((q) => ({ q, answer: q.kind === "single" ? (selections[q.prompt] ?? "") : note }))
+    // Drop optional questions the viewer left unanswered — otherwise the
+    // resolving content carries `"<prompt> → —"` placeholder lines that the
+    // resolved card would echo as the "answer". Required questions are always
+    // answered by the send gate, so they always survive.
+    .filter(({ q, answer }) => q.required || answer.length > 0)
+    .map(({ q, answer }) => `${q.prompt} → ${answer || "—"}`);
+  const hasFree = payload.questions.some((q) => q.kind === "free");
+  if (!hasFree && note) lines.push(note);
+  return lines.join("\n");
+}
+
+/**
  * Recover the chosen answers from a resolving message's content, keyed by
  * prompt. Canonical `"<prompt> → <answer>"` lines parse first; the fallback
  * accepts the bare option text the composer dock sends for a one-question
