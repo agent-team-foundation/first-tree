@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { CapabilityEntry } from "@first-tree/shared";
 import {
   agentConfigSchema,
   clientConfigSchema,
@@ -284,6 +285,54 @@ export async function checkWebSocket(): Promise<CheckResult> {
   } catch {
     return { label: "WebSocket", ok: false, detail: `server unreachable at ${serverUrl}` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime-provider capability rendering (shared by `daemon doctor` and
+// `daemon probe`)
+// ---------------------------------------------------------------------------
+
+const RUNTIME_PROVIDER_ORDER = ["claude-code", "claude-code-tui", "codex"];
+
+function formatCapabilityDetail(entry: CapabilityEntry): string {
+  if (entry.state === "ok") {
+    const bits: string[] = [];
+    if (entry.authMethod && entry.authMethod !== "none") bits.push(entry.authMethod);
+    if (entry.runtimeSource) bits.push(entry.runtimeSource);
+    if (entry.sdkVersion) bits.push(`v${entry.sdkVersion}`);
+    if (entry.degraded) bits.push("degraded");
+    if (typeof entry.latencyMs === "number") bits.push(`${entry.latencyMs}ms`);
+    return bits.length > 0 ? `ok — ${bits.join(", ")}` : "ok";
+  }
+  // Launch-verified probes always carry the provider's own message for every
+  // non-ok state — surface it verbatim instead of a generic label.
+  const reason = entry.error?.trim();
+  return reason ? `${entry.state} — ${reason}` : entry.state;
+}
+
+/**
+ * Render one capability entry as a doctor CheckResult. `ok` ⟺ the launch-
+ * verified probe reached `ok` (a real provider launch succeeded).
+ */
+export function runtimeProviderCheck(provider: string, entry: CapabilityEntry): CheckResult {
+  return { label: provider, ok: entry.state === "ok", detail: formatCapabilityDetail(entry) };
+}
+
+/**
+ * Map a capabilities snapshot into doctor CheckResults, ordered built-ins
+ * first then any unknown providers alphabetically. Empty snapshot → a single
+ * not-ok row so the operator sees the section ran but found nothing.
+ */
+export function runtimeProviderChecks(capabilities: Record<string, CapabilityEntry | undefined>): CheckResult[] {
+  const rank = (provider: string): number => {
+    const i = RUNTIME_PROVIDER_ORDER.indexOf(provider);
+    return i === -1 ? RUNTIME_PROVIDER_ORDER.length : i;
+  };
+  const entries = Object.entries(capabilities).sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+  if (entries.length === 0) {
+    return [{ label: "Runtime providers", ok: false, detail: "no providers probed" }];
+  }
+  return entries.flatMap(([provider, entry]) => (entry ? [runtimeProviderCheck(provider, entry)] : []));
 }
 
 // ---------------------------------------------------------------------------

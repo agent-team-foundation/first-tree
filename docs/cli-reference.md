@@ -43,7 +43,7 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
-├── daemon ...               Background daemon (start, stop, status, doctor)
+├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
 └── tree ...                 Validate and browse Context Trees
 ```
@@ -444,7 +444,8 @@ first-tree daemon
 ├── stop
 ├── restart
 ├── status
-└── doctor
+├── doctor
+└── probe [--no-upload] [--json]
 ```
 
 | Subcommand | Purpose |
@@ -453,7 +454,19 @@ first-tree daemon
 | `stop` | Stop the service (preserves auto-start; bring it back with `start`). |
 | `restart` | Restart the service. |
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
-| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, and the installed service file; report each step. |
+| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
+| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
+
+**Capability refresh timing.** The daemon launch-probes runtime providers at
+startup and re-probes automatically on every WebSocket reconnect. A full real
+re-probe of all providers runs only when there is no prior snapshot or one is
+older than 24h; otherwise each provider is re-validated individually — a
+still-launchable, still-logged-in provider keeps its prior `ok` for free
+(resolve + auth re-checked, no session smoke re-run), a provider that lost its
+binary or login downgrades, and a non-ok provider is fully re-probed so it can
+recover. So a machine missing an optional provider (e.g. no tmux for
+`claude-code-tui`) does not re-smoke its healthy providers on every reconnect.
+`daemon probe` is the manual, on-demand path between those automatic refreshes.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.

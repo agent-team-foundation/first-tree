@@ -25,7 +25,7 @@ describe("daemon namespace — refresh-unit hidden subcommand", () => {
     ).toBe(true);
   });
 
-  it("keeps the same five public subcommands visible (start / stop / restart / status / doctor)", () => {
+  it("keeps the public subcommands visible (start / stop / restart / status / doctor / probe)", () => {
     const root = new Command();
     registerDaemonCommands(root);
     const daemonCmd = root.commands.find((c) => c.name() === "daemon");
@@ -33,7 +33,7 @@ describe("daemon namespace — refresh-unit hidden subcommand", () => {
       .filter((c) => !(c as unknown as { _hidden?: boolean })._hidden)
       .map((c) => c.name())
       .sort();
-    expect(visibleNames).toEqual(["doctor", "restart", "start", "status", "stop"]);
+    expect(visibleNames).toEqual(["doctor", "probe", "restart", "start", "status", "stop"]);
   });
 });
 
