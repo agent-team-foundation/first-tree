@@ -575,6 +575,17 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree-sync");
     expect(briefing).toContain("fetch origin");
     expect(briefing).toContain("origin/main");
+    // Fail-closed repoint guard — carries main's #1058 invariant (a source
+    // path repointed from repoA to repoB must not silently serve the old
+    // clone) into the agent-managed protocol. The agent verifies the existing
+    // clone's origin against the declared url and blocks on a mismatch instead
+    // of reusing it unconditionally.
+    expect(briefing).toContain("fail closed");
+    expect(briefing).toContain("git -C <path> remote get-url origin");
+    expect(briefing).toMatch(/does NOT match/);
+    // Reuse is now CONDITIONAL on the origin matching — not an unconditional
+    // "reuse the existing path as-is".
+    expect(briefing).toContain("**If it matches**, reuse the clone");
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
