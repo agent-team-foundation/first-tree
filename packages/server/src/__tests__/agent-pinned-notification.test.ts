@@ -7,7 +7,7 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
-import { createAgent, suspendAgent } from "../services/agent.js";
+import { createAgent, rebindAgent, suspendAgent } from "../services/agent.js";
 import { getAgentClientId } from "../services/connection-manager.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
@@ -504,6 +504,47 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("rebind transaction detach notifications force-disconnect a matching local runtime route", async () => {
+    const seed = await seedConnectedClient("detach-notify");
+    const secondSeed = await seedAdditionalClient(seed, "detach-notify-second");
+    const agent = await createAgent(app.db, {
+      name: `pin-detach-notify-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Detach Notify",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      await bindRuntimeSlot(ws, agent.uuid, "bind-detach-notify");
+      expect(getAgentClientId(agent.uuid)).toBe(seed.clientId);
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const rebound = await rebindAgent(app.db, agent.uuid, {
+        clientId: secondSeed.clientId,
+        runtimeProvider: "claude-code",
+      });
+      expect(rebound.previousClientId).toBe(seed.clientId);
+
+      await expect(forcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_rebound",
+      });
+      expect(getAgentClientId(agent.uuid)).toBeUndefined();
+    } finally {
+      await closeSockets(ws);
     }
   }, 15000);
 

@@ -17,7 +17,7 @@ import {
   isReservedAgentName,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -31,6 +31,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
 import { agentVisibilityCondition } from "./access-control.js";
+import { AGENT_DETACH_CHANNEL } from "./notifier.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -961,6 +962,15 @@ export async function rebindAgent(db: Database, uuid: string, data: RebindAgent)
       .returning();
 
     if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+    if (previousClientId && previousClientId !== newClientId) {
+      await tx.execute(
+        sql`SELECT pg_notify(${AGENT_DETACH_CHANNEL}, ${JSON.stringify({
+          agentId: uuid,
+          clientId: previousClientId,
+          reason: "agent_rebound",
+        })})`,
+      );
+    }
     const refreshed = await selectAgentRowWithRuntime(tx, uuid);
     if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
     return { agent: refreshed, previousClientId };

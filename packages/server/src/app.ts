@@ -82,6 +82,7 @@ import { type BackgroundTasks, createBackgroundTasks } from "./services/backgrou
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
+import { forceDisconnect } from "./services/connection-manager.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
@@ -655,6 +656,15 @@ export async function buildApp(config: Config) {
     notifier
       .notifyChatMessage(chatId, messageId)
       .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
+  });
+  notifier.onAgentDetach(({ agentId, clientId, reason }) => {
+    const disconnected = forceDisconnect(agentId, reason, clientId);
+    if (disconnected) {
+      app.log.info(
+        { agentId, clientId, reason, instanceId: config.instanceId },
+        "agent detach notification disconnected local runtime",
+      );
+    }
   });
 
   // Start notifier and background tasks on server start.
