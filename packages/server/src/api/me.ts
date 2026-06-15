@@ -1,4 +1,5 @@
 import {
+  completeOnboardingSchema,
   createOrgFromMeSchema,
   joinByInvitationSchema,
   type OnboardingStep,
@@ -53,8 +54,6 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         username: users.username,
         displayName: users.displayName,
         avatarUrl: users.avatarUrl,
-        onboardingDismissedAt: users.onboardingDismissedAt,
-        onboardingCompletedAt: users.onboardingCompletedAt,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -92,9 +91,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     // Surface invite URL only for users who admin at least one org. The
     // web client picks the relevant org from `selectedOrganizationId`
     // first; this is purely a convenience fallback for the default org.
+    const defaultRow = defaultOrgId ? memberships.find((m) => m.organizationId === defaultOrgId) : undefined;
     let inviteUrl: string | null = null;
     if (defaultOrgId) {
-      const defaultRow = memberships.find((m) => m.organizationId === defaultOrgId);
       if (defaultRow?.role === "admin") {
         const inv = await getActiveInvitation(app.db, defaultOrgId);
         if (inv) inviteUrl = buildInviteUrl(resolvePublicUrl(app, request), inv.token);
@@ -114,11 +113,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         agentId: mb.agentId,
         orgHasOtherMembers: (memberCounts.get(mb.organizationId) ?? 1) > 1,
         hasUsableAgent: orgsWithUsableAgent.has(mb.organizationId),
+        onboardingSuppressedAt: mb.onboardingSuppressedAt ? mb.onboardingSuppressedAt.toISOString() : null,
+        onboardingSuppressedReason:
+          mb.onboardingSuppressedReason === "finish_later" ||
+          mb.onboardingSuppressedReason === "completed" ||
+          mb.onboardingSuppressedReason === "invitee_skip"
+            ? mb.onboardingSuppressedReason
+            : null,
+        onboardingCompletedAt: mb.onboardingCompletedAt ? mb.onboardingCompletedAt.toISOString() : null,
       })),
       onboarding: {
         step: onboardingStep,
-        dismissedAt: user?.onboardingDismissedAt ? user.onboardingDismissedAt.toISOString() : null,
-        completedAt: user?.onboardingCompletedAt ? user.onboardingCompletedAt.toISOString() : null,
+        dismissedAt: defaultRow?.onboardingSuppressedAt ? defaultRow.onboardingSuppressedAt.toISOString() : null,
+        completedAt: defaultRow?.onboardingCompletedAt ? defaultRow.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
     };
@@ -138,60 +145,68 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * PATCH /me/onboarding — currently the only mutable field is
-   * `dismissed`, set when the user clicks `✕` on the onboarding stepper.
-   * Stamping NOW() server-side avoids client-clock skew. Idempotent: a
-   * second PATCH leaves the original timestamp in place.
-   *
-   * See first-tree-context:agent-hub/onboarding.md §8.4.
+   * PATCH /me/onboarding — set or clear the current membership's auto-open
+   * suppressor. `dismissed=true` is the "finish later" action. Stamping
+   * NOW() server-side avoids client-clock skew. Idempotent: a second PATCH
+   * leaves the original timestamp in place.
    */
   app.patch("/me/onboarding", async (request, reply) => {
     const { userId } = requireUser(request);
     const body = patchOnboardingSchema.parse(request.body);
+    const memberId = await resolveOnboardingMembershipId(app, userId, body.organizationId);
 
     if (body.dismissed === true) {
       // Only stamp when not already set — re-clicks become a no-op rather
       // than resetting the original dismissal time.
       const result = await app.db
-        .update(users)
-        .set({ onboardingDismissedAt: new Date() })
-        .where(and(eq(users.id, userId), isNull(users.onboardingDismissedAt)))
-        .returning({ id: users.id });
+        .update(members)
+        .set({ onboardingSuppressedAt: new Date(), onboardingSuppressedReason: "finish_later" })
+        .where(and(eq(members.id, memberId), isNull(members.onboardingSuppressedAt)))
+        .returning({ id: members.id });
       if (result.length > 0) {
         app.log.info({ event: "onboarding.dismissed", userId }, "onboarding funnel: stepper dismissed");
       }
     } else if (body.dismissed === false) {
-      await app.db.update(users).set({ onboardingDismissedAt: null }).where(eq(users.id, userId));
+      await app.db
+        .update(members)
+        .set({ onboardingSuppressedAt: null, onboardingSuppressedReason: null })
+        .where(and(eq(members.id, memberId), isNull(members.onboardingCompletedAt)));
     }
 
-    const [u] = await app.db
-      .select({ onboardingDismissedAt: users.onboardingDismissedAt })
-      .from(users)
-      .where(eq(users.id, userId))
+    const [m] = await app.db
+      .select({ onboardingSuppressedAt: members.onboardingSuppressedAt })
+      .from(members)
+      .where(eq(members.id, memberId))
       .limit(1);
     return reply.status(200).send({
-      dismissedAt: u?.onboardingDismissedAt ? u.onboardingDismissedAt.toISOString() : null,
+      dismissedAt: m?.onboardingSuppressedAt ? m.onboardingSuppressedAt.toISOString() : null,
     });
   });
 
   /**
-   * POST /me/onboarding-completed — stamp the terminal-state column when
+   * POST /me/onboarding-completed — stamp the membership terminal-state column when
    * the user walks Step 3 to success (admin Continue, invitee Confirm /
-   * Continue). Distinct from PATCH /me/onboarding { dismissed: true },
-   * which only hides the stepper UI. Once stamped, the web sidebar drops
-   * the Settings → Onboarding entry point and /settings/onboarding
-   * redirects, so the wizard cannot re-enter.
+   * Continue). Completion also writes the membership suppressor with
+   * reason="completed"; `completed_at` remains the audit fact, while
+   * `suppressed_at` is the redirect gate.
    *
    * Idempotent: only writes when the column is still NULL — re-calling on
    * an already-completed user is a no-op rather than resetting the stamp.
    */
   app.post("/me/onboarding-completed", async (request, reply) => {
     const { userId } = requireUser(request);
+    const body = completeOnboardingSchema.parse(request.body ?? {});
+    const memberId = await resolveOnboardingMembershipId(app, userId, body.organizationId);
+    const now = new Date();
     const result = await app.db
-      .update(users)
-      .set({ onboardingCompletedAt: new Date() })
-      .where(and(eq(users.id, userId), isNull(users.onboardingCompletedAt)))
-      .returning({ id: users.id });
+      .update(members)
+      .set({
+        onboardingCompletedAt: now,
+        onboardingSuppressedAt: now,
+        onboardingSuppressedReason: "completed",
+      })
+      .where(and(eq(members.id, memberId), isNull(members.onboardingCompletedAt)))
+      .returning({ id: members.id });
     if (result.length > 0) {
       app.log.info({ event: "onboarding.completed", userId }, "onboarding funnel: setup completed");
     }
@@ -538,4 +553,27 @@ async function inferOnboardingStep(app: FastifyInstance, userId: string): Promis
     .limit(1);
   if (!hasAgent) return "create_agent";
   return "completed";
+}
+
+async function resolveOnboardingMembershipId(
+  app: FastifyInstance,
+  userId: string,
+  organizationId?: string,
+): Promise<string> {
+  if (organizationId) {
+    const [member] = await app.db
+      .select({ id: members.id })
+      .from(members)
+      .where(and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")))
+      .limit(1);
+    if (!member) throw new NotFoundError(`Membership for organization "${organizationId}" not found`);
+    return member.id;
+  }
+
+  const activeMemberships = await listActiveMemberships(app.db, userId);
+  const picked = authService.pickDefaultMembership(
+    activeMemberships.map((m) => ({ id: m.memberId, createdAt: m.createdAt })),
+  );
+  if (!picked) throw new NotFoundError("No active membership found");
+  return picked.id;
 }

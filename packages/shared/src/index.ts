@@ -6,6 +6,7 @@ export {
   type BriefingFingerprint,
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
+export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -231,10 +232,12 @@ export {
   CAPABILITY_STATES,
   type CapabilityAuthMethod,
   type CapabilityEntry,
+  type CapabilityRuntimeSource,
   type CapabilityState,
   type ClientCapabilities,
   capabilityAuthMethodSchema,
   capabilityEntrySchema,
+  capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
   type UpdateClientCapabilities,
@@ -451,7 +454,9 @@ export {
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";
 export {
+  type CompleteOnboarding,
   type CreateOrgFromMe,
+  completeOnboardingSchema,
   createOrgFromMeSchema,
   type MeMembership,
   meMembershipSchema,

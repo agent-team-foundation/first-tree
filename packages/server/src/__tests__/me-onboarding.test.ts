@@ -1,31 +1,46 @@
 import crypto from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
-import { users } from "../db/schema/users.js";
+import { members } from "../db/schema/members.js";
 import { encryptValue } from "../services/crypto.js";
+import { createMember } from "../services/member.js";
+import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("PATCH /me/onboarding", () => {
   const getApp = useTestApp();
 
-  it("dismissed=true stamps onboarding_dismissed_at and /me reflects it", async () => {
+  it("dismissed=true stamps only the selected membership and /me reflects it", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    const secondOrg = await createOrganization(app.db, {
+      name: `second-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Second Team",
+    });
+    const secondMember = await createMember(app.db, secondOrg.id, {
+      username: admin.username,
+      displayName: "Test Admin",
+      role: "member",
+    });
 
     const before = await app.inject({
       method: "GET",
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(before.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt).toBeNull();
+    const beforeMemberships = before.json<{
+      memberships: Array<{ id: string; onboardingSuppressedAt: string | null }>;
+    }>().memberships;
+    expect(beforeMemberships.find((m) => m.id === admin.memberId)?.onboardingSuppressedAt).toBeNull();
+    expect(beforeMemberships.find((m) => m.id === secondMember.id)?.onboardingSuppressedAt).toBeNull();
 
     const res = await app.inject({
       method: "PATCH",
       url: "/api/v1/me/onboarding",
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { dismissed: true },
+      payload: { dismissed: true, organizationId: secondOrg.id },
     });
     expect(res.statusCode).toBe(200);
     const stamped = res.json<{ dismissedAt: string | null }>().dismissedAt;
@@ -36,7 +51,16 @@ describe("PATCH /me/onboarding", () => {
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(after.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt).toBe(stamped);
+    const afterMemberships = after.json<{
+      memberships: Array<{
+        id: string;
+        onboardingSuppressedAt: string | null;
+        onboardingSuppressedReason: string | null;
+      }>;
+    }>().memberships;
+    expect(afterMemberships.find((m) => m.id === admin.memberId)?.onboardingSuppressedAt).toBeNull();
+    expect(afterMemberships.find((m) => m.id === secondMember.id)?.onboardingSuppressedAt).toBe(stamped);
+    expect(afterMemberships.find((m) => m.id === secondMember.id)?.onboardingSuppressedReason).toBe("finish_later");
   });
 
   it("dismissed=true is idempotent — second call leaves the original timestamp", async () => {
@@ -81,6 +105,107 @@ describe("PATCH /me/onboarding", () => {
       payload: { dismissed: false },
     });
     expect(cleared.json<{ dismissedAt: string | null }>().dismissedAt).toBeNull();
+  });
+
+  it("completion writes audit and suppress stamps for the selected membership", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { organizationId: admin.organizationId },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    const current = after
+      .json<{
+        memberships: Array<{
+          id: string;
+          onboardingSuppressedAt: string | null;
+          onboardingSuppressedReason: string | null;
+          onboardingCompletedAt: string | null;
+        }>;
+      }>()
+      .memberships.find((m) => m.id === admin.memberId);
+    expect(current?.onboardingCompletedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(current?.onboardingSuppressedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(current?.onboardingSuppressedReason).toBe("completed");
+  });
+
+  it("rejoin starts a fresh onboarding lifecycle — reactivation clears all three stamps", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { ensureMembership } = await import("../services/membership.js");
+
+    // Live through a full prior lifecycle: complete onboarding (stamps
+    // completed + suppressed(reason='completed')), then leave the org.
+    await app.db
+      .update(members)
+      .set({
+        onboardingCompletedAt: new Date(),
+        onboardingSuppressedAt: new Date(),
+        onboardingSuppressedReason: "completed",
+        status: "left",
+      })
+      .where(eq(members.id, admin.memberId));
+
+    // Rejoin (the invite-join / OAuth-invite path funnels through
+    // ensureMembership): the row is reactivated, not recreated…
+    const rejoined = await ensureMembership(app.db, {
+      userId: admin.userId,
+      organizationId: admin.organizationId,
+      role: "member",
+      displayName: "Test Admin",
+      username: admin.username,
+    });
+    expect(rejoined.id).toBe(admin.memberId);
+    expect(rejoined.status).toBe("active");
+    // …and the onboarding lifecycle starts FRESH: a stale suppress stamp
+    // must not hide setup for what is effectively a newly joined team.
+    expect(rejoined.onboardingSuppressedAt).toBeNull();
+    expect(rejoined.onboardingSuppressedReason).toBeNull();
+    expect(rejoined.onboardingCompletedAt).toBeNull();
+
+    const [row] = await app.db
+      .select({
+        suppressedAt: members.onboardingSuppressedAt,
+        suppressedReason: members.onboardingSuppressedReason,
+        completedAt: members.onboardingCompletedAt,
+        status: members.status,
+      })
+      .from(members)
+      .where(eq(members.id, admin.memberId));
+    expect(row).toEqual({ suppressedAt: null, suppressedReason: null, completedAt: null, status: "active" });
+  });
+
+  it("rejects a suppress timestamp without a suppress reason at the database boundary", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    // Drizzle wraps the postgres error ("Failed query: …") and keeps the
+    // CHECK-violation detail on the error's `cause`, so assert against the
+    // full chain rather than the wrapper message alone.
+    const violation = await app.db
+      .execute(sql`
+        UPDATE members
+        SET onboarding_suppressed_at = NOW(),
+            onboarding_suppressed_reason = NULL
+        WHERE id = ${admin.memberId}
+      `)
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+    expect(violation).not.toBeNull();
+    const chain = `${violation}\n${violation instanceof Error ? String(violation.cause ?? "") : ""}`;
+    expect(chain).toMatch(/members_onboarding_suppress_reason_check|check constraint/i);
   });
 
   it("rejects unauthenticated callers", async () => {
@@ -313,13 +438,16 @@ describe("/me onboarding payload", () => {
     expect(body.onboarding.completedAt).toBeNull();
   });
 
-  it("includes onboarding.dismissedAt as a timestamp once the user dismisses", async () => {
+  it("includes onboarding.dismissedAt as the default membership suppress stamp", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    // Stamp directly via the column to avoid coupling this test to the
+    // Stamp directly via the membership columns to avoid coupling this test to the
     // PATCH path (which has its own coverage above).
-    await app.db.update(users).set({ onboardingDismissedAt: new Date() }).where(eq(users.id, admin.userId));
+    await app.db
+      .update(members)
+      .set({ onboardingSuppressedAt: new Date(), onboardingSuppressedReason: "finish_later" })
+      .where(eq(members.id, admin.memberId));
 
     const me = await app.inject({
       method: "GET",
@@ -399,13 +527,10 @@ describe("POST /me/onboarding-completed", () => {
     expect(secondMe.json<{ onboarding: { completedAt: string } }>().onboarding.completedAt).toBe(firstStamp);
   });
 
-  it("does NOT touch onboarding_dismissed_at — the two stamps are orthogonal", async () => {
-    // Terminal completion and stepper-✕ are decoupled by design: dismiss
-    // = "hide the stepper UI" (reversible), completed = "setup done"
-    // (permanent). The POST must not double-stamp the dismiss column;
-    // otherwise a user who completed Step 3 without ever clicking ✕
-    // would surface as dismissed=true to other UI surfaces that still
-    // read that field.
+  it("completion suppresses future auto-open with reason=completed", async () => {
+    // Terminal completion is now the canonical "do not auto-open again"
+    // suppressor for this membership. `completed_at` remains the audit fact;
+    // `suppressed_at(reason='completed')` is the redirect gate.
     const app = getApp();
     const admin = await createTestAdmin(app);
 
@@ -428,7 +553,21 @@ describe("POST /me/onboarding-completed", () => {
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(after.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt).toBeNull();
+    const body = after.json<{
+      onboarding: { dismissedAt: string | null; completedAt: string | null };
+      memberships: Array<{
+        id: string;
+        onboardingSuppressedAt: string | null;
+        onboardingSuppressedReason: string | null;
+        onboardingCompletedAt: string | null;
+      }>;
+    }>();
+    expect(body.onboarding.dismissedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(body.onboarding.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    const current = body.memberships.find((m) => m.id === admin.memberId);
+    expect(current?.onboardingSuppressedReason).toBe("completed");
+    expect(current?.onboardingSuppressedAt).toBe(body.onboarding.dismissedAt);
+    expect(current?.onboardingCompletedAt).toBe(body.onboarding.completedAt);
   });
 
   it("rejects unauthenticated callers", async () => {

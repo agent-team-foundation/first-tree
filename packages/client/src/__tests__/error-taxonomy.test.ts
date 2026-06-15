@@ -120,6 +120,24 @@ describe("error-taxonomy.classify", () => {
       expect(c.message).toBe("Refresh token rejected");
     });
 
+    it("Codex missing binary errors are permanent", () => {
+      for (const message of [
+        "Unable to locate Codex CLI binaries for x86_64-apple-darwin. Ensure @openai/codex is installed with optional dependencies.",
+        "Missing optional dependency @openai/codex-darwin-x64. Reinstall Codex: npm install -g @openai/codex@latest",
+      ]) {
+        const c = classify(new Error(message), { source: "session" });
+        expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+        expect(c.reasonCode).toBe("codex_binary_missing");
+        expect(c.strategy.kind).toBe("none");
+      }
+      const stackOnly = new Error("codex startup failed");
+      stackOnly.stack = "Error: codex startup failed\n    at findCodexPath (index.js:445:11)";
+      const stackClass = classify(stackOnly, { source: "session" });
+      expect(stackClass.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(stackClass.reasonCode).toBe("codex_binary_missing");
+      expect(stackClass.strategy.kind).toBe("none");
+    });
+
     it("status-only and text-only Claude errors cover non-name branches and defaults", () => {
       expect(classify(noMessageShape({ status: 429 })).message).toBe("Claude API rate limit");
       expect(classify("rate limit exceeded").reasonCode).toBe("claude_rate_limit");

@@ -35,6 +35,27 @@ const TURN_GRACE_MS = 1500;
 const READY_TIMEOUT_MS = 30_000;
 
 /**
+ * Claude Code 2.1.170 rejects `--session-id <id> --resume <id>` unless
+ * `--fork-session` is also present. Resume should continue the existing
+ * conversation, so only new sessions get an explicit `--session-id`.
+ *
+ * Exported for tests because this flag contract is enforced by the external
+ * Claude CLI rather than TypeScript types.
+ */
+export function buildClaudeSessionFlags(input: { sessionId: string; resumeSessionId: string | null }): string[] {
+  if (input.resumeSessionId) {
+    return ["--resume", shellQuote(input.resumeSessionId)];
+  }
+  return ["--session-id", shellQuote(input.sessionId)];
+}
+
+function shellQuote(value: string): string {
+  if (!value) return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Module-level lazy sweep: on first handler instantiation in this process, kill
  * tmux sessions left over from a prior crashed run of THIS client.
  *
@@ -179,12 +200,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       // `--disallowed-tools` removes the tool from the model's context entirely instead.
       "--disallowed-tools",
       "AskUserQuestion",
-      "--session-id",
-      shellQuote(sessionId),
+      ...buildClaudeSessionFlags({ sessionId, resumeSessionId }),
     ];
-    if (resumeSessionId) {
-      args.push("--resume", shellQuote(resumeSessionId));
-    }
     if (payload.model) {
       args.push("--model", shellQuote(payload.model));
     }
@@ -498,12 +515,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
   function sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
-  }
-
-  function shellQuote(value: string): string {
-    if (!value) return "''";
-    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-    return `'${value.replace(/'/g, "'\\''")}'`;
   }
 
   async function teardownTmux(): Promise<void> {

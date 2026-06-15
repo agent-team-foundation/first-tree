@@ -19,6 +19,8 @@
  * a conservative cap — see {@link UNKNOWN_FALLBACK} for the rationale.
  */
 
+import { isCodexBinaryMissingError } from "./codex-binary.js";
+
 export const ERROR_KINDS = {
   TRANSIENT: "transient",
   DEGRADED: "degraded",
@@ -230,6 +232,14 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       strategy: NONE,
       reasonCode: "auth_refresh_failed",
       message: shape.message ?? "Refresh token rejected",
+    };
+  }
+  if (isCodexBinaryMissingError(err)) {
+    return {
+      kind: ERROR_KINDS.PERMANENT,
+      strategy: NONE,
+      reasonCode: "codex_binary_missing",
+      message: shape.message ?? "Codex runtime binary missing",
     };
   }
   // -- Anthropic SDK / stream errors ---------------------------------------

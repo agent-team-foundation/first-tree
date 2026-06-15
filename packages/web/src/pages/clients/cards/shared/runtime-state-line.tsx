@@ -30,19 +30,22 @@ export function RuntimeStateLine({
   os?: string | null;
 }) {
   const label = PROVIDER_LABEL[provider];
+  const runtimeSuffix = entry.runtimeSource === "path" ? " · system CLI fallback" : "";
   switch (entry.state) {
     case "ok":
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--success)" }}>✓</span> {label}
           {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
+          {runtimeSuffix}
         </div>
       );
     case "unauthenticated":
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}
-          {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""} · needs login · {providerUnauthHint(provider, os)}
+          {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
+          {runtimeSuffix} · needs login · {providerUnauthHint(provider, os)}
         </div>
       );
     case "missing":
