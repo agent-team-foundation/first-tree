@@ -75,6 +75,15 @@ export function RequestDock({
         borderRadius: "var(--radius-panel)",
         background: "color-mix(in oklch, var(--state-needs-you) 4%, var(--bg-raised))",
         padding: "var(--sp-2_5) var(--sp-3)",
+        // The dock lives in the `shrink-0` composer footer, which has no scroll
+        // of its own. A long ask — many questions, or a legacy wall-of-text
+        // prompt the user expanded via "Show all" — would otherwise grow the
+        // dock past the viewport and push its own option list AND the composer
+        // off-screen with no way to reach them. Cap the height and scroll the
+        // dock internally so the options stay reachable and the composer below
+        // stays visible.
+        maxHeight: "min(40vh, 32rem)",
+        overflowY: "auto",
       }}
     >
       <div
