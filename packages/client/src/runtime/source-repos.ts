@@ -38,11 +38,12 @@ export function currentSourceRepoNamesFromPayload(
  * filesystem or git side effects; the listed paths may not exist yet (the
  * agent clones them on first use per its briefing protocol).
  *
- * Each repo resolves to the TOP LEVEL of the agent home
- * (`<agentHome>/<localPath>`) — the `worktrees/` subdir stays reserved for
- * the per-task worktrees the agent creates. `resolveGitRepoTargetPath`
- * still validates `localPath` (no escape, no absolute paths) so a
- * malicious config cannot point the briefing outside the agent home.
+ * Each repo resolves under the agent home's `source-repos/` directory
+ * (`<agentHome>/source-repos/<localPath>`) — the `worktrees/` subdir stays
+ * reserved for the per-task worktrees the agent creates.
+ * `resolveGitRepoTargetPath` still validates `localPath` (no escape, no
+ * absolute paths) so a malicious config cannot point the briefing outside the
+ * agent home.
  */
 export function declaredSourceRepos(
   workspace: string,

@@ -384,9 +384,12 @@ describe("SessionManager edge coverage", () => {
     if (!ctx) throw new Error("context was not captured");
 
     const env = ctx.buildAgentEnv({ PATH: "/usr/bin" });
-    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "project"));
+    // Single source repo "project" → its clone lives under the `source-repos/`
+    // layer, so the narrow doc base and the agentHome-relative repo path both
+    // carry the `source-repos/` prefix.
+    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "source-repos", "project"));
     expect(env.FIRST_TREE_DOC_AGENT_HOME).toBe(workspaceRoot);
-    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("project");
+    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("source-repos/project");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe(tmpdir());
     expect(env.FIRST_TREE_AGENT_SLUG).toBe(workspaceRoot.split("/").at(-1));
 

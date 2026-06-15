@@ -31,6 +31,16 @@ function makeGitRepo(parentDir: string, name: string, options?: { originUrl?: st
   return repoDir;
 }
 
+function makeBareGitRepo(parentDir: string, name: string, options?: { originUrl?: string }): string {
+  const repoDir = join(parentDir, name);
+  mkdirSync(repoDir, { recursive: true });
+  execSync("git init --bare --quiet", { cwd: repoDir });
+  if (options?.originUrl !== undefined) {
+    execSync(`git remote add origin ${options.originUrl}`, { cwd: repoDir });
+  }
+  return repoDir;
+}
+
 function makeNestedGitRepo(parentDir: string, intermediateName: string, repoName: string): string {
   const intermediateDir = join(parentDir, intermediateName);
   mkdirSync(intermediateDir, { recursive: true });
@@ -157,6 +167,43 @@ describe("computeWorkspaceStatus", () => {
       { name: "web", path: join(workspaceRoot, "web"), present: false },
     ]);
     expect(status.missingBoundSources).toEqual([{ name: "web", path: join(workspaceRoot, "web"), present: false }]);
+  });
+
+  it("resolves bound + unbound BARE source clones under sourcesRoot when set", () => {
+    // Agent-managed layout: tree at the workspace root (regular clone), source
+    // clones one level down under `source-repos/` as BARE clones (no `.git/`).
+    makeGitRepo(workspaceRoot, "context");
+    const sourcesDir = join(workspaceRoot, "source-repos");
+    makeBareGitRepo(sourcesDir, "api", { originUrl: "git@github.com:acme/api.git" });
+    makeBareGitRepo(sourcesDir, "scratch"); // a BARE git repo under source-repos/ not in `sources`
+    makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: ["api", "web"], sourcesRoot: "source-repos" });
+
+    const status = computeWorkspaceStatus(workspaceRoot);
+
+    expect(status.treePresent).toBe(true);
+    // A present bound bare clone still resolves its remoteUrl (bare-repo aware).
+    expect(status.boundSources).toEqual([
+      { name: "api", path: join(sourcesDir, "api"), present: true, remoteUrl: "git@github.com:acme/api.git" },
+      { name: "web", path: join(sourcesDir, "web"), present: false },
+    ]);
+    // A BARE clone (the agent-managed shape, no `.git/`) under source-repos/ is
+    // still detected as an unbound sibling.
+    expect(status.unboundGitSiblings.map((entry) => entry.name)).toEqual(["scratch"]);
+  });
+
+  it("lists an unbound source sibling named like the tree when sourcesRoot is set", () => {
+    // Under sourcesRoot the tree lives at <ws>/context (outside source-repos/),
+    // so an unbound clone at <ws>/source-repos/context is a real sibling and
+    // must NOT be filtered out just because its name equals the tree name.
+    makeGitRepo(workspaceRoot, "context"); // tree (regular clone) at the workspace root
+    const sourcesDir = join(workspaceRoot, "source-repos");
+    makeBareGitRepo(sourcesDir, "context"); // unbound bare clone literally named like the tree
+    makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: [], sourcesRoot: "source-repos" });
+
+    const status = computeWorkspaceStatus(workspaceRoot);
+
+    expect(status.treePresent).toBe(true);
+    expect(status.unboundGitSiblings.map((entry) => entry.name)).toEqual(["context"]);
   });
 
   it("reports tree absent when the tree subdir is missing", () => {

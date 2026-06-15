@@ -76,10 +76,13 @@ invented.
 - `package.json` / `pyproject.toml` / `go.mod` / `Cargo.toml` declares a
   decision-relevant dependency (framework, runtime, datastore) that is
   absent from `.first-tree/org.yaml`'s `techStackConstraints`
-- a newly cloned source repo at `<workspaceRoot>/<name>` is not yet
-  in `workspace.json.sources` (detect by comparing the `sources` array
-  in `<workspaceRoot>/.first-tree/workspace.json` against `ls -d
-  <workspaceRoot>/*/` that are git repos)
+- a newly cloned source repo at `<workspaceRoot>/<sourcesRoot>/<name>`
+  (i.e. `<workspaceRoot>/source-repos/<name>`; legacy flat manifests omit
+  `sourcesRoot` and clone at `<workspaceRoot>/<name>`) is not yet in
+  `workspace.json.sources` (detect by comparing the `sources` array in
+  `<workspaceRoot>/.first-tree/workspace.json` against `ls -d
+  <workspaceRoot>/<sourcesRoot>/*/` — `source-repos/` when `sourcesRoot` is set,
+  or `<workspaceRoot>/*/` for a legacy flat manifest — that are git repos)
 - an active contributor (commits within the last 6 months) is not
   present under `members/`
 

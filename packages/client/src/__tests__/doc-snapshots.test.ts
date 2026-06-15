@@ -667,14 +667,19 @@ describe("buildMessageDocumentSnapshots — wide self-fence over agent home", ()
   let agentHome: string;
 
   beforeAll(async () => {
-    // Layout mirrors the post-#506 production tree:
-    //   <agentHome>/first-tree/          predeclared source repo (top level)
-    //   <agentHome>/worktrees/<task>/    agent-on-demand worktree
-    //   <agentHome>/docs/                agent-home-scoped notes
-    //   <agentHome>/.agent/              MUST stay rejected via hidden-segment check
+    // The promotion mechanism is path-agnostic, so most cases use a
+    // representative relative source path (`first-tree`). One case uses the real
+    // production shape, where source clones live under `source-repos/<name>`:
+    //   <agentHome>/first-tree/                generic single-repo fixture
+    //   <agentHome>/source-repos/first-tree/   the production source-repos/ layout
+    //   <agentHome>/worktrees/<task>/          agent-on-demand worktree
+    //   <agentHome>/docs/                      agent-home-scoped notes
+    //   <agentHome>/.agent/                    MUST stay rejected via hidden-segment check
     agentHome = await mkdtemp(join(tmpdir(), "doc-snap-agenthome-"));
     await mkdir(join(agentHome, "first-tree", "docs"), { recursive: true });
     await writeFile(join(agentHome, "first-tree", "docs", "intro.md"), "# intro\n", "utf8");
+    await mkdir(join(agentHome, "source-repos", "first-tree", "docs"), { recursive: true });
+    await writeFile(join(agentHome, "source-repos", "first-tree", "docs", "intro.md"), "# intro\n", "utf8");
     await mkdir(join(agentHome, "worktrees", "task-x", "docs"), { recursive: true });
     await writeFile(join(agentHome, "worktrees", "task-x", "docs", "design.md"), "# design\n", "utf8");
     await mkdir(join(agentHome, "docs"), { recursive: true });
@@ -719,6 +724,24 @@ describe("buildMessageDocumentSnapshots — wide self-fence over agent home", ()
     expect(rewrittenText).toBe(
       "relative [first-tree/docs/intro.md](first-tree/docs/intro.md) and " +
         "absolute [first-tree/docs/intro.md](first-tree/docs/intro.md)",
+    );
+  });
+
+  it("promotes under the source-repos/ layout when singleRepoLocalPath is `source-repos/<name>`", async () => {
+    // The runtime now passes the agentHome-relative source path
+    // `source-repos/<name>` (see selfFenceFromRuntimeConfig). Both the relative
+    // `docs/intro.md` (resolved against the source-repo top) and the absolute
+    // form key to one canonical `source-repos/first-tree/docs/intro.md`.
+    const abs = join(agentHome, "source-repos", "first-tree", "docs", "intro.md");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`relative docs/intro.md and absolute ${abs}`, {
+      agentHome,
+      singleRepoLocalPath: "source-repos/first-tree",
+    });
+
+    expect(docs.map((d) => d.path)).toEqual(["source-repos/first-tree/docs/intro.md"]);
+    expect(rewrittenText).toBe(
+      "relative [source-repos/first-tree/docs/intro.md](source-repos/first-tree/docs/intro.md) and " +
+        "absolute [source-repos/first-tree/docs/intro.md](source-repos/first-tree/docs/intro.md)",
     );
   });
 

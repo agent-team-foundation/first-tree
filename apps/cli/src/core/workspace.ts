@@ -159,10 +159,25 @@ function isDirectory(path: string): boolean {
 }
 
 function isGitRepoDir(path: string): boolean {
-  return isDirectory(path) && existsSync(join(path, ".git"));
+  if (!isDirectory(path)) {
+    return false;
+  }
+  // Normal working-tree checkout: a `.git` entry (directory or gitfile).
+  if (existsSync(join(path, ".git"))) {
+    return true;
+  }
+  // Bare clone — the agent-managed `source-repos/<name>` shape. Git metadata
+  // (HEAD, objects/, refs/) lives directly at the repo path with no `.git/`,
+  // so the `.git` check alone would miss every agent-managed source clone.
+  return existsSync(join(path, "HEAD")) && isDirectory(join(path, "objects")) && isDirectory(join(path, "refs"));
 }
 
 function listImmediateChildDirs(root: string): string[] {
+  // Tolerate a missing directory (e.g. a `source-repos/` sourcesRoot the agent
+  // has not materialised yet) — return no children rather than throwing.
+  if (!existsSync(root)) {
+    return [];
+  }
   const entries = readdirSync(root, { withFileTypes: true });
   const names: string[] = [];
   for (const entry of entries) {
@@ -251,8 +266,13 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
   const treePresent = isDirectory(treePath);
   const treeRemoteUrl = treePresent ? readGitRemoteUrl(treePath) : undefined;
 
+  // Source clones live under `<workspaceRoot>/<sourcesRoot>/` when the manifest
+  // declares a sourcesRoot (the agent-managed layout); a legacy flat manifest
+  // omits it and keeps sources at the workspace root.
+  const sourcesBase = manifest.sourcesRoot ? join(workspaceRoot, manifest.sourcesRoot) : workspaceRoot;
+
   const boundSources: WorkspaceBoundSource[] = manifest.sources.map((name) => {
-    const sourcePath = join(workspaceRoot, name);
+    const sourcePath = join(sourcesBase, name);
     const present = isDirectory(sourcePath);
     const remoteUrl = present ? readGitRemoteUrl(sourcePath) : undefined;
     return {
@@ -265,13 +285,21 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
 
   const missingBoundSources = boundSources.filter((entry) => !entry.present);
 
-  const declaredNames = new Set<string>([manifest.tree, ...manifest.sources]);
+  // Unbound git siblings are scanned where the bound sources live (sourcesBase).
+  // Exclude `manifest.tree` only in the FLAT layout, where tree and sources
+  // share the workspace-root namespace. With `sourcesRoot` set the tree lives at
+  // `<ws>/<tree>` (outside sourcesBase), so a clone at `<sourcesBase>/<tree-name>`
+  // (e.g. a source literally named `context-tree`, now schema-valid) is a real
+  // unbound sibling and must NOT be filtered out by the tree name.
+  const declaredNames = manifest.sourcesRoot
+    ? new Set<string>(manifest.sources)
+    : new Set<string>([manifest.tree, ...manifest.sources]);
   const unboundGitSiblings: WorkspaceUnboundSibling[] = [];
-  for (const childName of listImmediateChildDirs(workspaceRoot)) {
+  for (const childName of listImmediateChildDirs(sourcesBase)) {
     if (declaredNames.has(childName)) {
       continue;
     }
-    const childPath = join(workspaceRoot, childName);
+    const childPath = join(sourcesBase, childName);
     if (isGitRepoDir(childPath)) {
       const remoteUrl = readGitRemoteUrl(childPath);
       unboundGitSiblings.push({

@@ -3,15 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 
 describe("resolveGitRepoTargetPath", () => {
-  it("resolves safe paths under the session workspace", () => {
+  it("resolves safe paths under the workspace's source-repos/ directory", () => {
     const workspace = sep === "\\" ? "C:\\tmp\\workspace" : "/tmp/workspace";
 
-    // Single-segment names resolve directly; a clean nested path joins its
-    // segments with `-` (matching the schema's read-tolerant normalization),
-    // so both resolve to an immediate child of the workspace.
-    expect(resolveGitRepoTargetPath(workspace, "first-tree")).toBe(resolve(workspace, "first-tree"));
-    expect(resolveGitRepoTargetPath(workspace, "repos/first-tree")).toBe(resolve(workspace, "repos-first-tree"));
-    expect(resolveGitRepoTargetPath(workspace, "..safe")).toBe(resolve(workspace, "..safe"));
+    // Source clones live under `<workspace>/source-repos/<name>`. Single-segment
+    // names resolve directly; a clean nested path joins its segments with `-`
+    // (matching the schema's read-tolerant normalization), so both resolve to an
+    // immediate child of the `source-repos/` directory.
+    expect(resolveGitRepoTargetPath(workspace, "first-tree")).toBe(resolve(workspace, "source-repos", "first-tree"));
+    expect(resolveGitRepoTargetPath(workspace, "repos/first-tree")).toBe(
+      resolve(workspace, "source-repos", "repos-first-tree"),
+    );
+    expect(resolveGitRepoTargetPath(workspace, "..safe")).toBe(resolve(workspace, "source-repos", "..safe"));
   });
 
   it.each([

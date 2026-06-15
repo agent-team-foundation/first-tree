@@ -14,8 +14,14 @@ import { z } from "zod";
  * Constraints:
  *   - `tree` is the immediate subdirectory name (no path separators, no
  *     leading dot, no `..`).
- *   - `sources` entries are immediate subdirectory names with the same
- *     constraints. Duplicates are rejected.
+ *   - `sources` entries are subdirectory names with the same constraints.
+ *     Duplicates are rejected. They live under `sourcesRoot` (see below):
+ *     each bound source clone is `<workspace>/<sourcesRoot>/<sources[i]>`.
+ *   - `sourcesRoot` is the immediate subdirectory that contains the bound
+ *     source clones (the runtime writes `"source-repos"`). It is optional for
+ *     back-compat: a manifest written before the source-repos layer omits it,
+ *     and consumers treat its absence as "sources live directly at the
+ *     workspace root" (the legacy flat layout).
  *   - Sibling subdirectories present on disk but absent from `sources` are
  *     considered unbound and reported by `status`, not auto-promoted.
  *
@@ -44,13 +50,32 @@ export const workspaceManifestSchema = z
     sources: z.array(subdirectoryNameSchema).refine((values) => new Set(values).size === values.length, {
       message: "sources must not contain duplicate entries",
     }),
+    sourcesRoot: subdirectoryNameSchema.optional(),
   })
-  .refine((manifest) => !manifest.sources.includes(manifest.tree), {
-    message: "tree subdirectory must not also appear in sources",
+  // tree∉sources only matters in the LEGACY FLAT layout, where tree and sources
+  // share the workspace-root namespace. With `sourcesRoot` present they live in
+  // different namespaces — `tree` at `<ws>/<tree>`, a source at
+  // `<ws>/<sourcesRoot>/<name>` — so a source may legitimately share the tree's
+  // name (e.g. a repo literally named `context-tree`) without colliding.
+  .refine((manifest) => manifest.sourcesRoot !== undefined || !manifest.sources.includes(manifest.tree), {
+    message: "tree subdirectory must not also appear in sources (flat layout, no sourcesRoot)",
     path: ["sources"],
+  })
+  .refine((manifest) => manifest.sourcesRoot !== manifest.tree, {
+    message: "sourcesRoot must not equal the tree subdirectory",
+    path: ["sourcesRoot"],
   });
 
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
 
 export const WORKSPACE_MANIFEST_FILENAME = "workspace.json";
 export const WORKSPACE_STATE_DIRNAME = ".first-tree";
+
+/**
+ * Immediate subdirectory of the agent workspace that holds the bound source
+ * clones, each materialised at `<workspace>/<SOURCE_REPOS_DIRNAME>/<localPath>`.
+ * Written as the manifest's `sourcesRoot`. A fixed reserved name so the layout
+ * is stable and source clones stay grouped apart from the tree clone, the
+ * `worktrees/` dir, and workspace state dirs.
+ */
+export const SOURCE_REPOS_DIRNAME = "source-repos";
