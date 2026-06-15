@@ -52,8 +52,13 @@ export const workspaceManifestSchema = z
     }),
     sourcesRoot: subdirectoryNameSchema.optional(),
   })
-  .refine((manifest) => !manifest.sources.includes(manifest.tree), {
-    message: "tree subdirectory must not also appear in sources",
+  // tree∉sources only matters in the LEGACY FLAT layout, where tree and sources
+  // share the workspace-root namespace. With `sourcesRoot` present they live in
+  // different namespaces — `tree` at `<ws>/<tree>`, a source at
+  // `<ws>/<sourcesRoot>/<name>` — so a source may legitimately share the tree's
+  // name (e.g. a repo literally named `context-tree`) without colliding.
+  .refine((manifest) => manifest.sourcesRoot !== undefined || !manifest.sources.includes(manifest.tree), {
+    message: "tree subdirectory must not also appear in sources (flat layout, no sourcesRoot)",
     path: ["sources"],
   })
   .refine((manifest) => manifest.sourcesRoot !== manifest.tree, {

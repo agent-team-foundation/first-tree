@@ -94,22 +94,29 @@ refuses; route subsequent work through `first-tree-context` or
 
 Under the agent-managed repo model the declared sources are **bare**
 clones (a git object store, no working tree) — you cannot `ls` or read
-files at the clone path (`<workspaceRoot>/source-repos/<name>`, i.e.
-`<workspaceRoot>/<manifest.sourcesRoot>/<name>`) directly. Before any
-structural read, materialize one read worktree per source off its latest
-default branch, following the **Worktrees** protocol in your `AGENTS.md`
-/ `CLAUDE.md` briefing:
+files at the clone path directly. Resolve each source's bare-clone path
+from the manifest's `sourcesRoot` (do NOT hard-code it — the field is
+optional):
+
+- `sourcesRoot` present (current manifests, value `source-repos`):
+  `<source-clone>` = `<workspaceRoot>/<sourcesRoot>/<source>`
+  (e.g. `<workspaceRoot>/source-repos/<source>`)
+- `sourcesRoot` absent (legacy flat manifest):
+  `<source-clone>` = `<workspaceRoot>/<source>`
+
+Before any structural read, materialize one read worktree per source off
+its latest default branch, following the **Worktrees** protocol in your
+`AGENTS.md` / `CLAUDE.md` briefing:
 
 ```bash
-# for each <source> in manifest.sources (clone at <workspaceRoot>/source-repos/<source>):
-git -C <workspaceRoot>/source-repos/<source> fetch origin
-git -C <workspaceRoot>/source-repos/<source> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
+# for each <source> in manifest.sources, with <source-clone> resolved as above:
+git -C <source-clone> fetch origin
+git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
 ```
 
 Every "read every bound source" / Tier 0–2 scan in Phase 1 operates on
 these read worktrees, not the bare clone paths. Remove them
-(`git -C <workspaceRoot>/source-repos/<source> worktree remove <path>`) once both
-PRs are open.
+(`git -C <source-clone> worktree remove <path>`) once both PRs are open.
 
 ## The Two Phases
 

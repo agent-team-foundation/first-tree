@@ -49,8 +49,11 @@ export const CONTEXT_TREE_DIRNAME = "context-tree";
  *     manifest; such a source is still materialised on disk, it just can't be
  *     expressed in `sources`. (`sources` are names under `sourcesRoot` =
  *     `source-repos`, i.e. each clone is `<workspace>/source-repos/<name>`.)
- *   - Skips entirely when a declared source is named `context-tree` (the
- *     schema also forbids `tree` ∈ `sources`).
+ *   - A source named `context-tree` is fine: it lives at
+ *     `<workspace>/source-repos/context-tree`, a different namespace from the
+ *     tree at `<workspace>/context-tree`, so the schema's `tree ∉ sources`
+ *     collision rule does not apply once `sourcesRoot` is set. We always write
+ *     `sourcesRoot`, so we never drop the whole manifest over that name.
  *
  * The manifest may name a `tree` directory that does not exist yet — the
  * agent clones it on first use per its briefing protocol. The shipped
@@ -73,11 +76,6 @@ export function ensureWorkspaceManifest(
     log?.(`workspace manifest: dropping source "${name}" — not an immediate subdirectory name`);
     return false;
   });
-
-  if (usable.includes(CONTEXT_TREE_DIRNAME)) {
-    log?.(`workspace manifest skipped: a source repo is named "${CONTEXT_TREE_DIRNAME}"`);
-    return;
-  }
 
   // Validate (and pre-serialize) BEFORE any filesystem mutation.
   let serialized: string;

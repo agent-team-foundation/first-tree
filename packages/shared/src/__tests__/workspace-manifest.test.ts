@@ -32,13 +32,21 @@ describe("workspaceManifestSchema", () => {
     expect(workspaceManifestSchema.safeParse({ tree: "t", sources: [], sourcesRoot: ".hidden" }).success).toBe(false);
   });
 
-  it("still rejects the tree appearing in sources regardless of sourcesRoot", () => {
+  it("rejects the tree appearing in sources ONLY in the flat layout (no sourcesRoot)", () => {
+    // Flat layout: tree and sources share the workspace-root namespace, so a
+    // source named like the tree collides — rejected.
+    expect(workspaceManifestSchema.safeParse({ tree: "context-tree", sources: ["context-tree"] }).success).toBe(false);
+  });
+
+  it("allows a source named like the tree once sourcesRoot is set (different namespace)", () => {
+    // `tree` at <ws>/context-tree vs source at <ws>/source-repos/context-tree —
+    // no collision, so this valid new-layout case must parse.
     const result = workspaceManifestSchema.safeParse({
       tree: "context-tree",
       sources: ["context-tree"],
       sourcesRoot: SOURCE_REPOS_DIRNAME,
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("SOURCE_REPOS_DIRNAME is the reserved source-repos directory name", () => {
