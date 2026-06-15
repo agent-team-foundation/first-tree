@@ -1345,6 +1345,58 @@ describe("web DOM interaction coverage", () => {
     api.get = originalGet;
   });
 
+  it("keeps the selected team first and collapses long team lists", async () => {
+    const { UserMenu } = await import("../../components/user-menu.js");
+    authMock.value = {
+      ...authMock.value,
+      organizationId: "org-current",
+      role: "admin",
+      selectOrganization: vi.fn(async () => undefined),
+    };
+    const getMock = async <T,>(): Promise<T> =>
+      [
+        { id: "org-1", displayName: "Alpha", role: "member" },
+        { id: "org-2", displayName: "Beta", role: "member" },
+        { id: "org-3", displayName: "Gamma", role: "admin" },
+        { id: "org-4", displayName: "Delta", role: "member" },
+        { id: "org-5", displayName: "Epsilon", role: "member" },
+        { id: "org-6", displayName: "Zeta", role: "member" },
+        { id: "org-current", displayName: "Current Team", role: "admin" },
+      ] as T;
+    const { api } = await import("../../api/client.js");
+    const originalGet = api.get;
+    api.get = getMock;
+
+    const menu = await renderDom(<UserMenu />);
+    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
+    await waitForText("Current Team", menu.container);
+
+    const visibleTeamButtons = [...menu.container.querySelectorAll("button[role='menuitem']")].filter((button) =>
+      ["Current Team", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].some((name) =>
+        button.textContent?.includes(name),
+      ),
+    );
+    expect(
+      visibleTeamButtons.map(
+        (button) =>
+          ["Current Team", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].find((name) =>
+            button.textContent?.includes(name),
+          ) ?? "",
+      ),
+    ).toEqual(["Current Team", "Alpha", "Beta", "Gamma", "Delta"]);
+    expect(menu.container.textContent).not.toContain("Epsilon");
+    expect(menu.container.textContent).toContain("View 2 more teams");
+
+    await click(
+      [...menu.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("View 2 more teams"),
+      ) ?? null,
+    );
+    await waitForText("Zeta", menu.container);
+    expect(menu.container.textContent).toContain("Show fewer teams");
+    api.get = originalGet;
+  });
+
   it("loads, copies, rotates, and errors InviteLinkPanel", async () => {
     const { InviteLinkPanel } = await import("../invite-link-panel.js");
     const { api } = await import("../../api/client.js");
