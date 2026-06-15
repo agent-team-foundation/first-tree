@@ -56,6 +56,33 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+export class TuiLifecycleFence {
+  private activePromise: Promise<unknown> | null = null;
+  private requestedStop = false;
+
+  get active(): Promise<unknown> | null {
+    return this.activePromise;
+  }
+
+  get stopRequested(): boolean {
+    return this.requestedStop;
+  }
+
+  requestStop(): void {
+    this.requestedStop = true;
+  }
+
+  run<T>(body: () => Promise<T>): Promise<T> {
+    this.requestedStop = false;
+    const promise = (async () => body())();
+    const tracked = promise.finally(() => {
+      if (this.activePromise === tracked) this.activePromise = null;
+    });
+    this.activePromise = tracked;
+    return tracked;
+  }
+}
+
 /**
  * Module-level lazy sweep: on first handler instantiation in this process, kill
  * tmux sessions left over from a prior crashed run of THIS client.
@@ -113,6 +140,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let tmuxSessionName: string | null = null;
   let transcriptTailer: TranscriptTailer | null = null;
   let currentTurnPromise: Promise<void> | null = null;
+  const lifecycleFence = new TuiLifecycleFence();
   let turnAborted = false;
   // True for the whole span a turn is being prepared/run — start/resume
   // bootstrap through turn completion, or a queued-message turn. This is the
@@ -480,7 +508,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
    * so a concurrent `suspend()` awaits the turn instead of tearing it down.
    */
   function pump(): void {
-    if (turnRunning || queuedMessages.length === 0) return;
+    if (turnRunning || lifecycleFence.stopRequested || queuedMessages.length === 0) return;
     const sessionCtx = ctx;
     if (!sessionCtx || !tmuxSessionName) return;
     const drained = queuedMessages.splice(0);
@@ -493,6 +521,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         } catch (err) {
           sessionCtx.log(`tui inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (lifecycleFence.stopRequested) {
+          retryQueuedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
+          return;
+        }
+      }
+      if (lifecycleFence.stopRequested) {
+        retryQueuedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
+        return;
       }
       if (inputs.length === 0) {
         await sessionCtx.finishTurn(drained, { status: "error", terminal: true, errorKind: "deterministic" });
@@ -512,6 +548,23 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // recursion off the stack and lets the just-cleared flags settle.
         setImmediate(pump);
       });
+  }
+
+  function retryQueuedMessagesForRecovery(
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    reason: string,
+  ): void {
+    if (messages.length === 0) return;
+    sessionCtx.log(`tui ${reason}: retrying ${messages.length} queued message(s) through inbox recovery`);
+    sessionCtx.retryTurn(messages, reason);
+  }
+
+  function dropQueuedMessagesForRecovery(reason: string): void {
+    if (queuedMessages.length > 0) {
+      ctx?.log(`tui ${reason}: dropping ${queuedMessages.length} queued message(s) for inbox recovery`);
+      queuedMessages.length = 0;
+    }
   }
 
   function sleep(ms: number): Promise<void> {
@@ -538,108 +591,134 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     configTempDir = null;
   }
 
+  async function waitForStopFence(): Promise<void> {
+    const activeLifecycle = lifecycleFence.active;
+    const activeTurn = currentTurnPromise;
+    if ((activeTurn || !activeLifecycle) && tmuxSessionName) {
+      try {
+        await sendKey(tmuxSessionName, "Escape");
+      } catch {
+        /* best-effort */
+      }
+    }
+    try {
+      await (activeLifecycle ?? activeTurn);
+    } catch {
+      /* swallow */
+    }
+    currentTurnPromise = null;
+  }
+
   return {
     async start(message, sessionCtx) {
-      // Hold turnRunning across the whole bootstrap so an inject arriving while
-      // the session is still being prepared queues instead of racing pump()
-      // into a second turn the instant startClaude sets tmuxSessionName.
-      turnRunning = true;
-      try {
-        await orphanSweep(clientId);
-        ctx = sessionCtx;
-        cwd = acquireAgentHome(workspaceRoot);
-
-        const resolvedPayload = await loadPayload(sessionCtx);
-        const payload = resolvedPayload ?? defaultPayload();
-
-        // Per-chat material flows through the unified briefing
-        // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
-        // chat-context and source repos BEFORE bootstrap so the briefing the
-        // shared `ensureAgentBootstrap` materialises is fully populated; claude
-        // then reads CLAUDE.md once on spawn via `--setting-sources project`.
-        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        // Pure declaration — the agent itself clones/refreshes the repos per
-        // its briefing protocol; the listed paths may not exist yet.
-        sourceReposForPrompt = declaredSourceRepos(cwd, payload);
-        await materializeResourceSkills(cwd, payload, sessionCtx);
-        ensureAgentBootstrap({
-          workspace: cwd,
-          sessionCtx,
-          contextTreePath,
-          briefing: buildBriefing(sessionCtx, payload, cwd),
-          // `null` when we fell back to `defaultPayload()` — the empty
-          // `gitRepos: []` is then NOT authoritative, and the workspace
-          // manifest write is deferred for this session.
-          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-            payload,
-            resolvedPayload !== null && resolvedPayload !== undefined,
-          ),
-        });
-        markWorkspaceInitComplete(cwd);
-
-        const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
-
-        const inputText = await sessionCtx.formatInboundContent(message);
-        currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
+      return lifecycleFence.run(async () => {
+        // Hold turnRunning across the whole bootstrap so an inject arriving while
+        // the session is still being prepared queues instead of racing pump()
+        // into a second turn the instant startClaude sets tmuxSessionName.
+        turnRunning = true;
         try {
-          await currentTurnPromise;
-        } finally {
-          currentTurnPromise = null;
-        }
-        return sessionId;
-      } finally {
-        turnRunning = false;
-        // Drain any messages injected during bootstrap / the first turn.
-        setImmediate(pump);
-      }
-    },
+          await orphanSweep(clientId);
+          ctx = sessionCtx;
+          cwd = acquireAgentHome(workspaceRoot);
 
-    async resume(message, sessionId, sessionCtx) {
-      turnRunning = true;
-      try {
-        await orphanSweep(clientId);
-        ctx = sessionCtx;
-        cwd = acquireAgentHome(workspaceRoot);
+          const resolvedPayload = await loadPayload(sessionCtx);
+          const payload = resolvedPayload ?? defaultPayload();
 
-        const resumePayloadResolved = await loadPayload(sessionCtx);
-        const payload = resumePayloadResolved ?? defaultPayload();
+          // Per-chat material flows through the unified briefing
+          // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
+          // chat-context and source repos BEFORE bootstrap so the briefing the
+          // shared `ensureAgentBootstrap` materialises is fully populated; claude
+          // then reads CLAUDE.md once on spawn via `--setting-sources project`.
+          chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
+          // Pure declaration — the agent itself clones/refreshes the repos per
+          // its briefing protocol; the listed paths may not exist yet.
+          sourceReposForPrompt = declaredSourceRepos(cwd, payload);
+          await materializeResourceSkills(cwd, payload, sessionCtx);
+          ensureAgentBootstrap({
+            workspace: cwd,
+            sessionCtx,
+            contextTreePath,
+            briefing: buildBriefing(sessionCtx, payload, cwd),
+            // `null` when we fell back to `defaultPayload()` — the empty
+            // `gitRepos: []` is then NOT authoritative, and the workspace
+            // manifest write is deferred for this session.
+            currentSourceRepoNames: currentSourceRepoNamesFromPayload(
+              payload,
+              resolvedPayload !== null && resolvedPayload !== undefined,
+            ),
+          });
+          markWorkspaceInitComplete(cwd);
 
-        chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-        // Pure declaration — same as the start() path.
-        sourceReposForPrompt = declaredSourceRepos(cwd, payload);
-        await materializeResourceSkills(cwd, payload, sessionCtx);
-        // Same shared bootstrap as start(): ensureAgentBootstrap handles the
-        // sentinel + CLI-version drift internally, so a stale or failed
-        // integration is re-run on resume instead of being skipped.
-        ensureAgentBootstrap({
-          workspace: cwd,
-          sessionCtx,
-          contextTreePath,
-          briefing: buildBriefing(sessionCtx, payload, cwd),
-          // See PR #869 baixiaohang round-3 P0 — same gate as start().
-          currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-            payload,
-            resumePayloadResolved !== null && resumePayloadResolved !== undefined,
-          ),
-        });
-        markWorkspaceInitComplete(cwd);
+          const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
+          if (lifecycleFence.stopRequested) return sessionId;
 
-        const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
-
-        if (message) {
           const inputText = await sessionCtx.formatInboundContent(message);
+          if (lifecycleFence.stopRequested) return sessionId;
           currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
           try {
             await currentTurnPromise;
           } finally {
             currentTurnPromise = null;
           }
+          return sessionId;
+        } finally {
+          turnRunning = false;
+          // Drain any messages injected during bootstrap / the first turn.
+          setImmediate(pump);
         }
-        return restartedId;
-      } finally {
-        turnRunning = false;
-        setImmediate(pump);
-      }
+      });
+    },
+
+    async resume(message, sessionId, sessionCtx) {
+      return lifecycleFence.run(async () => {
+        turnRunning = true;
+        try {
+          await orphanSweep(clientId);
+          ctx = sessionCtx;
+          cwd = acquireAgentHome(workspaceRoot);
+
+          const resumePayloadResolved = await loadPayload(sessionCtx);
+          const payload = resumePayloadResolved ?? defaultPayload();
+
+          chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
+          // Pure declaration — same as the start() path.
+          sourceReposForPrompt = declaredSourceRepos(cwd, payload);
+          await materializeResourceSkills(cwd, payload, sessionCtx);
+          // Same shared bootstrap as start(): ensureAgentBootstrap handles the
+          // sentinel + CLI-version drift internally, so a stale or failed
+          // integration is re-run on resume instead of being skipped.
+          ensureAgentBootstrap({
+            workspace: cwd,
+            sessionCtx,
+            contextTreePath,
+            briefing: buildBriefing(sessionCtx, payload, cwd),
+            // See PR #869 baixiaohang round-3 P0 — same gate as start().
+            currentSourceRepoNames: currentSourceRepoNamesFromPayload(
+              payload,
+              resumePayloadResolved !== null && resumePayloadResolved !== undefined,
+            ),
+          });
+          markWorkspaceInitComplete(cwd);
+
+          const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
+
+          if (message) {
+            if (lifecycleFence.stopRequested) return restartedId;
+            const inputText = await sessionCtx.formatInboundContent(message);
+            if (lifecycleFence.stopRequested) return restartedId;
+            currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
+            try {
+              await currentTurnPromise;
+            } finally {
+              currentTurnPromise = null;
+            }
+          }
+          return restartedId;
+        } finally {
+          turnRunning = false;
+          setImmediate(pump);
+        }
+      });
     },
 
     inject(message) {
@@ -652,38 +731,20 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     },
 
     async suspend() {
+      lifecycleFence.requestStop();
       turnAborted = true;
-      if (tmuxSessionName) {
-        try {
-          await sendKey(tmuxSessionName, "Escape");
-        } catch {
-          /* best-effort */
-        }
-      }
-      try {
-        await currentTurnPromise;
-      } catch {
-        /* swallow */
-      }
-      currentTurnPromise = null;
+      dropQueuedMessagesForRecovery("suspend");
+      await waitForStopFence();
+      dropQueuedMessagesForRecovery("suspend");
       await teardownTmux();
     },
 
     async shutdown() {
+      lifecycleFence.requestStop();
       turnAborted = true;
-      if (tmuxSessionName) {
-        try {
-          await sendKey(tmuxSessionName, "Escape");
-        } catch {
-          /* best-effort */
-        }
-      }
-      try {
-        await currentTurnPromise;
-      } catch {
-        /* swallow */
-      }
-      currentTurnPromise = null;
+      dropQueuedMessagesForRecovery("shutdown");
+      await waitForStopFence();
+      dropQueuedMessagesForRecovery("shutdown");
       await teardownTmux();
 
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared

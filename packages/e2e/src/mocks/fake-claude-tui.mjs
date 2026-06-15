@@ -28,6 +28,8 @@
 // per agent via FIRST_TREE_HOME-scoped env):
 //
 //   FAKE_TUI_REPLY                — canned reply text (default: echoes input)
+//   FAKE_TUI_READY_DELAY_MS       — pre-ready delay; useful for suspend /
+//                                   resume preparation race tests
 //   FAKE_TUI_DELAY_MS             — pre-emit delay; useful for timeout tests
 //   FAKE_TUI_FAIL_READY=1         — never print the ready marker (probe a
 //                                   waitForReady timeout)
@@ -71,6 +73,7 @@ const resumeId = readFlag("--resume") ?? null;
 const sessionId = readFlag("--session-id") ?? resumeId ?? randomUUID();
 
 const REPLY = process.env.FAKE_TUI_REPLY ?? null;
+const READY_DELAY_MS = Number(process.env.FAKE_TUI_READY_DELAY_MS ?? "0");
 const DELAY_MS = Number(process.env.FAKE_TUI_DELAY_MS ?? "0");
 const FAIL_READY = process.env.FAKE_TUI_FAIL_READY === "1";
 const HANG = process.env.FAKE_TUI_HANG === "1";
@@ -385,6 +388,7 @@ async function main() {
   process.stdout.write("\x1b[?2004h");
   // Paint the ready surface: bypass-permissions marker + the `❯ ` prompt
   // line. waitForReady requires both.
+  await sleep(READY_DELAY_MS);
   paint(READY_MARKER);
   paint("❯ "); // NBSP: tmux capture-pane trims trailing ASCII space, NBSP survives — handler's USER_RE matches either
   logEvent("ready");
