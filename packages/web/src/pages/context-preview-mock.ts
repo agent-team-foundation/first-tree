@@ -249,6 +249,24 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         prNumber: null,
         createdAt: new Date(Date.now() - 90 * 60_000).toISOString(),
       },
+      // Root NODE.md edit: node path is "" (the tree root), so the feed must
+      // render a friendly label instead of an empty target.
+      {
+        id: `${"e".repeat(40)}:NODE.md`,
+        nodeId: "root",
+        nodePath: "",
+        title: "Context Tree",
+        changeType: "edited",
+        summary: "refresh the root index",
+        riskLevel: "medium",
+        authorName: "gandy-coder",
+        agentId: "agent-coder",
+        agentName: "gandy-coder",
+        agentAvatarColorToken: "hue-1",
+        commit: "e".repeat(40),
+        prNumber: 803,
+        createdAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+      },
       // Unmatched git author (a PR-merge commit telemetry never saw): no agent,
       // so we honestly show the git author + PR, and a high-risk removal.
       {
@@ -268,7 +286,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         createdAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
       },
     ],
-    writesTotal: 3,
+    writesTotal: 4,
     skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
   },
   nodes: [

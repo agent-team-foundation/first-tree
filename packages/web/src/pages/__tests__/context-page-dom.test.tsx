@@ -272,9 +272,10 @@ describe("ContextPage DOM behavior", () => {
     expect(readRows().length).toBeGreaterThan(0);
 
     // Agent-attributed write carries the PR chip as a real GitHub link + summary.
-    const prLink = container.querySelector<HTMLAnchorElement>("a.context-usage-feed-pr");
-    expect(prLink?.textContent).toBe(`#${514}`);
-    expect(prLink?.getAttribute("href")).toContain("/pull/514");
+    const prLinks = [...container.querySelectorAll<HTMLAnchorElement>("a.context-usage-feed-pr")];
+    const pr514 = prLinks.find((link) => link.textContent === `#${514}`);
+    expect(pr514).toBeDefined();
+    expect(pr514?.getAttribute("href")).toContain("/pull/514");
     expect(container.textContent).toContain("record team deletion semantics");
 
     // Unmatched git author (a PR merge) is shown honestly as the git author,
@@ -282,6 +283,12 @@ describe("ContextPage DOM behavior", () => {
     expect(container.textContent).toContain("yuezengwu");
     expect(container.textContent).toContain("git author");
     expect(container.querySelector(".context-usage-feed-risk.is-high")).not.toBeNull();
+
+    // Root write (empty node path) renders a friendly label, never a blank target.
+    const rootWriteRow = writeRows().find((row) => row.textContent?.includes("refresh the root index"));
+    expect(rootWriteRow).toBeDefined();
+    expect(rootWriteRow?.querySelector(".context-usage-feed-node")).toBeNull();
+    expect(rootWriteRow?.textContent).toContain("the Context Tree");
 
     // Filter → Writes: only write rows remain.
     await click(buttonByText(container, "Writes"));

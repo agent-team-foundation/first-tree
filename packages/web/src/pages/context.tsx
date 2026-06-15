@@ -531,9 +531,15 @@ function WriteFeedRow({
       <span className="context-usage-feed-text">
         <span className="context-usage-feed-agent">{displayName}</span>
         <span className="context-usage-feed-action">{writeVerb(write.changeType)}</span>
-        <span className="context-usage-feed-node" title={write.nodePath}>
-          {write.nodePath}
-        </span>
+        {write.nodePath ? (
+          <span className="context-usage-feed-node" title={write.nodePath}>
+            {write.nodePath}
+          </span>
+        ) : (
+          // Root node writes carry an empty node path (the root's tree path is
+          // ""); render the same friendly label reads use for the repo root.
+          <span className="context-usage-feed-action">the Context Tree</span>
+        )}
         {write.summary ? <span className="context-usage-feed-summary"> — {write.summary}</span> : null}
         {write.prNumber !== null ? (
           prUrl ? (
