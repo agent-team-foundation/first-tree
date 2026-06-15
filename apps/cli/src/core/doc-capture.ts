@@ -1,60 +1,76 @@
-import { buildMessageDocumentSnapshots, type SelfFence, type WorkspaceFence } from "@first-tree/client";
-import { documentContextSchema } from "@first-tree/shared";
+import {
+  buildMessageDocumentSnapshots,
+  type FirstTreeHubSDK,
+  type SelfFence,
+  type WorkspaceFence,
+} from "@first-tree/client";
+import { type AttachmentRef, documentContextSchema } from "@first-tree/shared";
 
 /**
- * Snapshot the `.md` documents an outbound `chat send` message references, the
+ * Capture the `.md` documents an outbound `chat send` message references, the
  * same way the runtime's `result-sink` does for an agent's final-text reply
  * (L3: unify doc-preview capture across ALL send paths, not just final-text).
  *
+ * Capture now uploads each resolved doc's bytes to the org attachment store and
+ * stores a generic `AttachmentRef` (kind: "document") in `metadata.attachments[]`,
+ * rewriting the mention into an `[display](attachment:<id>)` link — identical to
+ * result-sink. The bytes never travel inside the message.
+ *
  * The runtime injects the resolved doc context into the agent's environment
- * (`buildAgentEnv`); we read it here so the CLI sub-process resolves against
- * the exact same fence as the runtime — no config reconstruction, no server
- * round-trip.
+ * (`buildAgentEnv`); we read it here so the CLI sub-process resolves against the
+ * exact same fence as the runtime — no config reconstruction. Uploads need an
+ * org: it is resolved from the target chat (`getChatDetail`), so capture only
+ * runs when a `chatId` is supplied (i.e. `chat send`; `chat create` has no chat
+ * yet, so its initial message degrades doc mentions to plain text — KNOWN GAP,
+ * out of scope for this PR, tracked as follow-up #1069).
  *
- * Two wire forms, in priority order:
- *
- *  1. `FIRST_TREE_DOC_AGENT_HOME` (+ optional `_DOC_REPO_LOCAL_PATH`) — the
- *     wide self-fence introduced alongside the worktrees-fence widening. The
- *     full {@link SelfFence} is rebuilt so absolute `.md` paths in the agent's
- *     on-demand `worktrees/<task>/` checkouts also snapshot.
- *
- *  2. `FIRST_TREE_DOC_BASE` (legacy) — set by pre-fix runtimes. We treat it
- *     as `agentHome` so the snapshot pipeline still produces relative-key
- *     output, but no `singleRepoLocalPath` is available so the wider
- *     containment that #498's worktrees idiom relies on is not active. This
- *     branch keeps an old runtime + new chat-send combo working at pre-fix
- *     fidelity (no worktree preview, source-repo paths still resolve).
- *
- * Returns the (possibly rewritten) content + a validated `documentContext` to
- * merge into message metadata. When no doc base is present (not in an agent
- * session) it is a pure pass-through, so `chat send` keeps working unchanged.
- *
- * Capture failure NEVER blocks the send: any error degrades to passing the
- * original content through with no `documentContext`.
+ * Returns the (possibly rewritten) content + the metadata to merge (an
+ * `attachments` array and/or a `documentContext` failedMentions roster). When
+ * no doc base is present (not in an agent session), or the org can't be
+ * resolved, it is a pure pass-through. Capture failure NEVER blocks the send.
  */
 export async function captureOutboundDocs(
   content: string,
+  ctx: { sdk: FirstTreeHubSDK; chatId?: string },
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{ content: string; documentContext?: unknown }> {
+): Promise<{ content: string; attachments?: AttachmentRef[]; documentContext?: unknown }> {
   const self = resolveSelfFenceFromEnv(env);
-  if (!self) return { content };
+  if (!self || !ctx.chatId) return { content };
 
-  const chatId = env.FIRST_TREE_CHAT_ID;
+  const chatId = ctx.chatId;
   const workspacesRoot = env.FIRST_TREE_WORKSPACES_ROOT;
   const selfSlug = env.FIRST_TREE_AGENT_SLUG;
   const fence: WorkspaceFence | undefined =
-    workspacesRoot && selfSlug && chatId ? { workspacesRoot, chatId, selfSlug } : undefined;
+    workspacesRoot && selfSlug ? { workspacesRoot, chatId, selfSlug } : undefined;
 
   try {
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(content, self, fence);
-    if (docs.length === 0) return { content: rewrittenText };
-    // Validate through the shared schema (same as result-sink) so a malformed
-    // doc can never be lodged into immutable message history; on a parse error
-    // fall back to sending the content with no documentContext.
-    const documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
-    return { content: rewrittenText, documentContext };
+    const orgId = await resolveChatOrgId(ctx.sdk, chatId);
+    if (!orgId) return { content };
+    const { refs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+      content,
+      self,
+      { uploader: ctx.sdk, orgId },
+      fence,
+    );
+    const result: { content: string; attachments?: AttachmentRef[]; documentContext?: unknown } = {
+      content: rewrittenText,
+    };
+    if (refs.length > 0) result.attachments = refs;
+    if (failedMentions.length > 0) {
+      result.documentContext = documentContextSchema.parse({ kind: "snapshot", failedMentions });
+    }
+    return result;
   } catch {
     return { content };
+  }
+}
+
+async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<string | null> {
+  try {
+    const detail = await sdk.getChatDetail(chatId);
+    return typeof detail.organizationId === "string" && detail.organizationId.length > 0 ? detail.organizationId : null;
+  } catch {
+    return null;
   }
 }
 

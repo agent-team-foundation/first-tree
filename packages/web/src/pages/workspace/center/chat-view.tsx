@@ -1,4 +1,6 @@
 import {
+  type AttachmentRef,
+  attachmentRefsFromMetadata,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatParticipantDetail,
   type DocSnapshotFailReason,
@@ -8,7 +10,6 @@ import {
   isImageRefContent,
   type MentionParticipant,
   type OpenQuestionRequest,
-  parseWorkspaceDocKey,
   type RequestResolution,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -100,14 +101,9 @@ import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
-import {
-  docPreviewPathFromHref,
-  linkifyMarkdownDocPaths,
-  parseFailedDocHref,
-  wrapFailedDocMentions,
-} from "../../../lib/doc-preview-links.js";
+import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
-import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
@@ -283,7 +279,6 @@ function TextRow({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const slugToId = useAgentSlugToIdMap();
   // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
   // routing / read-receipts / mention-resolution stay consistent, but we
   // re-attribute the row to a synthetic "GitHub" sender in the UI. The
@@ -296,8 +291,17 @@ function TextRow({
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
   const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
   const isSelf = !isGithubSystem && myAgentId === msg.senderId;
-  const docBasePath = documentBasePathFromMetadata(msg.metadata);
-  const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
+  // Generic attachment refs (doc-preview is the first consumer; kind:
+  // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
+  // look the ref up and seed the drawer's cache. Old messages (legacy inline
+  // shape) have no `metadata.attachments` → empty map → no preview, plain text.
+  const docAttachmentRefs = useMemo(() => {
+    const map = new Map<string, AttachmentRef>();
+    for (const ref of attachmentRefsFromMetadata(msg.metadata)) {
+      if (ref.kind === "document") map.set(ref.attachmentId, ref);
+    }
+    return map;
+  }, [msg.metadata]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Does the request body *lead* with its target mention — the server-
   // normalised `@target …` shape that the renderer always chips? Resolved
@@ -312,38 +316,26 @@ function TextRow({
       .filter((name): name is string => typeof name === "string");
     return contentStartsWithMention(msg.content, targetNames);
   }, [msg.format, msg.content, msg.metadata, mentionParticipants]);
-  // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
-  // user typed in the web composer (`source === "web"`) is left untouched
-  // so paths that humans write — code-fence walkthroughs, quoted snippets,
-  // intentional bare references — render exactly as authored. Only paths that
-  // this message actually carries a snapshot for get linkified, so a filename
-  // the agent only *mentions* in prose stays plain text instead of becoming a
-  // dead link — and every link that does render opens from cache without a
-  // server round-trip.
-  //
-  // Failed mentions go through `wrapFailedDocMentions` AFTER linkify so any
-  // tokens still bare in the text get the inert-chip placeholder href
-  // (`#doc-failed?reason=…`). The `a` override below renders that placeholder
-  // as a disabled chip with a reason-mapped tooltip instead of a clickable
-  // link. Order matters: linkify first so a path that snapshotted is wrapped
-  // into a markdown link (and therefore hard-skipped by the scanner the
-  // failed-mention wrapper uses), and only the genuinely-failed remainder
-  // becomes chips.
+  // Successful doc captures are already explicit `[display](attachment:<id>)`
+  // links the runtime rewrote into the message body — web does NOT re-linkify
+  // bare tokens any more. The only scanner-driven rewrite left is wrapping the
+  // runtime-reported FAILED mentions into inert-chip placeholder hrefs
+  // (`#doc-failed?reason=…`); the `a` override renders those as disabled chips.
+  // Web-composed messages (`source === "web"`) are left untouched so paths a
+  // human types render exactly as authored.
   const textContent = useMemo<string | null>(() => {
     // `request` is included so RequestCard's `body` (the long narrative /
-    // decision context) renders through the same markdown + doc-link path as
+    // decision context) renders through the same markdown path as
     // text/markdown — without this it falls back to "" and the card shows
     // only the chip + answer block (QA: missing body on expanded requests).
     if (msg.format !== "text" && msg.format !== "markdown" && msg.format !== "request") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
     if (msg.source === "web") return msg.content;
-    const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
-    let body = linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
     if (failedDocMentions && failedDocMentions.size > 0) {
-      body = wrapFailedDocMentions(body, failedDocMentions);
+      return wrapFailedDocMentions(msg.content, failedDocMentions);
     }
-    return body;
-  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots, failedDocMentions]);
+    return msg.content;
+  }, [msg.format, msg.content, msg.source, failedDocMentions]);
   // Highlight `@<participant>` tokens in sent messages with the same
   // chip styling the composer's mirror overlay uses. Code blocks and
   // link text are skipped by the plugin itself, so a message containing
@@ -392,14 +384,13 @@ function TextRow({
             );
           }
         }
-        // issue 831: a markdown link whose href is neither a workspace doc-preview
-        // path nor a navigable web URL (e.g. an agent-written worktree path
-        // like `/Users/…/worktrees/<task>`) has no route on the cloud origin
-        // and 404s when clicked. Render the link text as plain text instead of
-        // a dead link. Doc-preview paths are checked first so snapshot-backed
-        // `.md` mentions keep their click-to-preview anchor.
-        const docPreviewPath = typeof href === "string" ? docPreviewPathFromHref(href) : null;
-        if (!docPreviewPath && !isNavigableWebHref(href)) {
+        // Doc-preview links are `attachment:<id>` (the runtime rewrites a
+        // captured mention into one). issue 831: a link whose href is neither a
+        // doc-preview attachment nor a navigable web URL (e.g. an agent-written
+        // worktree path) has no route on the cloud origin and 404s when
+        // clicked — render its text as plain text instead of a dead link.
+        const attachmentId = typeof href === "string" ? attachmentIdFromHref(href) : null;
+        if (!attachmentId && !isNavigableWebHref(href)) {
           return <>{children}</>;
         }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -415,53 +406,27 @@ function TextRow({
             return;
           }
 
-          const docPath = docPreviewPathFromHref(href);
-          if (!docPath) return;
+          const clickedAttachmentId = attachmentIdFromHref(href);
+          if (!clickedAttachmentId) return;
 
           event.preventDefault();
+          // Seed the drawer's React Query ref cache (keyed by attachmentId) with
+          // EVERY doc ref this message carries — so the drawer opens
+          // synchronously and an in-doc cross-link to a sibling doc in the same
+          // message hits cache too. The drawer fetches the bytes on demand from
+          // `GET /attachments/:id`.
+          const messageRefs = [...docAttachmentRefs.values()];
+          for (const ref of messageRefs) {
+            queryClient.setQueryData(docAttachmentRefQueryKey(ref.attachmentId), ref);
+          }
+          // Also seed the FULL per-message ref list under its own key so the
+          // drawer can enumerate same-message siblings on the seeded path
+          // (relative `other.md` links) without re-fetching the messages window.
+          queryClient.setQueryData(docMessageAttachmentRefsQueryKey(msg.id), messageRefs);
           const next = new URLSearchParams(searchParams);
           next.set("docChat", msg.chatId);
-          // Owner attribution for `docAgent`: a global cross-agent key
-          // `<ownerSlug>/<chatId>/…` (chatId segment === this chat) belongs to
-          // the OWNER, not the sender; self / legacy bare keys stay the sender.
-          // `docAgent` is only a hint here — the drawer authoritatively
-          // re-resolves the owner from the key's own slug for the path-based
-          // fallback (review P2-a), so an unresolved owner does NOT mis-query
-          // the sender's workspace; it just leaves this placeholder in the URL
-          // for `hasDocRef`. The inline snapshot path renders from cache
-          // regardless of `docAgent`.
-          const parsedKey = parseWorkspaceDocKey(docPath);
-          const ownerId =
-            parsedKey && parsedKey.chatId === msg.chatId
-              ? (slugToId(parsedKey.agentSlug) ?? msg.senderId)
-              : msg.senderId;
-          next.set("docAgent", ownerId);
-          next.set("docPath", docPath);
-
-          // Prefer the inline snapshot variant: hand the drawer the bytes via
-          // React Query cache (keyed by chat+message+path) and tag the URL
-          // with the source message id. Falls back to path-based legacy
-          // preview when the agent emitted only a `kind: "path"` context.
-          //
-          // Seed the ENTIRE message's docs[] in one shot — not just the
-          // clicked one — so when the drawer's internal markdown links jump
-          // between snapshots in the same message they still hit cache and
-          // avoid the legacy network round-trip.
-          const snapshot = docSnapshots?.get(docPath);
-          if (snapshot && docSnapshots) {
-            for (const entry of docSnapshots.values()) {
-              queryClient.setQueryData(docSnapshotQueryKey(msg.chatId, msg.id, entry.path), entry);
-            }
-            next.set("docMsg", msg.id);
-            next.delete("docBase");
-          } else {
-            next.delete("docMsg");
-            if (docBasePath) {
-              next.set("docBase", docBasePath);
-            } else {
-              next.delete("docBase");
-            }
-          }
+          next.set("docMsg", msg.id);
+          next.set("docAttachment", clickedAttachmentId);
           setSearchParams(next);
         };
 
@@ -472,18 +437,7 @@ function TextRow({
         );
       },
     }),
-    [
-      docBasePath,
-      docSnapshots,
-      failedDocMentions,
-      msg.chatId,
-      msg.id,
-      msg.senderId,
-      queryClient,
-      searchParams,
-      setSearchParams,
-      slugToId,
-    ],
+    [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
   );
 
   return (
@@ -602,34 +556,6 @@ function TextRow({
   );
 }
 
-function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
-  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  if (!parsed.success) return undefined;
-  // Only the path-based legacy variant exposes basePath; snapshot variants
-  // carry inline content rendered through a separate path.
-  return parsed.data.kind === "path" ? parsed.data.basePath : undefined;
-}
-
-export type DocSnapshotEntry = { path: string; content: string; sha256: string; size: number };
-
-/**
- * For snapshot-variant `documentContext`, return a map from `docs[].path` to
- * the snapshot record. Path-based or absent variants return `undefined`.
- * The map keys match the raw href that the agent emitted, so the chat link
- * click handler can use the clicked href directly as a lookup key.
- */
-export function documentSnapshotMapFromMetadata(
-  metadata: Record<string, unknown> | undefined,
-): Map<string, DocSnapshotEntry> | undefined {
-  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
-  const map = new Map<string, DocSnapshotEntry>();
-  for (const doc of parsed.data.docs) {
-    map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
-  }
-  return map;
-}
-
 /**
  * For snapshot-variant `documentContext`, return a map from the agent's
  * written raw token (suffix-stripped — wire format) to the failure reason.
@@ -669,8 +595,26 @@ function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
   }
 }
 
-export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {
-  return ["chat-doc-snapshot", chatId, messageId, path] as const;
+/**
+ * React Query key for a doc `AttachmentRef`, keyed solely by attachmentId (the
+ * blob is immutable, so the id is a stable cache key independent of which
+ * message referenced it). The chat-view click handler seeds the ref here so the
+ * drawer can read filename / sha256 / source.path without re-deriving them.
+ */
+export function docAttachmentRefQueryKey(attachmentId: string): readonly unknown[] {
+  return ["chat-doc-attachment-ref", attachmentId] as const;
+}
+
+/**
+ * React Query key for the FULL list of doc `AttachmentRef`s a single message
+ * carries, keyed by messageId. The chat-view click handler seeds this so the
+ * drawer can enumerate same-message sibling docs (relative `other.md` links)
+ * on the seeded (no-fetch) path — `docAttachmentRefQueryKey` alone is keyed by
+ * attachmentId and can't be enumerated. The cold-load / deep-link path falls
+ * back to recovering the list from the chat's messages window.
+ */
+export function docMessageAttachmentRefsQueryKey(msgId: string): readonly unknown[] {
+  return ["chat-doc-message-attachment-refs", msgId] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
@@ -885,7 +829,7 @@ export function ChatView({
   // expects. Stash whether the sidebar was visible at the moment doc-preview
   // opened so we can auto-restore it when the preview closes — the user did
   // not ask to dismiss the sidebar, they only opened a doc.
-  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docPath"));
+  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docAttachment"));
   const sidebarBeforeDocPreviewRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (hasDocPreview) {
@@ -908,10 +852,14 @@ export function ChatView({
     if (hasDocPreview) {
       const next = new URLSearchParams(searchParams);
       next.delete("docChat");
+      next.delete("docMsg");
+      // Current owner of which doc is open (attachment-ref model).
+      next.delete("docAttachment");
+      // Legacy params from the pre-convergence `docPath` model — still cleared
+      // so a stale URL minted before the migration also clears cleanly.
       next.delete("docAgent");
       next.delete("docPath");
       next.delete("docBase");
-      next.delete("docMsg");
       setSearchParams(next, { replace: true });
       sidebarBeforeDocPreviewRef.current = true;
       return;

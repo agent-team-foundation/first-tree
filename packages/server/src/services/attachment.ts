@@ -74,7 +74,11 @@ export async function createAttachment(db: Database, input: CreateAttachmentInpu
 /** Everything in `AttachmentRow` except the `bytea` payload. */
 export type AttachmentMeta = Omit<AttachmentRow, "data">;
 
-export async function loadAttachmentMeta(db: Database, id: string): Promise<AttachmentMeta | null> {
+/** A select-capable executor — `Database` or a transaction both satisfy it, so
+ *  read helpers can run inside a caller's open transaction. */
+export type AttachmentReader = Pick<Database, "select">;
+
+export async function loadAttachmentMeta(db: AttachmentReader, id: string): Promise<AttachmentMeta | null> {
   const [row] = await db
     .select({
       id: attachments.id,

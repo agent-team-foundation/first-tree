@@ -1,11 +1,25 @@
 import type { ComponentProps } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { isNavigableWebHref } from "../../lib/safe-href.js";
 import { cn } from "../../lib/utils.js";
 
 type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
+
+/**
+ * react-markdown's `defaultUrlTransform` sanitizes hrefs and STRIPS any
+ * unrecognized scheme to an empty string before our `a` component override
+ * runs — so a doc-preview `attachment:<uuid>` link (and the `#doc-failed`
+ * failure-chip fragment) would otherwise arrive at the override as `href=""`
+ * and render as dead text. Preserve exactly our two internal href shapes and
+ * delegate everything else to the default transform, so normal external links
+ * keep their full XSS-safety scrubbing (no weakening for `javascript:` etc.).
+ */
+function previewSafeUrlTransform(url: string): string {
+  if (url.startsWith("attachment:") || url.startsWith("#doc-failed")) return url;
+  return defaultUrlTransform(url);
+}
 
 export type MarkdownProps = {
   children: string;
@@ -48,6 +62,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         rehypePlugins={rehypePlugins}
+        urlTransform={previewSafeUrlTransform}
         components={{
           a: ({ node, href, children, ...props }) => {
             void node;

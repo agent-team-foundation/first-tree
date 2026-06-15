@@ -254,7 +254,10 @@ describe("chat command behavior", () => {
       "markdown",
     ]);
 
-    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("see docs/plan.md");
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith(
+      "see docs/plan.md",
+      expect.objectContaining({ sdk }),
+    );
     expect(sdk.createTaskChat).toHaveBeenCalledWith({
       mode: "task",
       initialRecipientAgentIds: [],

@@ -5,22 +5,23 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { docSnapshotQueryKey } from "../../pages/workspace/center/chat-view.js";
+import { docAttachmentRefQueryKey, docMessageAttachmentRefsQueryKey } from "../../pages/workspace/center/chat-view.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const meDocsMocks = vi.hoisted(() => ({
-  getMeDoc: vi.fn(),
+const ATT_ID = "00000000-0000-4000-8000-000000000001";
+
+const attachmentsMocks = vi.hoisted(() => ({
+  fetchAttachmentText: vi.fn(),
+  sha256Hex: vi.fn(),
+  downloadAttachment: vi.fn(),
 }));
 const chatsMocks = vi.hoisted(() => ({
   listChatMessages: vi.fn(),
 }));
 
-vi.mock("../../api/me-docs.js", () => meDocsMocks);
+vi.mock("../../api/attachments.js", () => attachmentsMocks);
 vi.mock("../../api/chats.js", () => chatsMocks);
-vi.mock("../../lib/use-agent-name-map.js", () => ({
-  useAgentSlugToIdMap: () => (slug: string | null | undefined) => (slug === "nova" ? "agent-owner" : null),
-}));
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -122,6 +123,29 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
+const docRef = {
+  attachmentId: ATT_ID,
+  kind: "document" as const,
+  mimeType: "text/markdown",
+  filename: "plan.md",
+  size: 28,
+  sha256: "a".repeat(64),
+  source: { path: "docs/plan.md" },
+};
+
+const SIBLING_ID = "00000000-0000-4000-8000-000000000002";
+// `details.md` relative to the current doc's `docs/plan.md` resolves to
+// `docs/details.md` — the sibling's source.path.
+const siblingRef = {
+  attachmentId: SIBLING_ID,
+  kind: "document" as const,
+  mimeType: "text/markdown",
+  filename: "details.md",
+  size: 10,
+  sha256: "c".repeat(64),
+  source: { path: "docs/details.md" },
+};
+
 beforeEach(() => {
   vi.resetModules();
   setupDom();
@@ -129,28 +153,17 @@ beforeEach(() => {
   latestSearch = "";
   root = null;
   container = null;
-  meDocsMocks.getMeDoc.mockReset();
-  meDocsMocks.getMeDoc.mockResolvedValue({
-    path: "docs/guide.md",
-    content: "# Guide\nSee [next](next.md).",
-    ref: { path: "docs/guide.md" },
+  attachmentsMocks.fetchAttachmentText.mockReset();
+  attachmentsMocks.fetchAttachmentText.mockResolvedValue({
+    text: "# Plan\nSee [details](details.md).",
+    mimeType: "text/markdown",
+    sizeBytes: 30,
   });
+  attachmentsMocks.sha256Hex.mockReset();
+  attachmentsMocks.sha256Hex.mockResolvedValue("a".repeat(64));
   chatsMocks.listChatMessages.mockReset();
   chatsMocks.listChatMessages.mockResolvedValue({ items: [], nextCursor: null });
 });
-
-// A snapshot-variant message whose metadata still carries the doc bytes —
-// the immutable source recovery re-derives from. sha256 must be 64 hex chars
-// because the recovery path schema-validates metadata.
-const recoveryMessage = {
-  id: "msg-1",
-  metadata: {
-    documentContext: {
-      kind: "snapshot",
-      docs: [{ path: "docs/plan.md", content: "# Recovered Plan", sha256: "a".repeat(64), size: 16 }],
-    },
-  },
-};
 
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
@@ -158,20 +171,15 @@ afterEach(async () => {
 });
 
 describe("DocPreviewDrawer", () => {
-  it("renders inline snapshots, follows markdown links, closes, and resizes", async () => {
+  it("fetches + renders the attachment from a seeded ref, closes, and resizes", async () => {
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fplan.md&docMsg=msg-1";
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
     const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
-      client.setQueryData(docSnapshotQueryKey("chat-1", "msg-1", "docs/plan.md"), {
-        path: "docs/plan.md",
-        content: "# Plan\nSee [details](details.md).",
-        sha256: "sha",
-        size: 28,
-      });
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
     });
 
+    expect(attachmentsMocks.fetchAttachmentText).toHaveBeenCalledWith(ATT_ID);
     expect(dom.textContent).toContain("Plan");
-    expect(meDocsMocks.getMeDoc).not.toHaveBeenCalled();
 
     const resize = dom.querySelector<HTMLButtonElement>('button[aria-label="Resize document preview"]');
     await act(async () => {
@@ -180,93 +188,136 @@ describe("DocPreviewDrawer", () => {
     });
     expect(localStorage.getItem("first-tree:doc-preview-drawer:width:v1")).toBeTruthy();
 
-    await click(dom.querySelector<HTMLAnchorElement>('a[href="details.md"]'));
-    expect(latestSearch).toContain("docPath=docs%2Fdetails.md");
-
     await click(dom.querySelector('button[aria-label="Close document preview"]'));
-    expect(latestSearch).not.toContain("docPath=");
+    expect(latestSearch).not.toContain("docAttachment=");
   });
 
-  it("recovers from the warm messages cache when the seeded entry was GC'd (chat open)", async () => {
-    // Reproduces the GC bug: the URL still carries docMsg, but the seeded
-    // `docSnapshotQueryKey` entry was garbage-collected (no observer). While
-    // the chat is open, ChatView keeps `chat-messages` warm — model that with
-    // a pre-seeded cache entry. The drawer must re-derive the snapshot from
-    // the message's `metadata.documentContext` instead of falling through to
-    // the path endpoint (which 404s on the cloud topology).
-    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+  it("shows an integrity warning when the fetched bytes do not match ref.sha256", async () => {
+    attachmentsMocks.sha256Hex.mockResolvedValue("b".repeat(64));
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fplan.md&docMsg=msg-1";
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
     const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
-      // No docSnapshotQueryKey seed — simulate the post-GC state.
-      client.setQueryData(["chat-messages", "chat-1"], { items: [recoveryMessage], nextCursor: null });
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
     });
     await flush();
-
-    expect(dom.textContent).toContain("Recovered Plan");
-    expect(meDocsMocks.getMeDoc).not.toHaveBeenCalled();
+    expect(dom.textContent).toContain("Integrity check failed");
   });
 
-  it("recovers by fetching the messages window after a cold reload", async () => {
-    // Reproduces the reload P2 codex flagged: no seeded snapshot AND no warm
-    // messages cache on first render. A non-reactive cache peek would memoise
-    // `undefined` and never recompute. The drawer must observe the messages
-    // query, fetch the window, and recover — never hitting the path endpoint.
-    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+  it("shows a download fallback when the doc exceeds the preview render cap", async () => {
+    attachmentsMocks.fetchAttachmentText.mockResolvedValue({
+      text: "x",
+      mimeType: "text/markdown",
+      sizeBytes: 2 * 1024 * 1024,
+    });
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fplan.md&docMsg=msg-1";
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
+    });
+    await flush();
+    expect(dom.textContent).toContain("too large to preview");
+    // The over-cap fallback is an authenticated download button (not a dead
+    // page-relative `/api/v1/...` anchor that would 401/404). Clicking it routes
+    // through the authed `downloadAttachment` helper.
+    const downloadButton = [...dom.querySelectorAll("button")].find((b) => b.textContent === "Download to view");
+    expect(downloadButton).toBeTruthy();
+    await click(downloadButton ?? null);
+    expect(attachmentsMocks.downloadAttachment).toHaveBeenCalledWith(ATT_ID, docRef.filename);
+  });
+
+  it("recovers the ref from the messages window after a cold reload", async () => {
+    chatsMocks.listChatMessages.mockResolvedValue({
+      items: [{ id: "msg-1", metadata: { attachments: [docRef] } }],
+      nextCursor: null,
+    });
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
     const dom = await renderAt(route, <DocPreviewDrawer />);
     await flush();
 
     expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
-    expect(dom.textContent).toContain("Recovered Plan");
-    expect(meDocsMocks.getMeDoc).not.toHaveBeenCalled();
+    expect(attachmentsMocks.fetchAttachmentText).toHaveBeenCalledWith(ATT_ID);
+    expect(dom.textContent).toContain("Plan");
   });
 
-  it("still uses the path endpoint for an in-preview link to a non-snapshotted doc", async () => {
-    // Guards the second regression: a snapshot-origin preview keeps `docMsg` in
-    // the URL when navigating to an in-doc link. If that target was never one
-    // of the message's snapshots, recovery comes up empty and the drawer must
-    // still fall through to the legacy path endpoint (single-host) rather than
-    // being gated out wholesale by `docMsg`.
-    chatsMocks.listChatMessages.mockResolvedValue({ items: [recoveryMessage], nextCursor: null });
+  // R4 follow-up (codex-assistant #2): a cold deep-link whose `docMsg` is OLDER
+  // than the recovery window (message not returned by listChatMessages) misses
+  // recovery. It must still fetch (capability-authed by attachmentId) and render,
+  // flagged "unverified" — NOT sit at a silent blank drawer. Would render blank
+  // before the fix (enabled gate stayed false forever on a recovery miss).
+  it("fetches unverified instead of going blank when the ref can't be recovered", async () => {
+    chatsMocks.listChatMessages.mockResolvedValue({ items: [], nextCursor: null });
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    // docPath is docs/design.md — present in neither the seed nor the message's
-    // docs[] (which only has docs/plan.md), but docMsg is still msg-1.
-    const route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fdesign.md&docMsg=msg-1";
+    const route = `/?docChat=chat-1&docMsg=msg-out-of-window&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />);
+    await flush();
+
+    expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
+    expect(attachmentsMocks.fetchAttachmentText).toHaveBeenCalledWith(ATT_ID);
+    expect(attachmentsMocks.sha256Hex).not.toHaveBeenCalled();
+    expect(dom.textContent).toContain("Plan");
+    expect(dom.textContent).toContain("This preview was not checksum verified");
+  });
+
+  it("renders a fetch error inline rather than throwing", async () => {
+    attachmentsMocks.fetchAttachmentText.mockRejectedValueOnce(new Error("Unable to load"));
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
     const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
-      client.setQueryData(["chat-messages", "chat-1"], { items: [recoveryMessage], nextCursor: null });
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
     });
     await flush();
-
-    expect(meDocsMocks.getMeDoc).toHaveBeenCalledWith("chat-1", {
-      agentId: "agent-1",
-      basePath: undefined,
-      path: "docs/design.md",
-    });
-    expect(dom.textContent).toContain("Guide");
+    expect(dom.textContent).toContain("Unable to load");
   });
 
-  it("loads fallback previews for cross-agent paths and renders API errors", async () => {
+  // R1: a relative in-doc link to a sibling doc in the SAME message resolves on
+  // the seeded (normal click) path — the click handler seeds the full per-message
+  // ref list, so the drawer maps `details.md` → the sibling attachment without
+  // fetching the messages window. Would no-op before the fix (recovery is
+  // disabled when a seeded ref exists, so the sibling map was empty).
+  it("resolves a same-message sibling link on the seeded path (no recovery fetch)", async () => {
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    const dom = await renderAt(
-      "/?docChat=chat-1&docAgent=sender&docPath=nova%2Fchat-1%2Fdocs%2Fguide.md",
-      <DocPreviewDrawer />,
-    );
-
-    await flush();
-    expect(meDocsMocks.getMeDoc).toHaveBeenCalledWith("chat-1", {
-      agentId: "agent-owner",
-      basePath: undefined,
-      path: "docs/guide.md",
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
+      client.setQueryData(docAttachmentRefQueryKey(SIBLING_ID), siblingRef);
+      // Seed the FULL per-message ref list — the seeded enumeration path.
+      client.setQueryData(docMessageAttachmentRefsQueryKey("msg-1"), [docRef, siblingRef]);
     });
-    expect(dom.textContent).toContain("Guide");
-
-    await act(async () => root?.unmount());
-    meDocsMocks.getMeDoc.mockRejectedValueOnce(new Error("Unable to load"));
-    const errored = await renderAt("/?docChat=chat-1&docAgent=sender&docPath=docs%2Fmissing.md", <DocPreviewDrawer />);
     await flush();
-    expect(errored.textContent).toContain("Unable to load");
+
+    // Recovery is disabled on the seeded path — the messages window is never read.
+    expect(chatsMocks.listChatMessages).not.toHaveBeenCalled();
+
+    const siblingLink = [...dom.querySelectorAll("a")].find((a) => a.textContent === "details");
+    expect(siblingLink).toBeTruthy();
+    await click(siblingLink ?? null);
+    expect(latestSearch).toContain(`docAttachment=${SIBLING_ID}`);
+  });
+
+  // R2: on a cold deep-link (no seeded ref) the fetch must WAIT for the ref to
+  // be recovered, then verify the bytes against the recovered ref's sha256.
+  // Here the recovered ref's sha256 mismatches the fetched bytes, so the
+  // integrity warning can only appear if verification ran against the recovered
+  // ref — proving the fetch did not race ahead of recovery. Would not warn
+  // before the fix (fetch ran with an undefined ref → verification skipped, and
+  // the attachmentId-only key never recomputed when the ref later resolved).
+  it("verifies bytes against the recovered ref on a cold deep-link", async () => {
+    chatsMocks.listChatMessages.mockResolvedValue({
+      items: [{ id: "msg-1", metadata: { attachments: [docRef] } }],
+      nextCursor: null,
+    });
+    // Fetched bytes hash to something other than docRef.sha256 ("aaaa...").
+    attachmentsMocks.sha256Hex.mockResolvedValue("d".repeat(64));
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />);
+    await flush();
+
+    expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
+    // Verification ran against the recovered ref (the fetch waited for it).
+    expect(attachmentsMocks.sha256Hex).toHaveBeenCalled();
+    expect(dom.textContent).toContain("Integrity check failed");
   });
 
   it("uses mobile focus handling and escape close", async () => {
@@ -276,7 +327,13 @@ describe("DocPreviewDrawer", () => {
     document.body.appendChild(previous);
     previous.focus();
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
-    const dom = await renderAt("/?docChat=chat-1&docAgent=agent-1&docPath=docs%2Fguide.md", <DocPreviewDrawer />);
+    const dom = await renderAt(
+      `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`,
+      <DocPreviewDrawer />,
+      (client) => {
+        client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
+      },
+    );
     await flush();
 
     expect(dom.querySelector('[aria-modal="true"]')).toBeTruthy();
@@ -284,6 +341,6 @@ describe("DocPreviewDrawer", () => {
       dom.querySelector("aside")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
-    expect(latestSearch).not.toContain("docPath=");
+    expect(latestSearch).not.toContain("docAttachment=");
   });
 });

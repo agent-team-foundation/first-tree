@@ -130,10 +130,19 @@ export function registerChatCreateCommand(chat: Command): void {
         }
 
         const sdk = createSdk(options.agent);
-        const captured = await captureOutboundDocs(content);
-        const outboundMetadata = captured.documentContext
-          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
-          : metadata;
+        // KNOWN GAP (follow-up #1069), out of scope for this PR: no chat exists
+        // yet, so the upload org can't be resolved from a chat — doc capture is a
+        // pass-through for `chat create`'s initial message (doc mentions render as
+        // plain text). Subsequent `chat send` captures normally.
+        const captured = await captureOutboundDocs(content, { sdk });
+        const outboundMetadata =
+          captured.attachments || captured.documentContext
+            ? {
+                ...(metadata ?? {}),
+                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
+              }
+            : metadata;
         const result = await sdk.createTaskChat({
           mode: "task",
           initialRecipientAgentIds: [],

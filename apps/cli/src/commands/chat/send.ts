@@ -176,13 +176,19 @@ export function registerChatSendCommand(chat: Command): void {
 
         const sdk = createSdk(options.agent);
 
-        // L3: snapshot any `.md` this message references, exactly like the
-        // runtime's result-sink does for final-text — closing the biggest
-        // doc-preview gap. Pure pass-through outside an agent session.
-        const captured = await captureOutboundDocs(content ?? "");
-        const outboundMetadata = captured.documentContext
-          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
-          : metadata;
+        // L3: capture any `.md` this message references, exactly like the
+        // runtime's result-sink does for final-text — uploading to the org
+        // attachment store and attaching generic refs. Pure pass-through
+        // outside an agent session.
+        const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+        const outboundMetadata =
+          captured.attachments || captured.documentContext
+            ? {
+                ...(metadata ?? {}),
+                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
+              }
+            : metadata;
 
         // `--reply-to` threads explicitly; `--answer`/`--close` thread under the
         // question they resolve. Either way `inReplyTo` is pure threading.
