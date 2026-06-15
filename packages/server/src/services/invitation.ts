@@ -109,13 +109,24 @@ export async function rotateInvitation(db: Database, orgId: string, createdBy: s
 export async function findActiveByToken(db: Database, token: string) {
   const now = new Date();
   const [row] = await db
-    .select()
+    .select({
+      id: invitations.id,
+      organizationId: invitations.organizationId,
+      token: invitations.token,
+      role: invitations.role,
+      expiresAt: invitations.expiresAt,
+      revokedAt: invitations.revokedAt,
+      createdBy: invitations.createdBy,
+      createdAt: invitations.createdAt,
+    })
     .from(invitations)
+    .innerJoin(organizations, eq(invitations.organizationId, organizations.id))
     .where(
       and(
         eq(invitations.token, token),
         isNull(invitations.revokedAt),
         or(isNull(invitations.expiresAt), gt(invitations.expiresAt, now)),
+        eq(organizations.status, "active"),
       ),
     )
     .limit(1);
@@ -132,7 +143,7 @@ export async function previewInvitation(db: Database, token: string) {
   const [org] = await db
     .select({ id: organizations.id, name: organizations.name, displayName: organizations.displayName })
     .from(organizations)
-    .where(eq(organizations.id, inv.organizationId))
+    .where(and(eq(organizations.id, inv.organizationId), eq(organizations.status, "active")))
     .limit(1);
   if (!org) throw new NotFoundError("Invitation organization not found");
 

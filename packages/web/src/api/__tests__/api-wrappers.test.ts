@@ -81,6 +81,8 @@ describe("api wrapper paths", () => {
     await orgSettings.deleteSourceReposSetting("org/id");
     await organizations.getOrganization("org/id");
     await organizations.updateOrganization("org/id", { displayName: "Acme" });
+    await organizations.previewOrganizationDeletion("org/id");
+    await organizations.deleteOrganization("org/id");
     await overview.getOverview();
     await resources.listTeamResources();
     await resources.listTeamResourcesForOrg("org/id");
@@ -124,6 +126,8 @@ describe("api wrapper paths", () => {
       repos: [{ url: "https://github.com/acme/web.git" }],
     });
     expect(apiMock.patch).toHaveBeenCalledWith("/orgs/org%2Fid", { displayName: "Acme" });
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/delete-preview");
+    expect(apiMock.delete).toHaveBeenCalledWith("/orgs/org%2Fid");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/overview");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/resources");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/resources");

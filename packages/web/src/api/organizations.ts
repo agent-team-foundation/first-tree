@@ -1,4 +1,4 @@
-import type { Organization, UpdateOrganization } from "@first-tree/shared";
+import type { Organization, OrganizationDeletionImpact, UpdateOrganization } from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**
@@ -12,4 +12,12 @@ export function getOrganization(id: string): Promise<Organization> {
 
 export function updateOrganization(id: string, patch: UpdateOrganization): Promise<Organization> {
   return api.patch<Organization>(`/orgs/${encodeURIComponent(id)}`, patch);
+}
+
+export function previewOrganizationDeletion(id: string): Promise<OrganizationDeletionImpact> {
+  return api.get<OrganizationDeletionImpact>(`/orgs/${encodeURIComponent(id)}/delete-preview`);
+}
+
+export function deleteOrganization(id: string): Promise<OrganizationDeletionImpact> {
+  return api.delete<OrganizationDeletionImpact>(`/orgs/${encodeURIComponent(id)}`);
 }

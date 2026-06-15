@@ -219,7 +219,7 @@ export async function listActiveMemberships(db: Database, userId: string) {
     })
     .from(members)
     .innerJoin(organizations, eq(members.organizationId, organizations.id))
-    .where(and(eq(members.userId, userId), eq(members.status, "active")))
+    .where(and(eq(members.userId, userId), eq(members.status, "active"), eq(organizations.status, "active")))
     .orderBy(desc(members.createdAt));
   return rows;
 }
@@ -267,7 +267,15 @@ export async function findActiveMembership(db: Database, userId: string, organiz
   const [row] = await db
     .select({ memberId: members.id, role: members.role })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, organizationId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }

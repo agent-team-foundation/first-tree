@@ -53,3 +53,10 @@ export const organizationSchema = z.object({
   updatedAt: z.string(),
 });
 export type Organization = z.infer<typeof organizationSchema>;
+
+export const organizationDeletionImpactSchema = z.object({
+  activeMemberCount: z.number().int().min(0),
+  agentCount: z.number().int().min(0),
+  historyRetained: z.literal(true),
+});
+export type OrganizationDeletionImpact = z.infer<typeof organizationDeletionImpactSchema>;
