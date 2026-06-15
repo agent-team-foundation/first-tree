@@ -2,7 +2,7 @@ import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";
-import { summarizeContextTreeIo } from "../../services/context-tree-io.js";
+import { buildContextTreeIoSummary } from "../../services/context-tree-io.js";
 import {
   type ContextTreeBinding,
   contextTreeSnapshotWindowDays,
@@ -42,7 +42,11 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
       humanAgentId: scope.humanAgentId,
       memberId: scope.memberId,
     });
-    const io = await summarizeContextTreeIo(app.db, scope.organizationId, contextTreeSnapshotWindowDays(window), {
+    const windowDays = contextTreeSnapshotWindowDays(window);
+    // Reads come from telemetry; writes are the snapshot's git-derived rows
+    // reconciled against write telemetry for agent attribution (complete,
+    // PR merges included, deduped). See buildContextTreeIoSummary.
+    const io = await buildContextTreeIoSummary(app.db, scope.organizationId, windowDays, snapshot.io.writes, {
       humanAgentId: scope.humanAgentId,
       memberId: scope.memberId,
     });

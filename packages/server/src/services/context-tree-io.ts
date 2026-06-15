@@ -9,6 +9,7 @@ import {
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
+  type ContextTreeWriteEvent,
   canonicalGitRepoUrl,
   classifyShellCommandIo,
   contextTreeIoSourceSchema,
@@ -600,6 +601,151 @@ async function accessibleChatIdSet(db: Database, viewer: ContextTreeIoViewer, ch
   return accessible;
 }
 
+type ReconcileTelemetryWrite = {
+  agentId: string;
+  agentName: string;
+  agentAvatarColorToken: string | null;
+  createdAtMs: number;
+  createdAtIso: string;
+};
+
+// Normalize a tree path to a stable per-node key so git paths and telemetry
+// paths compare equal: `system/x.md`, `/system/x`, `system/x/NODE.md` all map
+// to `system/x`.
+function normalizeNodeKey(path: string | null): string {
+  if (!path) return "";
+  return path
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.md$/i, "")
+    .replace(/\/node$/i, "")
+    .toLowerCase();
+}
+
+function titleFromNodeKey(key: string): string {
+  const last = key.split("/").filter(Boolean).at(-1) ?? key;
+  return last.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function writeSortKey(event: ContextTreeWriteEvent): number {
+  if (!event.createdAt) return 0;
+  const parsed = Date.parse(event.createdAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+// Prefer the most recent telemetry writer at or before the landing commit (the
+// agent whose edit that commit captured); fall back to the latest writer when
+// none precedes the commit (e.g. the git timestamp is missing).
+function pickWriteAttribution(matches: ReconcileTelemetryWrite[], commitMs: number): ReconcileTelemetryWrite {
+  const beforeCommit = Number.isNaN(commitMs) ? [] : matches.filter((m) => m.createdAtMs <= commitMs);
+  const pool = beforeCommit.length > 0 ? beforeCommit : matches;
+  return pool.reduce((best, candidate) => (candidate.createdAtMs >= best.createdAtMs ? candidate : best));
+}
+
+/**
+ * Reconcile git-derived writes (complete, including PR merges, but lacking
+ * agent identity — git only knows the committer) with session write telemetry
+ * (which carries the agent that authored the change). Produces one row per
+ * changed node for the window:
+ *
+ *   - git write + matching telemetry → agent-attributed, with commit / PR / risk
+ *   - git write, no telemetry match   → honest git author + commit / PR (a human
+ *     or a GitHub merge identity; we do not invent an agent)
+ *   - telemetry write, no git commit  → in-flight agent write (no commit / PR)
+ *
+ * Dedupe key is the normalized node path within the window, so a worktree edit
+ * and the PR merge that lands it collapse into a single row instead of double-
+ * counting. Reuses the already-computed git `writes`; the only added cost is
+ * one indexed telemetry query, so the snapshot's git cache stays untouched.
+ */
+export async function reconcileContextTreeWrites(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  gitWrites: ContextTreeWriteEvent[],
+): Promise<ContextTreeWriteEvent[]> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const sinceIso = since.toISOString();
+  await backfillContextTreeIoSessionEvents(db, organizationId, since);
+
+  const writeRows = await db.execute<{
+    agent_id: string;
+    agent_name: string;
+    agent_avatar_color_token: string | null;
+    target_path: string;
+    created_at: Date | string;
+  }>(sql`
+    ${allEventsSql(organizationId, sinceIso)}
+    SELECT
+      all_events.agent_id,
+      all_events.agent_name,
+      all_events.agent_avatar_color_token,
+      all_events.target_path,
+      all_events.created_at
+    FROM all_events
+    WHERE all_events.action = 'write'
+    ORDER BY all_events.created_at ASC
+  `);
+
+  const telemetryByKey = new Map<string, ReconcileTelemetryWrite[]>();
+  for (const row of writeRows) {
+    const key = normalizeNodeKey(row.target_path);
+    if (!key) continue;
+    const iso = isoOrNull(row.created_at);
+    const createdAtMs = iso ? Date.parse(iso) : Number.NaN;
+    const list = telemetryByKey.get(key) ?? [];
+    list.push({
+      agentId: row.agent_id,
+      agentName: row.agent_name,
+      agentAvatarColorToken: row.agent_avatar_color_token,
+      createdAtMs: Number.isNaN(createdAtMs) ? 0 : createdAtMs,
+      createdAtIso: iso ?? new Date().toISOString(),
+    });
+    telemetryByKey.set(key, list);
+  }
+
+  const consumedKeys = new Set<string>();
+  const reconciled: ContextTreeWriteEvent[] = gitWrites.map((write) => {
+    const key = normalizeNodeKey(write.nodePath);
+    const matches = key ? telemetryByKey.get(key) : undefined;
+    if (!key || !matches || matches.length === 0) return write;
+    consumedKeys.add(key);
+    const commitMs = write.createdAt ? Date.parse(write.createdAt) : Number.NaN;
+    const attribution = pickWriteAttribution(matches, commitMs);
+    return {
+      ...write,
+      agentId: attribution.agentId,
+      agentName: attribution.agentName,
+      agentAvatarColorToken: attribution.agentAvatarColorToken,
+    };
+  });
+
+  for (const [key, matches] of telemetryByKey) {
+    if (consumedKeys.has(key)) continue;
+    const latest = matches.reduce((best, candidate) => (candidate.createdAtMs >= best.createdAtMs ? candidate : best));
+    reconciled.push({
+      id: `telemetry:${key}:${latest.createdAtIso}`,
+      nodeId: null,
+      nodePath: key,
+      title: titleFromNodeKey(key),
+      changeType: "edited",
+      summary: null,
+      riskLevel: "low",
+      authorName: null,
+      agentId: latest.agentId,
+      agentName: latest.agentName,
+      agentAvatarColorToken: latest.agentAvatarColorToken,
+      commit: null,
+      prNumber: null,
+      createdAt: latest.createdAtIso,
+    });
+  }
+
+  reconciled.sort((a, b) => writeSortKey(b) - writeSortKey(a));
+  return reconciled;
+}
+
 export async function summarizeContextTreeIo(
   db: Database,
   organizationId: string,
@@ -698,6 +844,7 @@ export async function summarizeContextTreeIo(
       all_events.created_at
     FROM all_events
     LEFT JOIN chats c ON c.id = all_events.chat_id AND c.organization_id = ${organizationId}
+    WHERE all_events.action = 'read'
     ORDER BY all_events.created_at DESC
     LIMIT ${CONTEXT_TREE_IO_FEED_LIMIT}
   `);
@@ -741,6 +888,30 @@ export async function summarizeContextTreeIo(
       lastWriteAt: isoOrNull(row.last_write_at),
     })),
     recentEvents,
+    // Writes are git-derived, not telemetry-derived. This service owns reads +
+    // the summary buckets + the per-agent table; `buildContextTreeIoSummary`
+    // fills `writes` via reconcileContextTreeWrites against the git history.
+    writes: [],
+    writesTotal: 0,
     skipped,
   };
+}
+
+/**
+ * Full IO summary for a snapshot route: telemetry-sourced reads / summary /
+ * agents / skipped, plus git-derived writes (the snapshot's `io.writes`)
+ * reconciled against write telemetry for agent attribution. Both the org-scoped
+ * and the user-primary-org snapshot routes go through here so the write feed
+ * never silently empties on one of them.
+ */
+export async function buildContextTreeIoSummary(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  gitWrites: ContextTreeWriteEvent[],
+  viewer?: ContextTreeIoViewer,
+): Promise<ContextTreeIoSummary> {
+  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer);
+  const writes = await reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites);
+  return { ...io, writes, writesTotal: writes.length };
 }

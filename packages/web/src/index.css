@@ -1373,6 +1373,121 @@
   color: var(--fg);
 }
 
+/* [All / Writes / Reads] scope filter. Pushed to the right edge of the feed
+ * header; a small segmented control. */
+.context-usage-feed-filter {
+  /* Rendered as a <fieldset> for grouping semantics — reset its default
+   * border/margin/padding so it behaves as a plain inline flex row. */
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+  display: inline-flex;
+  gap: var(--sp-0_5);
+}
+
+.context-usage-feed-filter-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+  padding: var(--sp-0_5) var(--sp-1_5);
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+}
+
+.context-usage-feed-filter-btn:hover {
+  color: var(--fg);
+}
+
+.context-usage-feed-filter-btn.is-active {
+  color: var(--fg);
+  border-color: var(--border-strong);
+  background: color-mix(in oklch, var(--fg) 8%, transparent);
+}
+
+/* Write rows carry more weight than reads — the ✎ glyph replaces the timeline
+ * dot in the first grid column, and the agent/node read a touch stronger. */
+.context-usage-feed-write-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-4);
+  color: var(--success);
+  font-size: 13px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.context-usage-feed-row.is-write .context-usage-feed-node {
+  color: var(--fg);
+}
+
+/* Unmatched git author: neutral disc with a dashed ring so it reads as "not a
+ * known agent" rather than a styled agent avatar. */
+.context-usage-feed-avatar.is-git {
+  background: var(--border-faint);
+  color: var(--fg-3);
+  border: 1px dashed var(--border-strong);
+}
+
+.context-usage-feed-summary {
+  color: var(--fg-3);
+}
+
+.context-usage-feed-pr {
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-0_75);
+  border-radius: var(--radius-chip);
+  background: color-mix(in oklch, var(--success) 14%, transparent);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.context-usage-feed-pr:hover {
+  text-decoration: underline;
+}
+
+.context-usage-feed-pr.is-static {
+  cursor: default;
+}
+
+.context-usage-feed-pr.is-static:hover {
+  text-decoration: none;
+}
+
+.context-usage-feed-risk {
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-0_75);
+  border-radius: var(--radius-chip);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.context-usage-feed-risk.is-high {
+  background: color-mix(in oklch, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.context-usage-feed-risk.is-medium {
+  background: color-mix(in oklch, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.context-usage-feed-unmatched {
+  margin-left: var(--sp-1);
+  color: var(--fg-4);
+  font-size: 11px;
+  font-style: italic;
+}
+
 @media (max-width: 760px) {
   .context-live-page {
     padding-right: var(--sp-3);

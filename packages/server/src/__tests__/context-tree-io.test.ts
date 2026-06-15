@@ -1,9 +1,11 @@
+import type { ContextTreeWriteEvent } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import {
   explainContextTreeIoDecision,
+  reconcileContextTreeWrites,
   recordFromSessionEvent,
   summarizeContextTreeIo,
   summarizeContextTreeIoSkippedEvents,
@@ -730,10 +732,96 @@ describe("context-tree IO service", () => {
     });
 
     const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
-    expect(summary.recentEvents[0]).toMatchObject({
-      action: "write",
-      source: "git_status_delta",
-      targetPath: "NODE.md",
-    });
+    // recentEvents is reads-only now: writes are git-derived and reconciled by
+    // the route, so the telemetry write must NOT appear in the reads feed. It is
+    // still recorded (asserted above) and still counts toward the write summary
+    // bucket, where reconcileContextTreeWrites reads it for agent attribution.
+    expect(summary.recentEvents.some((event) => event.source === "git_status_delta")).toBe(false);
+    expect(summary.recentEvents.every((event) => event.action === "read")).toBe(true);
+    expect(summary.summary.write.eventCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reconciles git writes with telemetry: attributes the agent, keeps unmatched git authors, surfaces telemetry-only writes", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    async function seedWriteTelemetry(targetPath: string, createdAt: string): Promise<void> {
+      const sourceId = `ev-${crypto.randomUUID()}`;
+      await app.db.insert(contextTreeIoEvents).values({
+        id: `cte-${crypto.randomUUID()}`,
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        sourceSessionEventId: sourceId,
+        runtimeProvider: "claude-code",
+        action: "write",
+        source: "claude_write_tool",
+        treeRepoUrl: TREE_REPO,
+        treeBranch: "main",
+        targetKind: "file",
+        targetPath,
+        createdAt: new Date(createdAt),
+      });
+    }
+
+    // gandy-coder edited `system/x` in its worktree (telemetry), and that change
+    // later landed as PR #514 (git). Same node → must collapse to one row.
+    await seedWriteTelemetry("system/x.md", "2026-06-15T09:00:00.000Z");
+    // An in-flight worktree edit with no landed commit in the git window.
+    await seedWriteTelemetry("members/y/NODE.md", "2026-06-15T08:00:00.000Z");
+
+    const base = {
+      nodeId: null,
+      title: "",
+      summary: null,
+      riskLevel: "low" as const,
+      agentId: null,
+      agentName: null,
+      agentAvatarColorToken: null,
+    };
+    const gitWrites: ContextTreeWriteEvent[] = [
+      {
+        ...base,
+        id: "c1:system/x.md",
+        nodePath: "system/x",
+        changeType: "edited",
+        authorName: "a-committer",
+        commit: "c".repeat(40),
+        prNumber: 514,
+        createdAt: "2026-06-15T10:00:00.000Z",
+      },
+      {
+        // A PR-merge commit telemetry never saw — stays an honest git author.
+        ...base,
+        id: "c2:system/merged.md",
+        nodePath: "system/merged",
+        changeType: "edited",
+        authorName: "GitHub",
+        commit: "d".repeat(40),
+        prNumber: 702,
+        createdAt: "2026-06-15T11:00:00.000Z",
+      },
+    ];
+
+    const writes = await reconcileContextTreeWrites(app.db, seed.organizationId, 7, gitWrites);
+
+    // system/x: git write reconciled to the agent that authored it; PR preserved;
+    // only ONE row for the node (telemetry edit + git landing collapsed).
+    const xRows = writes.filter((w) => w.nodePath === "system/x");
+    expect(xRows).toHaveLength(1);
+    expect(xRows[0]).toMatchObject({ agentId: seed.agent.uuid, prNumber: 514, commit: "c".repeat(40) });
+
+    // system/merged: no telemetry match → honest git author, null agent.
+    const mergedRow = writes.find((w) => w.nodePath === "system/merged");
+    expect(mergedRow).toMatchObject({ agentId: null, authorName: "GitHub", prNumber: 702 });
+
+    // members/y: telemetry-only write (no git commit) still surfaces, attributed,
+    // with no commit/PR.
+    const telemetryOnly = writes.find((w) => w.nodePath === "members/y");
+    expect(telemetryOnly).toBeDefined();
+    expect(telemetryOnly).toMatchObject({ agentId: seed.agent.uuid, commit: null, prNumber: null });
+
+    // Sorted newest-first by time (merged commit 11:00 is first).
+    expect(writes[0]?.nodePath).toBe("system/merged");
   });
 });
