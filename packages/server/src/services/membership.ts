@@ -277,8 +277,10 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
         mirrorName: agents.name,
       })
       .from(members)
+      .innerJoin(organizations, eq(organizations.id, members.organizationId))
       .innerJoin(users, eq(users.id, members.userId))
       .innerJoin(agents, eq(agents.uuid, members.agentId))
+      .where(eq(organizations.status, "active"))
       .for("update");
 
     let activeMirrorsRepaired = 0;

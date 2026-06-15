@@ -13,6 +13,7 @@ import {
 } from "../services/github-app-installations.js";
 import { ensureActiveInvitation } from "../services/invitation.js";
 import { createMeChat } from "../services/me-chat.js";
+import { repairMembershipHumanMirrors } from "../services/membership.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
@@ -172,6 +173,13 @@ describe("DELETE /api/v1/orgs/:orgId", () => {
       .where(eq(agentsTable.organizationId, orgId));
     expect(agentRows.length).toBeGreaterThan(0);
     expect(agentRows.every((row) => row.status === "deleted" && row.name === null)).toBe(true);
+
+    await repairMembershipHumanMirrors(app.db);
+    const agentRowsAfterRepair = await app.db
+      .select({ status: agentsTable.status, name: agentsTable.name })
+      .from(agentsTable)
+      .where(eq(agentsTable.organizationId, orgId));
+    expect(agentRowsAfterRepair.every((row) => row.status === "deleted" && row.name === null)).toBe(true);
 
     const [installationAfterDelete] = await app.db
       .select({ hubOrganizationId: githubAppInstallations.hubOrganizationId })
