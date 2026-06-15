@@ -169,7 +169,7 @@ describe("api wrapper paths", () => {
     await agentConfig.getAgentClientStatus("agent/id");
     await agentStatus.fetchChatAgentStatuses("chat/id");
 
-    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "nova" });
+    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "nova", addressableOnly: true });
     await agents.listAllAgents({ limit: 5, cursor: "older" });
     await agents.listManagedAgents();
     await agents.getAgent("agent/id");
@@ -264,7 +264,9 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
     expect(apiMock.post).toHaveBeenCalledWith("/agents/agent/id/config/dry-run", { payload: { gitRepos: [] } });
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova");
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova&addressableOnly=true",
+    );
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");

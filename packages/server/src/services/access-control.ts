@@ -14,7 +14,7 @@
  * (`requireAgentAccess(..., "manage")`), not visibility.
  */
 
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
+import { AGENT_STATUSES, AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, inArray, ne, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -30,6 +30,18 @@ export function agentVisibilityCondition(orgId: string, memberId: string): SQL {
     eq(agents.organizationId, orgId),
     ne(agents.status, AGENT_STATUSES.DELETED),
     or(eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION), eq(agents.managerId, memberId)),
+  ) as SQL;
+}
+
+/**
+ * SQL WHERE condition for identities that may be selected as new chat
+ * participants. Callers must join `members` as `members.agentId = agents.uuid`
+ * before composing this predicate.
+ */
+export function agentAddressableCondition(): SQL {
+  return and(
+    eq(agents.status, AGENT_STATUSES.ACTIVE),
+    or(ne(agents.type, AGENT_TYPES.HUMAN), eq(members.status, "active")),
   ) as SQL;
 }
 

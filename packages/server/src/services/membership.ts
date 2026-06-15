@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { AGENT_STATUSES, AGENT_TYPES } from "@first-tree/shared";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { recomputeWatchersForMember } from "./watcher.js";
@@ -15,6 +18,17 @@ import { recomputeWatchersForMember } from "./watcher.js";
  * self-service and don't share its admin invariants (e.g. "last admin can't
  * be demoted" doesn't apply to "last admin leaves").
  */
+
+export const MEMBER_STATUSES = {
+  ACTIVE: "active",
+  LEFT: "left",
+  REMOVED: "removed",
+} as const;
+
+export type MemberStatus = (typeof MEMBER_STATUSES)[keyof typeof MEMBER_STATUSES];
+
+// biome-ignore lint/suspicious/noExplicitAny: needed for cross-schema compatibility with transaction clients.
+type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 type CreateMembershipForUser = {
   userId: string;
@@ -35,10 +49,8 @@ export async function ensureMembership(db: Database, data: CreateMembershipForUs
     .limit(1);
 
   if (existing) {
-    if (existing.status === "left") {
-      // Re-activate the prior soft-deleted row. The human agent associated
-      // with it may be in any state — leave it alone; it gets refreshed
-      // implicitly when the member starts using the team again.
+    if (existing.status === MEMBER_STATUSES.LEFT) {
+      // Re-activate the prior soft-deleted row and its human-agent mirror.
       //
       // Rejoin starts a FRESH onboarding lifecycle for this membership: clear
       // the prior suppress/completion stamps so the auto-entry gate treats
@@ -46,26 +58,25 @@ export async function ensureMembership(db: Database, data: CreateMembershipForUs
       // would otherwise hide setup for what is effectively a newly joined
       // team — the exact failure mode the membership-scoped gate exists to
       // prevent.
-      await db
-        .update(members)
-        .set({
-          status: "active",
-          onboardingSuppressedAt: null,
-          onboardingSuppressedReason: null,
-          onboardingCompletedAt: null,
-        })
-        .where(eq(members.id, existing.id));
-      // Watcher rows: re-activated member regains visibility into chats
-      // where their managed non-human agents speak. recompute restores
-      // the rows that were dropped on the prior `left` flip.
-      await recomputeWatchersForMember(db, existing.id);
+      await db.transaction(async (tx) => {
+        await reactivateMembership(tx, existing, {
+          displayName: data.displayName,
+          username: data.username,
+          resetOnboarding: true,
+        });
+      });
       return {
         ...existing,
-        status: "active" as const,
+        status: MEMBER_STATUSES.ACTIVE,
         onboardingSuppressedAt: null,
         onboardingSuppressedReason: null,
         onboardingCompletedAt: null,
       };
+    }
+    if (existing.status === MEMBER_STATUSES.REMOVED) {
+      throw new ConflictError(
+        `Membership for user "${data.userId}" was removed by an admin and must be restored by an admin.`,
+      );
     }
     return existing;
   }
@@ -96,7 +107,7 @@ export async function ensureMembership(db: Database, data: CreateMembershipForUs
         organizationId: data.organizationId,
         agentId: agentUuid,
         role: data.role,
-        status: "active",
+        status: MEMBER_STATUSES.ACTIVE,
       })
       .returning();
     if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
@@ -112,6 +123,197 @@ function sanitizeAgentName(login: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "user"
   );
+}
+
+type ExistingMembershipForLifecycle = {
+  id: string;
+  agentId: string;
+  organizationId: string;
+  status: string;
+};
+
+type ReactivateMembershipOptions = {
+  displayName: string;
+  username: string;
+  role?: "admin" | "member";
+  resetOnboarding?: boolean;
+};
+
+/**
+ * Restore an inactive member and its 1:1 human-agent mirror. The member row is
+ * preserved so historical chats, authorship, and ownership references keep the
+ * same stable ids across leave/rejoin and admin restore.
+ */
+export async function reactivateMembership(
+  db: DbLike,
+  existing: ExistingMembershipForLifecycle,
+  options: ReactivateMembershipOptions,
+): Promise<void> {
+  const memberUpdate = {
+    ...(options.role ? { role: options.role } : {}),
+    status: MEMBER_STATUSES.ACTIVE,
+    ...(options.resetOnboarding
+      ? {
+          onboardingSuppressedAt: null,
+          onboardingSuppressedReason: null,
+          onboardingCompletedAt: null,
+        }
+      : {}),
+  };
+  await db.update(members).set(memberUpdate).where(eq(members.id, existing.id));
+
+  const [mirror] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(eq(agents.uuid, existing.agentId))
+    .limit(1);
+  if (mirror?.name === null) {
+    const restoredName = await resolveRestoredAgentName(db, existing, options.username);
+    await db
+      .update(agents)
+      .set({
+        status: AGENT_STATUSES.ACTIVE,
+        displayName: options.displayName,
+        name: restoredName,
+        clientId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(agents.uuid, existing.agentId));
+  } else {
+    await db
+      .update(agents)
+      .set({
+        status: AGENT_STATUSES.ACTIVE,
+        displayName: options.displayName,
+        clientId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(agents.uuid, existing.agentId));
+  }
+
+  await recomputeWatchersForMember(db, existing.id);
+}
+
+async function resolveRestoredAgentName(
+  db: DbLike,
+  existing: Pick<ExistingMembershipForLifecycle, "agentId" | "organizationId">,
+  username: string,
+): Promise<string> {
+  const base = sanitizeAgentName(username);
+  const suffixes = ["", existing.agentId.slice(0, 8), randomBytes(2).toString("hex")];
+  for (const suffix of suffixes) {
+    const candidate = suffix ? appendAgentNameSuffix(base, suffix) : base;
+    const [collision] = await db
+      .select({ uuid: agents.uuid })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, existing.organizationId),
+          eq(agents.name, candidate),
+          ne(agents.uuid, existing.agentId),
+        ),
+      )
+      .limit(1);
+    if (!collision) return candidate;
+  }
+  return appendAgentNameSuffix(base, randomBytes(4).toString("hex"));
+}
+
+function appendAgentNameSuffix(base: string, suffix: string): string {
+  const maxNameLength = 64;
+  const roomForBase = maxNameLength - suffix.length - 1;
+  return `${base.slice(0, Math.max(1, roomForBase))}-${suffix}`;
+}
+
+/**
+ * Move a membership out of the active roster while preserving its identity.
+ * The human mirror becomes suspended, not deleted, so names and historical
+ * attribution remain intact and a future explicit restore can reactivate the
+ * same member+agent pair.
+ */
+export async function deactivateMembership(
+  db: DbLike,
+  memberId: string,
+  status: typeof MEMBER_STATUSES.LEFT | typeof MEMBER_STATUSES.REMOVED,
+) {
+  const [existing] = await db.select().from(members).where(eq(members.id, memberId)).limit(1);
+  if (!existing) throw new NotFoundError(`Membership "${memberId}" not found`);
+  if (existing.status !== MEMBER_STATUSES.ACTIVE && existing.status !== status) {
+    throw new ConflictError(`Membership "${memberId}" is not active`);
+  }
+
+  if (existing.status !== status) {
+    await db.update(members).set({ status }).where(eq(members.id, memberId));
+  }
+  await db
+    .update(agents)
+    .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })
+    .where(eq(agents.uuid, existing.agentId));
+  await recomputeWatchersForMember(db, memberId);
+  return { ...existing, status };
+}
+
+export type MembershipMirrorRepairResult = {
+  activeMirrorsRepaired: number;
+  inactiveMirrorsRepaired: number;
+};
+
+/**
+ * Idempotent startup repair for rows produced before membership removal used
+ * the suspended-mirror model. Active members must have an active, named human
+ * mirror; inactive memberships keep the mirror named but suspended.
+ */
+export async function repairMembershipHumanMirrors(db: Database): Promise<MembershipMirrorRepairResult> {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        memberId: members.id,
+        memberStatus: members.status,
+        agentId: members.agentId,
+        organizationId: members.organizationId,
+        username: users.username,
+        mirrorType: agents.type,
+        mirrorStatus: agents.status,
+        mirrorName: agents.name,
+      })
+      .from(members)
+      .innerJoin(users, eq(users.id, members.userId))
+      .innerJoin(agents, eq(agents.uuid, members.agentId))
+      .for("update");
+
+    let activeMirrorsRepaired = 0;
+    let inactiveMirrorsRepaired = 0;
+    for (const row of rows) {
+      const desiredStatus =
+        row.memberStatus === MEMBER_STATUSES.ACTIVE ? AGENT_STATUSES.ACTIVE : AGENT_STATUSES.SUSPENDED;
+      const needsRepair =
+        row.mirrorType !== AGENT_TYPES.HUMAN || row.mirrorStatus !== desiredStatus || row.mirrorName === null;
+      if (!needsRepair) continue;
+
+      const restoredName =
+        row.mirrorName ??
+        (await resolveRestoredAgentName(
+          tx,
+          { agentId: row.agentId, organizationId: row.organizationId },
+          row.username,
+        ));
+      await tx
+        .update(agents)
+        .set({
+          type: AGENT_TYPES.HUMAN,
+          status: desiredStatus,
+          name: restoredName,
+          clientId: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(agents.uuid, row.agentId));
+
+      if (row.memberStatus === MEMBER_STATUSES.ACTIVE) activeMirrorsRepaired += 1;
+      else inactiveMirrorsRepaired += 1;
+    }
+
+    return { activeMirrorsRepaired, inactiveMirrorsRepaired };
+  });
 }
 
 type CreatePersonalTeamInput = {
@@ -202,7 +404,7 @@ async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string,
   return candidate;
 }
 
-/** List ACTIVE memberships (omit soft-deleted "left") for a user. */
+/** List ACTIVE memberships (omit soft-deleted "left"/"removed") for a user. */
 export async function listActiveMemberships(db: Database, userId: string) {
   const rows = await db
     .select({
@@ -219,7 +421,7 @@ export async function listActiveMemberships(db: Database, userId: string) {
     })
     .from(members)
     .innerJoin(organizations, eq(members.organizationId, organizations.id))
-    .where(and(eq(members.userId, userId), eq(members.status, "active")))
+    .where(and(eq(members.userId, userId), eq(members.status, MEMBER_STATUSES.ACTIVE)))
     .orderBy(desc(members.createdAt));
   return rows;
 }
@@ -240,7 +442,7 @@ export async function countActiveMembersByOrgs(db: Database, organizationIds: st
       count: sql<number>`count(*)::int`,
     })
     .from(members)
-    .where(and(inArray(members.organizationId, organizationIds), eq(members.status, "active")))
+    .where(and(inArray(members.organizationId, organizationIds), eq(members.status, MEMBER_STATUSES.ACTIVE)))
     .groupBy(members.organizationId);
   return new Map(rows.map((r) => [r.organizationId, r.count]));
 }
@@ -256,7 +458,7 @@ export async function pickPrimaryMembership(db: Database, userId: string) {
 
 /**
  * Look up a user's ACTIVE membership in a specific org. Returns null when
- * the user isn't a member there (or their row is soft-deleted `left`).
+ * the user isn't a member there (or their row is inactive).
  *
  * Used by the OAuth callback to re-check that a `targetOrganizationId`
  * carried in the signed state still names an org the user can administer
@@ -267,7 +469,13 @@ export async function findActiveMembership(db: Database, userId: string, organiz
   const [row] = await db
     .select({ memberId: members.id, role: members.role })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, organizationId),
+        eq(members.status, MEMBER_STATUSES.ACTIVE),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }
@@ -285,15 +493,7 @@ export async function findActiveMembership(db: Database, userId: string, organiz
  * the chats from their `/me/chats` watching list.
  */
 export async function leaveOrganization(db: Database, memberId: string) {
-  const [existing] = await db.select().from(members).where(eq(members.id, memberId)).limit(1);
-  if (!existing) throw new NotFoundError(`Membership "${memberId}" not found`);
-  if (existing.status === "left") return existing;
-  await db.update(members).set({ status: "left" }).where(eq(members.id, memberId));
-  // Watcher rows anchored to this member's managed non-human agents drop
-  // off — they pivot through the now-inactive member, so the active-member
-  // predicate filters them out on the next recompute.
-  await recomputeWatchersForMember(db, memberId);
-  return { ...existing, status: "left" as const };
+  return deactivateMembership(db, memberId, MEMBER_STATUSES.LEFT);
 }
 
 /**

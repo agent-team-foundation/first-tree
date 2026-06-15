@@ -1,4 +1,4 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
+import { AGENT_STATUSES, AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -281,9 +281,10 @@ export async function assertAgentManageableByUser(db: Database, userId: string, 
 }
 
 /**
- * Assert every agent in `agentIds` is visible to `scope` and lives in
- * `scope.organizationId`. Used by chat-create to keep visibility rules out of
- * the service layer's signature.
+ * Assert every agent in `agentIds` is visible to `scope`, lives in
+ * `scope.organizationId`, and is eligible to become a new chat participant.
+ * Used by chat-create to keep visibility rules out of the service layer's
+ * signature.
  */
 export async function assertAllAgentsVisibleInOrg(db: Database, scope: OrgScope, agentIds: string[]): Promise<void> {
   if (agentIds.length === 0) return;
@@ -295,14 +296,18 @@ export async function assertAllAgentsVisibleInOrg(db: Database, scope: OrgScope,
       visibility: agents.visibility,
       managerId: agents.managerId,
       status: agents.status,
+      type: agents.type,
+      memberStatus: members.status,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, agentIds));
 
   const byId = new Map(rows.map((r) => [r.uuid, r]));
   for (const id of agentIds) {
     const row = byId.get(id);
-    if (!row || row.status === AGENT_STATUSES.DELETED) {
+    const inactiveHumanMirror = row?.type === AGENT_TYPES.HUMAN && row.memberStatus !== "active";
+    if (!row || row.status !== AGENT_STATUSES.ACTIVE || inactiveHumanMirror) {
       throw new NotFoundError(`Agent "${id}" not found`);
     }
     if (row.organizationId !== scope.organizationId) {

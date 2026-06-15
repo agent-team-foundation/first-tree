@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import type { CreateMember, UpdateMember } from "@first-tree/shared";
+import { AGENT_STATUSES, AGENT_TYPES, type CreateMember, type UpdateMember } from "@first-tree/shared";
 import bcrypt from "bcrypt";
-import { and, desc, eq, inArray, max, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, max, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -10,6 +10,10 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { createAgent } from "./agent.js";
+import { forceDisconnect } from "./connection-manager.js";
+import { MEMBER_STATUSES, reactivateMembership } from "./membership.js";
+import * as presenceService from "./presence.js";
+import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
 
 const SALT_ROUNDS = 10;
 
@@ -54,7 +58,30 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       .where(and(eq(members.userId, existingUser.id), eq(members.organizationId, orgId)))
       .limit(1);
     if (existingMember) {
-      throw new ConflictError(`User "${data.username}" is already a member of this organization`);
+      if (existingMember.status === MEMBER_STATUSES.ACTIVE) {
+        throw new ConflictError(`User "${data.username}" is already a member of this organization`);
+      }
+      if (existingMember.status !== MEMBER_STATUSES.LEFT && existingMember.status !== MEMBER_STATUSES.REMOVED) {
+        throw new ConflictError(`User "${data.username}" has an unsupported membership status`);
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.update(users).set({ displayName: data.displayName }).where(eq(users.id, existingUser.id));
+        await reactivateMembership(tx, existingMember, {
+          displayName: data.displayName,
+          username: data.username,
+          role: data.role ?? "member",
+          resetOnboarding: true,
+        });
+      });
+
+      const member = await getMember(db, existingMember.id);
+      return {
+        ...member,
+        username: data.username,
+        displayName: data.displayName,
+        notice: "Existing user — use their current password to log in",
+      };
     }
   }
 
@@ -127,13 +154,14 @@ export async function listMembers(db: Database, orgId: string) {
       organizationId: members.organizationId,
       agentId: members.agentId,
       role: members.role,
+      status: members.status,
       createdAt: members.createdAt,
       username: users.username,
       displayName: users.displayName,
     })
     .from(members)
     .innerJoin(users, eq(members.userId, users.id))
-    .where(eq(members.organizationId, orgId))
+    .where(and(eq(members.organizationId, orgId), eq(members.status, MEMBER_STATUSES.ACTIVE)))
     .orderBy(desc(members.createdAt));
 
   const lastActive = await lastActiveByAgent(
@@ -155,6 +183,7 @@ export async function getMember(db: Database, id: string) {
       organizationId: members.organizationId,
       agentId: members.agentId,
       role: members.role,
+      status: members.status,
       createdAt: members.createdAt,
       username: users.username,
       displayName: users.displayName,
@@ -175,6 +204,9 @@ export async function updateMember(db: Database, id: string, data: UpdateMember,
   // tenant. The route layer supplies its own org id; without a match we
   // 404 to avoid leaking that the member exists.
   if (callerOrgId && current.organizationId !== callerOrgId) {
+    throw new NotFoundError(`Member "${id}" not found`);
+  }
+  if (current.status !== MEMBER_STATUSES.ACTIVE) {
     throw new NotFoundError(`Member "${id}" not found`);
   }
 
@@ -225,41 +257,97 @@ export async function updateOwnProfile(db: Database, userId: string, displayName
 }
 
 export async function deleteMember(db: Database, id: string, callerOrgId: string) {
-  const member = await getMember(db, id);
-  // A cross-org admin should never be able to delete a member in another
-  // tenant. Return 404 to avoid leaking that the member exists.
-  if (member.organizationId !== callerOrgId) {
-    throw new NotFoundError(`Member "${id}" not found`);
+  const transferredAgentIds = await db.transaction(async (tx) => {
+    const [targetRef] = await tx
+      .select({ organizationId: members.organizationId })
+      .from(members)
+      .where(eq(members.id, id))
+      .limit(1);
+    // A cross-org admin should never be able to delete a member in another
+    // tenant. Return 404 to avoid leaking that the member exists.
+    if (!targetRef || targetRef.organizationId !== callerOrgId) {
+      throw new NotFoundError(`Member "${id}" not found`);
+    }
+
+    const activeAdmins = await tx
+      .select({ id: members.id })
+      .from(members)
+      .where(
+        and(
+          eq(members.organizationId, callerOrgId),
+          eq(members.role, "admin"),
+          eq(members.status, MEMBER_STATUSES.ACTIVE),
+        ),
+      )
+      .orderBy(asc(members.id))
+      .for("update");
+
+    const [member] = await tx
+      .select({
+        id: members.id,
+        organizationId: members.organizationId,
+        role: members.role,
+        status: members.status,
+        agentId: members.agentId,
+      })
+      .from(members)
+      .where(eq(members.id, id))
+      .for("update")
+      .limit(1);
+    if (!member || member.organizationId !== callerOrgId || member.status !== MEMBER_STATUSES.ACTIVE) {
+      throw new NotFoundError(`Member "${id}" not found`);
+    }
+
+    // Prevent deleting the last admin. The active-admin rows are locked in a
+    // deterministic order above, so concurrent admin removals serialize before
+    // this check and fallback selection.
+    const fallback = activeAdmins.find((admin) => admin.id !== id);
+    if (member.role === "admin" && !fallback) {
+      throw new BadRequestError("Cannot remove the last admin from the organization");
+    }
+    if (!fallback) {
+      throw new ConflictError(
+        `Cannot delete member "${id}" — another admin must exist in the organization to inherit their agents.`,
+      );
+    }
+
+    // Reassign every non-human agent managed by this member to another active
+    // admin in the org. The member's human mirror stays attached to the member
+    // row and is suspended by the membership lifecycle update below.
+    // managerId is NOT NULL after the unified-user-token milestone, so we can
+    // never clear it — a sibling admin takes over.
+    const transferred = await tx
+      .update(agents)
+      .set({ managerId: fallback.id, clientId: null, updatedAt: new Date() })
+      .where(and(eq(agents.managerId, id), ne(agents.type, AGENT_TYPES.HUMAN)))
+      .returning({ uuid: agents.uuid });
+
+    for (const { uuid } of transferred) {
+      await recomputeWatchersForAgent(tx, uuid);
+    }
+
+    const [deactivated] = await tx
+      .update(members)
+      .set({ status: MEMBER_STATUSES.REMOVED })
+      .where(and(eq(members.id, id), eq(members.status, MEMBER_STATUSES.ACTIVE)))
+      .returning({ id: members.id });
+    if (!deactivated) {
+      throw new ConflictError(`Membership "${id}" is not active`);
+    }
+    await tx
+      .update(agents)
+      .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })
+      .where(eq(agents.uuid, member.agentId));
+    await recomputeWatchersForMember(tx, id);
+    return transferred.map((agent) => agent.uuid);
+  });
+
+  for (const agentId of transferredAgentIds) {
+    forceDisconnect(agentId, "member_removed");
+    await presenceService.unbindAgent(db, agentId);
   }
 
-  // Prevent deleting the last admin
-  if (member.role === "admin") {
-    await assertNotLastAdmin(db, member.organizationId, id);
-  }
-
-  // Reassign every agent managed by this member to another admin in the org.
-  // managerId is NOT NULL after the unified-user-token milestone, so we can
-  // never clear it — a sibling admin takes over (assertNotLastAdmin above
-  // guarantees at least one remains).
-  const [fallback] = await db
-    .select({ id: members.id })
-    .from(members)
-    .where(and(eq(members.organizationId, member.organizationId), eq(members.role, "admin"), ne(members.id, id)))
-    .limit(1);
-  if (!fallback) {
-    throw new ConflictError(
-      `Cannot delete member "${id}" — another admin must exist in the organization to inherit their agents.`,
-    );
-  }
-  await db.update(agents).set({ managerId: fallback.id }).where(eq(agents.managerId, id));
-
-  // Mark the member's human agent as deleted
-  await db.update(agents).set({ status: "deleted", name: null }).where(eq(agents.uuid, member.agentId));
-
-  // Delete member record
-  await db.delete(members).where(eq(members.id, id));
-
-  // Note: user record is kept (for multi-org future — user may belong to other orgs)
+  // Note: user record is kept (for multi-org future — user may belong to other orgs).
 }
 
 /** Throw if this is the last admin in the organization. */
@@ -267,7 +355,14 @@ async function assertNotLastAdmin(db: Database, orgId: string, excludeMemberId: 
   const [otherAdmin] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin"), ne(members.id, excludeMemberId)))
+    .where(
+      and(
+        eq(members.organizationId, orgId),
+        eq(members.role, "admin"),
+        eq(members.status, MEMBER_STATUSES.ACTIVE),
+        ne(members.id, excludeMemberId),
+      ),
+    )
     .limit(1);
 
   if (!otherAdmin) {

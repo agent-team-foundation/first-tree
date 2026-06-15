@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createAgent } from "../services/agent.js";
+import { createAgent, getAgent } from "../services/agent.js";
 import { addParticipant, createChat } from "../services/chat.js";
 import { buildClientMessagePayload, buildClientMessagePayloadsForInbox } from "../services/message-dispatcher.js";
 import { createAdminContext, createTestApp } from "./helpers.js";
 
 let app: FastifyInstance;
-let ctx: { memberId: string; clientId: string };
+let ctx: { memberId: string; clientId: string; humanAgentUuid: string };
 
 beforeAll(async () => {
   app = await createTestApp();
@@ -154,11 +154,8 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
   });
 
   it("human↔agent two-speaker chat → 'mention_only' wire value (no v1 'full' derivation)", async () => {
-    const human = await createAgent(app.db, {
-      name: `rmode-hum-${Date.now()}`,
-      type: "human",
-      managerId: ctx.memberId,
-    });
+    const human = await getAgent(app.db, ctx.humanAgentUuid);
+    if (!human) throw new Error("expected admin human mirror");
     const agent = await createAgent(app.db, {
       name: `rmode-agt-${Date.now()}`,
       type: "agent",
