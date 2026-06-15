@@ -596,13 +596,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * current HEAD is strictly ahead of the resolved branch tip on the *same*
    * lineage — i.e. someone committed local work on top of the tracked branch.
    * `checkout -B` would orphan those commits, so we refuse and leave the
-   * checkout as-is. A diverged/unrelated HEAD (e.g. after an origin repoint) is
-   * NOT ahead-on-the-same-lineage, so it still resets cleanly. A pinned SHA
-   * `ref` is explicit operator intent and is always applied.
+   * checkout as-is. Disable that guard after an origin URL repoint: the current
+   * HEAD belongs to the previously configured source, and distinct repos can
+   * still share history (forks/templates), so serving it as the new source would
+   * be wrong. A pinned SHA `ref` is explicit operator intent and is always
+   * applied.
    */
   async function updateToLatest(
     absTarget: string,
     ref: string | undefined,
+    opts: { protectLocalCommits?: boolean } = {},
   ): Promise<"applied" | "skipped-local-commits"> {
     if (ref && looksLikeCommitSha(ref)) {
       if (await gitOk(["cat-file", "-e", ref], absTarget, 10_000)) {
@@ -623,24 +626,31 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         `Cannot update "${absTarget}": remote-tracking ref "${remoteRef}" not found after fetch.`,
       );
     }
-    // Data-loss guard: skip the destructive reset when HEAD carries commits the
-    // remote tip does NOT contain, on a *shared* history — i.e. local work
-    // committed on top of (or diverged from) the tracked branch. `checkout -B`
-    // would orphan those commits.
-    //   - related (common ancestor exists) AND HEAD not an ancestor of remote
-    //     → HEAD has its own commits → SKIP.
-    //   - HEAD is an ancestor of remote (fast-forward, incl. equal)        → reset.
-    //   - unrelated history (no common ancestor, e.g. origin repointed at a
-    //     different repo)                                                  → reset.
-    const related = await gitOk(["merge-base", remoteRef, "HEAD"], absTarget, 10_000);
-    const headIsAncestorOfRemote = await gitOk(["merge-base", "--is-ancestor", "HEAD", remoteRef], absTarget, 10_000);
-    if (related && !headIsAncestorOfRemote) {
-      return "skipped-local-commits";
+    if (opts.protectLocalCommits !== false) {
+      // Data-loss guard: skip the destructive reset when HEAD carries commits
+      // the remote tip does NOT contain, on a *shared* history — i.e. local
+      // work committed on top of (or diverged from) the tracked branch.
+      // `checkout -B` would orphan those commits.
+      //   - related (common ancestor exists) AND HEAD not an ancestor of remote
+      //     → HEAD has its own commits → SKIP.
+      //   - HEAD is an ancestor of remote (fast-forward, incl. equal) → reset.
+      //   - unrelated history (no common ancestor) → reset.
+      const related = await gitOk(["merge-base", remoteRef, "HEAD"], absTarget, 10_000);
+      const headIsAncestorOfRemote = await gitOk(["merge-base", "--is-ancestor", "HEAD", remoteRef], absTarget, 10_000);
+      if (related && !headIsAncestorOfRemote) {
+        return "skipped-local-commits";
+      }
     }
     // `checkout -B` with a clean tree moves the local branch to the remote tip
     // and updates the working tree. Force-guards against a transient index lock.
     await git(["checkout", "-B", branch, remoteRef], absTarget, cloneTimeoutMs);
     return "applied";
+  }
+
+  function repointBlockedError(absTarget: string, url: string, reason: string): GitMirrorError {
+    return new GitMirrorError(
+      `Cannot repoint source-repo target "${absTarget}" to "${url}" because ${reason}; refusing to serve the previous source as the configured source.`,
+    );
   }
 
   return {
@@ -703,6 +713,14 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         // fails, the local checkout is the OLD repo's content and must NOT be
         // served as the newly-configured source.
         const originMatchedBeforeFetch = await originCanonicallyMatches(absTarget, url);
+        if (!originMatchedBeforeFetch) {
+          if (activelyInUse) {
+            throw repointBlockedError(absTarget, url, "another live session is using the checkout");
+          }
+          if (await isDirty(absTarget)) {
+            throw repointBlockedError(absTarget, url, "the checkout has local changes");
+          }
+        }
         try {
           await reconcileOrigin(absTarget, url);
           await fetchClone(absTarget, url);
@@ -773,10 +791,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         }
 
         if (activelyInUse) {
+          if (!originMatchedBeforeFetch) {
+            throw repointBlockedError(absTarget, url, "another live session is using the checkout");
+          }
           log?.debug({ clonePath: absTarget }, "source-repo update skipped — another live session is using it");
           return finish("skipped-in-use");
         }
         if (await isDirty(absTarget)) {
+          if (!originMatchedBeforeFetch) {
+            throw repointBlockedError(absTarget, url, "the checkout has local changes");
+          }
           log?.warn(
             { clonePath: absTarget },
             "source-repo has local changes — leaving at current commit, not updating to latest",
@@ -785,7 +809,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         }
 
         const before = await headCommit(absTarget);
-        const update = await updateToLatest(absTarget, ref);
+        const update = await updateToLatest(absTarget, ref, { protectLocalCommits: originMatchedBeforeFetch });
         if (update === "skipped-local-commits") {
           log?.warn(
             { clonePath: absTarget },
