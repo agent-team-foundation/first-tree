@@ -159,7 +159,17 @@ function isDirectory(path: string): boolean {
 }
 
 function isGitRepoDir(path: string): boolean {
-  return isDirectory(path) && existsSync(join(path, ".git"));
+  if (!isDirectory(path)) {
+    return false;
+  }
+  // Normal working-tree checkout: a `.git` entry (directory or gitfile).
+  if (existsSync(join(path, ".git"))) {
+    return true;
+  }
+  // Bare clone — the agent-managed `source-repos/<name>` shape. Git metadata
+  // (HEAD, objects/, refs/) lives directly at the repo path with no `.git/`,
+  // so the `.git` check alone would miss every agent-managed source clone.
+  return existsSync(join(path, "HEAD")) && isDirectory(join(path, "objects")) && isDirectory(join(path, "refs"));
 }
 
 function listImmediateChildDirs(root: string): string[] {
