@@ -31,6 +31,8 @@ export {
   checkWebSocket,
   printResults,
   reconcileAgentConfigs,
+  runtimeProviderCheck,
+  runtimeProviderChecks,
 } from "./doctor.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.

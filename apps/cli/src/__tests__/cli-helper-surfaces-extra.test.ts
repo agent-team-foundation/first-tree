@@ -16,12 +16,14 @@ const doctorCoreMocks = vi.hoisted(() => ({
   ensureFreshAccessToken: vi.fn(),
   reconcileAgentConfigs: vi.fn(),
   resolveServerUrl: vi.fn(),
+  runtimeProviderChecks: vi.fn(),
 }));
 
 const clientMocks = vi.hoisted(() => ({
   FirstTreeHubSDK: vi.fn(),
   ClientOrgMismatchError: class ClientOrgMismatchError extends Error {},
   createLogger: vi.fn(),
+  probeCapabilities: vi.fn(),
 }));
 
 const configMocks = vi.hoisted(() => ({
@@ -85,6 +87,8 @@ beforeEach(() => {
   doctorCoreMocks.ensureFreshAccessToken.mockResolvedValue("token");
   doctorCoreMocks.reconcileAgentConfigs.mockResolvedValue({ label: "Agents", ok: true, detail: "reconciled" });
   doctorCoreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
+  doctorCoreMocks.runtimeProviderChecks.mockReturnValue([{ label: "codex", ok: true, detail: "ok — bundled" }]);
+  clientMocks.probeCapabilities.mockResolvedValue({});
   configMocks.initConfig.mockResolvedValue({ client: { id: "client-1" } });
   clientMocks.FirstTreeHubSDK.mockImplementation(() => ({ listMyAgents: vi.fn(async () => []) }));
   clientMocks.createLogger.mockReturnValue({ warn: vi.fn() });
@@ -157,6 +161,7 @@ describe("doctor checks and agent resolver", () => {
       { label: "Agents", ok: true, detail: "reconciled" },
       { label: "WebSocket", ok: true, detail: "ok" },
       { label: "Service", ok: true, detail: "running" },
+      { label: "codex", ok: true, detail: "ok — bundled" },
     ]);
     expect(configMocks.resetConfig).toHaveBeenCalled();
     expect(configMocks.resetConfigMeta).toHaveBeenCalled();

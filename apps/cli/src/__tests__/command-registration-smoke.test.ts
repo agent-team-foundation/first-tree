@@ -82,6 +82,7 @@ describe("CLI command registration", () => {
     expect(subcommands(root, "daemon")).toEqual([
       "doctor",
       "home-info",
+      "probe",
       "refresh-unit",
       "restart",
       "start",
