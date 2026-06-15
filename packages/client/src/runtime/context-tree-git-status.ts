@@ -63,7 +63,10 @@ export function createContextTreeGitWriteTracker(options: TrackerOptions): Conte
   function captureBaseline(): void {
     baseline = options.contextTreePath ? gitStatus(options.contextTreePath) : null;
     if (baseline === null && options.contextTreePath) {
-      options.log?.("Context Tree git write tracker disabled: git status baseline failed");
+      // Under the agent-managed-repos model the context tree clone may not
+      // exist yet at session start — the agent clones it on first use per its
+      // briefing protocol. Do not log a "disabled" message here; the lazy
+      // re-baseline path below will pick the clone up once it appears.
     }
   }
 
@@ -74,7 +77,22 @@ export function createContextTreeGitWriteTracker(options: TrackerOptions): Conte
     refsForSuccessfulToolCall(input): ToolFileRef[] {
       const contextTreePath = options.contextTreePath;
       const contextTreeRepoUrl = options.contextTreeRepoUrl;
-      if (!contextTreePath || !contextTreeRepoUrl || baseline === null) return [];
+      if (!contextTreePath || !contextTreeRepoUrl) return [];
+
+      // Lazy re-baseline: when the tracker was constructed before the agent
+      // cloned the context tree (fresh-bind first turn), the initial
+      // captureBaseline() saw no directory and left `baseline = null`.
+      // Without recovery every subsequent tool call would short-circuit and
+      // the session would silently report no tree writes until either a
+      // resume reconstructed the tracker or an explicit captureBaseline()
+      // ran. Recover here by treating a freshly-appeared clone as having an
+      // empty baseline (the clone was just minted, so anything dirty in it
+      // is necessarily this session's work) and continuing to the diff.
+      if (baseline === null) {
+        const lateBaseline = gitStatus(contextTreePath);
+        if (lateBaseline === null) return [];
+        baseline = [];
+      }
 
       const current = gitStatus(contextTreePath);
       if (current === null) {

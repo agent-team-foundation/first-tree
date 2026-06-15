@@ -135,7 +135,13 @@ describe("agentRuntimeConfigPayloadSchema validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects duplicate git repo local paths (derived)", () => {
+  it("tolerates duplicate git repo local paths on read (derived)", () => {
+    // gitRepos is no longer writable through the config payload (PATCH rejects
+    // it), so this read-side schema only sees gitRepos as carried-forward legacy
+    // data — and `commitWrite` re-parses the whole payload on every unrelated
+    // edit. A collision must NOT throw here; runtime uniqueness is enforced
+    // gracefully by the resources service's `applyRepoLocalPathDedup`. See
+    // `payloadDuplicatesRefinement` (PR #1048).
     const result = agentRuntimeConfigPayloadSchema.safeParse({
       prompt: { append: "" },
       model: "",
@@ -143,7 +149,7 @@ describe("agentRuntimeConfigPayloadSchema validation", () => {
       env: [],
       gitRepos: [{ url: "https://github.com/foo/bar.git" }, { url: "git@github.com:other/bar.git" }],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("rejects unknown root field (strict)", () => {

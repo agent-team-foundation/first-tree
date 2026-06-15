@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { AddParticipant, LegacyCreateChat, SendMessage } from "@first-tree/shared";
+import {
+  type AddParticipant,
+  AGENT_STATUSES,
+  AGENT_TYPES,
+  type LegacyCreateChat,
+  type SendMessage,
+} from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -71,6 +77,7 @@ type AgentIdentityForCreate = {
   organizationId: string;
   type: string;
   status: string;
+  memberStatus: string | null;
   visibility: string;
   managerId: string;
 };
@@ -128,10 +135,13 @@ async function createLegacyEmptyChat(
       id: agents.uuid,
       organizationId: agents.organizationId,
       type: agents.type,
+      status: agents.status,
+      memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
   if (existingAgents.length !== allParticipantIds.size) {
@@ -150,6 +160,12 @@ async function createLegacyEmptyChat(
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
+  }
+  const inactive = existingAgents.filter(
+    (a) => a.status !== AGENT_STATUSES.ACTIVE || (a.type === AGENT_TYPES.HUMAN && a.memberStatus !== "active"),
+  );
+  if (inactive.length > 0) {
+    throw new BadRequestError(`Cannot create chat with inactive participant "${inactive[0]?.id}".`);
   }
 
   // Owner-exclusive rule for private targets (RFC §4.5, shared-owner
@@ -361,10 +377,12 @@ async function loadAgentsForCreate(db: Database, agentIds: readonly string[]): P
       organizationId: agents.organizationId,
       type: agents.type,
       status: agents.status,
+      memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, distinct));
   if (rows.length !== distinct.length) {
     const found = new Set(rows.map((a) => a.id));
@@ -419,11 +437,15 @@ function validateCreateParticipants(input: {
     throw new BadRequestError(`Creator agent "${input.caller.id}" is not in organization "${input.organizationId}"`);
   }
   if (input.requireActive) {
-    const inactive = input.participants.filter((a) => a.status !== "active");
+    const inactive = input.participants.filter(
+      (a) => a.status !== AGENT_STATUSES.ACTIVE || (a.type === AGENT_TYPES.HUMAN && a.memberStatus !== "active"),
+    );
     if (inactive.length > 0) {
       const first = inactive[0];
+      if (!first) throw new Error("Unexpected: inactive participant list is empty");
+      const status = first.type === AGENT_TYPES.HUMAN && first.memberStatus !== "active" ? "removed" : first.status;
       throw new BadRequestError(
-        `Cannot create task chat with inactive participant "${first?.displayName ?? first?.id}" (${first?.status}).`,
+        `Cannot create task chat with inactive participant "${first.displayName ?? first.id}" (${status}).`,
       );
     }
   }

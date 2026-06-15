@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionName, ownedSessionPrefix } from "../handlers/claude-code-tui/tmux-session.js";
+import {
+  deriveSessionName,
+  isWorkspaceTrustPrompt,
+  ownedSessionPrefix,
+} from "../handlers/claude-code-tui/tmux-session.js";
 
 const CID = "client_abcd1234";
 
@@ -63,5 +67,29 @@ describe("ownedSessionPrefix", () => {
 
   it("falls back to a placeholder tag when clientId is empty", () => {
     expect(ownedSessionPrefix("")).toBe("ftth-nocid-");
+  });
+});
+
+describe("isWorkspaceTrustPrompt", () => {
+  it("detects Claude Code's first-run workspace trust dialog", () => {
+    const pane = `
+ Quick safety check: Is this a project you created or one you trust?
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+
+    expect(isWorkspaceTrustPrompt(pane)).toBe(true);
+  });
+
+  it("does not treat the normal ready surface as a trust prompt", () => {
+    const pane = `
+❯ Try "edit <filepath> to..."
+⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+    expect(isWorkspaceTrustPrompt(pane)).toBe(false);
   });
 });

@@ -95,6 +95,7 @@ export {
   type McpSseServer,
   type McpStdioServer,
   mcpServerSchema,
+  normalizeRepoLocalPath,
   PROMPT_APPEND_MAX_LENGTH,
   type PromptConfig,
   type PromptSection,

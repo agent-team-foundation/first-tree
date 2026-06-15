@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
-import { createAgent } from "../services/agent.js";
+import { createAgent, getAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import * as inboxService from "../services/inbox.js";
 import { sendMessage } from "../services/message.js";
@@ -161,11 +161,8 @@ describe("inbox WS data-plane claim helpers", () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const ctx = await createAdminContext(app, { username: `wsp-si-${uid}` });
-    const human = await createAgent(app.db, {
-      name: `wsp-si-h-${uid}`,
-      type: "human",
-      managerId: ctx.memberId,
-    });
+    const human = await getAgent(app.db, ctx.humanAgentUuid);
+    if (!human) throw new Error("expected admin human mirror");
     const observer = await createAgent(app.db, {
       name: `wsp-si-obs-${uid}`,
       type: "agent",

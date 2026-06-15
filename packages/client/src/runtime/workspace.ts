@@ -64,10 +64,9 @@ export function markWorkspaceInitComplete(agentHome: string): void {
 }
 
 /**
- * Clear the stage-2 sentinel so the next session start re-runs `runBootstrap`.
- * Intended for Context-Tree-drift detection: when `syncAgentContextTree`
- * reports the upstream commit changed, deleting the sentinel forces a fresh
- * integrate + CLAUDE.md regenerate without touching any other agent state.
+ * Clear the stage-2 sentinel so the next session start re-runs the full
+ * bootstrap (skill install + briefing regenerate) without touching any
+ * other agent state. Operator-facing escape hatch for a wedged workspace.
  */
 export function clearWorkspaceInitComplete(agentHome: string): void {
   const path = join(agentHome, INIT_COMPLETE_SENTINEL_REL);

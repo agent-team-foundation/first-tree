@@ -372,6 +372,97 @@ describe("Resources Phase 1", () => {
     ]);
   });
 
+  it("normalizes a legacy nested repo_local_path on the resource-binding read path", async () => {
+    // PR #1048 — the binding-input schema transforms/validates repoLocalPath on
+    // WRITE, but a row persisted before that narrowing reaches the read path raw.
+    // `repoRuntimeRow` must normalize it the same way, or the client sees a raw
+    // nested name that the briefing re-normalizes while the workspace.json
+    // manifest drops it — three different names for one binding.
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const teamRepo = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Web",
+        defaultEnabled: "recommended",
+        payload: { url: "https://github.com/acme/web.git", defaultBranch: "main" },
+      },
+      owner.memberId,
+    );
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: current.version,
+        bindings: [{ type: "repo", mode: "include", resourceId: teamRepo.id, repoLocalPath: "custom-web" }],
+      },
+      owner.memberId,
+    );
+
+    // Simulate a pre-narrowing row: write a nested value straight to the column,
+    // bypassing the input schema (which would reject it on write today).
+    await app.db
+      .update(agentResourceBindings)
+      .set({ repoLocalPath: "services/api" })
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.resourceId, teamRepo.id)));
+
+    const baseConfig = await app.configService.get(agent.uuid);
+    const resolved = await app.resourcesService.resolveRuntimeConfig(baseConfig);
+    expect(resolved.payload.gitRepos).toEqual([
+      { url: "https://github.com/acme/web.git", ref: "main", localPath: "services-api" },
+    ]);
+  });
+
+  it("dedups two repo bindings that collide only after localPath normalization", async () => {
+    // baixiaohang's concern: a legacy nested `services/api` and a single-segment
+    // `services-api` both resolve to the same workspace dir. Once the read path
+    // normalizes, resource dedup must catch the collision gracefully (mark the
+    // later repo unavailable) rather than letting both target the same dir.
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const repoA = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      { type: "repo", name: "A", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/a.git" } },
+      owner.memberId,
+    );
+    const repoB = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      { type: "repo", name: "B", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/b.git" } },
+      owner.memberId,
+    );
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: current.version,
+        bindings: [
+          { type: "repo", mode: "include", resourceId: repoA.id, repoLocalPath: "services-api", order: 0 },
+          { type: "repo", mode: "include", resourceId: repoB.id, repoLocalPath: "placeholder", order: 1 },
+        ],
+      },
+      owner.memberId,
+    );
+    // Make repoB's binding a legacy nested value that normalizes to repoA's name.
+    await app.db
+      .update(agentResourceBindings)
+      .set({ repoLocalPath: "services/api" })
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.resourceId, repoB.id)));
+
+    const agentResources = await app.resourcesService.getAgentResources(agent.uuid);
+    const repoRows = agentResources.effective.repos.filter(
+      (row) => row.resourceId === repoA.id || row.resourceId === repoB.id,
+    );
+    const enabled = repoRows.filter((row) => row.mode === "enabled");
+    const unavailable = repoRows.filter((row) => row.mode === "unavailable");
+    expect(enabled).toHaveLength(1);
+    expect(enabled[0]?.resourceId).toBe(repoA.id);
+    expect(unavailable).toHaveLength(1);
+    expect(unavailable[0]).toMatchObject({ resourceId: repoB.id, unavailableReason: "duplicate_local_path" });
+  });
+
   it("runs legacy backfill once, bumps affected agent versions, and does not resurrect retired or removed resources", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

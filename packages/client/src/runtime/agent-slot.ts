@@ -11,9 +11,8 @@ import type { ClientConnection, SessionReconcileResult } from "../client-connect
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
-import { syncAgentContextTree } from "./bootstrap.js";
+import { resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
-import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -28,13 +27,6 @@ export type AgentSlotConfig = {
   concurrency: number;
   /** Shared client connection (always present in unified-user-token milestone). */
   clientConnection: ClientConnection;
-  /**
-   * Shared across every AgentSlot on the same runtime. The manager's per-URL
-   * serial queue (`withUrlLock`) is the only thing that prevents two agents on
-   * the same chat from racing on `git worktree add` against the shared bare
-   * mirror's `config` file — so a per-slot instance is wrong by construction.
-   */
-  gitMirrorManager: GitMirrorManager;
   runtimeType?: string;
   runtimeVersion?: string;
 };
@@ -93,8 +85,8 @@ export class AgentSlot {
     // reset+drain push (which fires within ~1ms of the `agent:bound`
     // response on the server side) never lands on a listener-less
     // emitter. Pre-PR the listeners were attached AFTER `bindAgent` +
-    // `sdk.register` + `agentConfigCache.refresh` + `syncContextTree`
-    // (50ms-15s window depending on Context Tree), and any
+    // `sdk.register` + `agentConfigCache.refresh` + binding resolution
+    // (a 50ms+ window depending on server latency), and any
     // `inbox:deliver` frame arriving in that window was silently
     // dropped by Node's EventEmitter — the entry then stayed
     // `delivered` server-side and the in-process Deduplicator collapsed
@@ -193,19 +185,21 @@ export class AgentSlot {
       }
 
       this.inboxId = agent.inboxId;
-      const contextTreeBinding = await syncAgentContextTree(sdk, (msg) => this.logger.info(msg));
+      // Per-agent home — also the parent of the agent-managed Context Tree
+      // clone (`<workspaceRoot>/context-tree`) and source-repo clones.
+      const workspaceRoot = join(defaultDataDir(), "workspaces", this.config.name);
+      // Pure config resolution — no git. The agent itself materialises and
+      // refreshes the clone per the protocol injected into its briefing.
+      const contextTreeBinding = await resolveAgentContextTreeBinding(sdk, workspaceRoot, (msg) =>
+        this.logger.info(msg),
+      );
       if (!contextTreeBinding) {
         this.logger.info(
-          "context tree not configured or sync skipped — agent will start without organizational context",
+          "context tree not configured or binding unresolved — agent will start without organizational context",
         );
       }
 
       const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
-
-      // The runtime owns the GitMirrorManager and injects it here — sharing one
-      // manager across slots is what makes `withUrlLock` actually serialise
-      // concurrent worktree adds for the same URL (PRD §5.1.5).
-      const gitMirrorManager = this.config.gitMirrorManager;
 
       const ackEntry = (entryId: number) => this.clientConnection.sendInboxAck(entryId, agent.agentId);
       const recoverChat = (chatId: string) => this.clientConnection.sendInboxRecover(agent.agentId, chatId);
@@ -215,12 +209,11 @@ export class AgentSlot {
         concurrency: this.config.concurrency,
         handlerFactory: this.config.handlerFactory,
         handlerConfig: {
-          workspaceRoot: join(defaultDataDir(), "workspaces", this.config.name),
+          workspaceRoot,
           agentName: this.config.name,
           contextTreePath: contextTreeBinding?.path,
           contextTreeRepoUrl: contextTreeBinding?.repoUrl,
           contextTreeBranch: contextTreeBinding?.branch,
-          gitMirrorManager,
           // Identifies the owning client process. The claude-code-tui handler
           // uses it to scope tmux session ownership (orphan sweep / names) so
           // it never touches another live client's sessions. Other handlers
@@ -264,9 +257,9 @@ export class AgentSlot {
       // during init. With the bind-time reset+drain path (see design §4)
       // the server pushes pending entries the instant it processes the
       // `agent:bind` frame, but the surrounding `sdk.register` +
-      // `agentConfigCache.refresh` + `syncAgentContextTree` chain above
-      // can take anywhere from ~100ms (no Context Tree) to 15s
-      // (cold-clone Context Tree). Without this flush every restart with
+      // `agentConfigCache.refresh` + `resolveAgentContextTreeBinding` chain
+      // above can take from ~100ms up to multiple seconds on a slow
+      // server round-trip. Without this flush every restart with
       // an un-acked in-flight message lost the recovery push and the
       // server row stayed `delivered` indefinitely — the in-process
       // Deduplicator absorbed every subsequent bind-reset replay so the

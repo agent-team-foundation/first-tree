@@ -7,7 +7,7 @@ import matter from "gray-matter";
 
 import { isJsonMode, print } from "../../core/output.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { asString, findGitRoot, isRecord } from "./shared.js";
+import { asString, findGitRoot, isRecord, runCommand } from "./shared.js";
 
 export type NodeMetadata = {
   title: string;
@@ -49,6 +49,13 @@ type ParsedTreeTreeOptions = {
   level?: number;
   pattern?: string;
   path: string;
+  /**
+   * When true (the default), refresh the resolved Context Tree repo with
+   * `git pull --ff-only` before reading it, so the listing always reflects
+   * upstream. `--no-pull` turns this off for offline use or when the caller
+   * wants a stable snapshot within a task.
+   */
+  pull: boolean;
 };
 
 type ResolvedTreeTarget = {
@@ -450,7 +457,36 @@ function parseTreeTreeOptions(options: Record<string, unknown>, args: string[]):
     level,
     pattern: asString(options.pattern),
     path,
+    // Commander maps `--no-pull` to `options.pull === false`; the flag is
+    // absent (undefined) by default, which we treat as pull-enabled.
+    pull: options.pull !== false,
   };
+}
+
+/**
+ * Refresh the resolved Context Tree repo before reading it, so the listing
+ * (and the file reads the agent does right after) reflect upstream — moving
+ * tree freshness from a soft "remember to pull first" convention into a hard
+ * tool guarantee.
+ *
+ * Best-effort by design: a `git pull --ff-only` failure (offline, missing
+ * credentials, a dirty/diverged working tree) is reported to stderr and the
+ * command continues against the local copy. A tree read must never be blocked
+ * by an unreachable remote — a slightly stale tree beats no tree. `runCommand`
+ * already runs git with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails
+ * fast instead of hanging.
+ */
+function pullContextTreeRepo(root: string): void {
+  try {
+    runCommand("git", ["pull", "--ff-only"], root);
+  } catch (error) {
+    const stderr =
+      typeof error === "object" && error !== null && "stderr" in error
+        ? String((error as { stderr?: unknown }).stderr ?? "").trim()
+        : "";
+    const detail = (stderr || (error instanceof Error ? error.message : String(error))).split("\n")[0];
+    print.status("⚠️", `tree pull --ff-only skipped — reading local copy (${detail})`);
+  }
 }
 
 function normalizeSnapshotOptions(options: ReadContextTreeSnapshotOptions): ReadContextTreeSnapshotOptions {
@@ -584,9 +620,10 @@ function configureTreeTreeCommand(command: Command): void {
     .argument("[path]", "directory path to browse, resolved relative to the current working directory")
     .allowExcessArguments(false)
     .option("-L, --level <depth>", "max descendant depth below the target directory")
+    .option("-P, --pattern <pattern>", "shell-style glob filter matched against path, filename, title, and description")
     .option(
-      "-P, --pattern <pattern>",
-      "shell-style glob filter matched against path, filename, title, and description",
+      "--no-pull",
+      "skip the automatic `git pull --ff-only` refresh and read the local checkout as-is (offline / stable-snapshot use)",
     );
 }
 
@@ -595,6 +632,12 @@ export function runTreeTreeCommand(context: CommandContext): void {
     const options = context.command.opts<Record<string, unknown>>();
     const parsedOptions = parseTreeTreeOptions(options, context.command.args);
     const resolvedTarget = resolveTreeTarget(process.cwd(), parsedOptions.path);
+    // Refresh the tree before reading it (hard freshness guarantee), unless
+    // the caller opted out with --no-pull. Best-effort: failures degrade to
+    // the local copy with a stderr warning (see pullContextTreeRepo).
+    if (parsedOptions.pull) {
+      pullContextTreeRepo(resolvedTarget.repoRoot);
+    }
     const snapshot = readContextTreeSnapshot(resolvedTarget.repoRoot, {
       level: parsedOptions.level,
       pattern: parsedOptions.pattern,

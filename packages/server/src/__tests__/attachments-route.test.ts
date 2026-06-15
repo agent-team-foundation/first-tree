@@ -1,9 +1,8 @@
 import { ATTACHMENT_FILENAME_HEADER, ATTACHMENT_MIME_HEADER, MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
-import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
-import { createAgent } from "../services/agent.js";
+import { ensureMembership } from "../services/membership.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -176,19 +175,12 @@ describe("attachments route — upload + capability download", () => {
     await app.db
       .insert(organizations)
       .values({ id: otherOrgId, name: otherOrgId.slice(0, 30), displayName: "Other Org" });
-    const otherAgent = await createAgent(app.db, {
-      name: `mo-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "human",
-      displayName: "Other Org Agent",
-      managerId: admin.memberId,
-      organizationId: otherOrgId,
-    });
-    await app.db.insert(members).values({
-      id: uuidv7(),
+    const otherMember = await ensureMembership(app.db, {
       userId: admin.userId,
       organizationId: otherOrgId,
-      agentId: otherAgent.uuid,
       role: "member",
+      displayName: "Other Org Agent",
+      username: admin.username,
     });
 
     // Upload via the first org → uploaded_by = first org's humanAgent.
@@ -199,6 +191,6 @@ describe("attachments route — upload + capability download", () => {
     // Upload via the second org → uploaded_by = second org's humanAgent.
     const second = await postAttachment(app, admin, Buffer.from("second"), { orgId: otherOrgId });
     expect(second.statusCode).toBe(201);
-    expect((second.json() as { uploadedBy: string }).uploadedBy).toBe(otherAgent.uuid);
+    expect((second.json() as { uploadedBy: string }).uploadedBy).toBe(otherMember.agentId);
   });
 });

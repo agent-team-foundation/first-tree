@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
@@ -205,13 +206,27 @@ export async function createTestAgent(
   });
 
   const type = opts.type ?? "agent";
-  const agent = await createAgent(app.db, {
-    name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
-    type,
-    displayName: opts.displayName ?? "Test Agent",
-    managerId: admin.memberId,
-    ...(type === "human" ? {} : { clientId }),
-  });
+  const agent =
+    type === "human"
+      ? (
+          await app.db
+            .update(agents)
+            .set({
+              name: opts.name ?? `test-human-${crypto.randomUUID().slice(0, 8)}`,
+              displayName: opts.displayName ?? "Test Human",
+              updatedAt: new Date(),
+            })
+            .where(eq(agents.uuid, admin.humanAgentUuid))
+            .returning()
+        )[0]
+      : await createAgent(app.db, {
+          name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
+          type,
+          displayName: opts.displayName ?? "Test Agent",
+          managerId: admin.memberId,
+          clientId,
+        });
+  if (!agent) throw new Error("test agent setup failed");
 
   // `token` is kept as an alias for the user's JWT so the large body of
   // pre-unified-token tests still compiles; those tests will additionally
@@ -223,6 +238,7 @@ export async function createTestAgent(
     token: admin.accessToken,
     clientId,
     memberId: admin.memberId,
+    humanAgentUuid: admin.humanAgentUuid,
     userId: member.userId,
     organizationId: member.organizationId,
     /** Agent-scoped request — adds `Authorization` + `x-agent-id` headers. */

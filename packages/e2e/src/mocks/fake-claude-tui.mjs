@@ -4,9 +4,10 @@
 // (packages/client/src/handlers/claude-code-tui/), NOT the SDK path.
 //
 // The handler drives this binary by:
-//   1. Spawning it inside `tmux new-session -d -s <name> ... <cmd>`. The cmd
-//      includes `--session-id <uuid>` so we know which transcript file to
-//      write to (per real Claude's behaviour — see transcript-tail.ts).
+//   1. Spawning it inside `tmux new-session -d -s <name> ... <cmd>`. Fresh
+//      starts include `--session-id <uuid>`; resumes include `--resume <uuid>`.
+//      Both identify the transcript file to write to (per real Claude's
+//      behaviour — see transcript-tail.ts).
 //   2. Polling `tmux capture-pane` for the `bypass permissions on` ready
 //      marker, the `❯ ` prompt, and the `esc to interrupt` working marker.
 //   3. Sending user text via `paste-buffer -p` + `send-keys Enter`.
@@ -66,8 +67,8 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-const sessionId = readFlag("--session-id") ?? randomUUID();
 const resumeId = readFlag("--resume") ?? null;
+const sessionId = readFlag("--session-id") ?? resumeId ?? randomUUID();
 
 const REPLY = process.env.FAKE_TUI_REPLY ?? null;
 const DELAY_MS = Number(process.env.FAKE_TUI_DELAY_MS ?? "0");

@@ -49,7 +49,9 @@ export function AddParticipantDropdown({
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const { agentId: myAgentId, memberId: myMemberId } = useAuth();
-  const { data: agentsPage, isFetching: searchFetching } = useOrgAgentsSearch(debouncedSearch);
+  const { data: agentsPage, isFetching: searchFetching } = useOrgAgentsSearch(debouncedSearch, {
+    addressableOnly: true,
+  });
 
   const candidates = useMemo<MentionCandidate[]>(() => {
     const out: MentionCandidate[] = [];

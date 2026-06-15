@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "../runtime/config.js";
-import type { UpdateHooks, UpdateManagerOptions } from "../runtime/update-manager.js";
+import type { UpdateManagerOptions } from "../runtime/update-manager.js";
 
 type SlotBehavior = "resolve" | "reject";
 
@@ -30,9 +30,6 @@ type FakeConnection = EventEmitter & {
 type MockRuntimeState = {
   slots: FakeSlot[];
   connections: FakeConnection[];
-  gitManager: {
-    sweepLegacyMirrors: ReturnType<typeof vi.fn<() => Promise<{ removed: string[] }>>>;
-  };
   logger: {
     info: ReturnType<typeof vi.fn>;
     warn: ReturnType<typeof vi.fn>;
@@ -96,23 +93,8 @@ function makeRuntimeConfigWithAgentCount(count: number): RuntimeConfig {
   };
 }
 
-function makeUpdateHooks(): UpdateHooks {
-  return {
-    updateConfig: {
-      policy: "auto",
-      restart_quiet_seconds: 30,
-      restart_check_interval_seconds: 10,
-      prompt_timeout_seconds: 60,
-    },
-    prompt: vi.fn(async () => true),
-    executeUpdate: vi.fn(async () => ({ installed: true })),
-  };
-}
-
 function installRuntimeMocks(options?: {
   slotBehavior?: Record<string, SlotBehavior>;
-  sweepResult?: { removed: string[] };
-  sweepError?: Error;
   snapshots?: Record<string, { activeCount: number; lastActivityMs: number }>;
   stopPromise?: Promise<void>;
 }): MockRuntimeState {
@@ -121,12 +103,6 @@ function installRuntimeMocks(options?: {
   const state: MockRuntimeState = {
     slots: [],
     connections: [],
-    gitManager: {
-      sweepLegacyMirrors: vi.fn(async () => {
-        if (options?.sweepError) throw options.sweepError;
-        return options?.sweepResult ?? { removed: [] };
-      }),
-    },
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -159,9 +135,6 @@ function installRuntimeMocks(options?: {
         state.connections.push(this);
       }
     },
-  }));
-  vi.doMock("../runtime/git-mirror-manager.js", () => ({
-    createGitMirrorManager: vi.fn(() => state.gitManager),
   }));
   vi.doMock("../runtime/handler.js", () => ({
     getHandlerFactory: vi.fn((type: string) => ({ type })),
@@ -232,7 +205,6 @@ describe("AgentRuntime", () => {
     vi.doUnmock("@first-tree/shared/config");
     vi.doUnmock("../observability/logger.js");
     vi.doUnmock("../client-connection.js");
-    vi.doUnmock("../runtime/git-mirror-manager.js");
     vi.doUnmock("../runtime/handler.js");
     vi.doUnmock("../runtime/agent-slot.js");
     vi.doUnmock("../runtime/update-manager.js");
@@ -273,88 +245,6 @@ describe("AgentRuntime", () => {
     });
 
     expect(state.connections[0]?.getMaxListeners()).toBe(12);
-  });
-
-  it("starts, attaches updates, reports partial slot failures, and shuts down on SIGINT", async () => {
-    const state = installRuntimeMocks({
-      sweepResult: { removed: ["abc", "def"] },
-      slotBehavior: { beta: "reject" },
-      snapshots: {
-        alpha: { activeCount: 1, lastActivityMs: 10 },
-        beta: { activeCount: 2, lastActivityMs: 30 },
-      },
-    });
-    const signals = captureProcessSignals();
-    const { AgentRuntime } = await import("../runtime/runtime.js");
-    const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
-      clientId: "client-test",
-      currentVersion: "1.2.3",
-      update: makeUpdateHooks(),
-      getAccessToken: async () => "token",
-      shutdownTimeout: 50,
-    });
-
-    const started = runtime.start();
-    await vi.waitFor(() => expect(signals.getSigint()).not.toBeNull());
-
-    expect(state.gitManager.sweepLegacyMirrors).toHaveBeenCalledTimes(1);
-    expect(state.logger.info).toHaveBeenCalledWith({ removed: 2 }, "removed legacy shared git-mirrors tree");
-    expect(state.updateAttach).toHaveBeenCalledTimes(1);
-    expect(state.updateOptions?.getQuietGateSnapshot()).toEqual({ activeCount: 3, lastActivityMs: 30 });
-    state.updateOptions?.log("info", "update log line");
-    expect(state.logger.info).toHaveBeenCalledWith("update log line");
-    expect(state.connections[0]?.connect).toHaveBeenCalledTimes(1);
-    expect(state.logger.error).toHaveBeenCalledWith(
-      {
-        err: new Error("beta failed"),
-        agentName: "beta",
-        agentId: "agent-beta",
-        reason: "beta failed",
-      },
-      "failed to start agent",
-    );
-    expect(state.logger.warn).toHaveBeenCalledWith(
-      {
-        failedCount: 1,
-        totalCount: 2,
-        failures: [{ agentName: "beta", agentId: "agent-beta", reason: "beta failed" }],
-      },
-      "some agents failed to start — check that each agentId is still pinned to this client",
-    );
-
-    const firstShutdown = signals.getSigint()?.();
-    const secondShutdown = signals.getSigint()?.();
-    await firstShutdown;
-    await secondShutdown;
-    await expect(started).resolves.toBeUndefined();
-    expect(state.updateDispose).toHaveBeenCalledTimes(1);
-    expect(state.slots[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(state.slots[1]?.stop).toHaveBeenCalledTimes(1);
-    expect(state.connections[0]?.disconnect).toHaveBeenCalledTimes(1);
-  });
-
-  it("logs GC failures and can shut down through SIGTERM without update hooks", async () => {
-    const state = installRuntimeMocks({ sweepError: new Error("gc failed") });
-    const signals = captureProcessSignals();
-    const { AgentRuntime } = await import("../runtime/runtime.js");
-    const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
-      getAccessToken: async () => "token",
-      shutdownTimeout: 50,
-    });
-
-    const started = runtime.start();
-    await vi.waitFor(() => expect(signals.getSigterm()).not.toBeNull());
-    await signals.getSigterm()?.();
-
-    await expect(started).resolves.toBeUndefined();
-    expect(state.logger.warn).toHaveBeenCalledWith(
-      { err: new Error("gc failed") },
-      "sweepLegacyMirrors threw — continuing startup",
-    );
-    expect(state.updateAttach).not.toHaveBeenCalled();
-    expect(state.updateDispose).not.toHaveBeenCalled();
   });
 
   it("forces exit when shutdown exceeds the timeout", async () => {

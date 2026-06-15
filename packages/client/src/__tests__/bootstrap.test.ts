@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -16,20 +15,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
-  CONTEXT_TREE_HEAD_REL,
-  type ContextTreeBinding,
   deepEqualIdentity,
   FIRST_TREE_RUNTIME_DIR,
   IDENTITY_JSON_REL,
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
-  readCachedContextTreeHead,
-  readContextTreeHead,
   resolveBundledCliVersion,
-  withContextTreeSyncLock,
   writeBundledCliVersion,
-  writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
@@ -74,109 +67,6 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
     ...overrides,
   };
 }
-
-describe("contextTreeCloneDir", () => {
-  it("isolates local checkouts by repo URL and branch", async () => {
-    const { contextTreeCloneDir } = await import("../runtime/bootstrap.js");
-    const main = contextTreeCloneDir("https://github.com/example/context-tree", "main");
-    const release = contextTreeCloneDir("https://github.com/example/context-tree", "release");
-    const otherOrg = contextTreeCloneDir("https://github.com/other/context-tree", "main");
-
-    expect(main).not.toBe(release);
-    expect(main).not.toBe(otherOrg);
-    expect(main).toContain("context-tree-repos");
-    expect(main.split("/").at(-1)).toMatch(/^[a-f0-9]{64}$/);
-  });
-});
-
-describe("withContextTreeSyncLock", () => {
-  it("dedups concurrent callers sharing the same key to a single fn invocation", async () => {
-    // Each clone dir corresponds to one (repo, branch) pair. When N agents
-    // share that pair (the common case — one Context Tree per org), all N
-    // must share one in-flight sync instead of queuing N sequential pulls.
-    let invocations = 0;
-    let resolveSync: ((value: ContextTreeBinding) => void) | undefined;
-    const fn = (): Promise<ContextTreeBinding | null> => {
-      invocations++;
-      return new Promise<ContextTreeBinding>((resolve) => {
-        resolveSync = resolve;
-      });
-    };
-
-    const key = "/tmp/clone-dir-A";
-    const p1 = withContextTreeSyncLock(key, fn);
-    const p2 = withContextTreeSyncLock(key, fn);
-    const p3 = withContextTreeSyncLock(key, fn);
-
-    expect(invocations).toBe(1);
-    expect(p1).toBe(p2);
-    expect(p2).toBe(p3);
-
-    const binding: ContextTreeBinding = { path: key, repoUrl: "git@example/x", branch: "main" };
-    resolveSync?.(binding);
-    await expect(p1).resolves.toBe(binding);
-    await expect(p2).resolves.toBe(binding);
-    await expect(p3).resolves.toBe(binding);
-  });
-
-  it("isolates locks across distinct keys (different repos sync in parallel)", async () => {
-    let invocations = 0;
-    const fn = (): Promise<ContextTreeBinding | null> => {
-      invocations++;
-      return Promise.resolve(null);
-    };
-
-    await Promise.all([withContextTreeSyncLock("/tmp/clone-A", fn), withContextTreeSyncLock("/tmp/clone-B", fn)]);
-
-    expect(invocations).toBe(2);
-  });
-
-  it("clears the slot after settle so a later call triggers a fresh sync", async () => {
-    let invocations = 0;
-    const fn = (): Promise<ContextTreeBinding | null> => {
-      invocations++;
-      return Promise.resolve(null);
-    };
-
-    await withContextTreeSyncLock("/tmp/clone-C", fn);
-    await withContextTreeSyncLock("/tmp/clone-C", fn);
-
-    expect(invocations).toBe(2);
-  });
-
-  it("propagates rejection to all concurrent callers and clears the slot", async () => {
-    let invocations = 0;
-    let rejectSync: ((reason: Error) => void) | undefined;
-    const fn = (): Promise<ContextTreeBinding | null> => {
-      invocations++;
-      if (invocations === 1) {
-        return new Promise<ContextTreeBinding>((_, reject) => {
-          rejectSync = reject;
-        });
-      }
-      // Later retries succeed immediately so the test can observe that the
-      // slot was cleared without hanging on a second pending promise.
-      return Promise.resolve(null);
-    };
-
-    const key = "/tmp/clone-D";
-    const p1 = withContextTreeSyncLock(key, fn);
-    const p2 = withContextTreeSyncLock(key, fn);
-
-    expect(invocations).toBe(1);
-    expect(p1).toBe(p2);
-
-    rejectSync?.(new Error("git pull failed"));
-    await expect(p1).rejects.toThrow("git pull failed");
-    await expect(p2).rejects.toThrow("git pull failed");
-
-    // After the failed sync clears the slot, a new caller is allowed to
-    // retry — important so the next agent's bind isn't poisoned by an
-    // earlier transient network failure.
-    await expect(withContextTreeSyncLock(key, fn)).resolves.toBeNull();
-    expect(invocations).toBe(2);
-  });
-});
 
 describe("bootstrapWorkspace", () => {
   it("writes identity.json with agent-level stable fields only (no chatId / chatContext)", () => {
@@ -742,99 +632,6 @@ describe("installCoreSkills (no-op for current empty core list)", () => {
     expect(existsSync(join(workspace, ".claude"))).toBe(false);
     // No log line when nothing was installed/skipped/failed.
     expect(logs).toEqual([]);
-  });
-});
-
-describe("Context Tree HEAD drift helpers", () => {
-  function makeTreeRepo(dir: string, initialFile = "AGENT.md"): string {
-    mkdirSync(dir, { recursive: true });
-    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
-    execFileSync("git", ["config", "user.email", "t@test"], { cwd: dir });
-    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
-    writeFileSync(join(dir, initialFile), "v1");
-    execFileSync("git", ["add", "."], { cwd: dir });
-    execFileSync("git", ["commit", "-q", "-m", "seed"], { cwd: dir });
-    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" }).trim();
-  }
-
-  it("readContextTreeHead returns the commit hash when the path is a git repo", () => {
-    const treeDir = join(tmpBase, "tree-head-1");
-    const head = makeTreeRepo(treeDir);
-    expect(readContextTreeHead(treeDir)).toBe(head);
-  });
-
-  it("readContextTreeHead returns null for non-existent or non-git paths", () => {
-    expect(readContextTreeHead(null)).toBeNull();
-    expect(readContextTreeHead("/nonexistent/path-does-not-exist")).toBeNull();
-
-    const notGit = join(tmpBase, "tree-head-non-git");
-    mkdirSync(notGit, { recursive: true });
-    writeFileSync(join(notGit, "some-file"), "x");
-    expect(readContextTreeHead(notGit)).toBeNull();
-  });
-
-  it("readContextTreeHead returns null when git rev-parse fails", () => {
-    const brokenGit = join(tmpBase, "tree-head-broken-git");
-    mkdirSync(brokenGit, { recursive: true });
-    writeFileSync(join(brokenGit, ".git"), "gitdir: /path/that/does/not/exist\n");
-
-    expect(readContextTreeHead(brokenGit)).toBeNull();
-  });
-
-  it("write/read roundtrip pins the HEAD value for drift comparison", () => {
-    const workspace = join(tmpBase, "tree-head-cache");
-    mkdirSync(workspace, { recursive: true });
-
-    expect(readCachedContextTreeHead(workspace)).toBeNull();
-
-    writeContextTreeHead(workspace, "abc123def456");
-    expect(readCachedContextTreeHead(workspace)).toBe("abc123def456");
-    expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(true);
-  });
-
-  it("readCachedContextTreeHead returns null when the cache file cannot be read", () => {
-    const workspace = join(tmpBase, "tree-head-cache-unreadable");
-    const path = join(workspace, CONTEXT_TREE_HEAD_REL);
-    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
-    writeFileSync(path, "abc123");
-    chmodSync(path, 0);
-
-    expect(readCachedContextTreeHead(workspace)).toBeNull();
-  });
-
-  it("readCachedContextTreeHead returns null for an empty cache file", () => {
-    const workspace = join(tmpBase, "tree-head-cache-empty");
-    mkdirSync(join(workspace, FIRST_TREE_RUNTIME_DIR), { recursive: true });
-    writeFileSync(join(workspace, CONTEXT_TREE_HEAD_REL), "  \n");
-
-    expect(readCachedContextTreeHead(workspace)).toBeNull();
-  });
-
-  it("writeContextTreeHead is a no-op when the HEAD is null (unknown)", () => {
-    const workspace = join(tmpBase, "tree-head-null");
-    mkdirSync(workspace, { recursive: true });
-    writeContextTreeHead(workspace, null);
-    expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(false);
-  });
-
-  it("detects drift across commits when used together", () => {
-    const treeDir = join(tmpBase, "tree-head-drift");
-    const workspace = join(tmpBase, "tree-head-drift-ws");
-    mkdirSync(workspace, { recursive: true });
-
-    const firstHead = makeTreeRepo(treeDir);
-    writeContextTreeHead(workspace, firstHead);
-
-    // Drift: another commit upstream.
-    writeFileSync(join(treeDir, "NODE.md"), "v2");
-    execFileSync("git", ["add", "."], { cwd: treeDir });
-    execFileSync("git", ["commit", "-q", "-m", "v2"], { cwd: treeDir });
-    const secondHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: treeDir, encoding: "utf-8" }).trim();
-
-    expect(secondHead).not.toBe(firstHead);
-    expect(readContextTreeHead(treeDir)).toBe(secondHead);
-    expect(readCachedContextTreeHead(workspace)).toBe(firstHead);
-    // The handler compares these two; mismatch ⇒ re-bootstrap.
   });
 });
 

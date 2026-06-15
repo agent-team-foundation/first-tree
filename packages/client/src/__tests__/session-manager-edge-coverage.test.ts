@@ -351,7 +351,7 @@ describe("SessionManager edge coverage", () => {
         model: "opus",
         mcpServers: [],
         env: [],
-        gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "src/project" }],
+        gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "project" }],
         resourceSkills: [],
         reasoningEffort: "",
       },
@@ -384,9 +384,9 @@ describe("SessionManager edge coverage", () => {
     if (!ctx) throw new Error("context was not captured");
 
     const env = ctx.buildAgentEnv({ PATH: "/usr/bin" });
-    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "src/project"));
+    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "project"));
     expect(env.FIRST_TREE_DOC_AGENT_HOME).toBe(workspaceRoot);
-    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("src/project");
+    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("project");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe(tmpdir());
     expect(env.FIRST_TREE_AGENT_SLUG).toBe(workspaceRoot.split("/").at(-1));
 
