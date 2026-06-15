@@ -4,6 +4,7 @@ import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { resources } from "../db/schema/resources.js";
 import { NotFoundError } from "../errors.js";
 import { requireUser } from "./require-user.js";
@@ -19,7 +20,15 @@ async function resolveCallerInOrg(
   const [row] = await db
     .select({ id: members.id, role: members.role, agentId: members.agentId })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, orgId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+      ),
+    )
     .limit(1);
   if (!row || (row.role !== "admin" && row.role !== "member")) throw new NotFoundError("Resource not found");
   return { memberId: row.id, role: row.role, humanAgentId: row.agentId };

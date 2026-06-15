@@ -19,6 +19,7 @@ import { and, eq, inArray, ne, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 
 /**
@@ -91,8 +92,16 @@ export async function listAgentsManagedByUser(
     })
     .from(agents)
     .innerJoin(members, eq(agents.managerId, members.id))
+    .innerJoin(organizations, eq(agents.organizationId, organizations.id))
     .leftJoin(users, eq(users.id, members.userId))
-    .where(and(eq(members.userId, userId), eq(members.status, "active"), ne(agents.status, AGENT_STATUSES.DELETED)));
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+        ne(agents.status, AGENT_STATUSES.DELETED),
+      ),
+    );
 }
 
 /**

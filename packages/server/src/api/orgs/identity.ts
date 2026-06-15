@@ -28,4 +28,15 @@ export async function orgIdentityRoutes(app: FastifyInstance): Promise<void> {
       updatedAt: org.updatedAt.toISOString(),
     };
   });
+
+  app.get<{ Params: { orgId: string } }>("/delete-preview", async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    return orgService.previewOrganizationDeletion(app.db, scope.organizationId);
+  });
+
+  app.delete<{ Params: { orgId: string } }>("/", async (request, reply) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const impact = await orgService.deleteOrganization(app.db, scope.organizationId);
+    return reply.send(impact);
+  });
 }

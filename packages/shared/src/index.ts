@@ -571,6 +571,8 @@ export {
   type CreateOrganizationInput,
   createOrganizationSchema,
   type Organization,
+  type OrganizationDeletionImpact,
+  organizationDeletionImpactSchema,
   organizationSchema,
   type UpdateOrganization,
   updateOrganizationSchema,

@@ -15,12 +15,15 @@ const authMock = vi.hoisted(() => ({
     organizationId: "org-1" as string | null,
     onboardingCompletedAt: null as string | null,
     meLoaded: true,
+    refreshMe: vi.fn(),
   },
 }));
 
 const orgMocks = vi.hoisted(() => ({
   getOrganization: vi.fn(),
   updateOrganization: vi.fn(),
+  previewOrganizationDeletion: vi.fn(),
+  deleteOrganization: vi.fn(),
 }));
 
 const settingsMocks = vi.hoisted(() => ({
@@ -195,12 +198,23 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { role: "admin", organizationId: "org-1", onboardingCompletedAt: null, meLoaded: true };
+  authMock.value = {
+    role: "admin",
+    organizationId: "org-1",
+    onboardingCompletedAt: null,
+    meLoaded: true,
+    refreshMe: vi.fn(),
+  };
   viewportMock.value = "xl";
   orgMocks.getOrganization.mockResolvedValue(organization());
   orgMocks.updateOrganization.mockImplementation(async (_id: string, patch: Partial<Organization>) =>
     organization({ ...patch, updatedAt: "2026-05-28T12:01:00.000Z" }),
   );
+  orgMocks.previewOrganizationDeletion.mockResolvedValue({
+    activeMemberCount: 3,
+    agentCount: 5,
+    historyRetained: true,
+  });
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
@@ -277,6 +291,64 @@ describe("settings panels", () => {
     const failed = await renderPanel(<TeamIdentityPanel />);
     await waitForText(failed.container, "load org failed");
     await act(async () => failed.root.unmount());
+  });
+
+  it("lets admins delete the selected team after typing its display name", async () => {
+    const { TeamIdentityPanel } = await import("../team-identity-panel.js");
+    orgMocks.deleteOrganization.mockResolvedValue(undefined);
+
+    const { container, root } = await renderPanel(<TeamIdentityPanel />);
+    await waitForCondition(
+      () => container.querySelector<HTMLInputElement>("input")?.value === "Acme",
+      "Expected team identity input to load",
+    );
+
+    await waitForText(container, "Delete team");
+    await waitForText(
+      container,
+      "This will remove access for 3 active members, archive 5 agents, and retain historical chats, messages, settings, and resource records.",
+    );
+    expect(orgMocks.previewOrganizationDeletion).toHaveBeenCalledWith("org-1");
+    const openDeleteButton = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Delete team"),
+    );
+    expect(openDeleteButton?.hasAttribute("disabled")).toBe(false);
+    await click(openDeleteButton ?? null);
+    await waitForText(document.body, 'Delete "Acme"?');
+
+    const confirmButton = [...document.body.querySelectorAll("button")].find(
+      (button) => button.textContent === "Delete team",
+    );
+    expect(confirmButton?.hasAttribute("disabled")).toBe(true);
+
+    const inputs = document.body.querySelectorAll<HTMLInputElement>("input");
+    const confirmInput = inputs[inputs.length - 1];
+    if (!confirmInput) throw new Error("Expected delete confirmation input");
+    await setInputValue(confirmInput, "Acme");
+
+    expect(confirmButton?.hasAttribute("disabled")).toBe(false);
+    await click(confirmButton ?? null);
+
+    expect(orgMocks.deleteOrganization).toHaveBeenCalledWith("org-1");
+    await waitForCondition(() => authMock.value.refreshMe.mock.calls.length === 1, "Expected auth refresh");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps team deletion disabled when the impact preview fails", async () => {
+    const { TeamIdentityPanel } = await import("../team-identity-panel.js");
+    orgMocks.previewOrganizationDeletion.mockRejectedValueOnce(new Error("preview failed"));
+
+    const { container, root } = await renderPanel(<TeamIdentityPanel />);
+    await waitForText(container, "preview failed");
+
+    const openDeleteButton = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Delete team"),
+    );
+    expect(openDeleteButton?.hasAttribute("disabled")).toBe(true);
+    expect(orgMocks.deleteOrganization).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
   });
 
   it("loads and saves context tree settings with blank values normalized to null", async () => {

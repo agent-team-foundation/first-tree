@@ -11,6 +11,8 @@ export const organizations = pgTable("organizations", {
   maxAgents: integer("max_agents").notNull().default(0),
   /** 0 = unlimited */
   maxMessagesPerMinute: integer("max_messages_per_minute").notNull().default(0),
+  /** "active" | "deleted". Deleted orgs are hidden from membership resolution. */
+  status: text("status").notNull().default("active"),
   features: jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

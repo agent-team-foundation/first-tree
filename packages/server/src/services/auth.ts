@@ -4,6 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
 import { classifyJoseError, decodeJwtForTrace, untrustedAttrs } from "../observability/jwt-trace.js";
@@ -117,7 +118,8 @@ export async function login(
   const [member] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(and(eq(members.userId, user.id), eq(members.status, "active"), eq(organizations.status, "active")))
     .orderBy(desc(members.createdAt), desc(members.id))
     .limit(1);
 
@@ -191,7 +193,8 @@ export async function refreshAccessToken(
   const [anyMember] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(and(eq(members.userId, user.id), eq(members.status, "active"), eq(organizations.status, "active")))
     .limit(1);
 
   if (!anyMember) {
@@ -282,7 +285,8 @@ export async function exchangeConnectToken(
   const [anyMember] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(and(eq(members.userId, user.id), eq(members.status, "active"), eq(organizations.status, "active")))
     .limit(1);
 
   if (!anyMember) {

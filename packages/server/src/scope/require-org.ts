@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { ForbiddenError } from "../errors.js";
 import { stampOrgScope } from "../observability/request-context.js";
 import { requireUser } from "./require-user.js";
@@ -28,7 +29,15 @@ export async function requireOrgMembership(
   const [row] = await db
     .select({ id: members.id, role: members.role, agentId: members.agentId })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, orgId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+      ),
+    )
     .limit(1);
 
   if (!row) {
