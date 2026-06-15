@@ -129,7 +129,23 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", { config: { otelRecordBody: true } }, async (request) => {
     await requireAgentAccess(request, app.db, "manage");
     const body = rebindAgentSchema.parse(request.body);
-    const agent = await agentService.rebindAgent(app.db, request.params.uuid, body);
+    const { agent, previousClientId } = await agentService.rebindAgent(app.db, request.params.uuid, body);
+    if (previousClientId && previousClientId !== agent.clientId) {
+      const disconnected = forceDisconnect(request.params.uuid, "agent_rebound", previousClientId);
+      const clearedPresence = await presenceService.unbindAgent(app.db, request.params.uuid, {
+        expectedClientId: previousClientId,
+      });
+      app.log.info(
+        {
+          agentId: request.params.uuid,
+          oldClientId: previousClientId,
+          newClientId: agent.clientId,
+          disconnected,
+          clearedPresence,
+        },
+        "agent rebind detached previous client",
+      );
+    }
     notifyClientAgentPinned(agent);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
     return serializeAgent(agent, userAvatarUrl);

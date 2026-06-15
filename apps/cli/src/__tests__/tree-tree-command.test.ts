@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,7 +93,11 @@ function commandWithOptions(options: Record<string, unknown>, args: string[] = [
   const command = new Command("test");
   command.args = args;
 
-  for (const [key, value] of Object.entries(options)) {
+  // Default `pull: false` so the renderer / selection / JSON suites stay pure
+  // filesystem reads and never shell out to `git pull`. The dedicated
+  // "pull refresh" suite below opts back in with `{ pull: true }`.
+  const withDefaults: Record<string, unknown> = { pull: false, ...options };
+  for (const [key, value] of Object.entries(withDefaults)) {
     command.setOptionValue(key, value);
   }
 
@@ -498,5 +503,86 @@ describe("tree tree command action", () => {
         message: "Invalid --level: expected a non-negative integer.",
       },
     });
+  });
+});
+
+describe("tree tree pull refresh", () => {
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync("git", args, { cwd, stdio: "ignore" });
+  }
+
+  // A real origin (bare) + a regular working-tree clone tracking it, so a
+  // `git pull --ff-only` against the clone genuinely advances the working
+  // tree. Mirrors the production tree model: the agent maintains a regular
+  // clone and `first-tree tree tree` pulls it before reading.
+  function makeRemoteBackedTreeClone(): { clone: string; seed: string } {
+    const base = makeTempDir("ft-tree-pull-");
+    const origin = join(base, "origin.git");
+    const seed = join(base, "seed");
+    const clone = join(base, "clone");
+
+    execFileSync("git", ["init", "--bare", "-b", "main", origin], { stdio: "ignore" });
+    execFileSync("git", ["clone", origin, seed], { stdio: "ignore" });
+    git(seed, "config", "user.email", "agent@example.com");
+    git(seed, "config", "user.name", "Agent");
+    writeNode(seed, "Root Node", "Root description");
+    git(seed, "add", ".");
+    git(seed, "commit", "-m", "seed");
+    git(seed, "push", "origin", "main");
+    execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+
+    return { clone, seed };
+  }
+
+  function pushNewDomain(seed: string): void {
+    const domain = join(seed, "newdomain");
+    mkdirSync(domain, { recursive: true });
+    writeNode(domain, "New Domain", "Fresh upstream");
+    git(seed, "add", ".");
+    git(seed, "commit", "-m", "add domain");
+    git(seed, "push", "origin", "main");
+  }
+
+  it("pulls the tree before reading so an upstream commit appears (default)", () => {
+    const { clone, seed } = makeRemoteBackedTreeClone();
+    pushNewDomain(seed); // upstream moves ahead of the clone
+
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({ pull: true })));
+
+    // The clone was behind; the built-in pull fast-forwarded it, so the
+    // new domain shows up in the listing.
+    expect(readMockOutput(stderr)).toContain("newdomain/ [New Domain] -> Fresh upstream");
+  });
+
+  it("with --no-pull reads the local checkout without fetching upstream", () => {
+    const { clone, seed } = makeRemoteBackedTreeClone();
+    pushNewDomain(seed); // upstream moves ahead AFTER the clone
+
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({ pull: false })));
+
+    const out = readMockOutput(stderr);
+    expect(out).toContain("Root Node"); // local checkout still renders
+    expect(out).not.toContain("newdomain"); // but the unpulled upstream commit is absent
+  });
+
+  it("degrades to the local copy with a stderr warning when the pull fails", () => {
+    // makeTreeFixture writes a placeholder `.git` directory (not a real repo),
+    // so `git pull --ff-only` fails — exercising the graceful-degradation path.
+    const root = makeTreeFixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({ pull: true }, ["docs/development"])));
+
+    const out = readMockOutput(stderr);
+    expect(out).toContain("tree pull --ff-only skipped"); // warning surfaced
+    expect(out).toContain("docs/development/http.md [HTTP Leaf] -> HTTP routes"); // still rendered
+    expect(process.exitCode).toBeUndefined(); // never blocks the read
   });
 });

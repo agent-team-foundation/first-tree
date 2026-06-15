@@ -1,12 +1,9 @@
-import { join } from "node:path";
 import type { UpdateAttempt } from "@first-tree/shared";
-import { defaultDataDir } from "@first-tree/shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
 import type { RuntimeConfig } from "./config.js";
-import { createGitMirrorManager, type GitMirrorManager } from "./git-mirror-manager.js";
 import { getHandlerFactory } from "./handler.js";
 import { type UpdateHooks, UpdateManager } from "./update-manager.js";
 
@@ -52,7 +49,6 @@ export class AgentRuntime {
   private readonly config: RuntimeConfig;
   private readonly shutdownTimeout: number;
   private readonly clientConnection: ClientConnection;
-  private readonly gitMirrorManager: GitMirrorManager;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly currentVersion: string | undefined;
   private readonly updateHooks: UpdateHooks | undefined;
@@ -82,20 +78,6 @@ export class AgentRuntime {
     // recovery; a process-wide crash guard lives in ClientConnection itself.
     this.clientConnection.on("error", (err) => this.logger.error({ err }, "client connection error"));
 
-    // Single GitMirrorManager per runtime. Its per-URL serial queue is the
-    // only thing preventing concurrent `git worktree add` on the shared bare
-    // mirror's `config` from racing on `config.lock`; one manager per slot
-    // would defeat the lock the moment two agents in the same chat boot
-    // simultaneously.
-    this.gitMirrorManager = createGitMirrorManager({
-      dataDir: defaultDataDir(),
-      log: createLogger("git-mirror"),
-      // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
-      // rm -rf) for any target under the per-agent workspaces tree. Operator
-      // paths outside this root still fail loud — see GitMirrorManagerOptions.
-      hubManagedRoots: [join(defaultDataDir(), "workspaces")],
-    });
-
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
@@ -108,7 +90,6 @@ export class AgentRuntime {
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
           clientConnection: this.clientConnection,
-          gitMirrorManager: this.gitMirrorManager,
           runtimeType: agentConfig.type,
         }),
       );
@@ -136,18 +117,6 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
-    // One-time cleanup of the legacy shared `<dataDir>/git-mirrors/` tree left
-    // by the pre-per-agent-source-repo bare-mirror model. Pure cache, no state.
-    // Failures are advisory: log and continue startup.
-    try {
-      const sweep = await this.gitMirrorManager.sweepLegacyMirrors();
-      if (sweep.removed.length > 0) {
-        this.logger.info({ removed: sweep.removed.length }, "removed legacy shared git-mirrors tree");
-      }
-    } catch (err) {
-      this.logger.warn({ err }, "sweepLegacyMirrors threw — continuing startup");
-    }
-
     // Attach before connecting so the first welcome frame on a stale Client
     // is acted on rather than missed until the next reconnect.
     if (this.currentVersion && this.updateHooks) {

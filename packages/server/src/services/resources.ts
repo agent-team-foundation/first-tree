@@ -9,7 +9,9 @@ import {
   type EffectiveResourceRow,
   findAssembledBriefingFingerprint,
   type GitRepo,
+  getRepoLocalPathSafetyError,
   type NoSecretMcpServer,
+  normalizeRepoLocalPath,
   noSecretMcpServerSchema,
   PROMPT_APPEND_MAX_LENGTH,
   type PromptSection,
@@ -364,6 +366,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
   function repoRuntimeRow(resource: ResourceDbRow, binding: BindingDbRow | null): GitRepo | null {
     const payload = repoResourcePayloadSchema.safeParse(resource.payload);
     if (!payload.success) return null;
+    const localPath = normalizedBindingLocalPath(binding?.repoLocalPath);
     return {
       url: payload.data.url,
       ...(binding?.repoRef
@@ -371,8 +374,33 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         : payload.data.defaultBranch
           ? { ref: payload.data.defaultBranch }
           : {}),
-      ...(binding?.repoLocalPath ? { localPath: binding.repoLocalPath } : {}),
+      ...(localPath ? { localPath } : {}),
     };
+  }
+
+  /**
+   * Normalize a persisted `agent_resource_bindings.repo_local_path` the SAME
+   * way the binding-input schema does on write
+   * (`@first-tree/shared` `normalizeRepoLocalPath` + safety check), so the
+   * runtime `GitRepo` carries a single workspace-immediate segment regardless
+   * of when the row was written.
+   *
+   * The binding-input schema transforms+validates on WRITE, but a row persisted
+   * before that narrowing (e.g. a legacy nested `services/api`) reaches this
+   * read path raw. Without this, the client receives the raw value while the
+   * briefing's `resolveGitRepoTargetPath` re-normalizes it — leaving briefing,
+   * `workspace.json` manifest, and `applyRepoLocalPathDedup` disagreeing on the
+   * name for one binding (PR #1048 reviewer blocker).
+   *
+   * A value that does not reduce to a SAFE single segment is treated as "no
+   * usable override" → dropped, so the repo falls back to the URL-derived name
+   * (`deriveRepoLocalPath`) everywhere. Graceful: a malformed legacy row never
+   * throws on read.
+   */
+  function normalizedBindingLocalPath(raw: string | null | undefined): string | undefined {
+    if (!raw) return undefined;
+    const normalized = normalizeRepoLocalPath(raw);
+    return getRepoLocalPathSafetyError(normalized) ? undefined : normalized;
   }
 
   function promptBody(resource: ResourceDbRow): string | null {

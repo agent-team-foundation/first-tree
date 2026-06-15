@@ -13,7 +13,7 @@ import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
-import { type ContextTreeBinding, syncAgentContextTree } from "./bootstrap.js";
+import { type ContextTreeBinding, resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
 import type { SelfFence } from "./doc-snapshots.js";
@@ -232,8 +232,8 @@ type SessionManagerConfig = {
    * Resolver for the agent's Context Tree binding, used to lazily upgrade a
    * tree-LESS slot to tree-bound at session start (new-tree onboarding sets the
    * org `context_tree` only after the slot starts). Defaults to a live
-   * `syncAgentContextTree(sdk)`; injected as a stub in tests to avoid spawning
-   * real git.
+   * `resolveAgentContextTreeBinding(sdk, workspaceRoot)` — pure config
+   * resolution, no git; injected as a stub in tests to avoid the HTTP probe.
    */
   resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
   /** Callback when a session state changes (per-session granularity). */
@@ -269,7 +269,7 @@ const MAX_EVICTED_MAPPINGS = 500;
 
 /**
  * Minimum spacing between lazy Context-Tree re-resolutions for a slot that is
- * currently tree-LESS. Caps the per-new-session git + HTTP probe for a
+ * currently tree-LESS. Caps the per-new-session HTTP probe for a
  * permanently-tree-less agent at once per minute, while still picking up a tree
  * configured later within this window. Tree-BOUND slots never reach this gate
  * (they exit on the cheap already-bound check).
@@ -751,7 +751,7 @@ export class SessionManager {
     // Already bound — cheapest exit (no clock read, no resolver, no network).
     if (typeof cfg.contextTreePath === "string" && cfg.contextTreePath.length > 0) return;
     // Tree-less: rate-limit re-resolution so a permanently-tree-less agent (the
-    // common case) doesn't spawn git + an HTTP GET on EVERY new session for the
+    // common case) doesn't fire an HTTP GET on EVERY new session for the
     // slot's whole life. A tree configured later is still picked up within
     // TREE_RERESOLVE_INTERVAL_MS on the next new session.
     const now = Date.now();
@@ -760,7 +760,10 @@ export class SessionManager {
 
     const resolve =
       this.config.resolveContextTreeBinding ??
-      (() => syncAgentContextTree(this.config.sdk, (msg) => this.config.log.info(msg)));
+      (() =>
+        resolveAgentContextTreeBinding(this.config.sdk, this.config.handlerConfig.workspaceRoot, (msg) =>
+          this.config.log.info(msg),
+        ));
     const binding = await reresolveUnboundTree(cfg.contextTreePath, resolve);
     if (!binding) return;
     cfg.contextTreePath = binding.path;

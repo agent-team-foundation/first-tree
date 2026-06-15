@@ -101,4 +101,66 @@ describe("createContextTreeGitWriteTracker", () => {
       }),
     ).toEqual([]);
   });
+
+  it("self-heals when the tree clone appears after the tracker was constructed (S2)", () => {
+    // Fresh-bind path under the agent-managed-repos model: the tracker is
+    // built BEFORE the agent runs the briefing's clone protocol, so the
+    // initial captureBaseline() sees no tree directory and `baseline`
+    // stays null. Pre-fix, every subsequent tool call short-circuited and
+    // the first turn's writes to the tree were silently dropped from
+    // telemetry. Verify the lazy-rebaseline path reports the delta as
+    // soon as the clone appears.
+    const lateTree = join(root, "late-tree");
+    const tracker = createContextTreeGitWriteTracker({
+      contextTreePath: lateTree,
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    // Initial state: no directory → baseline is null and a regular call
+    // would return [].
+    expect(
+      tracker.refsForSuccessfulToolCall({
+        toolName: "Bash",
+        toolUseId: "tu-before-clone",
+        existingRefs: [],
+      }),
+    ).toEqual([]);
+
+    // The agent now clones the tree mid-turn and writes a file.
+    mkdirSync(join(lateTree, "domains"), { recursive: true });
+    git(root, "init", "late-tree");
+    git(lateTree, "config", "user.email", "agent@example.com");
+    git(lateTree, "config", "user.name", "Agent");
+    writeFileSync(join(lateTree, "NODE.md"), "root\n");
+    git(lateTree, "add", ".");
+    git(lateTree, "commit", "-m", "initial");
+    writeFileSync(join(lateTree, "domains", "new.md"), "minted in turn 1\n");
+
+    // First tool call AFTER the clone appears must report the freshly-
+    // written file as a delta — the lazy re-baseline treats the just-
+    // minted clone as having an empty baseline, so anything dirty in it
+    // is necessarily this session's work.
+    expect(
+      tracker.refsForSuccessfulToolCall({
+        toolName: "Write",
+        toolUseId: "tu-after-clone",
+        existingRefs: [],
+      }),
+    ).toEqual([
+      {
+        origin: "git_status_delta",
+        localPath: join(lateTree, "domains", "new.md"),
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "domains/new.md",
+        pathKind: "file",
+        metadata: {
+          gitStatus: "??",
+          toolName: "Write",
+          toolUseId: "tu-after-clone",
+        },
+      },
+    ]);
+  });
 });

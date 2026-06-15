@@ -27,15 +27,16 @@ export function removeConnection(agentId: string, ws: WebSocket): boolean {
 }
 
 /** Force-disconnect an agent's active WS connection. Returns true if a connection was closed. */
-export function forceDisconnect(agentId: string, reason?: string): boolean {
+export function forceDisconnect(agentId: string, reason?: string, expectedClientId?: string): boolean {
   const clientId = agentToClient.get(agentId);
+  if (expectedClientId !== undefined && clientId !== expectedClientId) return false;
   if (clientId) {
     // M1 mode: unbind the single agent without closing the shared client WS
     const entry = clientConnections.get(clientId);
     if (entry && entry.ws.readyState <= 1) {
       entry.ws.send(JSON.stringify({ type: "agent:force_disconnect", agentId, ...(reason ? { reason } : {}) }));
     }
-    unbindAgentFromClient(agentId);
+    unbindAgentFromClient(agentId, clientId);
     return true;
   }
 
@@ -99,8 +100,9 @@ export function bindAgentToClient(clientId: string, agentId: string): void {
   agentToClient.set(agentId, clientId);
 }
 
-export function unbindAgentFromClient(agentId: string): void {
+export function unbindAgentFromClient(agentId: string, expectedClientId?: string): boolean {
   const clientId = agentToClient.get(agentId);
+  if (expectedClientId !== undefined && clientId !== expectedClientId) return false;
   if (clientId) {
     const entry = clientConnections.get(clientId);
     if (entry) {
@@ -109,6 +111,7 @@ export function unbindAgentFromClient(agentId: string): void {
     agentToClient.delete(agentId);
   }
   activeConnections.delete(agentId);
+  return clientId !== undefined;
 }
 
 export function getClientAgentIds(clientId: string): string[] {

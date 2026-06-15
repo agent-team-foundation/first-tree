@@ -6,7 +6,11 @@ describe("resolveGitRepoTargetPath", () => {
   it("resolves safe paths under the session workspace", () => {
     const workspace = sep === "\\" ? "C:\\tmp\\workspace" : "/tmp/workspace";
 
-    expect(resolveGitRepoTargetPath(workspace, "repos/first-tree")).toBe(resolve(workspace, "repos/first-tree"));
+    // Single-segment names resolve directly; a clean nested path joins its
+    // segments with `-` (matching the schema's read-tolerant normalization),
+    // so both resolve to an immediate child of the workspace.
+    expect(resolveGitRepoTargetPath(workspace, "first-tree")).toBe(resolve(workspace, "first-tree"));
+    expect(resolveGitRepoTargetPath(workspace, "repos/first-tree")).toBe(resolve(workspace, "repos-first-tree"));
     expect(resolveGitRepoTargetPath(workspace, "..safe")).toBe(resolve(workspace, "..safe"));
   });
 
@@ -14,6 +18,8 @@ describe("resolveGitRepoTargetPath", () => {
     ".",
     "/tmp/repo",
     "../repo",
+    // Hard-unsafe shapes still throw; a clean nested path coerces to its
+    // basename instead (covered in the resolves-safe-paths test above).
     "repos/../repo",
     "repos//repo",
     "repos\\repo",

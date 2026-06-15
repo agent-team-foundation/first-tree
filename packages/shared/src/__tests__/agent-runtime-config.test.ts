@@ -15,6 +15,7 @@ import {
   gitRepoSchema,
   isRedactedEnvValue,
   isSafeRepoLocalPath,
+  normalizeRepoLocalPath,
   updateAgentRuntimeConfigSchema,
 } from "../schemas/agent-runtime-config.js";
 
@@ -185,17 +186,61 @@ describe("agent runtime config — reasoning effort", () => {
 });
 
 describe("agent runtime config — git repo localPath safety", () => {
-  it("accepts safe relative local paths", () => {
+  it("accepts a safe single-segment local path", () => {
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repo-1" })).toEqual({
+      url: "https://github.com/acme/repo.git",
+      localPath: "repo-1",
+    });
+  });
+
+  it("coerces a legacy clean nested localPath into a joined single segment", () => {
+    // Source repos must be immediate children of the workspace, but
+    // `agent_configs.payload` is persisted data: a value that was legal under
+    // the old (nesting-permitted) schema must still READ cleanly rather than
+    // throw on every config read / agent bind. A clean nested path joins its
+    // segments with `-` instead of erroring (PR #1048 — baixiaohang
+    // persisted-data blocker).
     expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
       url: "https://github.com/acme/repo.git",
-      localPath: "repos/repo-1",
+      localPath: "repos-repo-1",
     });
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "services/api" })).toEqual({
+      url: "https://github.com/acme/repo.git",
+      localPath: "services-api",
+    });
+  });
+
+  it("keeps a legacy nested basename-collision config parseable (services/api + libs/api → distinct)", () => {
+    // The exact class of configs nesting was useful for: two repos with the
+    // same basename kept apart by directory. Joining (not taking the basename)
+    // preserves the distinction (`services-api` vs `libs-api`) rather than
+    // collapsing both to `api` (PR #1048 — yuezengwu collision blocker).
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "claude-code",
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [
+        { url: "https://github.com/acme/services.git", localPath: "services/api" },
+        { url: "https://github.com/acme/libs.git", localPath: "libs/api" },
+      ],
+      resourceSkills: [],
+      reasoningEffort: "",
+    });
+    expect(parsed.gitRepos.map((repo) => repo.localPath)).toEqual(["services-api", "libs-api"]);
   });
 
   it.each([
     [""],
     ["/tmp/repo"],
     ["../repo"],
+    // Only HARD-unsafe shapes are rejected (absolute, escape / dot / empty /
+    // whitespace segment, backslash, control char). A *clean* nested path like
+    // `repos/repo-1` is NOT here — it coerces to its basename (see the
+    // coercion test above), per PR #1048.
+    ["."],
+    [".."],
     ["repos/../repo"],
     ["repos//repo"],
     ["repos/./repo"],
@@ -212,10 +257,32 @@ describe("agent runtime config — git repo localPath safety", () => {
 
   it("returns specific localPath safety errors", () => {
     expect(getRepoLocalPathSafetyError("")).toBe("Git repo local path must not be empty");
+    // A nested path is rejected at the single-segment check (which runs before
+    // per-segment inspection), so even `repos/ repo` reports the
+    // single-directory-name error rather than the whitespace one.
     expect(getRepoLocalPathSafetyError("repos/ repo")).toBe(
-      "Git repo local path segments must not have leading or trailing whitespace",
+      "Git repo local path must be a single directory name (no '/'): source repos are immediate children of the workspace",
     );
-    expect(getRepoLocalPathSafetyError("repos/repo")).toBeNull();
+    expect(getRepoLocalPathSafetyError("repos/repo")).toBe(
+      "Git repo local path must be a single directory name (no '/'): source repos are immediate children of the workspace",
+    );
+    expect(getRepoLocalPathSafetyError(".")).toBe("Git repo local path must not be a dot segment");
+    // A clean single segment still passes.
+    expect(getRepoLocalPathSafetyError("repo-1")).toBeNull();
+  });
+
+  it("normalizeRepoLocalPath joins clean nested paths, leaves unsafe shapes untouched", () => {
+    expect(normalizeRepoLocalPath("repo-1")).toBe("repo-1");
+    expect(normalizeRepoLocalPath("repos/repo-1")).toBe("repos-repo-1");
+    expect(normalizeRepoLocalPath("services/api")).toBe("services-api");
+    // Distinct nested paths that share a basename stay distinct after joining.
+    expect(normalizeRepoLocalPath("libs/api")).toBe("libs-api");
+    // Hard-unsafe shapes pass through unchanged so the safety check rejects them.
+    expect(normalizeRepoLocalPath("repos/../repo")).toBe("repos/../repo");
+    expect(normalizeRepoLocalPath("/tmp/repo")).toBe("/tmp/repo");
+    expect(normalizeRepoLocalPath(" repos/repo")).toBe(" repos/repo");
+    expect(normalizeRepoLocalPath("repos//repo")).toBe("repos//repo");
+    expect(normalizeRepoLocalPath("repos\\repo")).toBe("repos\\repo");
   });
 
   it("preserves derived repo local path behavior for repo URLs", () => {
@@ -268,11 +335,11 @@ describe("agent runtime config — git repo localPath safety", () => {
 
   it("formats a repo coordinate, surfacing a non-default branch and mount path", () => {
     expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "staging" })).toBe("acme/repo@staging");
-    expect(formatRepoCoordinate({ url: "https://github.com/acme/design-system", localPath: "packages/ui" })).toBe(
-      "acme/design-system → packages/ui",
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/design-system", localPath: "ui" })).toBe(
+      "acme/design-system → ui",
     );
-    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "dev", localPath: "libs/x" })).toBe(
-      "acme/repo@dev → libs/x",
+    expect(formatRepoCoordinate({ url: "https://github.com/acme/repo", ref: "dev", localPath: "libs-x" })).toBe(
+      "acme/repo@dev → libs-x",
     );
   });
 });
@@ -318,24 +385,39 @@ describe("agent runtime config — duplicate validation", () => {
     );
   });
 
-  it("rejects duplicate git repo local paths, including derived paths", () => {
-    const result = agentRuntimeConfigPayloadSchema.safeParse({
+  it("tolerates colliding git repo local paths on read (no fatal duplicate check)", () => {
+    // gitRepos is no longer writable through the config payload (the PATCH path
+    // rejects it with `legacy_resource_config_disabled`), so this read-side
+    // schema only ever sees gitRepos as carried-forward legacy data — and
+    // `commitWrite` re-parses the whole payload on every unrelated edit. A
+    // legacy localPath collision must therefore NOT throw here; runtime
+    // uniqueness is enforced gracefully by the resources service's
+    // `applyRepoLocalPathDedup`. See `payloadDuplicatesRefinement` (PR #1048 —
+    // no pure normalization is both injective and identity-preserving on common
+    // single-segment names, so tolerate-on-read is the correct contract).
+
+    // (a) The reviewer collision class: a nested path joins to the same single
+    // segment as an existing single-segment path. This previously threw on read.
+    const collidingNested = agentRuntimeConfigPayloadSchema.safeParse({
+      kind: "claude-code",
+      gitRepos: [
+        { url: "https://github.com/acme/a.git", localPath: "services/api" },
+        { url: "https://github.com/acme/b.git", localPath: "services-api" },
+      ],
+    });
+    expect(collidingNested.success).toBe(true);
+    expect(collidingNested.data?.gitRepos.map((repo) => repo.localPath)).toEqual(["services-api", "services-api"]);
+
+    // (b) Two URLs that derive the same name also read cleanly now.
+    const collidingDerived = agentRuntimeConfigPayloadSchema.safeParse({
       kind: "claude-code",
       gitRepos: [{ url: "https://github.com/acme/repo.git" }, { url: "git@github.com:other/repo.git" }],
     });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: ["gitRepos", 1, "localPath"],
-          message: 'Duplicate git repo local path "repo"',
-        }),
-      ]),
-    );
+    expect(collidingDerived.success).toBe(true);
+    expect(collidingDerived.data?.gitRepos).toHaveLength(2);
   });
 
-  it("ignores empty derived git repo paths during duplicate validation", () => {
+  it("reads gitRepos with empty derived paths cleanly", () => {
     const parsed = agentRuntimeConfigPayloadSchema.parse({
       kind: "claude-code",
       gitRepos: [{ url: "   " }, { url: "https://github.com/acme/repo.git" }],

@@ -25,7 +25,7 @@ end to end. Three concrete gaps:
   resource is `mode:"enabled"` for every org runtime agent by default; (c)
   `runKickoff` **already** creates the admin's selected repos as `recommended`
   team resources (the `orgWrites` block). So the admin new-tree agent's sources
-  already flow → `prepareSourceRepos` materializes them, and creating those
+  flow into the briefing as predeclared repo coordinates (the agent itself clones them per the briefing protocol), and creating those
   resources bumps the config version so the kickoff message refreshes the client
   config. **No gitRepos wiring is needed.** Residual gap: the invitee *picker*
   sub-state (invitee's own repos, never turned into resources) — an edge path,
@@ -40,13 +40,20 @@ end to end. Three concrete gaps:
   (`agent-briefing.ts:475`). The kickoff prose also names a non-existent
   "first-tree onboarding skill" (`bootstrap-prose.ts`).
 
-- **断点3 — seed assumes Cloud provisioned first; cloud layout doesn't match
-  W1.** `first-tree-seed` refuses unless `.first-tree/workspace.json`
-  (`{ tree, sources }`) exists, the tree is empty, and all sources are on disk
-  (`skills/first-tree-seed/SKILL.md` self-check). In cloud the tree is cloned to
-  a **separate** dir (`context-tree-repos/<hash>/`, not a workspace sibling),
-  sources live under the agent home, and **no `.first-tree/workspace.json` is
-  ever written** (only the local CLI `migrate-workspace` writes it).
+- **断点3 — seed assumes Cloud provisioned first.** `first-tree-seed`
+  refuses unless `.first-tree/workspace.json` (`{ tree, sources }`) exists,
+  the tree is empty, and all sources are on disk
+  (`skills/first-tree-seed/SKILL.md` self-check). Under the
+  agent-managed-repos model the runtime DOES write
+  `<workspace>/.first-tree/workspace.json` on every session start
+  (`workspace-manifest.ts::ensureWorkspaceManifest`), naming the tree
+  subdirectory and the bound source repos. The tree itself lives at
+  `<workspace>/context-tree` as an agent-managed clone (per-agent, not
+  the retired shared `context-tree-repos/<hash>/` pool), and the agent
+  clones it on first use per its `AGENTS.md` `## Tree Location` block.
+  So `first-tree-seed`'s manifest-present check passes; its
+  tree-dir-exists check is satisfied as soon as the agent runs the
+  briefing's clone protocol.
 
 Async note: a single agent already runs up to **5 concurrent sessions**
 (`runtime/config.ts`), per-chat isolated, with "working" state protected up to
@@ -100,6 +107,22 @@ add agent-driven repo creation.
    `SessionManager` (not the kickoff-UX reordering alternative). See §5.3.
 
 ## 5. Design
+
+> **Superseded mechanism (§5.2 + §5.3) — agent-managed-repos refactor (#1048).**
+> The client-runtime *implementation* below — a sibling **symlink**
+> `<workspace>/<TREE_DIR>` → a shared `context-tree-repos/<hash>/` clone, plus
+> lazy re-resolution that calls `syncAgentContextTree(sdk)` to clone/refresh the
+> tree — no longer exists. The runtime now does **declaration + observation
+> only**: it resolves the tree binding as pure config
+> (`bootstrap.ts::resolveAgentContextTreeBinding`, no git side effects) and
+> writes `<workspace>/.first-tree/workspace.json` via
+> `workspace-manifest.ts::ensureWorkspaceManifest`, naming the tree subdirectory
+> `context-tree`. The tree itself is a **per-agent clone the agent creates and
+> pulls itself** at `<workspace>/context-tree`, following its `AGENTS.md`
+> `## Tree Location` block (`first-tree tree tree` pulls before every read).
+> `syncAgentContextTree`, `contextTreeCloneDir`, and the symlink step were all
+> removed. §5.1 (onboarding prose) and the goals in §1–§4 still hold; only the
+> §5.2/§5.3 *how-the-runtime-binds-the-tree* mechanism is historical.
 
 ### 5.1 Web / onboarding
 

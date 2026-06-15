@@ -7,12 +7,9 @@ import {
   installCoreSkills,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
-  readCachedContextTreeHead,
-  readContextTreeHead,
   resolveBundledCliVersion,
   writeAgentBriefing,
   writeBundledCliVersion,
-  writeContextTreeHead,
 } from "./bootstrap.js";
 import type { SessionContext } from "./handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "./workspace.js";
@@ -34,12 +31,11 @@ export type AgentBootstrapParams = {
   briefing: string;
   /**
    * Authoritative source-repo `localPath` set from the live, resolved agent
-   * config payload — same value `prepareSourceRepos` was called with. `null`
-   * when the caller could not resolve a payload (cache miss, default-payload
-   * fallback). Threaded into `applyPendingMigrations` as the `ctx
-   * .currentSourceRepoNames` field so migrations that need an authoritative
-   * current config (`v1-orphan-ft-clones`) can defer instead of acting on an
-   * empty fallback. PR #869 baixiaohang round-3 P0.
+   * config payload (`currentSourceRepoNamesFromPayload`). `null` when the
+   * caller could not resolve a payload (cache miss, default-payload
+   * fallback). Gates the workspace-manifest write and is threaded into
+   * `applyPendingMigrations` so config-dependent migrations can defer
+   * instead of acting on an empty fallback.
    */
   currentSourceRepoNames: ReadonlySet<string> | null;
 };
@@ -105,49 +101,41 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   const { workspace, sessionCtx, contextTreePath, briefing, currentSourceRepoNames } = params;
 
   // One-shot workspace migrations: sweep legacy directory-structure residue
-  // (UUID-named per-chat snapshots, the legacy `WHITEPAPER.md` symlink,
-  // retired source-repo clones like `first-tree-hub/`) the moment we
-  // re-attach to an old workspace. Each migration runs at most once per
-  // workspace — the applier persists its own marker file at
+  // (UUID-named per-chat snapshots, the legacy `WHITEPAPER.md` symlink) the
+  // moment we re-attach to an old workspace. Each migration runs at most
+  // once per workspace — the applier persists its own marker file at
   // `.agent/migrations-applied.json` and skips already-applied ids on
   // subsequent calls. Cheap noop in the steady state.
   //
   // `currentSourceRepoNames` carries the live, resolved source-repo
-  // localPaths through to the per-migration context; migrations that need
-  // an authoritative current set (e.g. `v1-orphan-ft-clones`) return
-  // `"deferred"` when it's null and retry on a future resolved session
-  // (PR #869 baixiaohang round-3 P0).
+  // localPaths through to the per-migration context so config-dependent
+  // migrations can defer on an unresolved payload (cache miss).
   applyPendingMigrations(workspace, sessionCtx.log, { currentSourceRepoNames });
 
-  // Make this a valid W1 workspace for the shipped First Tree skills: expose the
-  // (external, cross-agent-shared) Context Tree clone as a sibling symlink and
-  // write `<workspace>/.first-tree/workspace.json` naming the tree + bound
-  // sources. Runs every session (cheap + idempotent) so the manifest tracks
+  // Make this a valid W1 workspace for the shipped First Tree skills: write
+  // `<workspace>/.first-tree/workspace.json` naming the tree + bound
+  // sources. The tree directory itself (`<workspace>/context-tree`) is
+  // agent-managed — the agent clones it on first use per its briefing
+  // protocol; the manifest may legitimately name a not-yet-materialised
+  // tree. Runs every session (cheap + idempotent) so the manifest tracks
   // source-repo changes. Gated on BOTH a resolved tree binding and a resolved
   // source set — a null source set (cache miss) would write a manifest that
   // falsely claims zero sources, which `first-tree-seed`'s self-check reads.
   if (contextTreePath !== null && currentSourceRepoNames !== null) {
-    ensureWorkspaceManifest(workspace, contextTreePath, [...currentSourceRepoNames], sessionCtx.log);
+    ensureWorkspaceManifest(workspace, [...currentSourceRepoNames], sessionCtx.log);
   }
 
   const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
-  const currentTreeHead = readContextTreeHead(contextTreePath);
-  const cachedTreeHead = readCachedContextTreeHead(workspace);
-  // Only treat as drift when both values are known AND differ — `null` on
-  // either side means "unknown", so we fall back to the sentinel-only decision
-  // (fail open). Warn on the asymmetry so a transient `git rev-parse` failure
-  // doesn't silently disable drift detection.
-  if (cachedTreeHead !== null && currentTreeHead === null) {
-    sessionCtx.log(
-      `Context Tree HEAD probe returned null while cached value is ` +
-        `${cachedTreeHead.slice(0, 7)}; drift detection bypassed for this start`,
-    );
-  }
-  const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
   // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
-  // shipped skills payload tracks CLI upgrades even when the Context
-  // Tree HEAD is unchanged. Same fail-open rule as tree drift.
+  // shipped skills payload tracks CLI upgrades. This is the ONLY content
+  // drift key left: the skills payload is bundled with the client package,
+  // so its content is keyed by CLI version — not by the Context Tree HEAD.
+  // (The retired tree-HEAD drift check predates the unified briefing: it
+  // refreshed tree-derived workspace copies that no longer exist. The agent
+  // reads its tree clone directly and keeps it fresh per the briefing's
+  // pull-before-read protocol; no runtime re-bootstrap is needed when the
+  // tree moves.) Fail open: `null` on either side means "unknown".
   const currentCliVersion = resolveBundledCliVersion();
   const cachedCliVersion = readCachedBundledCliVersion(workspace);
   const cliDrifted = currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
@@ -161,17 +149,12 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   // (no perpetual re-integration in version-less environments).
   const integrationNeverPinned = contextTreePath !== null && currentCliVersion !== null && cachedCliVersion === null;
 
-  if (sentinelPresent && !treeDrifted && !cliDrifted && !integrationNeverPinned) {
+  if (sentinelPresent && !cliDrifted && !integrationNeverPinned) {
     ensureStableIdentity(workspace, sessionCtx, contextTreePath);
     writeAgentBriefing(workspace, briefing);
     return;
   }
 
-  if (sentinelPresent && treeDrifted) {
-    sessionCtx.log(
-      `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
-    );
-  }
   if (sentinelPresent && cliDrifted) {
     sessionCtx.log(
       `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
@@ -203,8 +186,6 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
     });
   }
 
-  // Pin the current HEAD so the next start can detect drift.
-  writeContextTreeHead(workspace, currentTreeHead);
   // Only pin the CLI version when integration ACTUALLY RAN and succeeded —
   // i.e. the agent is tree-bound. A tree-less session skips
   // `installFirstTreeIntegration` (so no skills land) but `integrationOk` stays

@@ -9,8 +9,8 @@
 //
 // Path-level precision: the diff is "prev∖current" → delete. The flip side
 // (paths in `current` and not in `prev`) is handled by the existing
-// installers (`prepareSourceRepos`, `installFirstTreeSkills`) which already
-// (re)materialise everything they expect to be present.
+// installer (`installFirstTreeSkills`), which already (re)materialises
+// everything it expects to be present.
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";

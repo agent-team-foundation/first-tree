@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
 import { createAgent, rebindAgent } from "../services/agent.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
 
 /**
  * Coverage for the post-0026 capability gate in `services/agent.ts`:
@@ -201,6 +201,35 @@ describe("Agent capability gate (services/agent.ts)", () => {
       clientId: ctx.clientId,
       runtimeProvider: "codex",
     });
-    expect(rebound.runtimeProvider).toBe("codex");
+    expect(rebound.agent.runtimeProvider).toBe("codex");
+    expect(rebound.previousClientId).toBe(ctx.clientId);
+  });
+
+  it("rebindAgent returns the actual previous client for each committed move", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const secondClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    const thirdClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    const agent = await createAgent(app.db, {
+      name: `cap-gate-prev-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const first = await rebindAgent(app.db, agent.uuid, {
+      clientId: secondClientId,
+      runtimeProvider: "claude-code",
+    });
+    expect(first.previousClientId).toBe(ctx.clientId);
+    expect(first.agent.clientId).toBe(secondClientId);
+
+    const second = await rebindAgent(app.db, agent.uuid, {
+      clientId: thirdClientId,
+      runtimeProvider: "claude-code",
+    });
+    expect(second.previousClientId).toBe(secondClientId);
+    expect(second.agent.clientId).toBe(thirdClientId);
   });
 });

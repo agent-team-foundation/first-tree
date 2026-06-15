@@ -17,7 +17,8 @@ import {
   isReservedAgentName,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or, sql } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -30,6 +31,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
 import { agentAddressableCondition, agentVisibilityCondition } from "./access-control.js";
+import { AGENT_DETACH_CHANNEL } from "./notifier.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -39,6 +41,7 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  * internal traffic could be routed through a real account.
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
+type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -213,7 +216,7 @@ export function legacyWireAgentType(type: string): "human" | "personal_assistant
  * (e.g. operator overrides for an offline client).
  */
 async function ensureClientSupportsRuntimeProvider(
-  db: Database,
+  db: SelectDbLike,
   clientId: string | null,
   runtimeProvider: RuntimeProvider,
   options: { force?: boolean } = {},
@@ -242,7 +245,7 @@ async function ensureClientSupportsRuntimeProvider(
 }
 
 async function resolveAgentClient(
-  db: Database,
+  db: SelectDbLike,
   data: { clientId?: string; managerId: string; type: string },
 ): Promise<string | null> {
   if (data.type === "human") {
@@ -595,7 +598,7 @@ export async function checkAgentNameAvailability(
  * Returns `null` when no row exists (the caller decides whether that's a
  * 404 or an internal invariant violation post-update).
  */
-export async function selectAgentRowWithRuntime(db: Database, uuid: string): Promise<AgentRowWithRuntime | null> {
+export async function selectAgentRowWithRuntime(db: SelectDbLike, uuid: string): Promise<AgentRowWithRuntime | null> {
   const [row] = await db
     .select({
       ...getTableColumns(agents),
@@ -935,41 +938,56 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
  * dialog routes both same-client runtime-only switches and cross-client
  * moves through this single entry.
  *
- * NOTE: active sessions on the previous client are not auto-suspended in P1.
- * P3 will wire in cross-service coordination (inbox + presence + session)
- * so the destination client can resume cleanly.
+ * Returns the agent row plus the previous client captured under the same row
+ * lock as the update, so callers detach the runtime slot that this rebind
+ * actually replaced.
  */
 export async function rebindAgent(db: Database, uuid: string, data: RebindAgent) {
-  const agent = await getAgent(db, uuid);
-  if (agent.type === "human") {
-    throw new BadRequestError("Human agents have no runtime — they cannot be re-bound to a client.");
-  }
+  return db.transaction(async (tx) => {
+    const [agent] = await tx.select().from(agents).where(eq(agents.uuid, uuid)).for("update").limit(1);
+    if (!agent || agent.status === AGENT_STATUSES.DELETED) {
+      throw new NotFoundError(`Agent "${uuid}" not found`);
+    }
+    if (agent.type === "human") {
+      throw new BadRequestError("Human agents have no runtime — they cannot be re-bound to a client.");
+    }
+    const previousClientId = agent.clientId;
 
-  const newClientId = await resolveAgentClient(db, {
-    clientId: data.clientId,
-    managerId: agent.managerId,
-    type: agent.type,
+    const newClientId = await resolveAgentClient(tx, {
+      clientId: data.clientId,
+      managerId: agent.managerId,
+      type: agent.type,
+    });
+    if (newClientId === null) {
+      throw new BadRequestError("Rebind requires a non-null clientId.");
+    }
+
+    await ensureClientSupportsRuntimeProvider(tx, newClientId, data.runtimeProvider, { force: data.force });
+
+    const [updated] = await tx
+      .update(agents)
+      .set({
+        clientId: newClientId,
+        runtimeProvider: data.runtimeProvider,
+        updatedAt: new Date(),
+      })
+      .where(eq(agents.uuid, uuid))
+      .returning();
+
+    if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+    if (previousClientId && previousClientId !== newClientId) {
+      await tx.execute(
+        sql`SELECT pg_notify(${AGENT_DETACH_CHANNEL}, ${JSON.stringify({
+          agentId: uuid,
+          clientId: previousClientId,
+          reason: "agent_rebound",
+        })})`,
+      );
+    }
+    const refreshed = await selectAgentRowWithRuntime(tx, uuid);
+    if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+    return { agent: refreshed, previousClientId };
   });
-  if (newClientId === null) {
-    throw new BadRequestError("Rebind requires a non-null clientId.");
-  }
-
-  await ensureClientSupportsRuntimeProvider(db, newClientId, data.runtimeProvider, { force: data.force });
-
-  const [updated] = await db
-    .update(agents)
-    .set({
-      clientId: newClientId,
-      runtimeProvider: data.runtimeProvider,
-      updatedAt: new Date(),
-    })
-    .where(eq(agents.uuid, uuid))
-    .returning();
-
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  const refreshed = await selectAgentRowWithRuntime(db, uuid);
-  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
-  return refreshed;
 }
 
 /**

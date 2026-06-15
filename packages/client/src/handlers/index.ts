@@ -26,6 +26,6 @@ export function registerBuiltinHandlers(): void {
   );
   // Codex SDK bundles the codex CLI binary inside the npm package — no PATH
   // resolution needed. The handler factory consumes the same HandlerConfig
-  // (workspaceRoot / agentConfigCache / gitMirrorManager / contextTreePath).
+  // (workspaceRoot / agentConfigCache / contextTreePath).
   registerHandler("codex", (config) => createCodexHandler(config));
 }

@@ -8,7 +8,8 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
-import { createAgent, suspendAgent } from "../services/agent.js";
+import { createAgent, rebindAgent, suspendAgent } from "../services/agent.js";
+import { getAgentClientId } from "../services/connection-manager.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestApp } from "./helpers.js";
@@ -129,6 +130,54 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     await waitForFrame(ws, (m) => (m as { type?: string }).type === "client:registered");
 
     return ws;
+  }
+
+  async function seedAdditionalClient(
+    seed: Awaited<ReturnType<typeof seedConnectedClient>>,
+    suffix: string,
+  ): Promise<Awaited<ReturnType<typeof seedConnectedClient>>> {
+    const clientId = `cli-pin-${suffix}-${crypto.randomUUID().slice(0, 6)}`;
+    await app.db.insert(clients).values({
+      id: clientId,
+      userId: seed.userId,
+      organizationId: seed.organizationId,
+      status: "connected",
+    });
+    return { ...seed, clientId };
+  }
+
+  async function bindRuntimeSlot(ws: WebSocket, agentId: string, ref: string): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: "agent:bind",
+        ref,
+        agentId,
+        runtimeType: "claude-code",
+        runtimeVersion: "test",
+      }),
+    );
+    await waitForFrame(
+      ws,
+      (m) =>
+        (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+        (m as { agentId?: string }).agentId === agentId,
+    );
+  }
+
+  async function closeSockets(...sockets: WebSocket[]): Promise<void> {
+    await Promise.all(
+      sockets.map(
+        (ws) =>
+          new Promise<void>((resolve) => {
+            if (ws.readyState === WebSocket.CLOSED) {
+              resolve();
+              return;
+            }
+            ws.once("close", () => resolve());
+            ws.close();
+          }),
+      ),
+    );
   }
 
   beforeAll(async () => {
@@ -543,6 +592,169 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("rebind transaction detach notifications force-disconnect a matching local runtime route", async () => {
+    const seed = await seedConnectedClient("detach-notify");
+    const secondSeed = await seedAdditionalClient(seed, "detach-notify-second");
+    const agent = await createAgent(app.db, {
+      name: `pin-detach-notify-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Detach Notify",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      await bindRuntimeSlot(ws, agent.uuid, "bind-detach-notify");
+      expect(getAgentClientId(agent.uuid)).toBe(seed.clientId);
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const rebound = await rebindAgent(app.db, agent.uuid, {
+        clientId: secondSeed.clientId,
+        runtimeProvider: "claude-code",
+      });
+      expect(rebound.previousClientId).toBe(seed.clientId);
+
+      await expect(forcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_rebound",
+      });
+      expect(getAgentClientId(agent.uuid)).toBeUndefined();
+    } finally {
+      await closeSockets(ws);
+    }
+  }, 15000);
+
+  it("rebind force-disconnects the previous client and ignores stale unbinds", async () => {
+    const firstSeed = await seedConnectedClient("rebind-first");
+    const secondSeed = await seedAdditionalClient(firstSeed, "rebind-second");
+    const thirdSeed = await seedAdditionalClient(firstSeed, "rebind-third");
+    const firstWs = await openRegisteredSocket(firstSeed);
+    const secondWs = await openRegisteredSocket(secondSeed);
+    const thirdWs = await openRegisteredSocket(thirdSeed);
+
+    try {
+      const agent = await createAgent(app.db, {
+        name: `pin-rebind-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        displayName: "Rebind Agent",
+        source: "admin-api",
+        managerId: firstSeed.memberId,
+        organizationId: firstSeed.organizationId,
+        clientId: firstSeed.clientId,
+      });
+
+      await bindRuntimeSlot(firstWs, agent.uuid, "bind-first");
+      expect(getAgentClientId(agent.uuid)).toBe(firstSeed.clientId);
+
+      const firstForcePromise = waitForFrame(
+        firstWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const secondPinnedPromise = waitForFrame(
+        secondWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:pinned" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/agents/${agent.uuid}/rebind`,
+        headers: { authorization: `Bearer ${firstSeed.token}` },
+        payload: { clientId: secondSeed.clientId, runtimeProvider: "claude-code" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      await expect(firstForcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_rebound",
+      });
+      await expect(secondPinnedPromise).resolves.toMatchObject({
+        type: "agent:pinned",
+        agentId: agent.uuid,
+      });
+      expect(getAgentClientId(agent.uuid)).toBeUndefined();
+
+      await bindRuntimeSlot(secondWs, agent.uuid, "bind-second");
+      expect(getAgentClientId(agent.uuid)).toBe(secondSeed.clientId);
+
+      firstWs.send(JSON.stringify({ type: "agent:unbind", agentId: agent.uuid }));
+      await waitForFrame(
+        firstWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:unbound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      expect(getAgentClientId(agent.uuid)).toBe(secondSeed.clientId);
+      let [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+      expect(presence?.status).toBe("online");
+      expect(presence?.clientId).toBe(secondSeed.clientId);
+
+      const secondForcePromise = waitForFrame(
+        secondWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const thirdPinnedPromise = waitForFrame(
+        thirdWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:pinned" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      const secondRes = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/agents/${agent.uuid}/rebind`,
+        headers: { authorization: `Bearer ${firstSeed.token}` },
+        payload: { clientId: thirdSeed.clientId, runtimeProvider: "claude-code" },
+      });
+      expect(secondRes.statusCode).toBe(200);
+
+      await expect(secondForcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_rebound",
+      });
+      await expect(thirdPinnedPromise).resolves.toMatchObject({
+        type: "agent:pinned",
+        agentId: agent.uuid,
+      });
+      expect(getAgentClientId(agent.uuid)).toBeUndefined();
+
+      await bindRuntimeSlot(thirdWs, agent.uuid, "bind-third");
+      expect(getAgentClientId(agent.uuid)).toBe(thirdSeed.clientId);
+
+      secondWs.send(JSON.stringify({ type: "agent:unbind", agentId: agent.uuid }));
+      await waitForFrame(
+        secondWs,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:unbound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      expect(getAgentClientId(agent.uuid)).toBe(thirdSeed.clientId);
+      [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+      expect(presence?.status).toBe("online");
+      expect(presence?.clientId).toBe(thirdSeed.clientId);
+    } finally {
+      await closeSockets(firstWs, secondWs, thirdWs);
     }
   }, 15000);
 
