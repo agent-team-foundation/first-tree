@@ -55,10 +55,16 @@ export async function probeCapabilities(): Promise<ClientCapabilities> {
 }
 
 /**
- * Decide whether a reconnect should run a full real re-probe (spends a smoke)
- * or a free resolve+auth re-validate. Full when the previous snapshot is
- * empty, has any non-`ok` provider (it might have recovered), or is older than
- * `maxAgeMs` (periodic refresh); otherwise the cheaper re-validate suffices.
+ * Decide whether a reconnect should run a full real re-probe of ALL providers
+ * (`probeCapabilities`, a real smoke each) or the cheaper per-provider
+ * `revalidateCapabilities`. Full only when the snapshot is empty or any entry
+ * is older than `maxAgeMs` (a periodic real re-verification).
+ *
+ * A snapshot that merely contains a non-`ok` provider does NOT force a full
+ * sweep: `revalidateCapabilities` already re-probes the non-ok providers in
+ * full (to catch recovery) while keeping the fresh-`ok` ones on the free cached
+ * path. So a common no-tmux machine — where `claude-code-tui` is permanently
+ * `missing` — does not re-smoke `claude-code` + `codex` on every reconnect.
  */
 export function shouldFullReprobe(
   previous: ClientCapabilities,
@@ -67,7 +73,6 @@ export function shouldFullReprobe(
 ): boolean {
   const entries = Object.values(previous).filter((e): e is CapabilityEntry => e != null);
   if (entries.length === 0) return true;
-  if (entries.some((e) => e.state !== "ok")) return true;
   return entries.some((e) => {
     const at = Date.parse(e.detectedAt);
     return Number.isNaN(at) || now - at > maxAgeMs;

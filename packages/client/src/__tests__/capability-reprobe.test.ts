@@ -27,17 +27,13 @@ describe("shouldFullReprobe", () => {
     expect(shouldFullReprobe({}, now)).toBe(true);
   });
 
-  it("any non-ok provider → full (it might have recovered)", () => {
+  it("a non-ok-but-fresh provider does NOT force a full sweep (revalidate handles it per-provider)", () => {
+    const fresh = new Date(now - 60_000).toISOString();
     const caps: ClientCapabilities = {
-      "claude-code": okEntry({ detectedAt: new Date(now).toISOString() }),
-      codex: okEntry({
-        state: "missing",
-        available: false,
-        authenticated: false,
-        detectedAt: new Date(now).toISOString(),
-      }),
+      "claude-code": okEntry({ detectedAt: fresh }),
+      codex: okEntry({ state: "missing", available: false, authenticated: false, detectedAt: fresh }),
     };
-    expect(shouldFullReprobe(caps, now)).toBe(true);
+    expect(shouldFullReprobe(caps, now)).toBe(false);
   });
 
   it("all-ok but older than the TTL → full (periodic refresh)", () => {
@@ -140,7 +136,7 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     expect(out.codex).toEqual(missing);
   });
 
-  it("reprobeOnReconnect dispatches re-validate when all-ok+fresh, full otherwise", async () => {
+  it("reprobeOnReconnect dispatches re-validate when fresh, full only when empty/stale", async () => {
     const fresh = new Date().toISOString();
     const allOkFresh: ClientCapabilities = {
       "claude-code": okEntry({ detectedAt: fresh }),
@@ -149,14 +145,37 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     };
 
     const reval = await loadWithMocks();
-    const r1 = await reval.mod.reprobeOnReconnect(allOkFresh);
-    expect(r1.mode).toBe("revalidate");
+    expect((await reval.mod.reprobeOnReconnect(allOkFresh)).mode).toBe("revalidate");
     expect(reval.calls.codex?.deps?.runSmoke).toBeTypeOf("function"); // cached smoke injected
 
+    // Empty snapshot → full.
     const full = await loadWithMocks();
-    const withMissing: ClientCapabilities = { codex: okEntry({ state: "missing", available: false }) };
-    const r2 = await full.mod.reprobeOnReconnect(withMissing);
-    expect(r2.mode).toBe("full");
-    expect(full.calls.codex?.deps?.runSmoke).toBeUndefined(); // full probe, no injection
+    expect((await full.mod.reprobeOnReconnect({})).mode).toBe("full");
+
+    // Stale (past TTL) → full.
+    const stale = await loadWithMocks();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    expect((await stale.mod.reprobeOnReconnect({ codex: okEntry({ detectedAt: old }) })).mode).toBe("full");
+    expect(stale.calls.codex?.deps?.runSmoke).toBeUndefined(); // full probe, no injection
+  });
+
+  it("cost control: an optional provider missing does NOT full-smoke the fresh-ok providers on reconnect", async () => {
+    const fresh = new Date().toISOString();
+    // Common no-tmux box: TUI permanently missing, claude-code + codex ok & fresh.
+    const previous: ClientCapabilities = {
+      "claude-code": okEntry({ detectedAt: fresh }),
+      codex: okEntry({ detectedAt: fresh }),
+      "claude-code-tui": okEntry({ state: "missing", available: false, authenticated: false, detectedAt: fresh }),
+    };
+
+    const { mod, calls } = await loadWithMocks();
+    const { mode } = await mod.reprobeOnReconnect(previous);
+
+    expect(mode).toBe("revalidate");
+    // fresh-ok providers re-validated for free (cached smoke injected, no real smoke)
+    expect(calls["claude-code"]?.deps?.runSmoke).toBeTypeOf("function");
+    expect(calls.codex?.deps?.runSmoke).toBeTypeOf("function");
+    // the missing optional provider IS fully re-probed (to catch recovery), no cached smoke
+    expect(calls["claude-code-tui"]?.deps?.runSmoke).toBeUndefined();
   });
 });

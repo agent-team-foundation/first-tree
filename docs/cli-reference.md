@@ -453,12 +453,15 @@ first-tree daemon
 | `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
 
 **Capability refresh timing.** The daemon launch-probes runtime providers at
-startup and re-probes automatically on every WebSocket reconnect: a full real
-re-probe when the previous result was non-ok or older than 24h, otherwise a
-cheap resolve+auth re-validate that keeps a still-launchable, still-logged-in
-provider's prior `ok` without re-running the session smoke (a vanished binary
-or lost login still downgrades). `daemon probe` is the manual, on-demand path
-between those automatic refreshes.
+startup and re-probes automatically on every WebSocket reconnect. A full real
+re-probe of all providers runs only when there is no prior snapshot or one is
+older than 24h; otherwise each provider is re-validated individually — a
+still-launchable, still-logged-in provider keeps its prior `ok` for free
+(resolve + auth re-checked, no session smoke re-run), a provider that lost its
+binary or login downgrades, and a non-ok provider is fully re-probed so it can
+recover. So a machine missing an optional provider (e.g. no tmux for
+`claude-code-tui`) does not re-smoke its healthy providers on every reconnect.
+`daemon probe` is the manual, on-demand path between those automatic refreshes.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.
