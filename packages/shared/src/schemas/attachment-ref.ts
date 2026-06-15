@@ -37,6 +37,13 @@ export const attachmentRefSchema = z.object({
   filename: z.string().min(1),
   size: z.number().int().nonnegative(),
   sha256: z.string().length(64).optional(),
+  // SECURITY: `source.path` (and `sourcePath`) is UNTRUSTED, DISPLAY-ONLY
+  // metadata. A ref's bytes are self-supplied by the sender and downloads are
+  // capability-based (valid session + unguessable attachmentId), so a malicious
+  // runtime can fabricate bytes and pair them with an arbitrary `source.path`.
+  // The server cannot meaningfully validate a free-form display string, so it
+  // does not — this is display-spoofing only, NOT access escalation. NEVER use
+  // `source.path` for authorization, routing, or filesystem access.
   source: z
     .object({
       path: z.string(),
@@ -57,6 +64,13 @@ export const MAX_MESSAGE_ATTACHMENT_REFS = 10;
 const ATTACHMENT_KINDS_SET = new Set<string>(ATTACHMENT_KINDS);
 
 /**
+ * UUID shape check matching `z.string().uuid()` — kept in the hand-rolled guard
+ * so a non-uuid `attachmentId` cannot slip past `isAttachmentRef` (and thus the
+ * count-matched server reader) when the schema requires a uuid.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Hand-rolled guard for {@link AttachmentRef} — kept cheap (instead of
  * `schema.safeParse`) because every inbound message in chat-view / runtime
  * passes through it on render. Mirrors the contract of `attachmentRefSchema`;
@@ -66,7 +80,7 @@ const ATTACHMENT_KINDS_SET = new Set<string>(ATTACHMENT_KINDS);
 export function isAttachmentRef(value: unknown): value is AttachmentRef {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  if (typeof v.attachmentId !== "string") return false;
+  if (typeof v.attachmentId !== "string" || !UUID_RE.test(v.attachmentId)) return false;
   if (typeof v.kind !== "string" || !ATTACHMENT_KINDS_SET.has(v.kind)) return false;
   if (typeof v.mimeType !== "string" || v.mimeType.length === 0) return false;
   if (typeof v.filename !== "string" || v.filename.length === 0) return false;

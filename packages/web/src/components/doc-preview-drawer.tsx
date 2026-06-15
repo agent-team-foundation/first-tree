@@ -12,7 +12,7 @@ import {
 } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
-import { fetchAttachmentText, sha256Hex } from "../api/attachments.js";
+import { downloadAttachment, fetchAttachmentText, sha256Hex } from "../api/attachments.js";
 import { listChatMessages } from "../api/chats.js";
 import { attachmentIdFromHref } from "../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../lib/safe-href.js";
@@ -216,6 +216,11 @@ export function DocPreviewDrawer() {
     enabled: hasDocRef && Boolean(docAttachmentId),
   });
 
+  // SECURITY: `docRef.source.path` is UNTRUSTED, DISPLAY-ONLY metadata supplied
+  // by the sending runtime (see `AttachmentRef.source` in attachment-ref.ts). It
+  // is rendered purely as the drawer title/subtitle here — it must NEVER be used
+  // for authorization, routing, or filesystem access. The doc bytes are fetched
+  // by the capability-based attachmentId, not by this path.
   const title = useMemo(() => {
     const path = docRef?.source?.path ?? docRef?.filename ?? "";
     return path.split("/").filter(Boolean).at(-1) ?? path;
@@ -250,6 +255,20 @@ export function DocPreviewDrawer() {
     },
     [searchParams, setSearchParams],
   );
+
+  // Over-cap fallback: download the bytes through the authed api helper rather
+  // than navigating to a page-relative `/api/v1/...` (no auth header → 401,
+  // wrong origin → 404). The download filename prefers the captured filename.
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const handleDownload = useCallback(async () => {
+    if (!docAttachmentId) return;
+    setDownloadError(null);
+    try {
+      await downloadAttachment(docAttachmentId, docRef?.filename ?? "document.md");
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : "Download failed");
+    }
+  }, [docAttachmentId, docRef]);
 
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -416,15 +435,11 @@ export function DocPreviewDrawer() {
           <div className="rounded-[var(--radius-panel)] border border-border bg-bg-sunken p-4 text-body text-fg-2">
             This document is too large to preview ({Math.round(previewQuery.data.sizeBytes / 1024)} KB).{" "}
             {docAttachmentId ? (
-              <a
-                href={`/api/v1/attachments/${encodeURIComponent(docAttachmentId)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline"
-              >
+              <button type="button" onClick={handleDownload} className="underline">
                 Download to view
-              </a>
+              </button>
             ) : null}
+            {downloadError ? <div className="mt-2 text-caption text-error">{downloadError}</div> : null}
           </div>
         ) : previewQuery.data?.kind === "text" ? (
           <>

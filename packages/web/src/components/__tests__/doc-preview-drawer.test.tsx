@@ -14,6 +14,7 @@ const ATT_ID = "00000000-0000-4000-8000-000000000001";
 const attachmentsMocks = vi.hoisted(() => ({
   fetchAttachmentText: vi.fn(),
   sha256Hex: vi.fn(),
+  downloadAttachment: vi.fn(),
 }));
 const chatsMocks = vi.hoisted(() => ({
   listChatMessages: vi.fn(),
@@ -202,7 +203,13 @@ describe("DocPreviewDrawer", () => {
     });
     await flush();
     expect(dom.textContent).toContain("too large to preview");
-    expect(dom.querySelector(`a[href*="${ATT_ID}"]`)).toBeTruthy();
+    // The over-cap fallback is an authenticated download button (not a dead
+    // page-relative `/api/v1/...` anchor that would 401/404). Clicking it routes
+    // through the authed `downloadAttachment` helper.
+    const downloadButton = [...dom.querySelectorAll("button")].find((b) => b.textContent === "Download to view");
+    expect(downloadButton).toBeTruthy();
+    await click(downloadButton ?? null);
+    expect(attachmentsMocks.downloadAttachment).toHaveBeenCalledWith(ATT_ID, docRef.filename);
   });
 
   it("recovers the ref from the messages window after a cold reload", async () => {
