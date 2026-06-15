@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerBuiltinHandlers } from "../handlers/index.js";
 import { getHandlerFactory } from "../runtime/handler.js";
@@ -76,18 +79,23 @@ describe("Built-in Handlers", () => {
       PATH: process.env.PATH,
       Path: process.env.Path,
       path: process.env.path,
+      HOME: process.env.HOME,
     };
     const stderrMessages: string[] = [];
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
       stderrMessages.push(String(message));
       return true;
     });
+    // Isolated HOME: the resolver also checks well-known install dirs
+    // (~/.local/bin), which would otherwise find the dev machine's real claude.
+    const emptyHome = mkdtempSync(join(tmpdir(), "ftt-builtin-home-"));
 
     try {
       delete process.env.CLAUDE_CODE_EXECUTABLE;
       process.env.PATH = "";
       delete process.env.Path;
       delete process.env.path;
+      process.env.HOME = emptyHome;
 
       registerBuiltinHandlers();
     } finally {
@@ -111,6 +119,12 @@ describe("Built-in Handlers", () => {
       } else {
         process.env.path = originalEnv.path;
       }
+      if (originalEnv.HOME === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalEnv.HOME;
+      }
+      rmSync(emptyHome, { recursive: true, force: true });
       stderrWrite.mockRestore();
     }
 
