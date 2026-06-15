@@ -13,10 +13,13 @@ channel (`first-tree` on prod, `first-tree-staging` on staging,
 
 - one tree repo at `<workspaceRoot>/<tree>`, resolved by reading
   `<workspaceRoot>/.first-tree/workspace.json` directly (schema:
-  `{ tree: "<dir>", sources: [...] }`). The `<binName> tree status`
-  CLI was retired in 2026-06 — the manifest is small JSON, `cat` it.
-- one or more source repos at `<workspaceRoot>/<name>` for each
-  `name` in `sources`. Under the agent-managed repo model these are
+  `{ tree: "<dir>", sources: [...], sourcesRoot?: "source-repos" }`). The
+  `<binName> tree status` CLI was retired in 2026-06 — the manifest is
+  small JSON, `cat` it.
+- one or more source repos at `<workspaceRoot>/<sourcesRoot>/<name>` for
+  each `name` in `sources` — i.e. `<workspaceRoot>/source-repos/<name>`
+  (a legacy flat manifest omits `sourcesRoot` and keeps them at
+  `<workspaceRoot>/<name>`). Under the agent-managed repo model these are
   **bare** clones (no working tree) — Phase 4 reads them through a
   read worktree, never the bare path directly (see Phase 4).
   Phase 4 iterates over **every** bound source; for multi-source
