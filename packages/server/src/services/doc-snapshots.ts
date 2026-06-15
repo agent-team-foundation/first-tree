@@ -1,43 +1,32 @@
-import { createHash } from "node:crypto";
 import {
+  type AttachmentRef,
+  attachmentRefsFromMetadata,
   documentContextSchema,
-  looksLikeChatId,
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-  parseWorkspaceDocKey,
+  MAX_MESSAGE_ATTACHMENT_REFS,
 } from "@first-tree/shared";
 import { BadRequestError } from "../errors.js";
+import { type AttachmentReader, loadAttachmentMeta } from "./attachment.js";
 
 /**
- * Server-side bottom-line validation for `metadata.documentContext`.
+ * Server-side shape validation for `metadata.documentContext`.
  *
- * Runtime is the snapshot author, but content arrives over the wire — server
- * still has to verify byte budgets and recompute sha256 so a buggy or
- * malicious client cannot lodge a doc whose declared hash drifts from its
- * actual content. Shape validation (path / docs[] cap / kind discriminator)
- * lives in the shared schema; this file owns the byte-counted and
- * cryptographic checks that schemas cannot express.
+ * After the attachment-ref convergence the only thing left in
+ * `documentContext` is the inert-chip `failedMentions` roster (the successful
+ * captures are now generic `AttachmentRef`s in `metadata.attachments[]`, byte
+ * validated by {@link validateMessageAttachmentRefs}). This function only
+ * enforces the discriminated-union shape so a malformed roster is rejected
+ * loudly rather than silently stored.
  *
- * Returns the validated DocumentContext for the caller to store, or
- * `undefined` if no `documentContext` was provided.
+ * Graceful degradation: a pre-cutover message carrying the legacy inline
+ * `kind: "snapshot"` shape (`docs[].content`) no longer matches the schema, so
+ * the parse fails. This validator runs only on the SEND path (new messages),
+ * so a parse failure here is a genuine client bug worth surfacing; readers
+ * (web) tolerate the legacy shape by falling back to no-preview.
  *
- * Why throw BadRequestError instead of silently stripping: snapshot data
- * comes from a trusted runtime; a schema mismatch typically signals a
- * client bug, and surfacing it loudly is more useful than hiding it.
- *
- * `chatScope` (optional) enables cross-agent provenance authz: a snapshot key
- * shaped like a global cross key `<ownerSlug>/<chatId>/<rel>` whose chatId
- * segment matches the message's chat must name an owner that is a participant
- * of that chat. This is defense-in-depth on top of the runtime's structural
- * fence — a compromised runtime cannot embed (and broadcast) a non-participant
- * agent's workspace doc. Self / legacy bare keys carry no owner segment for
- * this chat and are unaffected. When omitted (other callers / tests), the
- * provenance check is skipped.
+ * Throws `BadRequestError` on a malformed `documentContext`; a no-op when the
+ * field is absent.
  */
-export function validateDocumentContext(
-  metadata: Record<string, unknown> | undefined,
-  chatScope?: { chatId: string; participantSlugs: ReadonlySet<string> },
-): void {
+export function validateDocumentContext(metadata: Record<string, unknown> | undefined): void {
   if (!metadata) return;
   const raw = metadata.documentContext;
   if (raw === undefined || raw === null) return;
@@ -48,77 +37,89 @@ export function validateDocumentContext(
       "doc_snapshot.parse_error": parsed.error.message.slice(0, 200),
     });
   }
-  const ctx = parsed.data;
-  if (ctx.kind !== "snapshot") return;
+}
 
-  let totalBytes = 0;
-  for (const doc of ctx.docs) {
-    if (chatScope) {
-      const key = parseWorkspaceDocKey(doc.path);
-      if (key) {
-        const ownerIsParticipant = chatScope.participantSlugs.has(key.agentSlug.toLowerCase());
-        if (key.chatId === chatScope.chatId) {
-          // Cross-agent global key for THIS chat — the owner must be a speaker
-          // participant, else a doc from a non-member's workspace would be
-          // broadcast into the chat.
-          if (!ownerIsParticipant) {
-            throw new BadRequestError("Document snapshot references a non-participant agent workspace", {
-              "doc_snapshot.path": doc.path,
-              "doc_snapshot.owner_slug": key.agentSlug,
-            });
-          }
-        } else if (ownerIsParticipant && looksLikeChatId(key.chatId)) {
-          // Owner-shaped global key naming a DIFFERENT chat. A participant-owned
-          // key whose chat segment isn't this chat would pull another chat's
-          // private workspace doc past the `workspaces/*/<currentChatId>/` fence
-          // — reject it (review P1).
-          //
-          // The `looksLikeChatId` gate disambiguates a real cross-chat attempt
-          // (`<participant>/<some-uuid>/<rel>`) from a deep SELF path whose
-          // first segment HAPPENS to be a participant slug. After the
-          // worktree-fence widening (this PR), a single-repo agent emits
-          // promoted self keys shaped `<localPath>/<rel>` (e.g.
-          // `assistant/docs/intro.md`); without the uuid check, those would be
-          // rejected here whenever `<localPath>` collides with a participant
-          // name, breaking otherwise valid sends. chatIds are minted by
-          // `createChat` as canonical UUIDs (services/chat.ts), so any
-          // non-uuid second segment cannot reference a real chat — the leak
-          // protection is meaningless in that branch.
-          throw new BadRequestError("Document snapshot references another chat's agent workspace", {
-            "doc_snapshot.path": doc.path,
-            "doc_snapshot.owner_slug": key.agentSlug,
-            "doc_snapshot.key_chat_id": key.chatId,
-          });
-        }
-      }
-    }
-    const actualBytes = Buffer.byteLength(doc.content, "utf8");
-    if (actualBytes > MAX_DOC_SNAPSHOT_BYTES) {
-      throw new BadRequestError("Document snapshot exceeds per-file byte budget", {
-        "doc_snapshot.path": doc.path,
-        "doc_snapshot.actual_bytes": actualBytes,
-        "doc_snapshot.limit_bytes": MAX_DOC_SNAPSHOT_BYTES,
-      });
-    }
-    if (doc.size !== actualBytes) {
-      throw new BadRequestError("Document snapshot size does not match content", {
-        "doc_snapshot.path": doc.path,
-        "doc_snapshot.declared_size": doc.size,
-        "doc_snapshot.actual_size": actualBytes,
-      });
-    }
-    const actualSha = createHash("sha256").update(doc.content, "utf8").digest("hex");
-    if (actualSha !== doc.sha256) {
-      throw new BadRequestError("Document snapshot sha256 does not match content", {
-        "doc_snapshot.path": doc.path,
-      });
-    }
-    totalBytes += actualBytes;
-  }
-  if (totalBytes > MAX_TOTAL_DOC_SNAPSHOT_BYTES) {
-    throw new BadRequestError("Total document snapshot bytes exceed per-message budget", {
-      "doc_snapshot.total_bytes": totalBytes,
-      "doc_snapshot.limit_bytes": MAX_TOTAL_DOC_SNAPSHOT_BYTES,
+/**
+ * Server-side bottom-line validation for `metadata.attachments[]` — the generic
+ * attachment-ref roster (doc-preview is the first consumer; kind: "document").
+ *
+ * Runtime is the ref author, but the wire is untrusted: server confirms each
+ * referenced blob actually exists and that the ref's declared `mimeType` /
+ * `size` agree with the stored `attachments` row. This is the trust boundary
+ * that keeps a buggy or malicious client from lodging a ref whose declared
+ * metadata drifts from reality (which would mislead every reader / integrity
+ * check). Integrity of the BYTES is verified client-side at render via
+ * `ref.sha256`, so the server does not re-hash (zero DB change, no bytea read
+ * on the hot send path).
+ *
+ * Deliberately does NOT check `uploaded_by == sender`: uploads record the
+ * managing human's `humanAgentId`, while the message sender is the agent uuid —
+ * the two are never equal, so that check would reject every normal send (see
+ * proposal §5.3, verified against api/orgs/attachments.ts).
+ *
+ * Throws `BadRequestError` when the ref count exceeds the cap, or any ref's
+ * attachment is missing / mime-mismatched / size-mismatched. A no-op when no
+ * `attachments` field is present (the common case — most messages carry none).
+ */
+export async function validateMessageAttachmentRefs(
+  db: AttachmentReader,
+  metadata: Record<string, unknown> | undefined,
+): Promise<void> {
+  const refs = readAttachmentRefsStrict(metadata);
+  if (refs.length === 0) return;
+
+  if (refs.length > MAX_MESSAGE_ATTACHMENT_REFS) {
+    throw new BadRequestError("Too many attachment references on a single message", {
+      "attachment_ref.count": refs.length,
+      "attachment_ref.limit": MAX_MESSAGE_ATTACHMENT_REFS,
     });
   }
+
+  // Look up every referenced row in parallel (metadata only — no bytea).
+  const rows = await Promise.all(refs.map((ref) => loadAttachmentMeta(db, ref.attachmentId)));
+
+  for (let i = 0; i < refs.length; i += 1) {
+    const ref = refs[i];
+    const row = rows[i];
+    if (!ref) continue;
+    if (!row) {
+      throw new BadRequestError("Attachment reference points at a non-existent attachment", {
+        "attachment_ref.id": ref.attachmentId,
+      });
+    }
+    if (row.mimeType !== ref.mimeType) {
+      throw new BadRequestError("Attachment reference mimeType does not match the stored attachment", {
+        "attachment_ref.id": ref.attachmentId,
+        "attachment_ref.declared_mime": ref.mimeType,
+        "attachment_ref.actual_mime": row.mimeType,
+      });
+    }
+    if (row.sizeBytes !== ref.size) {
+      throw new BadRequestError("Attachment reference size does not match the stored attachment", {
+        "attachment_ref.id": ref.attachmentId,
+        "attachment_ref.declared_size": ref.size,
+        "attachment_ref.actual_size": row.sizeBytes,
+      });
+    }
+  }
+}
+
+/**
+ * Read `metadata.attachments[]`, rejecting a present-but-malformed array as a
+ * client bug. `attachmentRefsFromMetadata` (the lenient reader used on render)
+ * silently drops bad entries; on the send path we want a loud failure instead
+ * so a misbehaving runtime can't ship a half-broken roster.
+ */
+function readAttachmentRefsStrict(metadata: Record<string, unknown> | undefined): AttachmentRef[] {
+  if (!metadata) return [];
+  const raw = metadata.attachments;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new BadRequestError("metadata.attachments must be an array of attachment references");
+  }
+  const refs = attachmentRefsFromMetadata(metadata);
+  if (refs.length !== raw.length) {
+    throw new BadRequestError("metadata.attachments contains a malformed attachment reference");
+  }
+  return refs;
 }

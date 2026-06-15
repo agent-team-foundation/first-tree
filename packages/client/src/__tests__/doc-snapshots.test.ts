@@ -1,37 +1,76 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-} from "@first-tree/shared";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildMessageDocumentSnapshots } from "../runtime/doc-snapshots.js";
+  type AttachmentUploader,
+  type BuildDocAttachmentsOptions,
+  buildMessageDocumentSnapshots,
+} from "../runtime/doc-snapshots.js";
 
 /**
- * Unit tests for the runtime snapshot builder. Every resolved+snapshotted `.md`
- * reference is rewritten into an EXPLICIT markdown link whose href is the
- * canonical snapshot key (bare → `[display](key)`; inline target → key), so web
- * resolves a click by direct href→snapshot lookup without re-scanning. Out-of-
- * root / hidden / escaping paths get no snapshot and are left verbatim.
+ * Unit tests for the runtime doc-capture builder after the attachment-ref
+ * convergence. A resolved `.md` reference is now uploaded to the org blob store
+ * and rewritten into an explicit `[display](attachment:<id>)` link; the bytes
+ * are no longer inlined. We use a deterministic stub uploader that mints
+ * uuid-shaped ids so the rewrite output is assertable.
  */
-describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A)", () => {
+
+const ORG_ID = "11111111-1111-4111-8111-111111111111";
+
+function fakeUploadId(seq: number): string {
+  const hex = seq.toString(16).padStart(12, "0");
+  return `00000000-0000-4000-8000-${hex}`;
+}
+
+type RecordedUpload = { bytes: Buffer; mimeType: string; filename: string; orgId: string };
+
+function stubUploader(): { uploader: AttachmentUploader; uploads: RecordedUpload[] } {
+  const uploads: RecordedUpload[] = [];
+  let seq = 0;
+  const uploader: AttachmentUploader = {
+    async uploadAttachment(opts) {
+      seq += 1;
+      const bytes = Buffer.from(opts.bytes);
+      uploads.push({ bytes, mimeType: opts.mimeType, filename: opts.filename, orgId: opts.orgId });
+      return { id: fakeUploadId(seq), mimeType: opts.mimeType, filename: opts.filename, sizeBytes: bytes.byteLength };
+    },
+  };
+  return { uploader, uploads };
+}
+
+function failingUploader(): AttachmentUploader {
+  return {
+    async uploadAttachment() {
+      throw new Error("upload boom");
+    },
+  };
+}
+
+function opts(uploader: AttachmentUploader): BuildDocAttachmentsOptions {
+  return { uploader, orgId: ORG_ID };
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+describe("buildMessageDocumentSnapshots — capture + attachment-link rewrite", () => {
   let root: string;
   let outside: string;
+  let uploads: RecordedUpload[];
+  let uploader: AttachmentUploader;
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "doc-snap-root-"));
     await writeFile(join(root, "design.md"), "# design\n", "utf8");
     await mkdir(join(root, "docs"), { recursive: true });
     await writeFile(join(root, "docs", "intro.md"), "# intro\n", "utf8");
-    // Symlink escape fixture: public.md → .agent/secret.md (hidden segment).
     await mkdir(join(root, ".agent"), { recursive: true });
     await writeFile(join(root, ".agent", "secret.md"), "# secret\n", "utf8");
     await symlink(join(root, ".agent", "secret.md"), join(root, "public.md"));
 
-    // A real .md file that EXISTS but lives OUTSIDE the workspace root, so the
-    // rejection is proven by containment, not a missing-file shortcut.
     outside = await mkdtemp(join(tmpdir(), "doc-snap-outside-"));
     await writeFile(join(outside, "external.md"), "# external\n", "utf8");
   });
@@ -41,864 +80,164 @@ describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A
     await rm(outside, { recursive: true, force: true });
   });
 
-  it("rewrites a bare absolute-in-root token to its relative path + snapshots it", async () => {
+  beforeEach(() => {
+    const stub = stubUploader();
+    uploader = stub.uploader;
+    uploads = stub.uploads;
+  });
+
+  it("uploads a bare absolute-in-root token and rewrites it to an attachment link", async () => {
     const abs = join(root, "design.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`wrote ${abs} just now`, root);
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(`wrote ${abs} just now`, root, opts(uploader));
 
-    expect(docs.map((d) => d.path)).toEqual(["design.md"]);
-    expect(docs[0]?.content).toBe("# design\n");
-    expect(rewrittenText).toBe("wrote [design.md](design.md) just now");
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.kind).toBe("document");
+    expect(refs[0]?.source?.path).toBe("design.md");
+    expect(refs[0]?.mimeType).toBe("text/markdown");
+    expect(refs[0]?.sha256).toBe(sha256("# design\n"));
+    expect(refs[0]?.filename).toBe("design.md");
+    expect(rewrittenText).toBe(`wrote [design.md](attachment:${fakeUploadId(1)}) just now`);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.orgId).toBe(ORG_ID);
   });
 
-  it("rewrites an absolute target inside an inline markdown link in place", async () => {
+  it("retargets an inline markdown link's target at the attachment", async () => {
     const abs = join(root, "docs", "intro.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see [intro](${abs}) for setup`, root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("see [intro](docs/intro.md) for setup");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `see [intro](${abs}) for setup`,
+      root,
+      opts(uploader),
+    );
+    expect(refs[0]?.source?.path).toBe("docs/intro.md");
+    expect(rewrittenText).toBe(`see [intro](attachment:${fakeUploadId(1)}) for setup`);
   });
 
-  it("preserves the :line[:col] suffix when rewriting an absolute token, keys the snapshot de-suffixed", async () => {
+  it("keeps the :line[:col] suffix on the display, points href at the attachment", async () => {
     const abs = join(root, "docs", "intro.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:42:7 here`, root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    // Explicit link: `:line` kept on the display, stripped from the key href.
-    expect(rewrittenText).toBe("open [docs/intro.md:42:7](docs/intro.md) here");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:42:7 here`, root, opts(uploader));
+    expect(refs[0]?.source?.path).toBe("docs/intro.md");
+    expect(rewrittenText).toBe(`open [docs/intro.md:42:7](attachment:${fakeUploadId(1)}) here`);
   });
 
-  it("leaves an out-of-root absolute path untouched — no snapshot, no rewrite", async () => {
+  it("leaves an out-of-root absolute path untouched — no upload, no rewrite", async () => {
     const abs = join(outside, "external.md");
     const text = `external doc at ${abs} here`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs).toEqual([]);
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(text, root, opts(uploader));
+    expect(refs).toEqual([]);
     expect(rewrittenText).toBe(text);
+    expect(uploads).toEqual([]);
   });
 
-  it("wraps a bare relative mention into an explicit link; an already-canonical inline href is left as-is", async () => {
-    const text = "see docs/intro.md and [d](design.md)";
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs.map((d) => d.path).sort()).toEqual(["design.md", "docs/intro.md"]);
-    // Bare `docs/intro.md` → explicit link; inline `[d](design.md)` href is
-    // already the canonical key, so it stays byte-identical.
-    expect(rewrittenText).toBe("see [docs/intro.md](docs/intro.md) and [d](design.md)");
+  it("links a bare relative mention; dedupes the same file mentioned twice to one upload", async () => {
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      "see docs/intro.md and again docs/intro.md",
+      root,
+      opts(uploader),
+    );
+    expect(refs).toHaveLength(1);
+    expect(uploads).toHaveLength(1);
+    expect(rewrittenText).toBe(
+      `see [docs/intro.md](attachment:${fakeUploadId(1)}) and again [docs/intro.md](attachment:${fakeUploadId(1)})`,
+    );
   });
 
-  it("canonicalises a non-canonical inline target (`./docs/intro.md` → `docs/intro.md`)", async () => {
-    const text = "see [d](./docs/intro.md)";
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    // Web no longer canonicalises on re-scan; the runtime points the target
-    // straight at the snapshot key so the click is a direct lookup.
-    expect(rewrittenText).toBe("see [d](docs/intro.md)");
-  });
-
-  it("scans an inline markdown link at the start of the message", async () => {
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("[d](design.md) starts here", root);
-
-    expect(docs.map((d) => d.path)).toEqual(["design.md"]);
-    expect(rewrittenText).toBe("[d](design.md) starts here");
-  });
-
-  it("rejects a symlink whose realpath crosses into a hidden dir — relative AND absolute forms", async () => {
-    const rel = "see [p](public.md)";
-    const relOut = await buildMessageDocumentSnapshots(rel, root);
-    expect(relOut.docs).toEqual([]);
-    expect(relOut.rewrittenText).toBe(rel);
-
+  it("rejects a symlink whose realpath crosses into a hidden dir (relative + absolute)", async () => {
+    const relOut = await buildMessageDocumentSnapshots("see [p](public.md)", root, opts(uploader));
+    expect(relOut.refs).toEqual([]);
     const abs = join(root, "public.md");
-    const absText = `see ${abs}`;
-    const absOut = await buildMessageDocumentSnapshots(absText, root);
-    expect(absOut.docs).toEqual([]);
-    expect(absOut.rewrittenText).toBe(absText);
+    const absOut = await buildMessageDocumentSnapshots(`see ${abs}`, root, opts(uploader));
+    expect(absOut.refs).toEqual([]);
   });
 
-  it("rejects a hidden-segment mention and leaves the text verbatim", async () => {
-    const text = "secret [s](.agent/secret.md)";
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("rewrites every occurrence of the same absolute path, snapshotting it once", async () => {
-    const abs = join(root, "design.md");
-    const text = `first ${abs} then again ${abs}`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs.map((d) => d.path)).toEqual(["design.md"]);
-    expect(rewrittenText).toBe("first [design.md](design.md) then again [design.md](design.md)");
-  });
-
-  it("invariant: every rewritten explicit-link href is a real snapshot key", async () => {
-    // The core "two ends agree by construction" guarantee — web resolves a
-    // click by direct href→snapshot lookup, so every href the rewrite emits
-    // MUST be one of the snapshot keys (else a dead link). Mixes bare +
-    // inline + absolute + relative + :line in one message.
-    const absDesign = join(root, "design.md");
-    const text = `a ${absDesign} b docs/intro.md c [x](${join(root, "docs", "intro.md")}) d ${absDesign}:9`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    const keys = new Set(docs.map((d) => d.path));
-    const hrefs = [...rewrittenText.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]);
-    expect(hrefs.length).toBeGreaterThan(0);
-    for (const href of hrefs) expect(keys.has(href ?? "")).toBe(true);
-  });
-
-  it("widens the rewrite over a single-backtick code span — code-styled clickable link", async () => {
-    // Phase-1 fix: previously inline code was a hard skip and `` `docs/intro.md` ``
-    // stayed dead. Now the rewrite encloses the whole tick-wrapped span so the
-    // mono-spaced visual survives and the link points at the snapshot key.
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("see `docs/intro.md` for setup", root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("see [`docs/intro.md`](docs/intro.md) for setup");
-  });
-
-  it("preserves multi-backtick code-span wrappers verbatim in the link text", async () => {
-    // Multi-tick spans are commonmark-legal too and the rewrite preserves the
-    // exact tick count + surrounding text so embedded backticks aren't lost.
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(
-      "see ``the ` token in docs/intro.md`` is escaped",
+  it("reports a bare missing mention as a failedMention and leaves it plain text", async () => {
+    const { refs, failedMentions, rewrittenText } = await buildMessageDocumentSnapshots(
+      "read directory-or-missing.md",
       root,
+      opts(uploader),
     );
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("see [``the ` token in docs/intro.md``](docs/intro.md) is escaped");
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "directory-or-missing.md", reason: "missing" }]);
+    expect(rewrittenText).toBe("read directory-or-missing.md");
   });
 
-  it("preserves the :line suffix when the path is wrapped in a code span", async () => {
-    // `:line` inside the span survives via the verbatim slice; the href is
-    // still the canonical de-suffixed key.
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("open `docs/intro.md:42:7` here", root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("open [`docs/intro.md:42:7`](docs/intro.md) here");
-  });
-
-  it("snapshots an absolute code-span path and links it with the canonical key", async () => {
-    const abs = join(root, "docs", "intro.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see \`${abs}\` please`, root);
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    // Display kept verbatim (long absolute path inside ticks), href is the
-    // canonical workspace-relative key.
-    expect(rewrittenText).toBe(`see [\`${abs}\`](docs/intro.md) please`);
-  });
-
-  it("leaves a fenced (triple-backtick) code block as plain text — fenced stays a hard skip", async () => {
-    const text = ["before", "```", "docs/intro.md", "```", "after"].join("\n");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("reports a missing relative mention via failedMentions[missing]", async () => {
-    // Phase-2: a bare mention whose canonical path can't be resolved to a
-    // real file lands in failedMentions with reason "missing". The rewrite
-    // leaves the token untouched (no dead link), and the snapshot list stays
-    // empty — the agent's text reaches the wire as authored.
-    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
-      "see docs/nope.md please",
+  it("degrades to plain text (no rewrite) when the upload fails after retries", async () => {
+    const { refs, failedMentions, rewrittenText } = await buildMessageDocumentSnapshots(
+      "see design.md please",
       root,
+      opts(failingUploader()),
     );
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe("see docs/nope.md please");
-    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
+    expect(refs).toEqual([]);
+    expect(rewrittenText).toBe("see design.md please");
+    // A bare mention whose upload failed surfaces an inert-chip reason.
+    expect(failedMentions).toEqual([{ raw: "design.md", reason: "unreadable" }]);
   });
 
-  it("reports a code-span-wrapped missing mention with raw stripped of line suffix", async () => {
-    // The code-span wrapper doesn't change failure reporting: the agent's
-    // written path (suffix-stripped) is what lands in failedMentions, so the
-    // web wrap pass can match every variant of the token in one entry.
-    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
-      "see `docs/missing.md:42` together",
-      root,
-    );
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe("see `docs/missing.md:42` together");
-    expect(failedMentions).toEqual([{ raw: "docs/missing.md", reason: "missing" }]);
-  });
-
-  it("reports an out-of-root absolute mention as out-of-fence", async () => {
-    // Out-of-root absolute paths fall through self resolution and fail
-    // classification — bucket them as out-of-fence so the chip tooltip can
-    // tell the agent the file is outside the workspace.
-    const abs = join(outside, "external.md");
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs} now`, root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
-  });
-
-  it("reports a hidden-segment mention via failedMentions[hidden-segment]", async () => {
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots("read .agent/secret.md", root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: ".agent/secret.md", reason: "hidden-segment" }]);
-  });
-
-  it("treats an in-workspace .md directory as missing", async () => {
-    await mkdir(join(root, "directory.md"), { recursive: true });
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots("read directory.md", root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: "directory.md", reason: "missing" }]);
-  });
-
-  it("classifies a relative `..` escape as out-of-fence, not hidden-segment", async () => {
-    // Parent-traversal mentions (`../outside.md`) cannot snapshot — but the
-    // failure reason is "outside the workspace", not "hidden directory". The
-    // chip tooltip would otherwise mis-attribute the cause and confuse the
-    // agent (Codex review round 1 P3).
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots("see ../outside.md please", root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: "../outside.md", reason: "out-of-fence" }]);
-  });
-
-  it("dedupes failedMentions by writtenPath across multiple raw variants", async () => {
-    // Two occurrences of the same canonical path under different `:line`
-    // suffixes collapse to ONE failedMentions entry on the wire. Web's wrap
-    // pass canonicalises each scan match before lookup so all occurrences
-    // still render as chips.
-    const { failedMentions } = await buildMessageDocumentSnapshots(
-      "compare docs/nope.md to docs/nope.md:5 together",
-      root,
-    );
-
-    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
-  });
-
-  it("drops failed mentions whose raw token would exceed the wire cap", async () => {
-    const tooLongRaw = `${"a".repeat(513)}.md`;
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${tooLongRaw}`, root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([]);
-  });
-
-  it("caps the number of failed mentions reported per message", async () => {
-    const names = Array.from({ length: 18 }, (_, i) => `missing-${i}.md`);
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(names.join(" "), root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toHaveLength(16);
-    expect(failedMentions.at(-1)).toEqual({ raw: "missing-15.md", reason: "missing" });
-  });
-
-  it("mixes successful snapshots and failed mentions in one message", async () => {
-    // Mixed message: a real path snapshots, an unreachable one fails. Both
-    // are reported so chat-view can render a real link + an inert chip side
-    // by side.
-    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
-      "wrote docs/intro.md but docs/nope.md is missing",
-      root,
-    );
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("wrote [docs/intro.md](docs/intro.md) but docs/nope.md is missing");
-    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
-  });
-
-  it("marks duplicate failed snapshot attempts with the original failure reason", async () => {
-    await writeFile(join(root, "too-big.md"), Buffer.alloc(MAX_DOC_SNAPSHOT_BYTES + 1, 0x61));
-
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots(
-      "first too-big.md then too-big.md again",
-      root,
-    );
-
-    expect(docs).toEqual([]);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: "too-big.md", reason: "too-large" }]);
-  });
-
-  it("falls back to missing for a duplicate attempted key with no prior failure reason", async () => {
-    const NativeSet = globalThis.Set;
-    let createdSets = 0;
-    class SnapshotBlindSet<T> extends NativeSet<T> {
-      private readonly blindHas: boolean;
-
-      constructor(values?: Iterable<T> | null) {
-        super(values ?? undefined);
-        createdSets += 1;
-        this.blindHas = createdSets === 2;
-      }
-
-      override has(value: T): boolean {
-        if (this.blindHas) return false;
-        return super.has(value);
-      }
-    }
-
-    Object.defineProperty(globalThis, "Set", {
-      configurable: true,
-      value: SnapshotBlindSet,
-      writable: true,
-    });
-    try {
-      const { docs, failedMentions } = await buildMessageDocumentSnapshots("design.md design.md", root);
-
-      expect(docs.map((d) => d.path)).toEqual(["design.md"]);
-      expect(failedMentions).toEqual([{ raw: "design.md", reason: "missing" }]);
-    } finally {
-      Object.defineProperty(globalThis, "Set", {
-        configurable: true,
-        value: NativeSet,
-        writable: true,
-      });
-    }
-  });
-
-  it("enforces the per-message snapshot count budget", async () => {
-    const names = Array.from({ length: MAX_DOC_SNAPSHOTS_PER_MESSAGE + 1 }, (_, i) => `budget-${i}.md`);
-    const overflowName = names[MAX_DOC_SNAPSHOTS_PER_MESSAGE] ?? "budget-overflow.md";
-    await Promise.all(names.map((name) => writeFile(join(root, name), `# ${name}\n`, "utf8")));
-
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots(names.join(" "), root);
-
-    expect(docs).toHaveLength(MAX_DOC_SNAPSHOTS_PER_MESSAGE);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: overflowName, reason: "budget-exceeded" }]);
-  });
-
-  it("skips files over the raw-byte snapshot cap", async () => {
-    await writeFile(join(root, "raw-too-large.md"), Buffer.alloc(MAX_DOC_SNAPSHOT_BYTES + 1, 0x61));
-
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots("read raw-too-large.md", root);
-
-    expect(docs).toEqual([]);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: "raw-too-large.md", reason: "too-large" }]);
-  });
-
-  it("skips files whose UTF-8 replacement content exceeds the per-file cap", async () => {
-    await writeFile(join(root, "utf8-too-large.md"), Buffer.alloc(Math.floor(MAX_DOC_SNAPSHOT_BYTES / 2), 0xff));
-
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots("read utf8-too-large.md", root);
-
-    expect(docs).toEqual([]);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: "utf8-too-large.md", reason: "too-large" }]);
-  });
-
-  it("enforces the aggregate snapshot byte budget after successful reads", async () => {
-    const chunkSize = Math.floor(MAX_TOTAL_DOC_SNAPSHOT_BYTES / 3);
-    const names = ["total-a.md", "total-b.md", "total-c.md", "total-d.md"];
-    await Promise.all(names.map((name) => writeFile(join(root, name), "a".repeat(chunkSize), "utf8")));
-
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots(names.join(" "), root);
-
-    expect(docs.map((d) => d.path)).toEqual(["total-a.md", "total-b.md", "total-c.md"]);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: "total-d.md", reason: "budget-exceeded" }]);
-  });
-
-  it("inline-link failures stay silent — no failedMentions entry", async () => {
-    // The agent's explicit `[label](target.md)` already shows their intent
-    // to link. A failed snapshot for that target leaves the link as-is in
-    // the text; web's click handler no-ops on the missing snapshot. We
-    // deliberately do NOT add an inert chip — the proposal scopes the chip
-    // UI to scanner-bare-token positions.
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots("click [docs](docs/nope.md) please", root);
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([]);
-  });
-
-  it("multi-path-in-one-code-span: first wins, second left inside the link text", async () => {
-    // Degenerate case: the agent crams two paths into one code span. The
-    // overlap-defensive applyRewrites picks the first match's widened span;
-    // the second match's rewrite is dropped. The second path's snapshot is
-    // still emitted so metadata stays self-consistent — it just isn't its
-    // own clickable target.
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(
-      "see `docs/intro.md and design.md` together",
-      root,
-    );
-
-    const paths = docs.map((d) => d.path).sort();
-    expect(paths).toEqual(["design.md", "docs/intro.md"]);
-    expect(rewrittenText).toBe("see [`docs/intro.md and design.md`](docs/intro.md) together");
+  it("does not capture when no .md mention is present", async () => {
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots("just chatting", root, opts(uploader));
+    expect(refs).toEqual([]);
+    expect(rewrittenText).toBe("just chatting");
+    expect(uploads).toEqual([]);
   });
 });
 
-/**
- * Cross-agent doc preview: with a workspace fence, an absolute `.md` path that
- * realpaths into ANOTHER agent's workspace (same chat) under the shared
- * `workspaces/` common root is snapshotted with a global
- * `<ownerSlug>/<chatId>/<rel>` key and rewritten into an explicit link with a
- * short `<ownerSlug>/<rel>` display and the FULL global key as href. Self paths
- * get an explicit relative link; out-of-scope paths (other chat, other root,
- * hidden) stay verbatim.
- */
 describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => {
   let workspacesRoot: string;
   let selfRoot: string;
-  const chatId = "chat-xyz";
-  const selfSlug = "coder";
-  const otherSlug = "assistant";
+  let crossRoot: string;
+  const CHAT = "22222222-2222-4222-8222-222222222222";
 
   beforeAll(async () => {
     workspacesRoot = await mkdtemp(join(tmpdir(), "doc-snap-ws-"));
-    // self workspace: workspaces/coder/chat-xyz
-    selfRoot = join(workspacesRoot, selfSlug, chatId);
+    selfRoot = join(workspacesRoot, "coder", CHAT);
+    crossRoot = join(workspacesRoot, "assistant", CHAT);
     await mkdir(selfRoot, { recursive: true });
-    await writeFile(join(selfRoot, "mine.md"), "# mine\n", "utf8");
-    // Self file whose relative path collides with a cross short form
-    // (`assistant/design.md`) — used to prove the collision → full-key rewrite.
-    await mkdir(join(selfRoot, otherSlug), { recursive: true });
-    await writeFile(join(selfRoot, otherSlug, "design.md"), "# my own assistant notes\n", "utf8");
-    // sibling agent workspace (same chat): workspaces/assistant/chat-xyz
-    const otherRoot = join(workspacesRoot, otherSlug, chatId);
-    await mkdir(join(otherRoot, "docs"), { recursive: true });
-    await writeFile(join(otherRoot, "design.md"), "# their design\n", "utf8");
-    await writeFile(join(otherRoot, "docs", "intro.md"), "# their intro\n", "utf8");
-    await mkdir(join(otherRoot, ".agent"), { recursive: true });
-    await writeFile(join(otherRoot, ".agent", "secret.md"), "# their secret\n", "utf8");
-    await symlink(join(otherRoot, ".agent", "secret.md"), join(otherRoot, "leak.md"));
-    // sibling agent in a DIFFERENT chat: workspaces/assistant/other-chat
-    const otherChatRoot = join(workspacesRoot, otherSlug, "other-chat");
-    await mkdir(otherChatRoot, { recursive: true });
-    await writeFile(join(otherChatRoot, "private.md"), "# other chat\n", "utf8");
+    await mkdir(crossRoot, { recursive: true });
+    await writeFile(join(crossRoot, "plan.md"), "# their plan\n", "utf8");
   });
 
   afterAll(async () => {
     await rm(workspacesRoot, { recursive: true, force: true });
   });
 
-  const fence = () => ({ workspacesRoot, chatId, selfSlug });
+  function fence() {
+    return { workspacesRoot, chatId: CHAT, selfSlug: "coder" };
+  }
 
-  it("snapshots a sibling agent's doc with a global key + short rewrite", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "design.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see ${abs} please`, selfRoot, fence());
-
-    expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/design.md`]);
-    expect(docs[0]?.content).toBe("# their design\n");
-    // Explicit link: short `<slug>/<rel>` display, FULL global key href so web
-    // direct-matches without chatId re-expansion.
-    expect(rewrittenText).toBe(`see [${otherSlug}/design.md](${otherSlug}/${chatId}/design.md) please`);
-  });
-
-  it("preserves subdir + :line suffix in the cross rewrite", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "docs", "intro.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:10 now`, selfRoot, fence());
-
-    expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/docs/intro.md`]);
-    expect(rewrittenText).toBe(`open [${otherSlug}/docs/intro.md:10](${otherSlug}/${chatId}/docs/intro.md) now`);
-  });
-
-  it("rewrites a self path into an explicit relative link even with a fence", async () => {
-    const abs = join(selfRoot, "mine.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`my ${abs} file`, selfRoot, fence());
-
-    expect(docs.map((d) => d.path)).toEqual(["mine.md"]);
-    expect(rewrittenText).toBe("my [mine.md](mine.md) file");
-  });
-
-  it("rejects a sibling doc from a DIFFERENT chat (chat-scope fence)", async () => {
-    const abs = join(workspacesRoot, otherSlug, "other-chat", "private.md");
-    const text = `cross-chat ${abs} nope`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("classifies a missing cross-workspace path as missing", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "missing-cross.md");
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: abs, reason: "missing" }]);
-  });
-
-  it("classifies a shallow path under the workspace common root as out-of-fence", async () => {
-    const abs = join(workspacesRoot, "loose.md");
-    await writeFile(abs, "# loose\n", "utf8");
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
-  });
-
-  it("classifies an absolute path outside the workspace common root as out-of-fence with a fence present", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "doc-snap-cross-outside-"));
-    try {
-      const abs = join(outside, "outside.md");
-      await writeFile(abs, "# outside\n", "utf8");
-
-      const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, fence());
-
-      expect(docs).toEqual([]);
-      expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
-    } finally {
-      await rm(outside, { recursive: true, force: true });
-    }
-  });
-
-  it("handles a workspace common root whose realpath is the filesystem root", async () => {
-    const detachedHome = await mkdtemp(join(tmpdir(), "doc-snap-root-ws-home-"));
-    const rootWorkspace = await mkdtemp(join(tmpdir(), "doc-snap-root-ws-"));
-    try {
-      const abs = join(rootWorkspace, "assistant", chatId, "notes.md");
-      await mkdir(join(rootWorkspace, "assistant", chatId), { recursive: true });
-      await writeFile(abs, "# root workspace\n", "utf8");
-
-      const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, detachedHome, {
-        workspacesRoot: "/",
-        chatId,
-        selfSlug,
-      });
-
-      expect(docs).toEqual([]);
-      expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
-    } finally {
-      await rm(detachedHome, { recursive: true, force: true });
-      await rm(rootWorkspace, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects a sibling symlink whose realpath crosses into a hidden dir", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "leak.md");
-    const text = `leak ${abs}`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("classifies a cross path with a hidden real segment as hidden", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, ".hidden", "notes.md");
-    await mkdir(join(workspacesRoot, otherSlug, chatId, ".hidden"), { recursive: true });
-    await writeFile(abs, "# hidden\n", "utf8");
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: abs, reason: "hidden-segment" }]);
-  });
-
-  it("classifies an absolute path under the self slug but outside this agent home as missing", async () => {
-    const abs = join(workspacesRoot, selfSlug, chatId, "foreign-self.md");
-    const detachedHome = await mkdtemp(join(tmpdir(), "doc-snap-detached-home-"));
-    await writeFile(abs, "# other self checkout\n", "utf8");
-
-    try {
-      const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, detachedHome, fence());
-
-      expect(docs).toEqual([]);
-      expect(failedMentions).toEqual([{ raw: abs, reason: "missing" }]);
-    } finally {
-      await rm(detachedHome, { recursive: true, force: true });
-    }
-  });
-
-  it("classifies a sibling .md directory as missing", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "folder.md");
-    await mkdir(abs, { recursive: true });
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([{ raw: abs, reason: "missing" }]);
-  });
-
-  it("classifies a cross path rejected by canonical key validation as unreadable", async () => {
-    const unusualSlug = "assistant?debug=true";
-    const abs = join(workspacesRoot, unusualSlug, chatId, "notes.md");
-    await mkdir(join(workspacesRoot, unusualSlug, chatId), { recursive: true });
-    await writeFile(abs, "# unusual slug\n", "utf8");
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see [notes](${abs})`, selfRoot, fence());
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([]);
-  });
-
-  it("does NOT cross-resolve when no fence is supplied (opt-in)", async () => {
-    const abs = join(workspacesRoot, otherSlug, chatId, "design.md");
-    const text = `see ${abs} please`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot);
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("a self ref and a cross ref that share a short form get DISTINCT hrefs (no collision)", async () => {
-    // Self file `assistant/design.md` (relative) AND the sibling agent's
-    // `assistant/<chat>/design.md` are both referenced — both display as
-    // `assistant/design.md`. With explicit links the hrefs are the canonical
-    // keys (self relative vs cross GLOBAL), so they can never collide and web
-    // direct-matches each to the right snapshot — no collision handling needed.
-    const crossAbs = join(workspacesRoot, otherSlug, chatId, "design.md");
-    const text = `self ${otherSlug}/design.md and cross ${crossAbs}`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
-
-    expect(docs.map((d) => d.path).sort()).toEqual([`${otherSlug}/${chatId}/design.md`, `${otherSlug}/design.md`]);
-    expect(rewrittenText).toBe(
-      `self [${otherSlug}/design.md](${otherSlug}/design.md) and ` +
-        `cross [${otherSlug}/design.md](${otherSlug}/${chatId}/design.md)`,
+  it("captures a cross-agent doc under the shared root and uses the short source path", async () => {
+    const stub = stubUploader();
+    const abs = join(crossRoot, "plan.md");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `see ${abs} please`,
+      selfRoot,
+      opts(stub.uploader),
+      fence(),
     );
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("assistant/plan.md");
+    expect(rewrittenText).toBe(`see [assistant/plan.md](attachment:${fakeUploadId(1)}) please`);
+  });
+
+  it("does not capture a cross-agent doc when no fence is supplied", async () => {
+    const stub = stubUploader();
+    const abs = join(crossRoot, "plan.md");
+    const { refs } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, opts(stub.uploader));
+    expect(refs).toEqual([]);
   });
 });
 
-/**
- * Worktree-fence widening (this PR): the self fence now extends to the FULL
- * agent home, not just the source-repo top, so absolute paths into the
- * agent's on-demand `<agentHome>/worktrees/<task>/` checkouts also snapshot
- * (PR #498's workflow). Relative mentions in a single-repo workspace are
- * promoted to `<localPath>/<rel>` so the abs + rel forms of a source-repo
- * file share one canonical key.
- */
-describe("buildMessageDocumentSnapshots — wide self-fence over agent home", () => {
-  let agentHome: string;
-
-  beforeAll(async () => {
-    // Layout mirrors the post-#506 production tree:
-    //   <agentHome>/first-tree/          predeclared source repo (top level)
-    //   <agentHome>/worktrees/<task>/    agent-on-demand worktree
-    //   <agentHome>/docs/                agent-home-scoped notes
-    //   <agentHome>/.agent/              MUST stay rejected via hidden-segment check
-    agentHome = await mkdtemp(join(tmpdir(), "doc-snap-agenthome-"));
-    await mkdir(join(agentHome, "first-tree", "docs"), { recursive: true });
-    await writeFile(join(agentHome, "first-tree", "docs", "intro.md"), "# intro\n", "utf8");
-    await mkdir(join(agentHome, "worktrees", "task-x", "docs"), { recursive: true });
-    await writeFile(join(agentHome, "worktrees", "task-x", "docs", "design.md"), "# design\n", "utf8");
-    await mkdir(join(agentHome, "docs"), { recursive: true });
-    await writeFile(join(agentHome, "docs", "note.md"), "# note\n", "utf8");
-    await mkdir(join(agentHome, ".agent"), { recursive: true });
-    await writeFile(join(agentHome, ".agent", "secret.md"), "# secret\n", "utf8");
-  });
-
-  afterAll(async () => {
-    await rm(agentHome, { recursive: true, force: true });
-  });
-
-  it("snapshots a worktree-scoped absolute .md (#506+#498 idiom — the bug this PR fixes)", async () => {
-    // Pre-fix the snapshot scanner gated absolute paths on the source-repo top
-    // and dropped this mention back to plain text. Wide fence + agent-home-
-    // relative key restores the preview.
-    const abs = join(agentHome, "worktrees", "task-x", "docs", "design.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`wrote ${abs} just now`, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["worktrees/task-x/docs/design.md"]);
-    expect(docs[0]?.content).toBe("# design\n");
-    expect(rewrittenText).toBe("wrote [worktrees/task-x/docs/design.md](worktrees/task-x/docs/design.md) just now");
-  });
-
-  it("promotes a relative source-repo mention to `<localPath>/<rel>` so abs + rel share one key", async () => {
-    // `docs/intro.md` written relatively was the pre-#506 idiom; we keep it
-    // resolving against the source-repo top so the agent's old habits still
-    // work. The snapshot key is PROMOTED so the absolute form
-    // `<agentHome>/first-tree/docs/intro.md` produces the same canonical key —
-    // web cache stays single-keyed per file.
-    const abs = join(agentHome, "first-tree", "docs", "intro.md");
-    const text = `relative docs/intro.md and absolute ${abs}`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["first-tree/docs/intro.md"]);
-    expect(rewrittenText).toBe(
-      "relative [first-tree/docs/intro.md](first-tree/docs/intro.md) and " +
-        "absolute [first-tree/docs/intro.md](first-tree/docs/intro.md)",
-    );
-  });
-
-  it("snapshots an agent-home-scoped absolute .md (sibling of the source repo)", async () => {
-    // `<agentHome>/docs/note.md` is in neither the source repo nor a worktree;
-    // it's an agent-home note (CLAUDE.md, README, scratch). The wide fence
-    // accepts it as a valid snapshot target.
-    const abs = join(agentHome, "docs", "note.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see ${abs}`, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/note.md"]);
-    expect(rewrittenText).toBe("see [docs/note.md](docs/note.md)");
-  });
-
-  it("rejects an absolute path outside the agent home — wide fence is not a free-for-all", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "doc-snap-outside-wide-"));
+describe("buildMessageDocumentSnapshots — orgId plumbing", () => {
+  it("passes the orgId through to every upload", async () => {
+    const root = await mkdtemp(join(tmpdir(), "doc-snap-org-"));
     try {
-      await writeFile(join(outside, "external.md"), "# external\n", "utf8");
-      const abs = join(outside, "external.md");
-      const text = `out-of-home ${abs}`;
-      const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, {
-        agentHome,
-        singleRepoLocalPath: "first-tree",
-      });
-
-      expect(docs).toEqual([]);
-      expect(rewrittenText).toBe(text);
+      await writeFile(join(root, "a.md"), "# a\n", "utf8");
+      const realRoot = await realpath(root);
+      const stub = stubUploader();
+      await buildMessageDocumentSnapshots("see a.md", realRoot, { uploader: stub.uploader, orgId: "org-xyz" });
+      expect(stub.uploads.map((u) => u.orgId)).toEqual(["org-xyz"]);
+      // Spies stay quiet — no global mocks here.
+      vi.clearAllMocks();
     } finally {
-      await rm(outside, { recursive: true, force: true });
-    }
-  });
-
-  it("still rejects a hidden-segment mention inside the agent home (.agent/secret.md)", async () => {
-    const abs = join(agentHome, ".agent", "secret.md");
-    const text = `secret ${abs}`;
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs).toEqual([]);
-    expect(rewrittenText).toBe(text);
-  });
-
-  it("falls back to agent-home resolution when singleRepoLocalPath is absent (zero/multi-repo)", async () => {
-    // No promotion: relative `first-tree/docs/intro.md` is interpreted directly
-    // against the agent home and resolves cleanly without prefixing.
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("see first-tree/docs/intro.md please", {
-      agentHome,
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["first-tree/docs/intro.md"]);
-    expect(rewrittenText).toBe("see [first-tree/docs/intro.md](first-tree/docs/intro.md) please");
-  });
-
-  it("gracefully degrades when singleRepoLocalPath points outside the agent home (no promotion)", async () => {
-    // Defence in depth: a misconfigured `localPath: "../escape"` must not let
-    // docBase wander outside the fence. The resolver silently drops the
-    // promotion and falls back to agent-home resolution.
-    const abs = join(agentHome, "docs", "note.md");
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see ${abs}`, {
-      agentHome,
-      singleRepoLocalPath: "../escape",
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/note.md"]);
-    expect(rewrittenText).toBe("see [docs/note.md](docs/note.md)");
-  });
-
-  it("drops promotion when singleRepoLocalPath resolves to the agent home itself", async () => {
-    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("see docs/note.md", {
-      agentHome,
-      singleRepoLocalPath: ".",
-    });
-
-    expect(docs.map((d) => d.path)).toEqual(["docs/note.md"]);
-    expect(rewrittenText).toBe("see [docs/note.md](docs/note.md)");
-  });
-
-  it("gracefully degrades when singleRepoLocalPath resolves outside the agent home", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "doc-snap-localpath-outside-"));
-    try {
-      await symlink(outside, join(agentHome, "outside-source"));
-
-      const { docs, rewrittenText } = await buildMessageDocumentSnapshots("see docs/note.md", {
-        agentHome,
-        singleRepoLocalPath: "outside-source",
-      });
-
-      expect(docs.map((d) => d.path)).toEqual(["docs/note.md"]);
-      expect(rewrittenText).toBe("see [docs/note.md](docs/note.md)");
-    } finally {
-      await rm(outside, { recursive: true, force: true });
-      await rm(join(agentHome, "outside-source"), { force: true });
-    }
-  });
-
-  it("promotes a missing relative source-repo mention before the read-time miss", async () => {
-    const { docs, failedMentions, skipped } = await buildMessageDocumentSnapshots("see docs/missing-promoted.md", {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs).toEqual([]);
-    expect(skipped).toBe(1);
-    expect(failedMentions).toEqual([{ raw: "docs/missing-promoted.md", reason: "missing" }]);
-  });
-
-  it("classifies an inside-home path rejected by canonical key validation as unreadable", async () => {
-    const abs = join(agentHome, "query?segment", "note.md");
-    await mkdir(join(agentHome, "query?segment"), { recursive: true });
-    await writeFile(abs, "# query segment\n", "utf8");
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see [note](${abs})`, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([]);
-  });
-
-  it("classifies an inside-home directory rejected by canonical key validation as missing", async () => {
-    const abs = join(agentHome, "dir?segment", "folder.md");
-    await mkdir(abs, { recursive: true });
-
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see [folder](${abs})`, {
-      agentHome,
-      singleRepoLocalPath: "first-tree",
-    });
-
-    expect(docs).toEqual([]);
-    expect(failedMentions).toEqual([]);
-  });
-
-  it("rejects a relative symlink that resolves outside the agent home", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "doc-snap-rel-outside-"));
-    try {
-      await writeFile(join(outside, "external.md"), "# external\n", "utf8");
-      await symlink(join(outside, "external.md"), join(agentHome, "external-link.md"));
-
-      const { docs, failedMentions } = await buildMessageDocumentSnapshots("see external-link.md", {
-        agentHome,
-      });
-
-      expect(docs).toEqual([]);
-      expect(failedMentions).toEqual([{ raw: "external-link.md", reason: "out-of-fence" }]);
-    } finally {
-      await rm(outside, { recursive: true, force: true });
-      await rm(join(agentHome, "external-link.md"), { force: true });
-    }
-  });
-
-  it("handles an agent home whose realpath is the filesystem root", async () => {
-    const rootScoped = await mkdtemp(join(tmpdir(), "doc-snap-root-home-"));
-    try {
-      const abs = join(rootScoped, "root-branch.md");
-      await writeFile(abs, "# root branch\n", "utf8");
-      const rejected = join(rootScoped, "query?x", "note.md");
-      await mkdir(join(rootScoped, "query?x"), { recursive: true });
-      await writeFile(rejected, "# rejected\n", "utf8");
-      const relativeToRoot = (await realpath(abs)).replace(/^\/+/, "");
-
-      const absoluteOut = await buildMessageDocumentSnapshots(`see ${abs}`, "/");
-      const relativeOut = await buildMessageDocumentSnapshots(`see ${relativeToRoot}`, "/");
-      const promotedOut = await buildMessageDocumentSnapshots("see root-branch.md", {
-        agentHome: "/",
-        singleRepoLocalPath: relativeToRoot.replace(/\/root-branch\.md$/, ""),
-      });
-      const rejectedOut = await buildMessageDocumentSnapshots(`see [root](${rejected})`, "/");
-
-      expect(absoluteOut.docs.map((d) => d.path)).toEqual([relativeToRoot]);
-      expect(relativeOut.docs.map((d) => d.path)).toEqual([relativeToRoot]);
-      expect(promotedOut.docs.map((d) => d.path)).toEqual([relativeToRoot]);
-      expect(rejectedOut.docs).toEqual([]);
-    } finally {
-      await rm(rootScoped, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

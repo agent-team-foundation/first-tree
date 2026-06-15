@@ -130,10 +130,18 @@ export function registerChatCreateCommand(chat: Command): void {
         }
 
         const sdk = createSdk(options.agent);
-        const captured = await captureOutboundDocs(content);
-        const outboundMetadata = captured.documentContext
-          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
-          : metadata;
+        // No chat exists yet, so org can't be resolved from a chat — doc
+        // capture is a pass-through for `chat create`'s initial message (doc
+        // mentions render as plain text). Subsequent `chat send` captures.
+        const captured = await captureOutboundDocs(content, { sdk });
+        const outboundMetadata =
+          captured.attachments || captured.documentContext
+            ? {
+                ...(metadata ?? {}),
+                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
+              }
+            : metadata;
         const result = await sdk.createTaskChat({
           mode: "task",
           initialRecipientAgentIds: [],

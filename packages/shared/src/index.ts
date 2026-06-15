@@ -135,6 +135,16 @@ export {
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
 export {
+  ATTACHMENT_KINDS,
+  type AttachmentKind,
+  type AttachmentRef,
+  attachmentKindSchema,
+  attachmentRefSchema,
+  attachmentRefsFromMetadata,
+  isAttachmentRef,
+  MAX_MESSAGE_ATTACHMENT_REFS,
+} from "./schemas/attachment-ref.js";
+export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
   connectTokenExchangeSchema,
@@ -443,13 +453,8 @@ export {
   type GetMeDocResponse,
   getMeDocResponseSchema,
   getMeDocSchema,
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
   MAX_FAILED_DOC_MENTION_RAW_LEN,
   MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-  type SnapshotDoc,
-  snapshotDocSchema,
   type WorkspaceDocRef,
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";

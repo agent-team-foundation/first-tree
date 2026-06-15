@@ -59,3 +59,32 @@ export async function fetchAttachmentBase64(id: string): Promise<{ base64: strin
   const mimeType = res.headers.get("content-type") ?? blob.type ?? "application/octet-stream";
   return { base64: await blobToBase64(blob), mimeType };
 }
+
+/**
+ * Download attachment bytes as decoded text — the doc-preview drawer's data
+ * source. Returns the UTF-8 text, the served MIME, and the raw byte length so
+ * callers can verify integrity (sha256) and enforce a render size cap.
+ */
+export async function fetchAttachmentText(id: string): Promise<{ text: string; mimeType: string; sizeBytes: number }> {
+  const res = await apiFetchRaw(`/attachments/${encodeURIComponent(id)}`);
+  const buffer = await res.arrayBuffer();
+  const mimeType = res.headers.get("content-type") ?? "application/octet-stream";
+  const text = new TextDecoder("utf-8").decode(buffer);
+  return { text, mimeType, sizeBytes: buffer.byteLength };
+}
+
+/**
+ * Compute the lowercase hex SHA-256 of a UTF-8 string via the Web Crypto API —
+ * used by the doc-preview drawer to verify fetched bytes against the captured
+ * `ref.sha256`. Throws when `crypto.subtle` is unavailable (insecure context);
+ * callers treat that as "skip verification".
+ */
+export async function sha256Hex(text: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error("Web Crypto subtle digest is unavailable");
+  const bytes = new TextEncoder().encode(text);
+  const digest = await subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}

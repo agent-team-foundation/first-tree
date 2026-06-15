@@ -1,4 +1,4 @@
-import { parseWorkspaceDocKey } from "@first-tree/shared";
+import { type AttachmentRef, attachmentRefsFromMetadata, normalizeDocLinkPath } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import {
@@ -12,17 +12,12 @@ import {
 } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
+import { fetchAttachmentText, sha256Hex } from "../api/attachments.js";
 import { listChatMessages } from "../api/chats.js";
-import { getMeDoc } from "../api/me-docs.js";
-import { docPreviewPathFromHref } from "../lib/doc-preview-links.js";
+import { attachmentIdFromHref } from "../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../lib/safe-href.js";
-import { useAgentSlugToIdMap } from "../lib/use-agent-name-map.js";
 import { cn } from "../lib/utils.js";
-import {
-  type DocSnapshotEntry,
-  docSnapshotQueryKey,
-  documentSnapshotMapFromMetadata,
-} from "../pages/workspace/center/chat-view.js";
+import { docAttachmentRefQueryKey } from "../pages/workspace/center/chat-view.js";
 import { Button } from "./ui/button.js";
 import { Markdown } from "./ui/markdown.js";
 
@@ -30,16 +25,19 @@ const DEFAULT_MAX_WIDTH = 1200;
 const DEFAULT_VIEWPORT_RATIO = 0.55;
 const MIN_DRAWER_WIDTH = 360;
 /**
- * Reserved layout width the drawer must NOT eat into when it expands.
- * Covers the fixed left conversation rail (320 wide, see
- * `packages/web/src/pages/workspace/conversations/index.tsx`) plus the
- * minimum readable chat column (about 320). Without this the drawer can
- * drag itself wide enough to squash the chat composer / reading column
- * into a few characters per line on common laptop viewports.
+ * Reserved layout width the drawer must NOT eat into when it expands. Covers the
+ * fixed left conversation rail plus a minimum readable chat column.
  */
 const RESERVED_MAIN_WIDTH = 640;
 const RESIZE_KEY_STEP = 24;
 const WIDTH_STORAGE_KEY = "first-tree:doc-preview-drawer:width:v1";
+
+/**
+ * Preview render size cap — separate from (and far below) the 10MB upload cap.
+ * A multi-MB markdown string would choke react-markdown / the DOM, so above
+ * this we show a "too large" download fallback instead of rendering.
+ */
+const MAX_PREVIEW_RENDER_BYTES = 1024 * 1024;
 
 function defaultDrawerWidth(): number {
   if (typeof window === "undefined") return DEFAULT_MAX_WIDTH;
@@ -92,101 +90,57 @@ function useIsMobileDocPreview(): boolean {
   return isMobile;
 }
 
+type PreviewState =
+  | { kind: "text"; text: string; integrityWarning: boolean }
+  | { kind: "too-large"; sizeBytes: number };
+
 /**
- * Markdown preview rail that sits to the right of the chat reading column.
+ * Markdown preview rail to the right of the chat reading column.
  *
- * Layout:
- *   - Desktop: a `relative shrink-0` flex sibling inside chat-view's flex
- *     container. The chat main column flexes around it, so the drawer
- *     coexists with the chat instead of overlaying it. The left edge is
- *     a draggable col-resize handle (mouse + keyboard via Arrow Left /
- *     Right) so the user can widen or shrink the rail toward the chat
- *     main column.
- *   - Mobile (`max-width: 47.999rem`): full-screen fixed inset-0 modal
- *     with focus trap, so the same component covers both surfaces
- *     without rendering two competing rails on a narrow viewport.
+ * Data source: a doc is referenced by `metadata.attachments[]` as a generic
+ * `AttachmentRef` (kind: "document"). The drawer reads the ref (seeded into the
+ * React Query cache by the chat-view click handler, or recovered from the
+ * message metadata on a cold deep-link / reload), then fetches the bytes from
+ * `GET /attachments/:id`, verifies them against `ref.sha256` (best-effort
+ * integrity warning on mismatch), enforces a render size cap, and renders the
+ * markdown. Bytes are cached by attachmentId, so re-opens and in-doc cross
+ * links to sibling docs in the same message are network-free after first load.
  *
- * Data source priority:
- *   - Seeded inline snapshot via React Query cache (PR 415). chat-view seeds
- *     the whole message's `docs[]` when the user clicks any `.md` link, so
- *     opening the drawer is a synchronous cache read with no network
- *     round-trip — load-bearing on the cloud topology where the server
- *     cannot read the local agent workspace.
- *   - Recovery from the message's own `metadata.documentContext` when the
- *     seeded entry is gone. That seeded entry has NO observer (read via
- *     `getQueryData`, never `useQuery`), so React Query garbage-collects it
- *     after the default gcTime (~5 min). The next re-render — e.g. the
- *     messages refetch `sendMut.onSettled` triggers when the user sends a new
- *     message — would otherwise drop straight to the path endpoint below and,
- *     on the cloud topology, 404 with "Document not found". The snapshot bytes
- *     are immutable and still live in the message row, so re-derive them from
- *     the messages cache. This also makes the preview survive a full page
- *     reload (the messages refetch restores the metadata).
- *     Recovery is deferred-to, not gated-around: the path endpoint still runs
- *     once recovery settles without a hit, so it is held off only during the
- *     brief recovery window, never disabled for `docMsg`-tagged messages.
- *   - Falls back to `GET /me/docs/preview` (path variant) for legacy
- *     `kind: "path"` messages AND for in-preview links to docs that were never
- *     snapshotted — both only resolve on single-host deployments where the
- *     server can read workspace files directly.
- *
- * Slot semantics — the drawer is rendered by chat-view in the same right
- * slot as `<ChatRightSidebar>`. chat-view enforces mutual exclusion so the
- * two rails never compete for space; see `chat-view.tsx` for the slot
- * decision and the auto-restore behaviour that re-opens the sidebar when
- * the drawer closes.
+ * Graceful degradation: an OLD message whose metadata still has the legacy
+ * inline shape carries no `attachments` ref, so clicking such a (legacy bare)
+ * link never reaches this drawer; if a stale URL points at an attachment that
+ * no longer resolves, the fetch error path renders an inline error rather than
+ * throwing.
  */
 export function DocPreviewDrawer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const docChatId = searchParams.get("docChat");
-  const docAgentId = searchParams.get("docAgent");
-  const docPath = searchParams.get("docPath");
-  const docBasePath = searchParams.get("docBase") ?? undefined;
   const docMsgId = searchParams.get("docMsg");
-  const hasDocRef = Boolean(docChatId && docAgentId && docPath);
-  // Inline snapshot takes precedence over the path-based endpoint. Two layers:
-  //   1. Seeded cache: the chat-view click handler stashes the whole message's
-  //      docs[] under `docSnapshotQueryKey`, so the first open is a
-  //      synchronous, network-free read.
-  //   2. Recovery from the message's `metadata.documentContext`: the seeded
-  //      entry has no observer and is GC'd after ~5 min, after which a
-  //      re-render (e.g. the post-send messages refetch) would otherwise fall
-  //      through to a path endpoint that 404s on the cloud topology. The bytes
-  //      are immutable and still in the message row, so re-derive them. See
-  //      the component docblock for the full failure trace.
-  const seededSnapshot =
-    docMsgId && docChatId && docPath
-      ? queryClient.getQueryData<DocSnapshotEntry>(docSnapshotQueryKey(docChatId, docMsgId, docPath))
-      : undefined;
-  // Reactively observe the chat's messages so recovery re-runs when they
-  // hydrate. A plain `getQueryData` peek is non-reactive: on a cold deep-link
-  // reload the messages cache is empty on first render, so a peek would
-  // memoise `undefined` and never recompute once ChatView's fetch lands —
-  // re-introducing the cloud 404 this path exists to prevent. Sharing
-  // ChatView's exact query key makes this a free cache read whenever the chat
-  // is already open; on a reload it fetches the window once.
-  const recoveryEnabled = Boolean(docChatId && docMsgId && docPath && !seededSnapshot);
+  const docAttachmentId = searchParams.get("docAttachment");
+  const hasDocRef = Boolean(docAttachmentId);
+
+  // The ref carries filename / sha256 / source.path. Prefer the seeded cache
+  // (synchronous, network-free after a click); recover from the message
+  // metadata on a cold reload by re-reading the chat's messages window.
+  const seededRef = docAttachmentId
+    ? queryClient.getQueryData<AttachmentRef>(docAttachmentRefQueryKey(docAttachmentId))
+    : undefined;
+  const recoveryEnabled = Boolean(docChatId && docMsgId && docAttachmentId && !seededRef);
   const recoveryMessages = useQuery({
     queryKey: ["chat-messages", docChatId],
     queryFn: () => listChatMessages(docChatId ?? "", { limit: 50 }),
     enabled: recoveryEnabled,
   });
-  const recoveredSnapshot = useMemo<DocSnapshotEntry | undefined>(() => {
-    if (seededSnapshot || !docMsgId || !docPath) return undefined;
+  const recoveredRef = useMemo<AttachmentRef | undefined>(() => {
+    if (seededRef || !docMsgId || !docAttachmentId) return undefined;
     const message = recoveryMessages.data?.items.find((item) => item.id === docMsgId);
     if (!message) return undefined;
-    return documentSnapshotMapFromMetadata(message.metadata)?.get(docPath);
-  }, [seededSnapshot, docMsgId, docPath, recoveryMessages.data]);
-  const inlineSnapshot = seededSnapshot ?? recoveredSnapshot;
-  // Only DEFER the path endpoint while the messages window is still loading for
-  // a snapshot-origin doc — long enough for the common GC / reload recovery to
-  // land without a wasted, soon-to-404 round-trip. Once recovery settles
-  // without a hit (e.g. an in-preview link to a doc that was never one of this
-  // message's snapshots), the path endpoint runs as the legacy single-host
-  // fallback exactly as before. We do NOT gate it out wholesale on `docMsg`:
-  // that would strand in-preview links to non-snapshotted docs on single-host.
-  const awaitingRecovery = recoveryEnabled && !recoveredSnapshot && recoveryMessages.isLoading;
+    return attachmentRefsFromMetadata(message.metadata).find((r) => r.attachmentId === docAttachmentId);
+  }, [seededRef, docMsgId, docAttachmentId, recoveryMessages.data]);
+  const docRef = seededRef ?? recoveredRef;
+  const awaitingRecovery = recoveryEnabled && !recoveredRef && recoveryMessages.isLoading;
+
   const isMobile = useIsMobileDocPreview();
   const [drawerWidth, setDrawerWidth] = useState<number>(() =>
     clampDrawerWidth(loadPersistedWidth() ?? defaultDrawerWidth()),
@@ -195,18 +149,11 @@ export function DocPreviewDrawer() {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  // Persist width changes (skip mobile — width has no meaning when the
-  // drawer is a fullscreen modal and we don't want a portrait-mode
-  // session to overwrite the user's desktop width preference).
   useEffect(() => {
     if (isMobile) return;
     savePersistedWidth(drawerWidth);
   }, [isMobile, drawerWidth]);
 
-  // Re-clamp when the viewport shrinks below the saved width (e.g. window
-  // resize, devtools open). Without this the drawer could end up wider
-  // than the viewport - RESERVED_MAIN_WIDTH and squeeze the chat column
-  // below usable size.
   useEffect(() => {
     if (isMobile) return;
     const onResize = () => setDrawerWidth((current) => clampDrawerWidth(current));
@@ -217,10 +164,8 @@ export function DocPreviewDrawer() {
   const close = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete("docChat");
-    next.delete("docAgent");
-    next.delete("docPath");
-    next.delete("docBase");
     next.delete("docMsg");
+    next.delete("docAttachment");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -237,7 +182,6 @@ export function DocPreviewDrawer() {
     if (!hasDocRef || !isMobile) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-
     return () => {
       window.clearTimeout(focusTimer);
       const previous = previousFocusRef.current;
@@ -246,53 +190,62 @@ export function DocPreviewDrawer() {
     };
   }, [hasDocRef, isMobile]);
 
-  // A cross-agent docPath is a global key `<ownerSlug>/<chatId>/<rel>`; the
-  // path-based fallback endpoint is keyed by (owner agentId, rel) under
-  // `workspaces/<ownerName>/<chatId>/`, so strip the owner+chatId prefix and
-  // send just `rel`. Self / legacy bare keys (or a deep self path whose chatId
-  // segment doesn't match this chat) pass through unchanged.
-  const slugToId = useAgentSlugToIdMap();
-  const parsedKey = docPath ? parseWorkspaceDocKey(docPath) : null;
-  const isCrossKey = parsedKey !== null && parsedKey.chatId === docChatId;
-  // For a cross key the OWNER is named in the key itself — resolve the owner
-  // agent id from that slug rather than trusting `docAgent` (the click handler
-  // may have stored the sender as a hasDocRef placeholder when the owner slug
-  // couldn't be resolved). This keeps the fallback pointed at the owner's
-  // workspace even after a reload / cache miss; if the owner can't be resolved
-  // we DISABLE the fallback rather than query the sender, which could surface a
-  // same-named file from the WRONG workspace (review P2-a).
-  const crossOwnerId = isCrossKey && parsedKey ? slugToId(parsedKey.agentSlug) : null;
-  const fallbackAgentId = isCrossKey ? crossOwnerId : docAgentId;
-  const apiPath = isCrossKey && parsedKey ? parsedKey.rel : (docPath ?? "");
-  const apiBasePath = isCrossKey ? undefined : docBasePath;
-  const previewQuery = useQuery({
-    queryKey: ["me", "docs", "preview", docChatId, fallbackAgentId, apiBasePath, apiPath],
-    queryFn: () =>
-      getMeDoc(docChatId ?? "", {
-        agentId: fallbackAgentId ?? "",
-        basePath: apiBasePath,
-        path: apiPath,
-      }),
-    // Skip the network round-trip when we already have an inline snapshot
-    // (seeded or recovered), when a cross key's owner couldn't be resolved
-    // (fail closed), or while metadata recovery is still in flight — see
-    // `awaitingRecovery`, which holds this off just long enough for the common
-    // GC / reload recovery to win instead of racing a doomed cloud 404.
-    enabled: hasDocRef && !inlineSnapshot && Boolean(fallbackAgentId) && !awaitingRecovery,
+  // Fetch + verify the doc bytes. React Query caches by attachmentId (immutable
+  // blob), so re-opens / in-doc cross-links are network-free.
+  const previewQuery = useQuery<PreviewState>({
+    queryKey: ["doc-attachment-preview", docAttachmentId],
+    queryFn: async (): Promise<PreviewState> => {
+      const id = docAttachmentId ?? "";
+      const fetched = await fetchAttachmentText(id);
+      if (fetched.sizeBytes > MAX_PREVIEW_RENDER_BYTES) {
+        return { kind: "too-large", sizeBytes: fetched.sizeBytes };
+      }
+      let integrityWarning = false;
+      const expected = docRef?.sha256;
+      if (expected) {
+        try {
+          const actual = await sha256Hex(fetched.text);
+          integrityWarning = actual !== expected;
+        } catch {
+          // Web Crypto unavailable (e.g. insecure context) — skip verification.
+          integrityWarning = false;
+        }
+      }
+      return { kind: "text", text: fetched.text, integrityWarning };
+    },
+    enabled: hasDocRef && Boolean(docAttachmentId),
   });
-  const resolvedDocPath = inlineSnapshot?.path ?? previewQuery.data?.ref.path ?? docPath;
-  const displayDocPath = inlineSnapshot?.path ?? previewQuery.data?.path ?? docPath;
 
   const title = useMemo(() => {
-    const path = displayDocPath ?? "";
+    const path = docRef?.source?.path ?? docRef?.filename ?? "";
     return path.split("/").filter(Boolean).at(-1) ?? path;
-  }, [displayDocPath]);
-  const subtitle = displayDocPath && displayDocPath !== title ? displayDocPath : null;
+  }, [docRef]);
+  const docSourcePath = docRef?.source?.path ?? docRef?.filename ?? null;
+  const subtitle = docSourcePath && docSourcePath !== title ? docSourcePath : null;
 
-  const openDocPath = useCallback(
-    (path: string) => {
+  // Map a click on an in-doc markdown link to a sibling doc ref in the SAME
+  // message (matched by `source.path`) so cross-navigation stays inside the
+  // attachment model. Falls back to no-op when the target isn't a sibling doc.
+  const siblingRefsByPath = useMemo(() => {
+    const map = new Map<string, AttachmentRef>();
+    if (!docMsgId) return map;
+    // Seeded siblings: the click handler stashes every ref of the message under
+    // its own attachmentId key. We can only enumerate via the messages cache,
+    // so read recovery/messages data when present.
+    const message = recoveryMessages.data?.items.find((item) => item.id === docMsgId);
+    const refs = message ? attachmentRefsFromMetadata(message.metadata) : [];
+    for (const r of refs) {
+      if (r.kind === "document" && r.source?.path) map.set(r.source.path, r);
+    }
+    // Always include the current ref so a self-link resolves.
+    if (docRef?.source?.path) map.set(docRef.source.path, docRef);
+    return map;
+  }, [docMsgId, recoveryMessages.data, docRef]);
+
+  const openSiblingAttachment = useCallback(
+    (attachmentId: string) => {
       const next = new URLSearchParams(searchParams);
-      next.set("docPath", path);
+      next.set("docAttachment", attachmentId);
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
@@ -301,11 +254,14 @@ export function DocPreviewDrawer() {
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
-        // issue 831: neutralise dead links (local filesystem paths / unknown
-        // schemes) that would 404 against the cloud origin. Doc-preview `.md`
-        // paths resolve first so in-doc cross-links keep their click handler.
-        const docPreviewPath = typeof href === "string" ? docPreviewPathFromHref(href, resolvedDocPath) : null;
-        if (!docPreviewPath && !isNavigableWebHref(href)) {
+        // An `attachment:<id>` link inside the doc → open that sibling doc.
+        const inDocAttachmentId = typeof href === "string" ? attachmentIdFromHref(href) : null;
+        // A relative `.md` link resolved against the current doc's source path,
+        // matched to a sibling ref's source.path.
+        const siblingId =
+          typeof href === "string" ? resolveSiblingByPath(href, docSourcePath, siblingRefsByPath) : null;
+        const targetId = inDocAttachmentId ?? siblingId;
+        if (!targetId && !isNavigableWebHref(href)) {
           return <>{children}</>;
         }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -320,10 +276,9 @@ export function DocPreviewDrawer() {
           ) {
             return;
           }
-          const nextDocPath = docPreviewPathFromHref(href, resolvedDocPath);
-          if (!nextDocPath) return;
+          if (!targetId) return;
           event.preventDefault();
-          openDocPath(nextDocPath);
+          openSiblingAttachment(targetId);
         };
 
         return (
@@ -333,13 +288,9 @@ export function DocPreviewDrawer() {
         );
       },
     }),
-    [openDocPath, resolvedDocPath],
+    [docSourcePath, siblingRefsByPath, openSiblingAttachment],
   );
 
-  // Resize via the left edge. The drawer lives on the right of the chat
-  // main column, so growing left = wider drawer (= narrower chat). Track
-  // the starting width at mousedown and apply (startX - clientX) to the
-  // delta so cumulative drags stay stable across React state updates.
   const startResize = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -366,9 +317,6 @@ export function DocPreviewDrawer() {
     window.addEventListener("mouseup", onMouseUp);
   }, []);
 
-  // Keyboard a11y for the resize handle. Arrow Left widens the drawer
-  // (it lives on the right, so "left" means "push the resize edge
-  // leftward into the chat column"); Arrow Right narrows it.
   const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -433,18 +381,11 @@ export function DocPreviewDrawer() {
           onKeyDown={resizeWithKeyboard}
           type="button"
         >
-          {/* Always-on hairline so the user can see the rail is draggable.
-              Hover bumps to full opacity for affirmative feedback. */}
           <div className="mx-auto h-full w-px bg-border-faint opacity-60 transition-all group-hover:w-1 group-hover:bg-accent group-hover:opacity-100" />
         </button>
       )}
 
-      <header
-        className="flex shrink-0 items-center gap-3 px-4"
-        // Match chat-view's header sizing + raised background so the two
-        // headers share one continuous chrome row across the panel split.
-        style={{ height: 52, background: "var(--bg-raised)" }}
-      >
+      <header className="flex shrink-0 items-center gap-3 px-4" style={{ height: 52, background: "var(--bg-raised)" }}>
         <div className="min-w-0 flex-1">
           <div className="truncate text-body font-medium">{title}</div>
           {subtitle ? <div className="truncate text-caption text-fg-3">{subtitle}</div> : null}
@@ -462,34 +403,63 @@ export function DocPreviewDrawer() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {inlineSnapshot ? (
-          <Markdown components={markdownComponents}>{inlineSnapshot.content}</Markdown>
-        ) : awaitingRecovery ? (
+        {awaitingRecovery || previewQuery.isLoading ? (
           <div className="flex h-full items-center justify-center text-body text-fg-2">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
             Loading preview
           </div>
-        ) : (
+        ) : previewQuery.isError ? (
+          <div className="rounded-[var(--radius-panel)] border border-error bg-error-soft p-4 text-body text-error">
+            {previewQuery.error instanceof Error ? previewQuery.error.message : "Unable to load document"}
+          </div>
+        ) : previewQuery.data?.kind === "too-large" ? (
+          <div className="rounded-[var(--radius-panel)] border border-border bg-bg-sunken p-4 text-body text-fg-2">
+            This document is too large to preview ({Math.round(previewQuery.data.sizeBytes / 1024)} KB).{" "}
+            {docAttachmentId ? (
+              <a
+                href={`/api/v1/attachments/${encodeURIComponent(docAttachmentId)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Download to view
+              </a>
+            ) : null}
+          </div>
+        ) : previewQuery.data?.kind === "text" ? (
           <>
-            {previewQuery.isLoading ? (
-              <div className="flex h-full items-center justify-center text-body text-fg-2">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-                Loading preview
+            {previewQuery.data.integrityWarning ? (
+              <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
+                Integrity check failed — the fetched content does not match the captured checksum.
               </div>
             ) : null}
-
-            {previewQuery.isError ? (
-              <div className="rounded-[var(--radius-panel)] border border-error bg-error-soft p-4 text-body text-error">
-                {previewQuery.error instanceof Error ? previewQuery.error.message : "Unable to load document"}
-              </div>
-            ) : null}
-
-            {previewQuery.data ? (
-              <Markdown components={markdownComponents}>{previewQuery.data.content}</Markdown>
-            ) : null}
+            <Markdown components={markdownComponents}>{previewQuery.data.text}</Markdown>
           </>
-        )}
+        ) : null}
       </div>
     </aside>
   );
+}
+
+/**
+ * Resolve a relative in-doc markdown link (`../api.md`, `design.md`) against the
+ * currently-open doc's `source.path`, then match it to a sibling ref's
+ * `source.path`. Returns the sibling's attachmentId or null.
+ */
+function resolveSiblingByPath(
+  href: string,
+  currentDocPath: string | null,
+  siblingRefsByPath: ReadonlyMap<string, AttachmentRef>,
+): string | null {
+  const pathPart = href.trim().split(/[?#]/, 1).at(0) ?? "";
+  if (!pathPart.toLowerCase().endsWith(".md")) return null;
+  let candidate = pathPart;
+  if (currentDocPath && !pathPart.startsWith("/")) {
+    const slash = currentDocPath.lastIndexOf("/");
+    const base = slash >= 0 ? currentDocPath.slice(0, slash + 1) : "";
+    candidate = `${base}${pathPart}`;
+  }
+  const normalized = normalizeDocLinkPath(candidate);
+  if (!normalized) return null;
+  return siblingRefsByPath.get(normalized)?.attachmentId ?? null;
 }

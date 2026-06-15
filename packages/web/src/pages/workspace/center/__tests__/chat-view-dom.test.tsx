@@ -249,9 +249,19 @@ const BASE_MESSAGES = messages([
     createdAt: "2026-05-28T11:55:00.000Z",
     metadata: {
       mentions: ["agent-1"],
+      attachments: [
+        {
+          attachmentId: "00000000-0000-4000-8000-000000000001",
+          kind: "document",
+          mimeType: "text/markdown",
+          filename: "plan.md",
+          size: 21,
+          sha256: "a".repeat(64),
+          source: { path: "docs/plan.md" },
+        },
+      ],
       documentContext: {
         kind: "snapshot",
-        docs: [{ path: "docs/plan.md", content: "# Plan\nShip carefully.", sha256: "sha", size: 21 }],
         failedMentions: [{ raw: "secrets.env", reason: "hidden-segment" }],
       },
     },
@@ -264,9 +274,19 @@ const BASE_MESSAGES = messages([
     createdAt: "2026-05-28T11:56:00.000Z",
     deliveryStatus: "acked",
     metadata: {
+      attachments: [
+        {
+          attachmentId: "00000000-0000-4000-8000-000000000001",
+          kind: "document",
+          mimeType: "text/markdown",
+          filename: "plan.md",
+          size: 21,
+          sha256: "a".repeat(64),
+          source: { path: "docs/plan.md" },
+        },
+      ],
       documentContext: {
         kind: "snapshot",
-        docs: [{ path: "docs/plan.md", content: "# Plan\nShip carefully.", sha256: "sha", size: 21 }],
         failedMentions: [{ raw: "secrets.env", reason: "hidden-segment" }],
       },
     },
@@ -469,7 +489,7 @@ function seedChat(
 async function renderDom(
   element: ReactElement,
   seed?: (queryClient: QueryClient) => void,
-  route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs/plan.md",
+  route = "/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001",
 ): Promise<{ container: HTMLElement; queryClient: QueryClient; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);

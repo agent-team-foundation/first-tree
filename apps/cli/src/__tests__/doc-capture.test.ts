@@ -1,15 +1,43 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FirstTreeHubSDK } from "@first-tree/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { captureOutboundDocs } from "../core/doc-capture.js";
 
 /**
- * `chat send` doc capture (L3 阶段1): the CLI snapshots referenced `.md` the
- * same way result-sink does, driven by the runtime-injected env. These tests
- * exercise the env contract + pass-through behaviour; the snapshot/rewrite
- * mechanics themselves are covered by client `doc-snapshots.test.ts`.
+ * `chat send` doc capture (L3): the CLI captures referenced `.md` the same way
+ * result-sink does, driven by the runtime-injected env. After the
+ * attachment-ref convergence it uploads bytes to the org store (org resolved
+ * from the chat) and attaches generic refs. The snapshot/rewrite mechanics
+ * themselves are covered by client `doc-snapshots.test.ts`; these tests pin the
+ * env contract + the metadata shape this layer produces.
  */
+
+const CHAT_ID = "11111111-1111-4111-8111-111111111111";
+const ORG_ID = "22222222-2222-4222-8222-222222222222";
+
+function stubSdk(): { sdk: FirstTreeHubSDK } {
+  let seq = 0;
+  const sdk = {
+    serverUrl: "http://test",
+    async getChatDetail() {
+      return { id: CHAT_ID, organizationId: ORG_ID, participants: [] };
+    },
+    async uploadAttachment(o: { bytes: Uint8Array | Buffer; mimeType: string; filename: string; orgId: string }) {
+      seq += 1;
+      const bytes = Buffer.from(o.bytes);
+      return {
+        id: `00000000-0000-4000-8000-${seq.toString(16).padStart(12, "0")}`,
+        mimeType: o.mimeType,
+        filename: o.filename,
+        sizeBytes: bytes.byteLength,
+      };
+    },
+  } as unknown as FirstTreeHubSDK;
+  return { sdk };
+}
+
 describe("captureOutboundDocs (chat send L3 capture)", () => {
   let base: string;
 
@@ -23,46 +51,57 @@ describe("captureOutboundDocs (chat send L3 capture)", () => {
   });
 
   it("pass-through when no doc base in env (not in an agent session)", async () => {
-    const out = await captureOutboundDocs("see design.md please", {});
+    const { sdk } = stubSdk();
+    const out = await captureOutboundDocs("see design.md please", { sdk, chatId: CHAT_ID }, {});
     expect(out.content).toBe("see design.md please");
-    expect(out.documentContext).toBeUndefined();
+    expect(out.attachments).toBeUndefined();
   });
 
-  it("snapshots a referenced workspace .md and attaches documentContext (explicit link)", async () => {
-    const out = await captureOutboundDocs("see design.md please", { FIRST_TREE_DOC_BASE: base });
-    expect(out.content).toBe("see [design.md](design.md) please");
-    const ctx = out.documentContext as { kind?: string; docs?: Array<{ path: string }> } | undefined;
-    expect(ctx?.kind).toBe("snapshot");
-    expect(ctx?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+  it("pass-through when no chatId is supplied (org unresolvable, e.g. chat create)", async () => {
+    const { sdk } = stubSdk();
+    const out = await captureOutboundDocs("see design.md please", { sdk }, { FIRST_TREE_DOC_BASE: base });
+    expect(out.content).toBe("see design.md please");
+    expect(out.attachments).toBeUndefined();
   });
 
-  it("rewrites an absolute-in-base path into an explicit relative link + snapshots it", async () => {
-    const abs = join(base, "design.md");
-    const out = await captureOutboundDocs(`wrote ${abs} now`, { FIRST_TREE_DOC_BASE: base });
-    expect(out.content).toBe("wrote [design.md](design.md) now");
-    const ctx = out.documentContext as { docs?: Array<{ path: string }> } | undefined;
-    expect(ctx?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+  it("captures a referenced workspace .md as an attachment ref + rewrites the link", async () => {
+    const { sdk } = stubSdk();
+    const out = await captureOutboundDocs(
+      "see design.md please",
+      { sdk, chatId: CHAT_ID },
+      { FIRST_TREE_DOC_BASE: base },
+    );
+    expect(out.content).toBe("see [design.md](attachment:00000000-0000-4000-8000-000000000001) please");
+    expect(out.attachments?.map((a) => a.source?.path)).toEqual(["design.md"]);
+    expect(out.attachments?.[0]?.kind).toBe("document");
   });
 
-  it("no documentContext when the referenced path is not in the workspace", async () => {
-    const out = await captureOutboundDocs("see /etc/nope/missing.md", { FIRST_TREE_DOC_BASE: base });
+  it("no attachments when the referenced path is not in the workspace", async () => {
+    const { sdk } = stubSdk();
+    const out = await captureOutboundDocs(
+      "see /etc/nope/missing.md",
+      { sdk, chatId: CHAT_ID },
+      { FIRST_TREE_DOC_BASE: base },
+    );
     expect(out.content).toBe("see /etc/nope/missing.md");
-    expect(out.documentContext).toBeUndefined();
+    expect(out.attachments).toBeUndefined();
   });
 
-  it("no documentContext when the message references no .md", async () => {
-    const out = await captureOutboundDocs("just a plain message", { FIRST_TREE_DOC_BASE: base });
+  it("no attachments when the message references no .md", async () => {
+    const { sdk } = stubSdk();
+    const out = await captureOutboundDocs(
+      "just a plain message",
+      { sdk, chatId: CHAT_ID },
+      { FIRST_TREE_DOC_BASE: base },
+    );
     expect(out.content).toBe("just a plain message");
-    expect(out.documentContext).toBeUndefined();
+    expect(out.attachments).toBeUndefined();
   });
 
   describe("wide-fence env (FIRST_TREE_DOC_AGENT_HOME + optional FIRST_TREE_DOC_REPO_LOCAL_PATH)", () => {
     let agentHome: string;
 
     beforeAll(async () => {
-      // Layout mirrors the post-#506 production tree:
-      //   <agentHome>/<localPath>/         predeclared source repo
-      //   <agentHome>/worktrees/<task>/    on-demand worktree the LLM `git worktree add`s
       agentHome = await mkdtemp(join(tmpdir(), "cli-doc-capture-agent-home-"));
       await mkdir(join(agentHome, "first-tree", "docs"), { recursive: true });
       await writeFile(join(agentHome, "first-tree", "docs", "intro.md"), "# intro\n", "utf8");
@@ -74,43 +113,39 @@ describe("captureOutboundDocs (chat send L3 capture)", () => {
       await rm(agentHome, { recursive: true, force: true });
     });
 
-    it("snapshots a worktree-scoped absolute path when AGENT_HOME widens the fence", async () => {
-      // The pre-fix narrow fence (source-repo top only) would have dropped this
-      // mention to plain text; the wide fence now produces an agent-home-relative
-      // snapshot key.
+    it("captures a worktree-scoped absolute path when AGENT_HOME widens the fence", async () => {
+      const { sdk } = stubSdk();
       const abs = join(agentHome, "worktrees", "task-x", "docs", "design.md");
-      const out = await captureOutboundDocs(`wrote ${abs} now`, {
-        FIRST_TREE_DOC_AGENT_HOME: agentHome,
-        FIRST_TREE_DOC_REPO_LOCAL_PATH: "first-tree",
-      });
-      expect(out.content).toBe(`wrote [worktrees/task-x/docs/design.md](worktrees/task-x/docs/design.md) now`);
-      const ctx = out.documentContext as { docs?: Array<{ path: string }> } | undefined;
-      expect(ctx?.docs?.map((d) => d.path)).toEqual(["worktrees/task-x/docs/design.md"]);
+      const out = await captureOutboundDocs(
+        `wrote ${abs} now`,
+        { sdk, chatId: CHAT_ID },
+        { FIRST_TREE_DOC_AGENT_HOME: agentHome, FIRST_TREE_DOC_REPO_LOCAL_PATH: "first-tree" },
+      );
+      expect(out.attachments?.map((a) => a.source?.path)).toEqual(["worktrees/task-x/docs/design.md"]);
+      expect(out.content).toBe(
+        "wrote [worktrees/task-x/docs/design.md](attachment:00000000-0000-4000-8000-000000000001) now",
+      );
     });
 
-    it("promotes a relative source-repo mention to a shared agent-home-relative key", async () => {
-      // `docs/intro.md` written relatively must share its canonical key with the
-      // absolute form `<agentHome>/<localPath>/docs/intro.md` — otherwise the same
-      // file produces two snapshot entries and web cache lookup splits.
-      const out = await captureOutboundDocs("see docs/intro.md please", {
-        FIRST_TREE_DOC_AGENT_HOME: agentHome,
-        FIRST_TREE_DOC_REPO_LOCAL_PATH: "first-tree",
-      });
-      const ctx = out.documentContext as { docs?: Array<{ path: string }> } | undefined;
-      expect(ctx?.docs?.map((d) => d.path)).toEqual(["first-tree/docs/intro.md"]);
-      expect(out.content).toBe("see [first-tree/docs/intro.md](first-tree/docs/intro.md) please");
+    it("promotes a relative source-repo mention to a shared agent-home-relative source path", async () => {
+      const { sdk } = stubSdk();
+      const out = await captureOutboundDocs(
+        "see docs/intro.md please",
+        { sdk, chatId: CHAT_ID },
+        { FIRST_TREE_DOC_AGENT_HOME: agentHome, FIRST_TREE_DOC_REPO_LOCAL_PATH: "first-tree" },
+      );
+      expect(out.attachments?.map((a) => a.source?.path)).toEqual(["first-tree/docs/intro.md"]);
     });
 
     it("ignores the legacy FIRST_TREE_DOC_BASE when FIRST_TREE_DOC_AGENT_HOME is present", async () => {
-      // The wide-fence env takes precedence so a runtime that emits BOTH (during
-      // upgrade) routes through the new path.
+      const { sdk } = stubSdk();
       const abs = join(agentHome, "worktrees", "task-x", "docs", "design.md");
-      const out = await captureOutboundDocs(`wrote ${abs} now`, {
-        FIRST_TREE_DOC_AGENT_HOME: agentHome,
-        FIRST_TREE_DOC_BASE: join(agentHome, "first-tree"),
-      });
-      const ctx = out.documentContext as { docs?: Array<{ path: string }> } | undefined;
-      expect(ctx?.docs?.map((d) => d.path)).toEqual(["worktrees/task-x/docs/design.md"]);
+      const out = await captureOutboundDocs(
+        `wrote ${abs} now`,
+        { sdk, chatId: CHAT_ID },
+        { FIRST_TREE_DOC_AGENT_HOME: agentHome, FIRST_TREE_DOC_BASE: join(agentHome, "first-tree") },
+      );
+      expect(out.attachments?.map((a) => a.source?.path)).toEqual(["worktrees/task-x/docs/design.md"]);
     });
   });
 });

@@ -16,35 +16,29 @@ describe("documentContextSchema", () => {
     });
   });
 
-  it("accepts snapshot context with canonical markdown docs", () => {
+  it("accepts a snapshot context carrying a failedMentions roster", () => {
+    // Post-convergence the snapshot variant is the inert-chip roster ONLY —
+    // successful captures live in metadata.attachments[] as AttachmentRefs.
     const context = {
       kind: "snapshot",
-      docs: [
-        {
-          path: "docs/readme.md",
-          sha256: "a".repeat(64),
-          size: 12,
-          content: "# Readme",
-        },
-      ],
-    };
-
-    expect(documentContextSchema.parse(context)).toEqual(context);
-  });
-
-  it("accepts snapshot context with failed mentions and no docs", () => {
-    const context = {
-      kind: "snapshot",
-      docs: [],
       failedMentions: [{ raw: "docs/missing.md", reason: "missing" }],
     };
 
     expect(documentContextSchema.parse(context)).toEqual(context);
   });
 
-  it("rejects snapshot context without docs or failed mentions", () => {
-    expect(() => documentContextSchema.parse({ kind: "snapshot", docs: [] })).toThrow(
-      "snapshot documentContext must include at least one snapshot or one failedMention",
-    );
+  it("rejects a snapshot context with an empty failedMentions roster", () => {
+    expect(() => documentContextSchema.parse({ kind: "snapshot", failedMentions: [] })).toThrow();
+  });
+
+  it("rejects the legacy inline `docs[].content` snapshot shape (cutover)", () => {
+    // Old messages with this shape no longer parse; readers degrade gracefully
+    // to no-preview rather than throwing.
+    expect(() =>
+      documentContextSchema.parse({
+        kind: "snapshot",
+        docs: [{ path: "docs/readme.md", sha256: "a".repeat(64), size: 12, content: "# Readme" }],
+      }),
+    ).toThrow();
   });
 });
