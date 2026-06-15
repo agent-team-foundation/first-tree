@@ -74,36 +74,54 @@ export function shouldFullReprobe(
   });
 }
 
-/** A smoke that returns the previous `ok` outcome without launching anything —
- * the resolve + auth-precheck stages still run for real, so the provider keeps
- * its `ok` only while it remains launchable + authenticated. */
-function cachedOkSmoke(entry: CapabilityEntry): () => Promise<SmokeOutcome> {
-  return async () => ({
-    state: "ok",
-    version: entry.sdkVersion ?? null,
-    method: entry.authMethod,
-    ...(entry.degraded ? { degraded: true } : {}),
-  });
+/**
+ * A smoke that reports `ok` WITHOUT launching a session. The resolve and
+ * auth-precheck stages still run for real (those DO spawn the binary), so a
+ * provider only re-validates to `ok` while it stays launchable + authenticated.
+ * This `ok` is a signal, not a fresh verdict: `revalidateCapabilities`
+ * preserves the prior REAL entry on `ok` rather than minting a new
+ * launch-verified `ok` that never ran a smoke — so the launch-verified contract
+ * is never faked.
+ */
+function cachedOkSmoke(): () => Promise<SmokeOutcome> {
+  return async () => ({ state: "ok" });
 }
 
 /**
  * Re-validate capabilities WITHOUT spending a real smoke. Each provider's
- * resolve + auth precheck still run for real; only the smoke is short-circuited
- * to the previous `ok` result. So a provider that is still launchable + logged
- * in keeps its `ok` (and version / method) for free, while one whose binary
- * vanished now resolves to `missing` and one that logged out to
- * `unauthenticated`. Providers whose previous entry was NOT `ok` are fully
- * re-probed (a real smoke) so a recovered provider can flip back to `ok`.
+ * resolve + auth precheck still run for real; only the session smoke is
+ * skipped. The launch-verified contract is preserved by NOT fabricating a
+ * fresh `ok`:
+ *
+ *   - a previously-`ok` provider that still passes resolve+auth keeps its
+ *     PRIOR entry verbatim (its `detectedAt` / `probeKind` reflect the last
+ *     real smoke — nothing about this reconnect is presented as a fresh launch);
+ *   - a previously-`ok` provider whose binary vanished downgrades to a fresh
+ *     `missing`, or to `unauthenticated` if it logged out (real, this cycle);
+ *   - a previously-non-`ok` provider is fully re-probed (a real smoke) so a
+ *     recovered provider can flip back to a genuine launch-verified `ok`.
  */
 export async function revalidateCapabilities(previous: ClientCapabilities): Promise<ClientCapabilities> {
   const claude = previous["claude-code"];
   const tui = previous["claude-code-tui"];
   const codex = previous.codex;
-  return aggregate([
-    ["claude-code", probeClaudeCodeCapability(claude?.state === "ok" ? { runSmoke: cachedOkSmoke(claude) } : {})],
-    ["claude-code-tui", probeClaudeCodeTuiCapability(tui?.state === "ok" ? { runSmoke: cachedOkSmoke(tui) } : {})],
-    ["codex", probeCodexCapability(codex?.state === "ok" ? { runSmoke: cachedOkSmoke(codex) } : {})],
+  const revalidated = await aggregate([
+    ["claude-code", probeClaudeCodeCapability(claude?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
+    ["claude-code-tui", probeClaudeCodeTuiCapability(tui?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
+    ["codex", probeCodexCapability(codex?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
   ]);
+
+  // Preserve the prior real launch-verified entry wherever the provider stayed
+  // `ok` (resolve+auth still pass, smoke skipped); only regressions keep the
+  // freshly-probed entry. This is what keeps a re-validate from claiming a
+  // launch that did not happen.
+  const out: ClientCapabilities = { ...revalidated };
+  for (const [provider, prev] of Object.entries(previous)) {
+    if (prev?.state === "ok" && out[provider]?.state === "ok") {
+      out[provider] = prev;
+    }
+  }
+  return out;
 }
 
 /**

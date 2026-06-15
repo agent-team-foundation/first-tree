@@ -68,17 +68,16 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
   });
 
   /**
-   * Mock each provider probe to record the `deps` it was called with and echo
-   * back an entry. The key assertion: an `ok`-previous provider is re-validated
-   * with an injected `runSmoke` (so no real smoke runs), while a non-ok one is
-   * fully re-probed (no injected smoke).
+   * Mock each provider probe to record the `deps` it was called with and return
+   * a configurable entry (default: a generic `ok`). Lets us assert both the
+   * injected-smoke wiring and the preserve-vs-downgrade substitution.
    */
-  async function loadWithMocks() {
+  async function loadWithMocks(results: Record<string, CapabilityEntry> = {}) {
     const calls: Record<string, { deps: { runSmoke?: (b?: string) => Promise<unknown> } | undefined }> = {};
     const mk = (provider: string) =>
       vi.fn((deps?: { runSmoke?: (b?: string) => Promise<unknown> }) => {
         calls[provider] = { deps };
-        return Promise.resolve(okEntry());
+        return Promise.resolve(results[provider] ?? okEntry());
       });
     vi.resetModules();
     vi.doMock("../runtime/capabilities/claude-code.js", () => ({ probeClaudeCodeCapability: mk("claude-code") }));
@@ -90,7 +89,7 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     return { mod, calls };
   }
 
-  it("re-validate injects a cached smoke for ok providers and fully re-probes non-ok ones", async () => {
+  it("injects a no-launch cached smoke for ok providers and fully re-probes non-ok ones", async () => {
     const { mod, calls } = await loadWithMocks();
     const previous: ClientCapabilities = {
       "claude-code": okEntry({ sdkVersion: "2.1.0", authMethod: "oauth" }),
@@ -100,14 +99,45 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
 
     await mod.revalidateCapabilities(previous);
 
-    // ok provider → injected runSmoke that returns the cached ok (no real smoke)
+    // ok provider → injected runSmoke; it reports ok WITHOUT launching a session
     const claudeSmoke = calls["claude-code"]?.deps?.runSmoke;
     expect(typeof claudeSmoke).toBe("function");
-    await expect(claudeSmoke?.()).resolves.toMatchObject({ state: "ok", version: "2.1.0", method: "oauth" });
+    await expect(claudeSmoke?.()).resolves.toEqual({ state: "ok" });
 
     // non-ok / absent providers → full probe, no injected smoke
     expect(calls.codex?.deps?.runSmoke).toBeUndefined();
     expect(calls["claude-code-tui"]?.deps?.runSmoke).toBeUndefined();
+  });
+
+  it("preserves the prior entry verbatim when an ok provider stays ok (no fabricated fresh launch)", async () => {
+    const prevClaude = okEntry({
+      sdkVersion: "2.1.0",
+      authMethod: "oauth",
+      detectedAt: "2026-06-01T00:00:00.000Z",
+      probeKind: "launch",
+    });
+    // The mock returns a DIFFERENT, would-be-fresh ok; the result must still be
+    // the PRIOR entry (original detectedAt / version), never the fresh one.
+    const { mod } = await loadWithMocks({
+      "claude-code": okEntry({ sdkVersion: "9.9.9", detectedAt: new Date().toISOString() }),
+    });
+    const out = await mod.revalidateCapabilities({ "claude-code": prevClaude });
+    expect(out["claude-code"]).toEqual(prevClaude);
+  });
+
+  it("downgrades (does NOT preserve) when an ok provider regresses", async () => {
+    const prevCodex = okEntry({ detectedAt: "2026-06-01T00:00:00.000Z" });
+    const missing: CapabilityEntry = {
+      state: "missing",
+      available: false,
+      authenticated: false,
+      authMethod: "none",
+      error: "codex binary not found",
+      detectedAt: new Date().toISOString(),
+    };
+    const { mod } = await loadWithMocks({ codex: missing });
+    const out = await mod.revalidateCapabilities({ codex: prevCodex });
+    expect(out.codex).toEqual(missing);
   });
 
   it("reprobeOnReconnect dispatches re-validate when all-ok+fresh, full otherwise", async () => {

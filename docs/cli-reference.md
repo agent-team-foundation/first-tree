@@ -450,7 +450,15 @@ first-tree daemon
 | `restart` | Restart the service. |
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
 | `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
-| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). The daemon otherwise probes only at startup, so this refreshes a client's advertised capabilities after a provider is installed / logged in — without a restart. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
+| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
+
+**Capability refresh timing.** The daemon launch-probes runtime providers at
+startup and re-probes automatically on every WebSocket reconnect: a full real
+re-probe when the previous result was non-ok or older than 24h, otherwise a
+cheap resolve+auth re-validate that keeps a still-launchable, still-logged-in
+provider's prior `ok` without re-running the session smoke (a vanished binary
+or lost login still downgrades). `daemon probe` is the manual, on-demand path
+between those automatic refreshes.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.
