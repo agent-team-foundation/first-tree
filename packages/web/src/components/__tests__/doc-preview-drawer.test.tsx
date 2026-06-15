@@ -254,8 +254,9 @@ describe("DocPreviewDrawer", () => {
 
     expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
     expect(attachmentsMocks.fetchAttachmentText).toHaveBeenCalledWith(ATT_ID);
+    expect(attachmentsMocks.sha256Hex).not.toHaveBeenCalled();
     expect(dom.textContent).toContain("Plan");
-    expect(dom.textContent).toContain("Couldn't verify integrity");
+    expect(dom.textContent).toContain("This preview was not checksum verified");
   });
 
   it("renders a fetch error inline rather than throwing", async () => {

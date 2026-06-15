@@ -91,11 +91,7 @@ function useIsMobileDocPreview(): boolean {
 }
 
 type PreviewState =
-  // `integrityWarning`: had an expected sha256 and it did NOT match (tamper/corruption).
-  // `unverified`: a ref was expected (deep-link with a docMsg) but could not be recovered
-  // (e.g. the message is older than the recovery window), so the fetched bytes could not be
-  // checked against a checksum — shown to the user rather than left as a silent blank drawer.
-  | { kind: "text"; text: string; integrityWarning: boolean; unverified: boolean }
+  | { kind: "text"; text: string; integrityWarning: boolean }
   | { kind: "too-large"; sizeBytes: number };
 
 /**
@@ -144,6 +140,8 @@ export function DocPreviewDrawer() {
   }, [seededRef, docMsgId, docAttachmentId, recoveryMessages.data]);
   const docRef = seededRef ?? recoveredRef;
   const awaitingRecovery = recoveryEnabled && !recoveredRef && recoveryMessages.isLoading;
+  const recoveryMiss = recoveryEnabled && !recoveredRef && !recoveryMessages.isLoading && !recoveryMessages.isFetching;
+  const previewWillBeUnverifiedAfterRecoveryMiss = recoveryMiss && !docRef;
 
   const isMobile = useIsMobileDocPreview();
   const [drawerWidth, setDrawerWidth] = useState<number>(() =>
@@ -203,7 +201,9 @@ export function DocPreviewDrawer() {
   // fetch until recovery settles whenever a ref is recoverable — this enforces
   // the invariant: whenever a ref with a sha256 is available, the rendered
   // preview was verified against it. A truly ref-less orphan (no msgId to
-  // recover from) still fetches unverified, which is acceptable.
+  // recover from) still fetches unverified, which is acceptable. A stale deep
+  // link with msgId outside the recovery window also fetches unverified after
+  // recovery misses, but renders a visible warning instead of a blank drawer.
   const previewQuery = useQuery<PreviewState>({
     queryKey: ["doc-attachment-preview", docAttachmentId, docRef?.sha256 ?? null],
     queryFn: async (): Promise<PreviewState> => {
@@ -223,17 +223,13 @@ export function DocPreviewDrawer() {
           integrityWarning = false;
         }
       }
-      // A ref was expected (deep-link carried a docMsg) but couldn't be recovered →
-      // we fetch anyway (capability-authed by attachmentId) but flag it unverified
-      // rather than render a silent blank drawer.
-      const unverified = !expected && Boolean(docMsgId);
-      return { kind: "text", text: fetched.text, integrityWarning, unverified };
+      return { kind: "text", text: fetched.text, integrityWarning };
     },
     // Hold the fetch only while recovery is still in flight (`awaitingRecovery`).
     // Once recovery SETTLES — whether it produced the ref or missed (e.g. the
     // message is older than the recovery window) — we fetch: with the ref it
-    // verifies (sha256 in the key); on a miss it fetches unverified (flagged
-    // above) instead of leaving the drawer stuck idle/blank.
+    // verifies (sha256 in the key); on a miss it fetches unverified with a
+    // visible warning instead of leaving the drawer stuck idle/blank.
     enabled: Boolean(docAttachmentId) && !awaitingRecovery,
   });
 
@@ -461,6 +457,12 @@ export function DocPreviewDrawer() {
           </div>
         ) : previewQuery.data?.kind === "too-large" ? (
           <div className="rounded-[var(--radius-panel)] border border-border bg-bg-sunken p-4 text-body text-fg-2">
+            {previewWillBeUnverifiedAfterRecoveryMiss ? (
+              <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
+                Unable to recover document metadata from the recent message window. This preview was not checksum
+                verified.
+              </div>
+            ) : null}
             This document is too large to preview ({Math.round(previewQuery.data.sizeBytes / 1024)} KB).{" "}
             {docAttachmentId ? (
               <button type="button" onClick={handleDownload} className="underline">
@@ -471,13 +473,15 @@ export function DocPreviewDrawer() {
           </div>
         ) : previewQuery.data?.kind === "text" ? (
           <>
+            {previewWillBeUnverifiedAfterRecoveryMiss ? (
+              <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
+                Unable to recover document metadata from the recent message window. This preview was not checksum
+                verified.
+              </div>
+            ) : null}
             {previewQuery.data.integrityWarning ? (
               <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
                 Integrity check failed — the fetched content does not match the captured checksum.
-              </div>
-            ) : previewQuery.data.unverified ? (
-              <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
-                Couldn't verify integrity — the document reference is unavailable (showing fetched content).
               </div>
             ) : null}
             <Markdown components={markdownComponents}>{previewQuery.data.text}</Markdown>
