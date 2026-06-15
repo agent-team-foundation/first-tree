@@ -379,6 +379,25 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     expect(upstream).not.toBe(localHead);
   });
 
+  it("keeps local commits protected when origin is missing before fetch", async () => {
+    const { url, tip } = seedBareRepo();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    await m.ensureSourceRepo({ url, clonePath });
+    execSync("git config user.email t@e.com && git config user.name t", { cwd: clonePath });
+    writeFileSync(join(clonePath, "local.txt"), "agent work");
+    execSync("git add . && git commit -q -m local-work", { cwd: clonePath });
+    const localHead = gitIn(clonePath, "rev-parse HEAD");
+    execSync("git remote remove origin", { cwd: clonePath });
+
+    const r = await m.ensureSourceRepo({ url, clonePath });
+    expect(r.outcome).toBe("skipped-local-commits");
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(localHead);
+    expect(existsSync(join(clonePath, "local.txt"))).toBe(true);
+    expect(localHead).not.toBe(tip);
+  });
+
   it("degrades to the existing checkout when a SAME-repo fetch fails transiently (stale-offline)", async () => {
     // Issue #865: an existing, usable clone of the SAME repo + a transient
     // network fetch failure must NOT abort — leave the checkout at its current

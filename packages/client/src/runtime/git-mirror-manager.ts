@@ -407,21 +407,21 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * so the subsequent fetch + `checkout -B` track the configured upstream
    * instead of silently serving the old one.
    */
+  type OriginUrlState = "matched" | "different" | "missing-or-unreadable";
+
   /**
-   * True when `absTarget`'s current `remote.origin.url` already canonically
-   * matches the configured `url` — i.e. reconcileOrigin would NOT repoint origin
-   * to a different repo. Mirrors reconcileOrigin's own canonical comparison.
-   * Gates the transient `stale-offline` degrade: serving the local checkout is
-   * only safe when it is the SAME repo. Treats an unreadable / missing origin as
-   * "not matching" (fail closed).
+   * Classify the current `remote.origin.url` before reconciling it. A confirmed
+   * canonical difference means a real URL repoint; a missing / unreadable origin
+   * is ambiguous and must keep same-repo local-commit protection.
    */
-  async function originCanonicallyMatches(absTarget: string, url: string): Promise<boolean> {
+  async function originUrlState(absTarget: string, url: string): Promise<OriginUrlState> {
     try {
       const { stdout } = await git(["config", "--get", "remote.origin.url"], absTarget, 10_000);
       const current = stdout.trim();
-      return current.length > 0 && canonicalizeRepoUrl(current) === canonicalizeRepoUrl(url);
+      if (!current) return "missing-or-unreadable";
+      return canonicalizeRepoUrl(current) === canonicalizeRepoUrl(url) ? "matched" : "different";
     } catch {
-      return false;
+      return "missing-or-unreadable";
     }
   }
 
@@ -706,13 +706,13 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
 
         // (4) Managed standalone clone → reconcile origin, fetch, then update when safe.
         //
-        // Capture whether origin ALREADY canonically matched the configured
-        // upstream *before* reconcileOrigin can repoint it. The transient
-        // degrade below is only safe for the SAME repo: if this call is
-        // repointing origin to a different repo and the confirming fetch then
-        // fails, the local checkout is the OLD repo's content and must NOT be
-        // served as the newly-configured source.
-        const originMatchedBeforeFetch = await originCanonicallyMatches(absTarget, url);
+        // Capture origin state *before* reconcileOrigin can mutate it. Only a
+        // confirmed canonical difference is a real URL repoint. A missing /
+        // unreadable origin is ambiguous: fetch failures must fail closed, but a
+        // successful fetch must still protect same-repo local commits.
+        const originStateBeforeFetch = await originUrlState(absTarget, url);
+        const originMatchedBeforeFetch = originStateBeforeFetch === "matched";
+        const originDiffersBeforeFetch = originStateBeforeFetch === "different";
         if (!originMatchedBeforeFetch) {
           if (activelyInUse) {
             throw repointBlockedError(absTarget, url, "another live session is using the checkout");
@@ -809,7 +809,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         }
 
         const before = await headCommit(absTarget);
-        const update = await updateToLatest(absTarget, ref, { protectLocalCommits: originMatchedBeforeFetch });
+        const update = await updateToLatest(absTarget, ref, { protectLocalCommits: !originDiffersBeforeFetch });
         if (update === "skipped-local-commits") {
           log?.warn(
             { clonePath: absTarget },
