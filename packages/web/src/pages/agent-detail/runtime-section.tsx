@@ -20,9 +20,6 @@ export type RuntimeSectionProps = {
   canBindComputer: boolean;
   bindComputerPending?: boolean;
   onBindComputer?: () => void;
-  /** When set, the bound-computer card surfaces a "Re-bind" button that
-   *  opens the unified ReBindDialog (UX U2). Available only on bound agents. */
-  onRebind?: () => void;
 };
 
 const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
@@ -45,20 +42,7 @@ export function RuntimeSection(props: RuntimeSectionProps) {
   return (
     <Section
       title={titleWithSemantics("Execution", "immediate")}
-      description="Computer and runtime changes apply immediately through bind or re-bind."
-      action={
-        props.computerLabel && props.onRebind ? (
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={props.onRebind}
-            title="Move this agent to another computer or runtime"
-          >
-            <Link2 className="h-3 w-3" />
-            Re-bind
-          </Button>
-        ) : null
-      }
+      description="Runtime is set when the agent is created; the computer is bound once and is then fixed."
     >
       <ComputerRow
         computerLabel={props.computerLabel}

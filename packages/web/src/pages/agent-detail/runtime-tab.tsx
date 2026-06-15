@@ -61,7 +61,6 @@ export function RuntimeTab() {
           canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}
           bindComputerPending={ctx.bindClientPending}
           onBindComputer={ctx.onOpenBindDialog}
-          onRebind={ctx.agent.clientId ? ctx.onOpenRebindDialog : undefined}
         />
       )}
 

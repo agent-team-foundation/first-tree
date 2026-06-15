@@ -36,7 +36,6 @@ import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
-import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { deriveSaveHint } from "./agent-detail/save-hint.js";
 import { buildTabs, type TabDef } from "./agent-detail/tabs.js";
@@ -224,7 +223,6 @@ function AgentDetailPageView() {
   const [bindClientOpen, setBindClientOpen] = useState(false);
   const [bindClientSelected, setBindClientSelected] = useState<string>("");
   const [bindClientError, setBindClientError] = useState<string | null>(null);
-  const [reBindOpen, setReBindOpen] = useState(false);
   const clientsQuery = useQuery({
     queryKey: ["clients"],
     queryFn: listClients,
@@ -461,7 +459,6 @@ function AgentDetailPageView() {
     boundClientLabel,
     setupRuntimeProvider,
     onOpenBindDialog: () => setBindClientOpen(true),
-    onOpenRebindDialog: () => setReBindOpen(true),
     bindClientPending: bindClientMutation.isPending,
     saveIdentity: async (patch) => {
       await identityUpdateMutation.mutateAsync(patch);
@@ -704,8 +701,6 @@ function AgentDetailPageView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <ReBindDialog open={reBindOpen} onOpenChange={setReBindOpen} agent={agent} />
     </div>
   );
 }

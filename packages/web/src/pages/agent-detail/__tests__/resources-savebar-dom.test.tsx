@@ -168,7 +168,6 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
     boundClientLabel: "gandy-macbook",
     setupRuntimeProvider: "claude-code",
     onOpenBindDialog: vi.fn(),
-    onOpenRebindDialog: vi.fn(),
     bindClientPending: false,
     saveIdentity: vi.fn(),
     refreshAgent: vi.fn(),

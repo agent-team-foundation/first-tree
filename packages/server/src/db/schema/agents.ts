@@ -47,9 +47,9 @@ export const agents = pgTable(
     managerId: text("manager_id").notNull(),
     /**
      * Physical client this agent is pinned to. Nullable for human agents (no
-     * runtime). For non-human agents this used to be immutable (Rule R-RUN);
-     * post-0026 it is re-bindable via `agentService.rebindAgent`, which runs
-     * owner / org / capability checks atomically.
+     * runtime). For non-human agents it is set once (NULL → ID, on creation or
+     * first claim) and immutable thereafter (Rule R-RUN) — there is no
+     * move/re-bind path. To run on a different client, provision a new agent.
      */
     clientId: text("client_id").references(() => clients.id, { onDelete: "restrict" }),
     /**

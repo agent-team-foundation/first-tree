@@ -59,8 +59,6 @@ export {
   legacyWireAgentTypeSchema,
   listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
-  type RebindAgent,
-  rebindAgentSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
