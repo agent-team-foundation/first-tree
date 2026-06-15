@@ -26,37 +26,64 @@ function payload(gitRepos: AgentRuntimeConfigPayload["gitRepos"]): AgentRuntimeC
 const PER_CHAT = "/data/workspaces/agent/chat-123";
 
 describe("documentBasePathFromRuntimeConfig", () => {
+  // For a NEW agent-home session, sessionRoot === workspaceRoot. The unit tests
+  // below stand AGENT_HOME in for both so they exercise the new-layout branch.
+  const AGENT_HOME = PER_CHAT;
+
   it("returns the session doc root when there are zero repos", () => {
-    expect(documentBasePathFromRuntimeConfig(payload([]), PER_CHAT)).toBe(PER_CHAT);
+    expect(documentBasePathFromRuntimeConfig(payload([]), AGENT_HOME, AGENT_HOME)).toBe(AGENT_HOME);
   });
 
   it("returns the session doc root when there are multiple repos", () => {
     const result = documentBasePathFromRuntimeConfig(
       payload([{ url: "https://github.com/a/one.git" }, { url: "https://github.com/a/two.git" }]),
-      PER_CHAT,
+      AGENT_HOME,
+      AGENT_HOME,
     );
-    expect(result).toBe(PER_CHAT);
+    expect(result).toBe(AGENT_HOME);
   });
 
-  it("returns an ABSOLUTE source-repo clone path (sessionRoot + source-repos/ + localPath) for a single repo", () => {
-    // Regression: the old code returned a bare relative localPath
-    // ("first-tree"), which the runtime resolved against its own
-    // process.cwd() (the launch dir, not the per-chat workspace) and failed to
-    // find any doc — leaving single-repo cloud preview dead. The clone now
-    // lives under the `source-repos/` layer, so the base is `<root>/source-repos/<name>`.
-    expect(documentBasePathFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), PER_CHAT)).toBe(
-      `${PER_CHAT}/source-repos/first-tree`,
-    );
+  it("returns an ABSOLUTE source-repo clone path (under source-repos/) for a single repo in a new session", () => {
+    // New agent-home session (sessionRoot === workspaceRoot): the clone lives
+    // under the `source-repos/` layer, so the base is `<root>/source-repos/<name>`.
+    expect(
+      documentBasePathFromRuntimeConfig(
+        payload([{ url: "https://github.com/a/first-tree.git" }]),
+        AGENT_HOME,
+        AGENT_HOME,
+      ),
+    ).toBe(`${AGENT_HOME}/source-repos/first-tree`);
   });
 
   it("honours an explicit localPath for a single repo (under source-repos/)", () => {
     expect(
-      documentBasePathFromRuntimeConfig(payload([{ url: "https://x/y.git", localPath: "custom-dir" }]), PER_CHAT),
-    ).toBe(`${PER_CHAT}/source-repos/custom-dir`);
+      documentBasePathFromRuntimeConfig(
+        payload([{ url: "https://x/y.git", localPath: "custom-dir" }]),
+        AGENT_HOME,
+        AGENT_HOME,
+      ),
+    ).toBe(`${AGENT_HOME}/source-repos/custom-dir`);
+  });
+
+  it("keeps the legacy per-chat flat base (no source-repos/) when sessionRoot is a per-chat dir", () => {
+    // Legacy pre-#506 session: sessionRoot is `<workspaceRoot>/<chatId>`, NOT the
+    // agent home. That layout never had a `source-repos/` layer, so prepending
+    // one would point preview at a nonexistent dir — keep the prior flat base.
+    const workspaceRoot = "/data/workspaces/agent";
+    const legacySessionRoot = `${workspaceRoot}/chat-123`;
+    expect(
+      documentBasePathFromRuntimeConfig(
+        payload([{ url: "https://github.com/a/first-tree.git" }]),
+        legacySessionRoot,
+        workspaceRoot,
+      ),
+    ).toBe(`${legacySessionRoot}/first-tree`);
   });
 
   it("falls back to the session doc root when a single repo's localPath is blank", () => {
-    expect(documentBasePathFromRuntimeConfig(payload([{ url: "", localPath: "   " }]), PER_CHAT)).toBe(PER_CHAT);
+    expect(documentBasePathFromRuntimeConfig(payload([{ url: "", localPath: "   " }]), AGENT_HOME, AGENT_HOME)).toBe(
+      AGENT_HOME,
+    );
   });
 });
 
@@ -93,6 +120,7 @@ describe("resolveSessionDocRoot — per-agent-home vs legacy per-chat layout", (
     const base = documentBasePathFromRuntimeConfig(
       payload([{ url: "https://github.com/agent-team-foundation/first-tree.git" }]),
       resolveSessionDocRoot(workspaceRoot, "another-new-chat"),
+      workspaceRoot,
     );
     expect(base).toBe(join(workspaceRoot, "source-repos", "first-tree"));
   });
@@ -124,18 +152,38 @@ describe("singleRepoLocalPathFromPayload + selfFenceFromRuntimeConfig", () => {
     expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "   " }]))).toBeNull();
   });
 
-  it("selfFenceFromRuntimeConfig packs agentHome + the agentHome-relative source-repos/ path", () => {
-    // singleRepoLocalPath is the repo's path RELATIVE to agentHome — under the
-    // source-repos/ layout that is `source-repos/<name>`, resolved by the
-    // snapshot pipeline as `resolve(agentHome, "source-repos/<name>")`.
-    expect(selfFenceFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), "/ws/coder")).toEqual({
+  it("selfFenceFromRuntimeConfig packs agentHome + source-repos/<name> for a NEW session", () => {
+    // New session (sessionRoot === workspaceRoot): singleRepoLocalPath is the
+    // repo's agentHome-relative path under the `source-repos/` layer, resolved
+    // by the snapshot pipeline as `resolve(agentHome, "source-repos/<name>")`.
+    expect(
+      selfFenceFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), "/ws/coder", "/ws/coder"),
+    ).toEqual({
       agentHome: "/ws/coder",
       singleRepoLocalPath: "source-repos/first-tree",
     });
-    expect(selfFenceFromRuntimeConfig(payload([]), "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
+    expect(selfFenceFromRuntimeConfig(payload([]), "/ws/coder", "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
+  });
+
+  it("selfFenceFromRuntimeConfig keeps the flat relative path for a legacy per-chat session", () => {
+    // Legacy session (sessionRoot is a per-chat dir, not the agent home): the
+    // pre-#506 flat layout had no `source-repos/` layer, so singleRepoLocalPath
+    // stays the bare name to match `documentBasePathFromRuntimeConfig`.
+    const workspaceRoot = "/ws/coder";
+    const legacySessionRoot = `${workspaceRoot}/chat-1`;
+    expect(
+      selfFenceFromRuntimeConfig(
+        payload([{ url: "https://github.com/a/first-tree.git" }]),
+        legacySessionRoot,
+        workspaceRoot,
+      ),
+    ).toEqual({
+      agentHome: legacySessionRoot,
+      singleRepoLocalPath: "first-tree",
+    });
   });
 
   it("returns agentHome-only when no payload is cached yet (very first message)", () => {
-    expect(selfFenceFromRuntimeConfig(null, "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
+    expect(selfFenceFromRuntimeConfig(null, "/ws/coder", "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
   });
 });
