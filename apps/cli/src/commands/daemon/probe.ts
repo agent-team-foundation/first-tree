@@ -43,14 +43,15 @@ export function registerDaemonProbeCommand(daemon: Command): void {
       if (!wantJson) print.line("\n  Probing runtime providers (each provider is launched for real)...\n\n");
       const capabilities = await probeCapabilities();
 
-      if (wantJson) {
-        print.result(capabilities);
-      } else {
-        printResults(runtimeProviderChecks(capabilities));
-      }
+      // The human report renders immediately; the JSON success envelope is
+      // deferred until the command's outcome (including upload) is known, so
+      // `--json` never writes a premature `{ ok: true }` to stdout that a
+      // missing-credentials / failed upload would then contradict on stderr.
+      if (!wantJson) printResults(runtimeProviderChecks(capabilities));
 
       if (options.upload === false) {
-        if (!wantJson) print.line("  Skipped upload (--no-upload).\n\n");
+        if (wantJson) print.result(capabilities);
+        else print.line("  Skipped upload (--no-upload).\n\n");
         return;
       }
 
@@ -67,14 +68,18 @@ export function registerDaemonProbeCommand(daemon: Command): void {
           clientId: config.client.id,
           capabilities,
         });
-        if (!wantJson) print.line("  Uploaded to the server.\n\n");
+        if (wantJson) print.result(capabilities);
+        else print.line("  Uploaded to the server.\n\n");
       } catch (err) {
-        // The clients row only exists after a `client:register` handshake, so a
-        // probe run before the daemon ever connected can 404 here. The local
-        // result is already printed; surface the upload failure without failing
-        // the whole command.
         const msg = err instanceof Error ? err.message : String(err);
-        if (!wantJson) print.status("⚠️", `capabilities upload skipped: ${msg}`);
+        // In JSON mode the envelope must reflect the real outcome: a failed
+        // upload is `{ ok: false }`, not a success with the snapshot. (A caller
+        // who only wants the local snapshot uses `--no-upload`.) In human mode
+        // the report is already printed, so the upload failure is a soft
+        // warning — the clients row only exists after a `client:register`
+        // handshake, so a probe before the daemon ever connected can 404 here.
+        if (wantJson) fail("UPLOAD_FAILED", msg, 1);
+        print.status("⚠️", `capabilities upload skipped: ${msg}`);
       } finally {
         resetConfig();
         resetConfigMeta();

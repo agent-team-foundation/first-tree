@@ -104,4 +104,27 @@ describe("daemon probe", () => {
     expect(clientMocks.probeCapabilities).toHaveBeenCalledTimes(1);
     expect(coreMocks.uploadClientCapabilities).not.toHaveBeenCalled();
   });
+
+  it("--json without credentials does NOT emit a premature success envelope (fails NO_CREDENTIALS)", async () => {
+    coreMocks.loadCredentials.mockReturnValue(false);
+    await expect(runProbe(["--json"])).rejects.toMatchObject({ code: "NO_CREDENTIALS" });
+    // the {ok:true} envelope must not be written before the upload outcome is known
+    expect(outputMocks.print.result).not.toHaveBeenCalled();
+    expect(coreMocks.uploadClientCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("--json with a failed upload emits an error envelope, never a success one", async () => {
+    coreMocks.uploadClientCapabilities.mockRejectedValueOnce(new Error("HTTP 404"));
+    await expect(runProbe(["--json"])).rejects.toMatchObject({ code: "UPLOAD_FAILED" });
+    expect(outputMocks.print.result).not.toHaveBeenCalled();
+  });
+
+  it("--json success envelope is emitted only after a successful upload", async () => {
+    await runProbe(["--json"]);
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledTimes(1);
+    expect(outputMocks.print.result).toHaveBeenCalledWith(CAPABILITIES);
+    const uploadOrder = coreMocks.uploadClientCapabilities.mock.invocationCallOrder[0];
+    const resultOrder = outputMocks.print.result.mock.invocationCallOrder[0];
+    expect(resultOrder).toBeGreaterThan(uploadOrder); // envelope after upload
+  });
 });
