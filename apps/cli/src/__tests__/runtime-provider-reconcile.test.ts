@@ -161,6 +161,43 @@ describe("reconcileLocalRuntimeProviders", () => {
     expect(existsSync(registryPath)).toBe(true);
   });
 
+  it("materializes an omitted runtime to the server default without clearing the registry", async () => {
+    // A legacy/hand-written agent.yaml omits `runtime`; agentConfigSchema
+    // defaults it to claude-code. With the server also on claude-code, the
+    // effective provider is unchanged — materializing the field must NOT be
+    // mistaken for a provider switch and wipe valid Claude session state.
+    const yamlPath = seedAgentDir("delta", { agentId: "agent-4" });
+    const registryPath = seedSessionRegistry("delta");
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-4", clientId: "cli-1", runtimeProvider: "claude-code" }]), {
+        status: 200,
+      }),
+    );
+
+    await reconcileLocalRuntimeProviders({ serverUrl: "http://first-tree.test", accessToken: "tok", agentsDir });
+
+    // Field is materialized for explicitness, but the registry is preserved.
+    expect((parseYaml(readFileSync(yamlPath, "utf-8")) as { runtime?: string }).runtime).toBe("claude-code");
+    expect(existsSync(registryPath)).toBe(true);
+  });
+
+  it("clears the registry when an omitted runtime resolves to a different server provider", async () => {
+    // Omitted runtime defaults to claude-code; server says codex → the
+    // effective provider really changes, so the stale claude-code session
+    // registry must be cleared.
+    seedAgentDir("epsilon", { agentId: "agent-5" });
+    const registryPath = seedSessionRegistry("epsilon");
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-5", clientId: "cli-1", runtimeProvider: "codex" }]), {
+        status: 200,
+      }),
+    );
+
+    await reconcileLocalRuntimeProviders({ serverUrl: "http://first-tree.test", accessToken: "tok", agentsDir });
+
+    expect(existsSync(registryPath)).toBe(false);
+  });
+
   it("leaves agent.yaml untouched when runtime already matches the server", async () => {
     const yamlPath = seedAgentDir("beta", { agentId: "agent-2", runtime: "codex" });
     const before = readFileSync(yamlPath, "utf-8");

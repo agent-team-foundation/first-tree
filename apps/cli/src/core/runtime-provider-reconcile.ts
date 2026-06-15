@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { agentSessionRegistryPath } from "@first-tree/client";
 import type { ClientCapabilities, RuntimeProvider, SkillDescriptor } from "@first-tree/shared";
+import { DEFAULT_RUNTIME_PROVIDER } from "@first-tree/shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
 
@@ -66,6 +67,16 @@ export async function reconcileLocalRuntimeProviders(opts: {
     if (!auth) continue;
     if (parsed.runtime === auth.runtimeProvider) continue;
 
+    // The *effective* local provider is what `loadAgents()` will hand the slot:
+    // `agentConfigSchema` defaults an omitted `runtime` to DEFAULT_RUNTIME_PROVIDER.
+    // A legacy config that just omits `runtime` (effective `claude-code`) against
+    // a server `claude-code` is NOT a switch — the same handler launches either
+    // way — even though the raw YAML value (`undefined`) differs. The registry
+    // clear must key off this effective comparison, not the raw field, or it
+    // would delete valid session mappings on every startup for defaulted configs.
+    const effectiveLocal = parsed.runtime ?? DEFAULT_RUNTIME_PROVIDER;
+    const providerChanged = effectiveLocal !== auth.runtimeProvider;
+
     const next = { ...parsed, runtime: auth.runtimeProvider };
     try {
       writeFileSync(yamlPath, stringifyYaml(next), { mode: 0o600 });
@@ -80,13 +91,15 @@ export async function reconcileLocalRuntimeProviders(opts: {
       // the persisted session registry is still valid. Leave it alone.
       continue;
     }
-    // The provider actually changed on disk. The persisted session registry
-    // holds the OLD provider's native session ids, which the new handler
-    // cannot resume (a Claude session id is meaningless to Codex
-    // `resumeThread` and vice versa). Clear it so every chat cold-starts under
-    // the new provider — the live `agent:pinned` hot-swap path clears the same
-    // file; this covers the offline-rebind path where reconciliation (not a
-    // pin push) applies the switch before the slot first binds.
+    // Only a real change in the effective provider invalidates the registry.
+    // Materializing an omitted field to the same provider (above) is not a
+    // switch, so the OLD provider's native session ids stay valid and must be
+    // preserved. When the provider genuinely changed, clear them so every chat
+    // cold-starts under the new provider (a Claude session id is meaningless to
+    // Codex `resumeThread` and vice versa) — mirroring the live hot-swap path,
+    // for the offline-rebind case where reconciliation applies the switch
+    // before the slot first binds.
+    if (!providerChanged) continue;
     try {
       rmSync(agentSessionRegistryPath(subdir.name), { force: true });
     } catch (err) {
