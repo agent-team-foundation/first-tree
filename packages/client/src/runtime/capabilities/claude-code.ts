@@ -104,7 +104,7 @@ export function classifyClaudeSmokeFailure(message: string): SmokeOutcome {
  * reports `ok` — exactly the "session would actually work" claim the web UI
  * makes when it shows a green check.
  */
-async function defaultClaudeSdkSmoke(binary: string | undefined): Promise<SmokeOutcome> {
+export async function defaultClaudeSdkSmoke(binary: string | undefined): Promise<SmokeOutcome> {
   const sdk = await import("@anthropic-ai/claude-agent-sdk");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CLAUDE_SMOKE_TIMEOUT_MS);
@@ -115,8 +115,17 @@ async function defaultClaudeSdkSmoke(binary: string | undefined): Promise<SmokeO
         model: "haiku",
         maxTurns: 1,
         abortController: controller,
+        // Match the real handler's launch contract: `createClaudeCodeHandler`
+        // runs the SDK with `settingSources: ["user", "project"]`, so the smoke
+        // must load the same settings sources — otherwise a machine whose
+        // Claude runtime depends on `~/.claude/settings.json` (provider
+        // endpoint / proxy / model alias / hooks / plugins) would be probed
+        // under a different config than it actually runs with.
+        settingSources: ["user", "project"],
         // Neutral cwd: the daemon's cwd may be anywhere; the smoke must not
-        // pick up a repo's .claude/ settings or spawn in a deleted dir.
+        // pick up a repo's .claude/ project settings or spawn in a deleted dir
+        // (a tmp dir has no `project` settings, so this stays equivalent to the
+        // handler's source contract without inheriting an arbitrary repo).
         cwd: tmpdir(),
         ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
       },

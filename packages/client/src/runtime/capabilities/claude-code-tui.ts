@@ -65,10 +65,31 @@ function defaultProbeTmux(): TmuxVersion | null {
  * version gate), so the smoke does not need to drive a real pane to prove the
  * provider end of the contract.
  */
-async function defaultTuiSmoke(binary: string): Promise<SmokeOutcome> {
-  const res = await runCommand(binary, ["-p", CLAUDE_SMOKE_PROMPT, "--model", "haiku"], {
+/**
+ * Args the TUI smoke launches with. Mirrors the real TUI handler's launch
+ * contract — it spawns `claude` with `--setting-sources user,project` (see
+ * `handlers/claude-code-tui/index.ts`), so the smoke loads the same settings
+ * sources. Exported for a regression test that pins this parity.
+ */
+export const TUI_SMOKE_ARGS: readonly string[] = [
+  "-p",
+  CLAUDE_SMOKE_PROMPT,
+  "--model",
+  "haiku",
+  "--setting-sources",
+  "user,project",
+];
+
+export async function defaultTuiSmoke(binary: string, run: typeof runCommand = runCommand): Promise<SmokeOutcome> {
+  // Match the real TUI handler's launch contract (see TUI_SMOKE_ARGS):
+  // otherwise a machine whose Claude runtime depends on `~/.claude/settings.json`
+  // (provider endpoint / proxy / model alias / hooks / plugins) would be probed
+  // under a different config than it actually runs.
+  const res = await run(binary, [...TUI_SMOKE_ARGS], {
     timeoutMs: CLAUDE_SMOKE_TIMEOUT_MS,
-    // Neutral cwd — don't pick up repo-local .claude/ settings.
+    // Neutral cwd — a tmp dir has no `project` settings, so this stays
+    // equivalent to the handler's source contract without picking up an
+    // arbitrary repo's .claude/ project settings.
     cwd: tmpdir(),
   });
   if (res.ok) return { state: "ok" };

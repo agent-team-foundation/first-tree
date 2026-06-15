@@ -8,7 +8,12 @@ import {
   probeClaudeCodeCapability,
   verifyBundledClaudeArtifact,
 } from "../runtime/capabilities/claude-code.js";
-import { parseTmuxVersion, probeClaudeCodeTuiCapability } from "../runtime/capabilities/claude-code-tui.js";
+import {
+  defaultTuiSmoke,
+  parseTmuxVersion,
+  probeClaudeCodeTuiCapability,
+  TUI_SMOKE_ARGS,
+} from "../runtime/capabilities/claude-code-tui.js";
 import {
   type CodexBinaryResolution,
   classifyDoctorReport,
@@ -18,6 +23,7 @@ import {
   resolveBundledCodexBinary,
   resolveCodexRuntimeBinary,
 } from "../runtime/capabilities/codex.js";
+import type { RunCommandResult } from "../runtime/capabilities/launch-probe.js";
 import {
   type AuthPrecheckOutcome,
   commandFailureDigest,
@@ -261,6 +267,55 @@ describe("classifyClaudeSmokeFailure", () => {
 
   it("empty text gets a placeholder instead of an empty error", () => {
     expect(classifyClaudeSmokeFailure("  ").error).toBe("smoke failed without output");
+  });
+});
+
+/**
+ * Regression for PR #996 review (codex-assistant): the Claude smokes must load
+ * the SAME settings sources as the real handlers (`settingSources: ["user",
+ * "project"]` / `--setting-sources user,project`), or the capability row would
+ * be probed under a different config than the runtime actually launches with.
+ */
+describe("Claude smoke ↔ handler settings-source parity", () => {
+  it("TUI_SMOKE_ARGS carry `--setting-sources user,project` (+ the haiku model)", () => {
+    const i = TUI_SMOKE_ARGS.indexOf("--setting-sources");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(TUI_SMOKE_ARGS[i + 1]).toBe("user,project");
+    expect(TUI_SMOKE_ARGS).toContain("haiku");
+  });
+
+  it("defaultTuiSmoke launches the resolved binary with the setting-sources args", async () => {
+    let capturedArgs: string[] | undefined;
+    const fakeRun = async (_binary: string, args: string[]): Promise<RunCommandResult> => {
+      capturedArgs = args;
+      return { ok: true, exitCode: 0, stdout: "OK", stderr: "", timedOut: false, durationMs: 5 };
+    };
+    const out = await defaultTuiSmoke("/usr/local/bin/claude", fakeRun);
+    expect(out.state).toBe("ok");
+    expect(capturedArgs).toEqual([...TUI_SMOKE_ARGS]);
+  });
+
+  it("defaultClaudeSdkSmoke passes settingSources [user, project] to the SDK query", async () => {
+    vi.resetModules();
+    let capturedOptions: Record<string, unknown> | undefined;
+    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
+      query: (input: { options: Record<string, unknown> }) => {
+        capturedOptions = input.options;
+        return (async function* () {
+          yield { type: "result", subtype: "success", is_error: false };
+        })();
+      },
+    }));
+    const mod = await import("../runtime/capabilities/claude-code.js");
+
+    const out = await mod.defaultClaudeSdkSmoke(undefined);
+
+    expect(out.state).toBe("ok");
+    expect(capturedOptions?.settingSources).toEqual(["user", "project"]);
+    expect(capturedOptions?.model).toBe("haiku");
+
+    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
+    vi.resetModules();
   });
 });
 
