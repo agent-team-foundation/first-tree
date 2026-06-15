@@ -191,13 +191,14 @@ WS=$(find_workspace_root) || { echo "No First Tree workspace at or above cwd"; }
 cat "$WS/.first-tree/workspace.json"
 ```
 
-The manifest is `{ tree: "<dir>", sources: ["<dir>", ...] }`. Resolve:
+The manifest is `{ tree: "<dir>", sources: ["<dir>", ...], sourcesRoot?: "source-repos" }`. Resolve:
 
 | Field | What you're looking at | Where to go next |
 |---|---|---|
 | `<workspace-root>` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
-| `tree` | the tree subdirectory name (sibling of source repos under workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
-| `sources` | bound source repo subdirectory names | Each is a sibling of the tree under the workspace root. |
+| `tree` | the tree subdirectory name (an immediate child of the workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
+| `sources` | bound source repo subdirectory names | Each lives under `sourcesRoot`: `<workspace-root>/<sourcesRoot>/<name>`. |
+| `sourcesRoot` | directory holding the source clones (the runtime writes `"source-repos"`) | Optional — if absent, the manifest is a legacy flat one and sources sit directly at `<workspace-root>/<name>`. |
 
 If no `workspace.json` is found at or above cwd, the workspace is
 unbound. Binding a workspace to a tree is an operator action taken
@@ -234,7 +235,10 @@ which are computable from `workspaceRoot` + `cwd`:
 
 - **Tree** — `cwd` resolves to or under `<workspaceRoot>/<manifest.tree>`.
   Use this for direct tree reads / writes.
-- **Source** — `cwd` resolves to or under one of `<workspaceRoot>/<manifest.sources[i]>`.
+- **Source** — `cwd` resolves to or under one of the source clones at
+  `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` (i.e.
+  `<workspaceRoot>/source-repos/<name>`; a legacy flat manifest without
+  `sourcesRoot` keeps them at `<workspaceRoot>/<name>`).
   Use this for source-side tasks.
 - **Workspace** — `cwd` is `<workspaceRoot>` itself, or sits outside any
   declared tree / source. Use this when the task spans multiple sources

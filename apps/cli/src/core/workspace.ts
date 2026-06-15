@@ -163,6 +163,11 @@ function isGitRepoDir(path: string): boolean {
 }
 
 function listImmediateChildDirs(root: string): string[] {
+  // Tolerate a missing directory (e.g. a `source-repos/` sourcesRoot the agent
+  // has not materialised yet) — return no children rather than throwing.
+  if (!existsSync(root)) {
+    return [];
+  }
   const entries = readdirSync(root, { withFileTypes: true });
   const names: string[] = [];
   for (const entry of entries) {
@@ -251,8 +256,13 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
   const treePresent = isDirectory(treePath);
   const treeRemoteUrl = treePresent ? readGitRemoteUrl(treePath) : undefined;
 
+  // Source clones live under `<workspaceRoot>/<sourcesRoot>/` when the manifest
+  // declares a sourcesRoot (the agent-managed layout); a legacy flat manifest
+  // omits it and keeps sources at the workspace root.
+  const sourcesBase = manifest.sourcesRoot ? join(workspaceRoot, manifest.sourcesRoot) : workspaceRoot;
+
   const boundSources: WorkspaceBoundSource[] = manifest.sources.map((name) => {
-    const sourcePath = join(workspaceRoot, name);
+    const sourcePath = join(sourcesBase, name);
     const present = isDirectory(sourcePath);
     const remoteUrl = present ? readGitRemoteUrl(sourcePath) : undefined;
     return {
@@ -265,13 +275,17 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
 
   const missingBoundSources = boundSources.filter((entry) => !entry.present);
 
+  // Unbound git siblings are scanned where the bound sources live (sourcesBase).
+  // `manifest.tree` lives at the workspace root, not under a sourcesRoot, so
+  // excluding it is a no-op in the agent-managed layout and the necessary guard
+  // in the flat layout (where sourcesBase === workspaceRoot).
   const declaredNames = new Set<string>([manifest.tree, ...manifest.sources]);
   const unboundGitSiblings: WorkspaceUnboundSibling[] = [];
-  for (const childName of listImmediateChildDirs(workspaceRoot)) {
+  for (const childName of listImmediateChildDirs(sourcesBase)) {
     if (declaredNames.has(childName)) {
       continue;
     }
-    const childPath = join(workspaceRoot, childName);
+    const childPath = join(sourcesBase, childName);
     if (isGitRepoDir(childPath)) {
       const remoteUrl = readGitRemoteUrl(childPath);
       unboundGitSiblings.push({

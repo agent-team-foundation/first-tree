@@ -159,6 +159,26 @@ describe("computeWorkspaceStatus", () => {
     expect(status.missingBoundSources).toEqual([{ name: "web", path: join(workspaceRoot, "web"), present: false }]);
   });
 
+  it("resolves bound sources and unbound siblings under sourcesRoot when set", () => {
+    // Agent-managed layout: tree at the workspace root, source clones one level
+    // down under `source-repos/`.
+    makeGitRepo(workspaceRoot, "context");
+    const sourcesDir = join(workspaceRoot, "source-repos");
+    makeGitRepo(sourcesDir, "api");
+    makeGitRepo(sourcesDir, "scratch"); // a git repo under source-repos/ not in `sources`
+    makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: ["api", "web"], sourcesRoot: "source-repos" });
+
+    const status = computeWorkspaceStatus(workspaceRoot);
+
+    expect(status.treePresent).toBe(true);
+    expect(status.boundSources).toEqual([
+      { name: "api", path: join(sourcesDir, "api"), present: true },
+      { name: "web", path: join(sourcesDir, "web"), present: false },
+    ]);
+    // Unbound siblings are scanned under source-repos/, not the workspace root.
+    expect(status.unboundGitSiblings.map((entry) => entry.name)).toEqual(["scratch"]);
+  });
+
   it("reports tree absent when the tree subdir is missing", () => {
     makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: [] });
 

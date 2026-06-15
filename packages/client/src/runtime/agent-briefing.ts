@@ -413,7 +413,9 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "Management protocol (shared by every chat of this agent):",
     "",
     "1. **Ensure** — if a listed path is missing, create it as a bare clone.",
-    "   Each path is a single directory name directly under your workspace:",
+    "   Each listed path is an immediate child of your workspace's",
+    "   `source-repos/` directory (`<workspace>/source-repos/<name>`); `git",
+    "   clone` creates that parent directory for you:",
     "",
     "   ```bash",
     "   git clone --bare <url> <path>",
@@ -463,7 +465,9 @@ function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<Predeclare
   // and worktree paths are shell-quoted real values; only `<name>`,
   // `<task-name>`, `<new-branch>`, `origin/main` stay as placeholders.
   const quotedHome = shellQuote(agentHome);
-  const exampleSource = sourceRepos[0] ? shellQuote(sourceRepos[0].absolutePath) : `${quotedHome}/<source-repo>`;
+  const exampleSource = sourceRepos[0]
+    ? shellQuote(sourceRepos[0].absolutePath)
+    : `${quotedHome}/source-repos/<source-repo>`;
   const readWorktreePath = shellQuote(`${agentHome}/worktrees/<name>-read`);
   const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
   return `## Worktrees (how you read AND write a bare source repo)

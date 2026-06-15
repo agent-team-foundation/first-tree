@@ -80,30 +80,35 @@ refuses; route subsequent work through `first-tree-context` or
    one-line explanation pointing at `first-tree-context` /
    `first-tree-sync`. Do **not** prompt the user to clear the tree
    yourself; deleting nodes is human-owned.
-3. **All declared sources present on disk.**
-   `<workspaceRoot>/<manifest.sources[i]>` exists for every entry (each
-   is a **bare** clone — see *Materialize source read worktrees* below).
-   A missing source means the workspace is half-provisioned; surface
-   to the user and stop. Do not seed from a partial workspace.
+3. **All declared sources present on disk.** Each source clone lives at
+   `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` — the
+   runtime writes `sourcesRoot: "source-repos"`, so the path is
+   `<workspaceRoot>/source-repos/<name>` (a legacy flat manifest omits
+   `sourcesRoot` and keeps sources at `<workspaceRoot>/<name>`). That path
+   must exist for every entry (each is a **bare** clone — see *Materialize
+   source read worktrees* below). A missing source means the workspace is
+   half-provisioned; surface to the user and stop. Do not seed from a
+   partial workspace.
 
 ### Materialize source read worktrees
 
 Under the agent-managed repo model the declared sources are **bare**
 clones (a git object store, no working tree) — you cannot `ls` or read
-files at `<workspaceRoot>/<manifest.sources[i]>` directly. Before any
+files at the clone path (`<workspaceRoot>/source-repos/<name>`, i.e.
+`<workspaceRoot>/<manifest.sourcesRoot>/<name>`) directly. Before any
 structural read, materialize one read worktree per source off its latest
 default branch, following the **Worktrees** protocol in your `AGENTS.md`
 / `CLAUDE.md` briefing:
 
 ```bash
-# for each <source> in manifest.sources:
-git -C <workspaceRoot>/<source> fetch origin
-git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
+# for each <source> in manifest.sources (clone at <workspaceRoot>/source-repos/<source>):
+git -C <workspaceRoot>/source-repos/<source> fetch origin
+git -C <workspaceRoot>/source-repos/<source> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
 ```
 
 Every "read every bound source" / Tier 0–2 scan in Phase 1 operates on
 these read worktrees, not the bare clone paths. Remove them
-(`git -C <workspaceRoot>/<source> worktree remove <path>`) once both
+(`git -C <workspaceRoot>/source-repos/<source> worktree remove <path>`) once both
 PRs are open.
 
 ## The Two Phases

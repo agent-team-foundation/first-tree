@@ -61,11 +61,13 @@ default branch — following the **Worktrees** protocol in your `AGENTS.md`
 / `CLAUDE.md` briefing — and remove it when the audit is done:
 
 ```bash
-# for each <source> in manifest.sources:
-git -C <workspaceRoot>/<source> fetch origin
-git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
+# for each <source> in manifest.sources — the bare clone is at
+# <workspaceRoot>/<manifest.sourcesRoot>/<source>, i.e. <workspaceRoot>/source-repos/<source>
+# (a legacy flat manifest omits sourcesRoot → <workspaceRoot>/<source>):
+git -C <workspaceRoot>/source-repos/<source> fetch origin
+git -C <workspaceRoot>/source-repos/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
 # ... all Phase 2–4 reads below use this worktree as <source-root> ...
-git -C <workspaceRoot>/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
+git -C <workspaceRoot>/source-repos/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
 ```
 
 Throughout Phases 2–4, `<source-root>` / `<source-path>` resolve **inside
