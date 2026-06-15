@@ -37,6 +37,7 @@ beforeAll(async () => {
   hangFixture = await createTuiAgent({
     handle,
     displayName: "tui-restart-resume hanging agent",
+    bindMode: "after-env-patch",
     knobs: { hang: true },
   });
 }, 120_000);

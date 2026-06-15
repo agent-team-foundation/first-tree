@@ -242,11 +242,13 @@ export {
   CAPABILITY_STATES,
   type CapabilityAuthMethod,
   type CapabilityEntry,
+  type CapabilityProbeKind,
   type CapabilityRuntimeSource,
   type CapabilityState,
   type ClientCapabilities,
   capabilityAuthMethodSchema,
   capabilityEntrySchema,
+  capabilityProbeKindSchema,
   capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
@@ -759,6 +761,7 @@ export {
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export {
+  SOURCE_REPOS_DIRNAME,
   WORKSPACE_MANIFEST_FILENAME,
   WORKSPACE_STATE_DIRNAME,
   type WorkspaceManifest,

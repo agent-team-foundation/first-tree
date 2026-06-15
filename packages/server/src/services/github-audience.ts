@@ -35,8 +35,11 @@ export function evaluateDelegateTarget(
  * event). Three buckets:
  *
  *   - `agent`         — actor.login maps to one of this org's agents. Used
- *                       for echo suppression: the agent's own actions don't
- *                       fan back into their own chat.
+ *                       for echo suppression at the notification layer: the
+ *                       card still lands in every mapped chat (the public
+ *                       record of what happened), but the actor is excluded
+ *                       from the notify/addressing fan-out so agents aren't
+ *                       woken by their own actions. See #942.
  *   - `our-app-bot`   — actor is `<app-slug>[bot]`. The event is a downstream
  *                       effect of First Tree's own outbound write. `kind: "existing"`
  *                       targets are kept (so PRs the agent opens via First Tree's
@@ -91,6 +94,15 @@ export type AudienceTarget = {
    * mentioned" because two involves shared the same reason.
    */
   involveLogin: string | null;
+  /**
+   * Set when the event's actor resolves to an org agent (`identifyActor`
+   * returned `kind: "agent"`). Stage 3 excludes this id from the card's
+   * notification addressing (`addressedToAgentIds`) so the actor is never
+   * woken / red-dotted by their own action, while the card itself still
+   * lands in the chat as the public record (#942). `null` for our-app-bot
+   * and external actors.
+   */
+  actorAgentId: string | null;
 };
 
 /**
@@ -105,9 +117,14 @@ export type AudienceTarget = {
  * already subscribed, appends a `new` row.
  *
  * Echo filtering runs after the union:
- *   - actor = `agent`: rows where the actor sits on either the human or
- *     delegate side of an `existing` mapping are dropped. `kind: "new"`
- *     mention rows are kept (explicit involves are intentional routing).
+ *   - actor = `agent`: no row is dropped — every mapped chat keeps the card
+ *     as the public record of what happened. Instead, each row is annotated
+ *     with `actorAgentId` so Stage 3 excludes the actor from notification
+ *     addressing (the actor isn't woken / red-dotted by their own action,
+ *     other recipients are notified normally). Dropping rows here used to
+ *     conflate "should this chat get the card" with "should this recipient
+ *     be notified" and silently killed delivery to multi-participant chats
+ *     whose only routing entry had the actor on one side (#942).
  *   - actor = `our-app-bot`: `kind: "existing"` rows are kept so follow-up
  *     events on entities the agent opened still reach the chat through the
  *     subscription path; `kind: "new"` rows are dropped to avoid forking a
@@ -140,19 +157,28 @@ export async function resolveAudience(
       ),
     );
 
-  // Dedup subscribed rows by `humanAgentId` (keep earliest `bound_at`).
-  // After `resolveTargetChat` step (a.5) lands, the same `(human, entity)`
-  // pair can have multiple mapping rows pointing at the *same* chat (one
-  // per delegate that ever drove an event for this entity under this
-  // human). Without this dedup the audience loops the same chatId N times
-  // and `deliverNormalizedEvent` posts N identical cards. Sibling rows are
-  // guaranteed to share `chatId` because (a.5) always inserts using the
-  // human-scoped lookup's `chatId`, so collapsing them is loss-free.
-  const earliestByHuman = new Map<string, (typeof subscribedRows)[number]>();
+  // Dedup subscribed rows by `(humanAgentId, chatId)` (keep earliest
+  // `bound_at`). A single `(human, entity)` pair can carry multiple mapping
+  // rows pointing at the *same* chat (one per delegate that ever drove an
+  // event for this entity under this human); collapsing those to one row is
+  // loss-free and stops `deliverNormalizedEvent` posting N identical cards
+  // to that chat.
+  //
+  // The key MUST include `chatId`. Deduping by `humanAgentId` alone assumed
+  // every row for a human shared one chat — false once the same human is
+  // bound to the entity from more than one chat (e.g. a webhook
+  // `human_fallback` row in one chat plus an explicit `follow` row in
+  // another, each under a different delegate). Collapsing across chats kept
+  // only the earliest chat's row and silently dropped every *other* followed
+  // chat from the audience — that chat never received the entity's events at
+  // all. "The chat follows, not the person", so the surviving unit is one
+  // row per (human, chat), never one per human.
+  const earliestByHumanChat = new Map<string, (typeof subscribedRows)[number]>();
   for (const row of subscribedRows) {
-    const current = earliestByHuman.get(row.humanAgentId);
+    const key = `${row.humanAgentId}:${row.chatId}`;
+    const current = earliestByHumanChat.get(key);
     if (!current || row.boundAt < current.boundAt) {
-      earliestByHuman.set(row.humanAgentId, row);
+      earliestByHumanChat.set(key, row);
     }
   }
   // #766: A `pull_request.opened` delivery reaching a reviewer purely through
@@ -182,13 +208,14 @@ export async function resolveAudience(
     return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
   };
 
-  const subscribed: AudienceTarget[] = [...earliestByHuman.values()].filter(keepSubscribedOpened).map((row) => ({
+  const subscribed: AudienceTarget[] = [...earliestByHumanChat.values()].filter(keepSubscribedOpened).map((row) => ({
     humanAgentId: row.humanAgentId,
     delegateAgentId: row.delegateAgentId,
     kind: "existing",
     chatId: row.chatId,
     involveReason: null,
     involveLogin: null,
+    actorAgentId: null,
   }));
 
   // Dedup involved candidates by `humanAgentId` only — once any (human, *,
@@ -257,6 +284,7 @@ export async function resolveAudience(
         chatId: null,
         involveReason: reason,
         involveLogin: candidateLogin,
+        actorAgentId: null,
       });
     }
   }
@@ -275,17 +303,27 @@ export async function resolveAudience(
     return audience.filter((a) => a.kind === "existing");
   }
   if (actor.kind === "agent") {
-    // Echo suppression applies to subscribed rows only: a row where the
-    // actor is on either side of an existing mapping shouldn't fan back
-    // into their chat (they already know about the action they just took).
-    // `kind: "new"` rows come from explicit involves in the event payload
-    // (mention / review_request / assign) — the actor deliberately named
-    // that login, so even a self-target is intentional routing, not echo.
-    // Dropping them would regress the human-self-mention pattern that used
-    // to work under the pre-#345 mention-driven webhook.
-    return audience.filter(
-      (a) => a.kind === "new" || (a.humanAgentId !== actor.agentId && a.delegateAgentId !== actor.agentId),
-    );
+    // Echo suppression is a *notification* concern, not a delivery one
+    // (#942). Every mapped chat keeps its card — the chat row is the public
+    // record of what happened, and other participants of a multi-member
+    // chat legitimately want to see it. The actor's id is annotated onto
+    // every target so Stage 3 (`deliverNormalizedEvent`) excludes it from
+    // `addressedToAgentIds`: the actor is never woken / red-dotted by their
+    // own action, while everyone else is notified normally. A 1:1 chat where
+    // the actor is the sole addressable recipient reduces naturally to "card
+    // visible, nobody woken" via the existing `allowRecipientlessSend`
+    // trusted opt-out.
+    //
+    // The previous implementation dropped `kind: "existing"` rows whose
+    // human or delegate side matched the actor. When such a row was the
+    // chat's only routing entry, that silently killed delivery to the entire
+    // chat — multi-participant chats lost the event altogether. It also
+    // assumed `actor.login` identifies a single acting agent, which is
+    // unsound: agents act on GitHub under a human's GitHub identity, so
+    // identity-based echo cannot reliably tell an agent's own write from a
+    // human's. Notification-layer exclusion is best-effort — at worst it
+    // re-wakes the actor once; it never drops an event.
+    return audience.map((a) => ({ ...a, actorAgentId: actor.agentId }));
   }
   return audience;
 }

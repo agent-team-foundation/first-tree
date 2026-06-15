@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -6,16 +6,20 @@ import { resolveClaudeCodeExecutable } from "../handlers/claude-executable.js";
 
 let binDir: string;
 let fakeClaude: string;
+/** HOME with no well-known install dirs — isolates tests from the dev machine's real ~/.local/bin/claude. */
+let emptyHome: string;
 
 beforeAll(() => {
   binDir = mkdtempSync(join(tmpdir(), "ftt-claude-exec-"));
   fakeClaude = join(binDir, "claude");
   writeFileSync(fakeClaude, "#!/bin/sh\nexit 0\n");
   chmodSync(fakeClaude, 0o755);
+  emptyHome = mkdtempSync(join(tmpdir(), "ftt-claude-home-"));
 });
 
 afterAll(() => {
   rmSync(binDir, { recursive: true, force: true });
+  rmSync(emptyHome, { recursive: true, force: true });
 });
 
 afterEach(() => {
@@ -54,14 +58,59 @@ describe("resolveClaudeCodeExecutable", () => {
 
   it("returns the default sentinel when nothing is found", () => {
     const resolution = resolveClaudeCodeExecutable({
-      env: { PATH: join(tmpdir(), "definitely-not-a-real-bin-dir-xyz") },
+      env: { PATH: join(tmpdir(), "definitely-not-a-real-bin-dir-xyz"), HOME: emptyHome },
     });
     expect(resolution).toEqual({ path: undefined, source: "default" });
   });
 
   it("returns the default sentinel when PATH is empty", () => {
-    const resolution = resolveClaudeCodeExecutable({ env: {} });
+    const resolution = resolveClaudeCodeExecutable({ env: { HOME: emptyHome } });
     expect(resolution).toEqual({ path: undefined, source: "default" });
+  });
+
+  it("falls back to ~/.local/bin/claude when PATH misses it (well-known dir)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ftt-claude-wk-"));
+    try {
+      const wkClaude = join(home, ".local", "bin", "claude");
+      mkdirSync(join(home, ".local", "bin"), { recursive: true });
+      writeFileSync(wkClaude, "#!/bin/sh\nexit 0\n");
+      chmodSync(wkClaude, 0o755);
+
+      const resolution = resolveClaudeCodeExecutable({ env: { PATH: "", HOME: home } });
+
+      expect(resolution).toEqual({ path: wkClaude, source: "well-known" });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a PATH hit over the well-known dirs", () => {
+    const home = mkdtempSync(join(tmpdir(), "ftt-claude-wk2-"));
+    try {
+      mkdirSync(join(home, ".local", "bin"), { recursive: true });
+      writeFileSync(join(home, ".local", "bin", "claude"), "#!/bin/sh\nexit 0\n");
+
+      const resolution = resolveClaudeCodeExecutable({ env: { PATH: binDir, HOME: home } });
+
+      expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("checks the `claude migrate-installer` target (~/.claude/local/claude)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ftt-claude-wk3-"));
+    try {
+      const migrated = join(home, ".claude", "local", "claude");
+      mkdirSync(join(home, ".claude", "local"), { recursive: true });
+      writeFileSync(migrated, "#!/bin/sh\nexit 0\n");
+
+      const resolution = resolveClaudeCodeExecutable({ env: { PATH: "", HOME: home } });
+
+      expect(resolution).toEqual({ path: migrated, source: "well-known" });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("searches default Windows PATHEXT entries when PATHEXT is absent", () => {

@@ -248,6 +248,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        actorAgentId: null,
       },
     ]);
   });
@@ -297,6 +298,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        actorAgentId: null,
       },
     ]);
   });
@@ -338,6 +340,7 @@ describe("resolveAudience", () => {
         chatId: null,
         involveReason: "review_requested",
         involveLogin: humanName.toLowerCase(),
+        actorAgentId: null,
       },
     ]);
   });
@@ -449,6 +452,67 @@ describe("resolveAudience", () => {
     expect(audience[0]?.kind).toBe("existing");
     expect(audience[0]?.humanAgentId).toBe(human);
     expect(audience[0]?.chatId).toBe(chatId);
+  });
+
+  it("M2: does NOT collapse subscribed rows across different chats for the same human", async () => {
+    // Regression for the multi-human-not-pushed bug: the same human can be
+    // bound to one entity from two different chats (e.g. a webhook
+    // `human_fallback` row in chat A under delegateA plus an explicit follow
+    // row in chat B under delegateB). Deduping by `humanAgentId` alone kept
+    // only the earliest chat and silently dropped the *other* followed chat
+    // from the audience. Dedup is keyed by `(human, chat)`, so BOTH chats
+    // receive the event.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `frank-${randomUUID().slice(0, 6)}`,
+    });
+    const chatA = await seedChat(app, admin.organizationId, human);
+    const chatB = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateA,
+      entityType: "issue",
+      entityKey: "owner/repo#303",
+      chatId: chatA,
+    });
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateB,
+      entityType: "issue",
+      entityKey: "owner/repo#303",
+      chatId: chatB,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#303",
+        actorLogin: "outsider",
+        kind: "commented",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(2);
+    expect(audience.every((a) => a.kind === "existing")).toBe(true);
+    expect(new Set(audience.map((a) => a.chatId))).toEqual(new Set([chatA, chatB]));
   });
 
   it("dedups involves by human even when the existing mapping uses a different delegate", async () => {
@@ -589,7 +653,7 @@ describe("resolveAudience", () => {
     expect(audience).toEqual([]);
   });
 
-  it("echo: drops mappings where actor is the human side OR delegate side", async () => {
+  it("echo (#942): keeps every mapping but annotates actorAgentId (notification-layer suppression)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -633,7 +697,11 @@ describe("resolveAudience", () => {
       chatId: chatOther,
     });
 
-    // Actor is the human-side agent → only the other-human row survives.
+    // Actor is the human-side agent. The previous behaviour DROPPED the
+    // actor's own row, which silently killed delivery to that chat (the
+    // multi-human-not-pushed bug). Now no row is dropped — every target is
+    // annotated with `actorAgentId` so Stage 3 excludes the actor from the
+    // notification addressing while the card still lands in every chat.
     const [humanRow] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, human)).limit(1);
     const audience = await resolveAudience(
       app.db,
@@ -646,8 +714,11 @@ describe("resolveAudience", () => {
       }),
       "first-tree",
     );
-    expect(audience).toHaveLength(1);
-    expect(audience[0]?.humanAgentId).toBe(otherHuman);
+    expect(audience).toHaveLength(2);
+    expect(new Set(audience.map((a) => a.humanAgentId))).toEqual(new Set([human, otherHuman]));
+    for (const target of audience) {
+      expect(target.actorAgentId).toBe(human);
+    }
   });
 
   it("keeps an involved-new row when actor self-mentions (explicit intent, not echo)", async () => {
@@ -694,17 +765,16 @@ describe("resolveAudience", () => {
     });
   });
 
-  it("self-mention in an already-subscribed entity stays silent (existing dropped, new skipped by subscribedKeys)", async () => {
-    // Documents the interaction between two filters when actor self-targets
-    // an entity they already subscribe to:
+  it("self-mention in an already-subscribed entity keeps the existing row, annotated (no fork, #942)", async () => {
+    // Actor self-targets an entity they already subscribe to:
     //   - the `subscribedKeys` short-circuit (resolveAudience) skips adding a
     //     `kind: "new"` row because (human, delegate) is already subscribed
-    //   - the actor-agent echo filter then drops the surviving `kind: "existing"`
-    //     row because the actor is on the human side
-    // Net result: audience is empty. This is *not* the explicit-intent path the
-    // sibling test covers — there's no new row to keep. Locking the behavior
-    // here so a future change that wants to nudge a subscribed delegate via
-    // self-mention has a clear anchor.
+    //   - the surviving `kind: "existing"` row is NOT dropped (#942): it is
+    //     annotated with `actorAgentId` so Stage 3 excludes the actor from
+    //     addressing. The card still lands; the delegate (≠ actor) is woken
+    //     normally — activity on a subscribed entity is real signal.
+    // Previously the actor-agent echo filter dropped this row, leaving an
+    // empty audience and silently swallowing the event.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -742,7 +812,14 @@ describe("resolveAudience", () => {
       "first-tree",
     );
 
-    expect(audience).toEqual([]);
+    expect(audience).toHaveLength(1);
+    expect(audience[0]).toMatchObject({
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      actorAgentId: human,
+    });
   });
 
   it("skips an involve whose delegate target is inactive (suspended/deleted)", async () => {

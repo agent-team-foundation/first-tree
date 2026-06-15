@@ -120,7 +120,7 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // skill payloads installed on disk (`installFirstTreeIntegration`
   // is short-circuited in `agent-bootstrap.ts`), so mandating a load
   // would point at files that don't exist.
-  const requiredReading = requiredReadingSection(opts.contextTreePath);
+  const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
   if (requiredReading) sections.push(requiredReading);
 
   sections.push(
@@ -285,8 +285,10 @@ prompt.*`,
  * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
  * point at files that aren't there.
  */
-function requiredReadingSection(contextTreePath: string | null): string | null {
+function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
+  const firstTreeSkillPath = `${workspacePath}/.agents/skills/first-tree/SKILL.md`;
+  const contextSkillPath = `${workspacePath}/.agents/skills/first-tree-context/SKILL.md`;
   return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
@@ -306,6 +308,13 @@ workspace-collab basics.
 2. **\`first-tree-context\`** — what a Context Tree is, the
    source-system boundary, authorship read-discipline, and the Hard
    Rules + Double Test that govern every tree write.
+
+If your runtime does not automatically inject the full skill body after
+selecting a skill from the skill listing, read the local payload files
+directly before acting:
+
+- \`${firstTreeSkillPath}\`
+- \`${contextSkillPath}\`
 
 These two are unconditional. The remaining First Tree skills
 (\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
@@ -413,9 +422,12 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "Management protocol (shared by every chat of this agent):",
     "",
     "1. **Ensure** — if a listed path is missing, create it as a bare clone.",
-    "   Each path is a single directory name directly under your workspace:",
+    "   Each listed path is an immediate child of your workspace's",
+    "   `source-repos/` directory (`<workspace>/source-repos/<name>`). Create the",
+    "   `source-repos/` parent first, then clone into it:",
     "",
     "   ```bash",
+    '   mkdir -p "$(dirname <path>)"   # ensure the source-repos/ parent exists',
     "   git clone --bare <url> <path>",
     "   git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
     "   git -C <path> fetch origin",
@@ -463,7 +475,9 @@ function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<Predeclare
   // and worktree paths are shell-quoted real values; only `<name>`,
   // `<task-name>`, `<new-branch>`, `origin/main` stay as placeholders.
   const quotedHome = shellQuote(agentHome);
-  const exampleSource = sourceRepos[0] ? shellQuote(sourceRepos[0].absolutePath) : `${quotedHome}/<source-repo>`;
+  const exampleSource = sourceRepos[0]
+    ? shellQuote(sourceRepos[0].absolutePath)
+    : `${quotedHome}/source-repos/<source-repo>`;
   const readWorktreePath = shellQuote(`${agentHome}/worktrees/<name>-read`);
   const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
   return `## Worktrees (how you read AND write a bare source repo)

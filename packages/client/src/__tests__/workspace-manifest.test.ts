@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SOURCE_REPOS_DIRNAME } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONTEXT_TREE_DIRNAME, ensureWorkspaceManifest } from "../runtime/workspace-manifest.js";
 
@@ -17,13 +18,16 @@ describe("ensureWorkspaceManifest", () => {
   const manifestPath = () => join(ws, ".first-tree", "workspace.json");
   const treeDirPath = () => join(ws, CONTEXT_TREE_DIRNAME);
 
-  it("writes .first-tree/workspace.json naming the tree dir + sources", () => {
+  it("writes .first-tree/workspace.json naming the tree dir + sources + sourcesRoot", () => {
     ensureWorkspaceManifest(ws, ["app", "api"]);
     expect(existsSync(manifestPath())).toBe(true);
     expect(JSON.parse(readFileSync(manifestPath(), "utf-8"))).toEqual({
       tree: CONTEXT_TREE_DIRNAME,
       sources: ["app", "api"],
+      sourcesRoot: SOURCE_REPOS_DIRNAME,
     });
+    // sourcesRoot pins the source clones one level down under source-repos/.
+    expect(SOURCE_REPOS_DIRNAME).toBe("source-repos");
   });
 
   it("is idempotent across repeated calls", () => {
@@ -32,6 +36,7 @@ describe("ensureWorkspaceManifest", () => {
     expect(JSON.parse(readFileSync(manifestPath(), "utf-8"))).toEqual({
       tree: CONTEXT_TREE_DIRNAME,
       sources: ["app"],
+      sourcesRoot: SOURCE_REPOS_DIRNAME,
     });
   });
 
@@ -40,6 +45,7 @@ describe("ensureWorkspaceManifest", () => {
     expect(JSON.parse(readFileSync(manifestPath(), "utf-8"))).toEqual({
       tree: CONTEXT_TREE_DIRNAME,
       sources: [],
+      sourcesRoot: SOURCE_REPOS_DIRNAME,
     });
   });
 
@@ -50,14 +56,22 @@ describe("ensureWorkspaceManifest", () => {
     expect(JSON.parse(readFileSync(manifestPath(), "utf-8"))).toEqual({
       tree: CONTEXT_TREE_DIRNAME,
       sources: ["app", "api"],
+      sourcesRoot: SOURCE_REPOS_DIRNAME,
     });
     expect(logs.some((l) => l.includes('dropping source "nested/path"'))).toBe(true);
   });
 
-  it("skips the manifest entirely when a source repo is named context-tree", () => {
+  it("writes a source named context-tree (lives under source-repos/, no tree collision)", () => {
+    // With sourcesRoot set, a source repo literally named `context-tree` lives
+    // at `<ws>/source-repos/context-tree` — a different namespace from the tree
+    // at `<ws>/context-tree` — so it is a valid source, NOT a reason to drop the
+    // whole manifest and leave a tree-bound agent with no workspace.json.
     ensureWorkspaceManifest(ws, [CONTEXT_TREE_DIRNAME]);
-    // Refused to write a manifest that would put the tree name into `sources`.
-    expect(existsSync(manifestPath())).toBe(false);
+    expect(JSON.parse(readFileSync(manifestPath(), "utf-8"))).toEqual({
+      tree: CONTEXT_TREE_DIRNAME,
+      sources: [CONTEXT_TREE_DIRNAME],
+      sourcesRoot: SOURCE_REPOS_DIRNAME,
+    });
   });
 
   it("creates no context-tree entry on disk — the agent materialises the clone itself", () => {

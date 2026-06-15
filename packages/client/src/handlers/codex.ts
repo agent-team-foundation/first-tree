@@ -310,12 +310,12 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
     if (!localPath) continue;
-    // Per agent-session-cwd-redesign (2026-05-22 redesign): predeclared
-    // source repos live at the TOP LEVEL of the agent home — no `worktrees/`
-    // prefix. Codex's sandbox `workingDirectory` already covers `<cwd>` and
-    // everything under it (including agent-on-demand `worktrees/<name>/`),
-    // so this entry is technically redundant; we keep it for parity with
-    // earlier behavior + to make the allowlist explicit for ops.
+    // Predeclared source repos live under the agent home's `source-repos/`
+    // directory (`<cwd>/source-repos/<localPath>`, via resolveGitRepoTargetPath)
+    // — no `worktrees/` prefix. Codex's sandbox `workingDirectory` already
+    // covers `<cwd>` and everything under it (including `source-repos/` and
+    // agent-on-demand `worktrees/<name>/`), so this entry is technically
+    // redundant; we keep it for parity + to make the allowlist explicit for ops.
     additionalDirectories.push(resolveGitRepoTargetPath(workspaceCwd, localPath));
   }
   // Only pin a model when the operator explicitly set one in the agent
@@ -632,8 +632,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
   /**
    * Derive the prompt-facing source-repo list from the runtime config's
    * `gitRepos` — pure declaration, no git. The agent itself clones and
-   * refreshes `<workspaceCwd>/<localPath>/` per the protocol in its
-   * briefing. The list feeds the per-session AGENTS.md "Source
+   * refreshes `<workspaceCwd>/source-repos/<localPath>/` per the protocol in
+   * its briefing. The list feeds the per-session AGENTS.md "Source
    * Repositories" block on the next `buildAgentBriefing` call.
    */
   function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {

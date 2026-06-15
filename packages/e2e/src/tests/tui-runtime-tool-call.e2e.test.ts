@@ -34,6 +34,7 @@ beforeAll(async () => {
   fixture = await createTuiAgent({
     handle,
     displayName: "tui-runtime-tool-call agent",
+    bindMode: "after-env-patch",
     knobs: { emitToolCall: true },
   });
 });

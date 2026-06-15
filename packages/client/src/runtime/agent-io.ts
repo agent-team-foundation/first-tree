@@ -46,8 +46,9 @@ export function buildAgentEnv(
      *    dir for pre-#506 chats). Covers on-demand `worktrees/<task>/`
      *    checkouts that #498's idiom puts here. New chat-send binaries read
      *    `FIRST_TREE_DOC_AGENT_HOME`.
-     *  - `base` — the NARROW fence: source repo top (`<agentHome>/<localPath>`
-     *    for single-repo, `agentHome` otherwise). Kept emitting under the
+     *  - `base` — the NARROW fence: source repo top
+     *    (`<agentHome>/source-repos/<localPath>` for single-repo, `agentHome`
+     *    otherwise). Kept emitting under the
      *    legacy `FIRST_TREE_DOC_BASE` name so a stale pre-fix `chat send`
      *    binary still snapshots like it used to (graceful degradation: no
      *    worktree preview, but source-repo docs work).

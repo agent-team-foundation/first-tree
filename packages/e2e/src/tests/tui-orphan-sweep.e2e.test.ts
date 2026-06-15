@@ -39,7 +39,11 @@ let foreignSessionName: string;
 beforeAll(async () => {
   handle = await setupOwnTuiWorld();
   const creds = readCredentialsOrThrow(handle);
-  fixture = await createTuiAgent({ handle, displayName: "tui-orphan-sweep agent" });
+  fixture = await createTuiAgent({
+    handle,
+    displayName: "tui-orphan-sweep agent",
+    bindMode: "after-env-patch",
+  });
 
   // Plant two stale sessions:
   //   - one with the daemon's own prefix (should be swept)

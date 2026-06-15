@@ -94,6 +94,15 @@ export async function deliverNormalizedEvent(
       // and the multi-speaker fan-out collapses to notify=false for
       // everyone. Same pattern as any system-routed delivery (see
       // SendMessageOptions `addressedToAgentIds`).
+      //
+      // Echo suppression (#942): when the event's actor resolved to an org
+      // agent, exclude it from the addressing — nobody is woken / red-dotted
+      // by their own action. The card itself is still written (public
+      // record); when the exclusion empties the addressing this reduces to
+      // the recipientless trusted send below. The actor on the *human* side
+      // needs no exclusion here: it is the card's senderId and the message
+      // fan-out never self-delivers.
+      const addressedToAgentIds = [target.delegateAgentId].filter((id) => id !== target.actorAgentId);
       const { message, recipients } = await sendMessage(
         app.db,
         resolved.chatId,
@@ -121,7 +130,7 @@ export async function deliverNormalizedEvent(
           },
         },
         {
-          addressedToAgentIds: [target.delegateAgentId],
+          addressedToAgentIds,
           // Opt in to writing `metadata.systemSender` — the message service
           // strips that key from every other caller (web / agent SDK POST)
           // so HTTP boundaries cannot impersonate the GitHub sender in the
@@ -130,8 +139,10 @@ export async function deliverNormalizedEvent(
           // Opt out of the default explicit-recipient guard. This trusted
           // system delivery owns and validates its own addressing
           // (`addressedToAgentIds` derived from the resolved audience row),
-          // but the delegate may not be a speaker of the bound chat on some
-          // events, so the addressing resolves to no live recipient. Such a
+          // but on some events the addressing resolves to no live recipient:
+          // the delegate may not be a speaker of the bound chat, or the
+          // delegate IS the event's actor and was excluded by echo
+          // suppression (#942, the empty-filter case above). Such a
           // card is still a valid history/context row for human observers;
           // without this opt-out the default guard would make this trusted path
           // start throwing. (A delegate that IS a speaker but suspended/deleted

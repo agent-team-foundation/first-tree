@@ -28,6 +28,7 @@ beforeAll(async () => {
   fixture = await createTuiAgent({
     handle,
     displayName: "tui-askuser-disallowed agent",
+    bindMode: "after-env-patch",
   });
 });
 

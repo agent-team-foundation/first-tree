@@ -228,10 +228,10 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     expect(briefing).toContain("worktree add");
     expect(briefing).toContain("No worktrees are pre-created");
 
-    // Top-level path of the declared repo surfaces in the briefing even
+    // The declared repo surfaces in the briefing under `source-repos/` even
     // though the runtime never materialises it on disk.
-    expect(briefing).toContain(join(workspaceRoot, "lib"));
-    expect(existsSync(join(workspaceRoot, "lib"))).toBe(false);
+    expect(briefing).toContain(join(workspaceRoot, "source-repos", "lib"));
+    expect(existsSync(join(workspaceRoot, "source-repos", "lib"))).toBe(false);
 
     // Legacy wording from the previous design MUST be gone.
     expect(briefing).not.toContain("Predeclared worktrees");
