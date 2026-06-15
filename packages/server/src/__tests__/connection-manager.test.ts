@@ -89,6 +89,16 @@ describe("connection-manager: bindAgentToClient", () => {
     expect(getAgentClientId(agent1)).toBe(clientA);
     expect(getClientAgentIds(clientA)).toEqual([agent1]);
   });
+
+  it("does not unbind when expected client does not own the agent", () => {
+    bindAgentToClient(clientB, agent1);
+
+    const removed = unbindAgentFromClient(agent1, clientA);
+
+    expect(removed).toBe(false);
+    expect(getAgentClientId(agent1)).toBe(clientB);
+    expect(getClientAgentIds(clientB)).toContain(agent1);
+  });
 });
 
 describe("connection-manager: removeClientConnection", () => {
@@ -226,5 +236,30 @@ describe("connection-manager: forceDisconnect M1 mode", () => {
 
     // Cleanup
     forceDisconnectClient(clientId);
+  });
+
+  it("does not force-disconnect when expected client is stale", () => {
+    const currentClientId = "client-m1-current";
+    const staleClientId = "client-m1-stale";
+    const agent1 = "agent-m1-stale-1";
+    const sentMessages: string[] = [];
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: () => {},
+      send: (data: string) => {
+        sentMessages.push(data);
+      },
+    } as unknown as WebSocket;
+
+    setClientConnection(currentClientId, ws);
+    bindAgentToClient(currentClientId, agent1);
+
+    const result = forceDisconnect(agent1, "agent_rebound", staleClientId);
+
+    expect(result).toBe(false);
+    expect(sentMessages).toHaveLength(0);
+    expect(getAgentClientId(agent1)).toBe(currentClientId);
+
+    forceDisconnectClient(currentClientId);
   });
 });

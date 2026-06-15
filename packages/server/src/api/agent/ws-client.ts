@@ -1078,12 +1078,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const info = boundAgents.get(agentId);
+              const stillRoutedHere = isAgentStillRoutedHere(agentId);
               if (info) {
                 notifier.unsubscribe(info.inboxId, socket);
               }
 
-              await presenceService.unbindAgent(app.db, agentId);
-              connectionManager.unbindAgentFromClient(agentId);
+              if (stillRoutedHere && clientId) {
+                await presenceService.unbindAgent(app.db, agentId, { expectedClientId: clientId });
+                connectionManager.unbindAgentFromClient(agentId, clientId);
+              } else {
+                app.log.info({ clientId, agentId }, "stale agent:unbind ignored for global binding");
+              }
               boundAgents.delete(agentId);
               clearInboxInFlightForAgent(agentId);
 
@@ -1318,10 +1323,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               await chainInboxDelivery("__socket", async () => {
                 try {
+                  const routedBoundAgents = [...boundAgents.values()].filter((agent) =>
+                    isAgentStillRoutedHere(agent.agentId),
+                  );
                   const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                     app.db,
                     entryId,
-                    [...boundAgents.values()].map((a) => a.inboxId),
+                    routedBoundAgents.map((a) => a.inboxId),
                   );
                   if (!ackResult.ok) {
                     if (ref) {
@@ -1340,7 +1348,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                         entryId,
                         ref,
                         agentId: null,
-                        boundInboxes: boundAgents.size,
+                        boundInboxes: routedBoundAgents.length,
                         reason: ackResult.reason,
                         ackEvent: "inbox_ack_rejected",
                       },
@@ -1350,7 +1358,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   }
                   // Find the agentId that owns this inbox to decrement the
                   // counter and trigger backlog drain.
-                  const owner = [...boundAgents.values()].find((a) => a.inboxId === ackResult.throughEntry.inboxId);
+                  const owner = routedBoundAgents.find((a) => a.inboxId === ackResult.throughEntry.inboxId);
                   if (ref) {
                     socket.send(
                       JSON.stringify({
