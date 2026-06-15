@@ -607,24 +607,40 @@ type ReconcileTelemetryWrite = {
   agentAvatarColorToken: string | null;
   createdAtMs: number;
   createdAtIso: string;
+  // Human-facing node path (case preserved) for telemetry-only rows.
+  displayPath: string;
 };
 
-// Normalize a tree path to a stable per-node key so git paths and telemetry
-// paths compare equal: `system/x.md`, `/system/x`, `system/x/NODE.md` all map
-// to `system/x`.
-function normalizeNodeKey(path: string | null): string {
+// Sentinel key for the root node. The root's git node path is "" and its file
+// path is "NODE.md"; both must collapse to the SAME key (root is the tree's
+// highest-signal node, so a root edit must reconcile, not split into two rows).
+// A non-empty sentinel also keeps root out of the "skip empty key" path.
+const ROOT_NODE_KEY = " root";
+
+// Human-facing node path: strip a leading slash, the `.md` suffix, and a
+// trailing `NODE` segment (so `members/x/NODE.md` → `members/x`, `NODE.md` and
+// `/` → "" for root). Case preserved — used for display, not matching.
+function displayNodePath(path: string | null): string {
   if (!path) return "";
   return path
     .trim()
     .replace(/^\/+/, "")
     .replace(/\/+$/, "")
     .replace(/\.md$/i, "")
-    .replace(/\/node$/i, "")
-    .toLowerCase();
+    .replace(/(^|\/)NODE$/i, "");
 }
 
-function titleFromNodeKey(key: string): string {
-  const last = key.split("/").filter(Boolean).at(-1) ?? key;
+// Normalize a tree path to a stable per-node key so git paths and telemetry
+// paths compare equal: `system/x.md`, `/system/x`, `system/x/NODE.md` all map
+// to `system/x`; `NODE.md`, ``, and `/` all map to ROOT_NODE_KEY.
+function normalizeNodeKey(path: string | null): string {
+  const display = displayNodePath(path);
+  return display === "" ? ROOT_NODE_KEY : display.toLowerCase();
+}
+
+function titleFromNodePath(path: string): string {
+  const last = path.split("/").filter(Boolean).at(-1);
+  if (!last) return "Context Tree";
   return last.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -632,15 +648,6 @@ function writeSortKey(event: ContextTreeWriteEvent): number {
   if (!event.createdAt) return 0;
   const parsed = Date.parse(event.createdAt);
   return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-// Prefer the most recent telemetry writer at or before the landing commit (the
-// agent whose edit that commit captured); fall back to the latest writer when
-// none precedes the commit (e.g. the git timestamp is missing).
-function pickWriteAttribution(matches: ReconcileTelemetryWrite[], commitMs: number): ReconcileTelemetryWrite {
-  const beforeCommit = Number.isNaN(commitMs) ? [] : matches.filter((m) => m.createdAtMs <= commitMs);
-  const pool = beforeCommit.length > 0 ? beforeCommit : matches;
-  return pool.reduce((best, candidate) => (candidate.createdAtMs >= best.createdAtMs ? candidate : best));
 }
 
 /**
@@ -691,7 +698,6 @@ export async function reconcileContextTreeWrites(
   const telemetryByKey = new Map<string, ReconcileTelemetryWrite[]>();
   for (const row of writeRows) {
     const key = normalizeNodeKey(row.target_path);
-    if (!key) continue;
     const iso = isoOrNull(row.created_at);
     const createdAtMs = iso ? Date.parse(iso) : Number.NaN;
     const list = telemetryByKey.get(key) ?? [];
@@ -701,34 +707,52 @@ export async function reconcileContextTreeWrites(
       agentAvatarColorToken: row.agent_avatar_color_token,
       createdAtMs: Number.isNaN(createdAtMs) ? 0 : createdAtMs,
       createdAtIso: iso ?? new Date().toISOString(),
+      displayPath: displayNodePath(row.target_path),
     });
     telemetryByKey.set(key, list);
   }
 
-  const consumedKeys = new Set<string>();
-  const reconciled: ContextTreeWriteEvent[] = gitWrites.map((write) => {
+  const reconciled: ContextTreeWriteEvent[] = [];
+  // Process git writes oldest-first so each landed commit consumes only the
+  // telemetry that preceded IT; a later in-flight edit on the same node stays
+  // available for the telemetry-only pass instead of being attached to (and
+  // then hidden behind) an older commit.
+  const gitWritesOldestFirst = [...gitWrites].sort((a, b) => writeSortKey(a) - writeSortKey(b));
+  for (const write of gitWritesOldestFirst) {
     const key = normalizeNodeKey(write.nodePath);
-    const matches = key ? telemetryByKey.get(key) : undefined;
-    if (!key || !matches || matches.length === 0) return write;
-    consumedKeys.add(key);
+    const rows = telemetryByKey.get(key) ?? [];
     const commitMs = write.createdAt ? Date.parse(write.createdAt) : Number.NaN;
-    const attribution = pickWriteAttribution(matches, commitMs);
-    return {
+    // Only telemetry at or before the landing commit can be the edit that
+    // commit captured. When the git timestamp is missing, treat every row as a
+    // candidate (we can't order them). A write with no qualifying telemetry
+    // keeps its honest git author and consumes nothing.
+    const matched = Number.isNaN(commitMs) ? rows : rows.filter((r) => r.createdAtMs <= commitMs);
+    if (matched.length === 0) {
+      reconciled.push(write);
+      continue;
+    }
+    const attribution = matched.reduce((best, c) => (c.createdAtMs >= best.createdAtMs ? c : best));
+    reconciled.push({
       ...write,
       agentId: attribution.agentId,
       agentName: attribution.agentName,
       agentAvatarColorToken: attribution.agentAvatarColorToken,
-    };
-  });
+    });
+    // Leave later (post-commit) telemetry for the telemetry-only pass.
+    telemetryByKey.set(key, Number.isNaN(commitMs) ? [] : rows.filter((r) => r.createdAtMs > commitMs));
+  }
 
-  for (const [key, matches] of telemetryByKey) {
-    if (consumedKeys.has(key)) continue;
-    const latest = matches.reduce((best, candidate) => (candidate.createdAtMs >= best.createdAtMs ? candidate : best));
+  // Telemetry-only writes: a node an agent wrote that has no matching landed
+  // commit in the window (typically an in-flight worktree edit). One row per
+  // node, attributed, with no commit / PR.
+  for (const rows of telemetryByKey.values()) {
+    if (rows.length === 0) continue;
+    const latest = rows.reduce((best, c) => (c.createdAtMs >= best.createdAtMs ? c : best));
     reconciled.push({
-      id: `telemetry:${key}:${latest.createdAtIso}`,
+      id: `telemetry:${latest.displayPath}:${latest.createdAtIso}`,
       nodeId: null,
-      nodePath: key,
-      title: titleFromNodeKey(key),
+      nodePath: latest.displayPath,
+      title: titleFromNodePath(latest.displayPath),
       changeType: "edited",
       summary: null,
       riskLevel: "low",

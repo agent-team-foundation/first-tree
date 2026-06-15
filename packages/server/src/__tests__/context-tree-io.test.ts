@@ -745,14 +745,19 @@ describe("context-tree IO service", () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
 
-    async function seedWriteTelemetry(targetPath: string, createdAt: string): Promise<void> {
-      const sourceId = `ev-${crypto.randomUUID()}`;
+    // Timestamps are relative to now so the test does not age out of the
+    // reconcile window (writes filter from `Date.now() - windowDays`).
+    const now = Date.now();
+    const minutesAgo = (mins: number): Date => new Date(now - mins * 60_000);
+    const isoMinutesAgo = (mins: number): string => minutesAgo(mins).toISOString();
+
+    async function seedWriteTelemetry(targetPath: string, mins: number): Promise<void> {
       await app.db.insert(contextTreeIoEvents).values({
         id: `cte-${crypto.randomUUID()}`,
         organizationId: seed.organizationId,
         agentId: seed.agent.uuid,
         chatId: seed.chatId,
-        sourceSessionEventId: sourceId,
+        sourceSessionEventId: `ev-${crypto.randomUUID()}`,
         runtimeProvider: "claude-code",
         action: "write",
         source: "claude_write_tool",
@@ -760,15 +765,22 @@ describe("context-tree IO service", () => {
         treeBranch: "main",
         targetKind: "file",
         targetPath,
-        createdAt: new Date(createdAt),
+        createdAt: minutesAgo(mins),
       });
     }
 
-    // gandy-coder edited `system/x` in its worktree (telemetry), and that change
-    // later landed as PR #514 (git). Same node → must collapse to one row.
-    await seedWriteTelemetry("system/x.md", "2026-06-15T09:00:00.000Z");
-    // An in-flight worktree edit with no landed commit in the git window.
-    await seedWriteTelemetry("members/y/NODE.md", "2026-06-15T08:00:00.000Z");
+    // system/x: edited in a worktree (telemetry, 60m ago) then landed as PR #514
+    // (git, 50m ago) → reconcile to ONE attributed row.
+    await seedWriteTelemetry("system/x.md", 60);
+    // members/y: in-flight worktree edit with no landed commit → telemetry-only.
+    await seedWriteTelemetry("members/y/NODE.md", 70);
+    // Root NODE.md edit (telemetry path "NODE.md" must reconcile with the git
+    // root write whose node path is "").
+    await seedWriteTelemetry("NODE.md", 80);
+    // system/late: a NEW in-flight edit (30m ago) on a node whose only git
+    // commit is OLDER (120m ago). The later telemetry must NOT be attached to
+    // the old commit, and must surface as its own in-flight row.
+    await seedWriteTelemetry("system/late.md", 30);
 
     const base = {
       nodeId: null,
@@ -782,46 +794,89 @@ describe("context-tree IO service", () => {
     const gitWrites: ContextTreeWriteEvent[] = [
       {
         ...base,
-        id: "c1:system/x.md",
+        id: "c1",
         nodePath: "system/x",
         changeType: "edited",
         authorName: "a-committer",
-        commit: "c".repeat(40),
+        commit: "a".repeat(40),
         prNumber: 514,
-        createdAt: "2026-06-15T10:00:00.000Z",
+        createdAt: isoMinutesAgo(50),
       },
+      // PR-merge commit telemetry never saw → honest git author.
       {
-        // A PR-merge commit telemetry never saw — stays an honest git author.
         ...base,
-        id: "c2:system/merged.md",
+        id: "c2",
         nodePath: "system/merged",
         changeType: "edited",
         authorName: "GitHub",
-        commit: "d".repeat(40),
+        commit: "b".repeat(40),
         prNumber: 702,
-        createdAt: "2026-06-15T11:00:00.000Z",
+        createdAt: isoMinutesAgo(40),
+      },
+      // Root write; git node path is "" (must match telemetry "NODE.md").
+      {
+        ...base,
+        id: "c3",
+        nodePath: "",
+        changeType: "edited",
+        authorName: "root-committer",
+        commit: "c".repeat(40),
+        prNumber: 800,
+        createdAt: isoMinutesAgo(70),
+      },
+      // Old commit whose only telemetry edit happens AFTER it (finding R4).
+      {
+        ...base,
+        id: "c4",
+        nodePath: "system/late",
+        changeType: "edited",
+        authorName: "merge-bot",
+        commit: "d".repeat(40),
+        prNumber: 900,
+        createdAt: isoMinutesAgo(120),
       },
     ];
 
     const writes = await reconcileContextTreeWrites(app.db, seed.organizationId, 7, gitWrites);
 
-    // system/x: git write reconciled to the agent that authored it; PR preserved;
-    // only ONE row for the node (telemetry edit + git landing collapsed).
+    // system/x: reconciled to the authoring agent; PR preserved; ONE row.
     const xRows = writes.filter((w) => w.nodePath === "system/x");
     expect(xRows).toHaveLength(1);
-    expect(xRows[0]).toMatchObject({ agentId: seed.agent.uuid, prNumber: 514, commit: "c".repeat(40) });
+    expect(xRows[0]).toMatchObject({ agentId: seed.agent.uuid, prNumber: 514, commit: "a".repeat(40) });
 
-    // system/merged: no telemetry match → honest git author, null agent.
-    const mergedRow = writes.find((w) => w.nodePath === "system/merged");
-    expect(mergedRow).toMatchObject({ agentId: null, authorName: "GitHub", prNumber: 702 });
+    // system/merged: no telemetry → honest git author, null agent.
+    expect(writes.find((w) => w.nodePath === "system/merged")).toMatchObject({
+      agentId: null,
+      authorName: "GitHub",
+      prNumber: 702,
+    });
 
-    // members/y: telemetry-only write (no git commit) still surfaces, attributed,
-    // with no commit/PR.
-    const telemetryOnly = writes.find((w) => w.nodePath === "members/y");
-    expect(telemetryOnly).toBeDefined();
-    expect(telemetryOnly).toMatchObject({ agentId: seed.agent.uuid, commit: null, prNumber: null });
+    // members/y: telemetry-only in-flight write, attributed, no commit/PR.
+    expect(writes.find((w) => w.nodePath === "members/y")).toMatchObject({
+      agentId: seed.agent.uuid,
+      commit: null,
+      prNumber: null,
+    });
 
-    // Sorted newest-first by time (merged commit 11:00 is first).
-    expect(writes[0]?.nodePath).toBe("system/merged");
+    // Root: telemetry "NODE.md" reconciles with the git root write (path "") →
+    // exactly one root row, attributed, PR preserved.
+    const rootRows = writes.filter((w) => w.nodePath === "");
+    expect(rootRows).toHaveLength(1);
+    expect(rootRows[0]).toMatchObject({ agentId: seed.agent.uuid, prNumber: 800 });
+
+    // system/late: the old commit keeps its git author (no telemetry preceded
+    // it), and the later in-flight edit surfaces as its own attributed row.
+    const lateRows = writes.filter((w) => w.nodePath === "system/late");
+    expect(lateRows).toHaveLength(2);
+    expect(lateRows.find((w) => w.commit !== null)).toMatchObject({
+      agentId: null,
+      authorName: "merge-bot",
+      prNumber: 900,
+    });
+    expect(lateRows.find((w) => w.commit === null)).toMatchObject({ agentId: seed.agent.uuid, prNumber: null });
+
+    // Sorted newest-first by time.
+    const times = writes.map((w) => (w.createdAt ? Date.parse(w.createdAt) : 0));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 });
