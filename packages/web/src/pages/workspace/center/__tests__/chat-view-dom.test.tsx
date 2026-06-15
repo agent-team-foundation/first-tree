@@ -846,11 +846,14 @@ describe("ChatView", () => {
     await waitForText(container, "Awaiting your answer");
     await waitForCondition(() => textarea.value === "", "Expected late request dock to clear auto-primed @");
 
+    // Decoupled: clicking an option highlights the pill but does NOT fill the
+    // composer — the draft stays empty (the auto-primed @ has been cleared).
     await click(optionByText(container, "Blue-green"));
-    expect(textarea.value).toBe("Blue-green");
+    expect(textarea.value).toBe("");
     await click(container.querySelector('button[aria-label="Send"]'));
-    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected clean option send");
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Blue-green", ["agent-1"], {
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected option answer send");
+    // Sending merges the selection into a canonical line and resolves.
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
       inReplyTo: "req-1",
       resolves: { request: "req-1", kind: "answered" },
     });
@@ -905,7 +908,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("threads docked attachment replies under the live request without a visible @mention", async () => {
+  it("resolves a blocking free-text question via a text reply; an attached image is not sent while blocked", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([
       message({
@@ -933,21 +936,22 @@ describe("ChatView", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
     await setValue(textarea, "Screenshot evidence attached");
+    // While a question blocks me there is no image/judge reply path — the send
+    // is the answer and it resolves via a text reply. An attached image is left
+    // pending (not sent) so it can be sent normally once the block lifts.
     const file = new File(["abc"], "evidence.png", { type: "image/png" });
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("File input missing");
     await changeFiles(fileInput, [file]);
     await click(container.querySelector('button[aria-label="Send"]'));
-    await waitForCondition(() => chatMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image send");
-    expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text resolve send");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
       "chat-1",
-      {
-        caption: "Screenshot evidence attached",
-        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "evidence.png", size: 3 }],
-      },
-      { mentions: ["agent-1"] },
-      { inReplyTo: "req-file" },
+      "Evidence? → Screenshot evidence attached",
+      ["agent-1"],
+      { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
     );
+    expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

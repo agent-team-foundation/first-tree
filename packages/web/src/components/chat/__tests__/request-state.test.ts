@@ -1,11 +1,14 @@
 import type { Message } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
+  allRequiredAnswered,
   allRequiredSelected,
   buildAnswerDraft,
+  buildResolveAnswer,
   contentStartsWithMention,
   defaultExpanded,
   deriveRequestState,
+  findBlockingRequest,
   findDockableRequest,
   findThreadableRequestId,
   isRelatedViewer,
@@ -268,6 +271,56 @@ describe("findDockableRequest", () => {
   });
 });
 
+describe("findBlockingRequest", () => {
+  const older = msg({
+    id: "req-old",
+    format: "request",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    metadata: { mentions: [TARGET], request: { questions: [{ id: "q1", prompt: "Old?", options: ["a"] }] } },
+  });
+
+  it("returns the OLDEST live request directed at the viewer (FIFO — the contrast with the dock's newest-first)", () => {
+    // `request` (id "req") is newer; the block must surface the older one first.
+    expect(findBlockingRequest([older, request], TARGET)?.id).toBe("req-old");
+  });
+
+  it("advances to the next-oldest once the oldest resolves", () => {
+    const answerOld = msg({
+      id: "ans-old",
+      senderId: TARGET,
+      inReplyTo: "req-old",
+      content: "a",
+      metadata: { resolves: { request: "req-old", kind: "answered" } },
+    });
+    expect(findBlockingRequest([older, request, answerOld], TARGET)?.id).toBe("req");
+  });
+
+  it("blocks on a DISCUSSING request — threading does not unblock it", () => {
+    const discuss = msg({ id: "d1", senderId: TARGET, inReplyTo: "req-old", content: "why?" });
+    expect(findBlockingRequest([older, discuss], TARGET)?.id).toBe("req-old");
+  });
+
+  it("returns null for non-target viewers and signed-out viewers", () => {
+    expect(findBlockingRequest([older, request], OTHER)).toBeNull();
+    expect(findBlockingRequest([older, request], null)).toBeNull();
+  });
+
+  it("skips an unparseable request and blocks on the next parseable one (no stuck block)", () => {
+    // Oldest is a request with an invalid payload (empty questions fails the
+    // schema): it has no answer surface, so it must NOT become the block —
+    // otherwise the timeline would truncate with no way to answer.
+    const malformed = msg({
+      id: "req-bad",
+      format: "request",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      metadata: { mentions: [TARGET], request: { questions: [] } },
+    });
+    expect(findBlockingRequest([malformed, request], TARGET)?.id).toBe("req");
+    // With no parseable live request, nothing blocks.
+    expect(findBlockingRequest([malformed], TARGET)).toBeNull();
+  });
+});
+
 describe("buildAnswerDraft / allRequiredSelected", () => {
   const single = {
     subject: "Deploy",
@@ -316,6 +369,89 @@ describe("buildAnswerDraft / allRequiredSelected", () => {
     expect(allRequiredSelected(multi, { "Strategy?": "blue-green", "Window?": "friday" })).toBe(true);
     // A required free-text question always routes through agent judgment.
     expect(allRequiredSelected(withFree, {})).toBe(false);
+  });
+});
+
+describe("allRequiredAnswered / buildResolveAnswer (blocking surface — both channels resolve)", () => {
+  const single = {
+    subject: "Deploy",
+    questions: [{ id: "q1", prompt: "Ship?", kind: "single" as const, options: ["yes", "no"], required: true }],
+    allowExtra: false,
+  };
+  const multi = {
+    subject: "Release",
+    questions: [
+      { id: "q1", prompt: "Strategy?", kind: "single" as const, options: ["blue-green", "rolling"], required: true },
+      { id: "q2", prompt: "Window?", kind: "single" as const, options: ["friday", "monday"], required: true },
+    ],
+    allowExtra: false,
+  };
+  const withFree = {
+    subject: "Risk",
+    questions: [{ id: "q1", prompt: "Concerns?", kind: "free" as const, options: [], required: true }],
+    allowExtra: false,
+  };
+  const mixed = {
+    subject: "Plan",
+    questions: [
+      { id: "q1", prompt: "Strategy?", kind: "single" as const, options: ["blue-green"], required: true },
+      { id: "q2", prompt: "Notes?", kind: "free" as const, options: [], required: true },
+    ],
+    allowExtra: false,
+  };
+
+  it("a required single needs a selection; free text does not satisfy it", () => {
+    expect(allRequiredAnswered(single, {}, "")).toBe(false);
+    expect(allRequiredAnswered(single, {}, "just typing")).toBe(false);
+    expect(allRequiredAnswered(single, { "Ship?": "yes" }, "")).toBe(true);
+  });
+
+  it("a required free-text question IS satisfied by composer free text (no longer judge-only)", () => {
+    expect(allRequiredAnswered(withFree, {}, "  ")).toBe(false);
+    expect(allRequiredAnswered(withFree, {}, "looks risky")).toBe(true);
+  });
+
+  it("a mixed request needs both channels", () => {
+    expect(allRequiredAnswered(mixed, { "Strategy?": "blue-green" }, "")).toBe(false);
+    expect(allRequiredAnswered(mixed, {}, "some notes")).toBe(false);
+    expect(allRequiredAnswered(mixed, { "Strategy?": "blue-green" }, "some notes")).toBe(true);
+  });
+
+  it("builds canonical prompt → answer lines recoverAnswerSelections reads back", () => {
+    const content = buildResolveAnswer(multi, { "Strategy?": "blue-green", "Window?": "friday" }, "");
+    expect(content).toBe("Strategy? → blue-green\nWindow? → friday");
+    expect(recoverAnswerSelections(content, multi.questions)).toEqual({
+      "Strategy?": "blue-green",
+      "Window?": "friday",
+    });
+  });
+
+  it("uses the composer free text as the answer to free-text questions", () => {
+    expect(buildResolveAnswer(withFree, {}, "looks risky")).toBe("Concerns? → looks risky");
+    expect(buildResolveAnswer(mixed, { "Strategy?": "blue-green" }, "ship monday")).toBe(
+      "Strategy? → blue-green\nNotes? → ship monday",
+    );
+  });
+
+  it("appends an extra note as a trailing line when there is no free-text question", () => {
+    expect(buildResolveAnswer(single, { "Ship?": "yes" }, "but watch the canary")).toBe(
+      "Ship? → yes\nbut watch the canary",
+    );
+  });
+
+  it("drops optional questions the viewer left unanswered (no '→ —' placeholder lines)", () => {
+    const withOptional = {
+      subject: "Deploy",
+      questions: [
+        { id: "q1", prompt: "Ship?", kind: "single" as const, options: ["yes", "no"], required: true },
+        { id: "q2", prompt: "Canary?", kind: "single" as const, options: ["5%", "20%"], required: false },
+      ],
+      allowExtra: false,
+    };
+    // Optional Canary left unanswered → only the answered required line survives.
+    expect(buildResolveAnswer(withOptional, { "Ship?": "yes" }, "")).toBe("Ship? → yes");
+    // Optional answered → it is included.
+    expect(buildResolveAnswer(withOptional, { "Ship?": "yes", "Canary?": "5%" }, "")).toBe("Ship? → yes\nCanary? → 5%");
   });
 });
 

@@ -9,7 +9,6 @@ import {
   isImageBatchRefContent,
   isImageRefContent,
   type MentionParticipant,
-  type OpenQuestionRequest,
   type RequestResolution,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -69,14 +68,13 @@ import {
 import { RequestCard } from "../../../components/chat/request-card.js";
 import { RequestDock } from "../../../components/chat/request-dock.js";
 import {
-  allRequiredSelected,
-  buildAnswerDraft,
+  allRequiredAnswered,
+  buildResolveAnswer,
   contentStartsWithMention,
-  findDockableRequest,
+  findBlockingRequest,
   findThreadableRequestId,
   readMentions,
   readRequestPayload,
-  recoverAnswerSelections,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
@@ -1130,9 +1128,9 @@ export function ChatView({
       inReplyTo?: string;
       resolves?: RequestResolution;
     }) =>
-      // `resolves` rides only the composer dock's direct-resolve send (the
-      // untouched option selection) — see `dockDirectResolve` in handleSend.
-      // Plain sends keep the 3-arg shape (no opts object on the wire path).
+      // `resolves` rides the blocking question's answer send (option
+      // selections + free text merged) — see the `dockRequest` branch in
+      // handleSend. Plain sends keep the 3-arg shape (no opts on the wire).
       inReplyTo || resolves
         ? sendChatMessage(chatId, content, mentions, { inReplyTo, resolves })
         : sendChatMessage(chatId, content, mentions),
@@ -1214,25 +1212,38 @@ export function ChatView({
   const handleSend = async () => {
     const text = draft.trim();
     const images = pendingImages;
-    if (!text && images.length === 0) return;
     if (uploading) return;
 
-    // Direct resolve: the draft is exactly the dock's untouched option
-    // selection — send it as the clean answer. It threads under the request
-    // (`inReplyTo`) and carries the explicit `resolves` signal that drives the
-    // server's red-dot −1. Mentions route to the asker automatically, so this
-    // path needs no typed @mention even in a group chat. Any edit, free text,
-    // or attached image fails `dockDirectResolve` and falls through to the
-    // normal send below (a plain reply the asking agent judges).
-    if (dockDirectResolve && dockRequest) {
+    // Blocking question: while a question blocks me, the only send is the
+    // answer, and it ALWAYS resolves. Merge the option selections + the
+    // composer's free text into one canonical reply, thread it under the
+    // request (`inReplyTo`), and carry the explicit `resolves` signal that
+    // drives the server's red-dot −1. Mentions route to the asker
+    // automatically, so no typed @mention is needed even in a group chat.
+    // Gated on every required question being answered (the send button mirrors
+    // this), so an options-only answer with an empty draft sends fine and a
+    // partial answer cannot slip through. Runs BEFORE the empty-draft guard
+    // below precisely because a pure-option answer carries no composer text.
+    if (dockRequest && dockPayload) {
+      if (!dockCanResolve || sendMut.isPending) return;
+      // The answer is text only. A queued image is NOT part of it and stays
+      // attached (so it isn't lost) — flag that so the no-op on the image
+      // doesn't look like a stuck send.
+      if (images.length > 0) {
+        setUploadError(
+          "Your answer is sent as text — the attached image isn't included; it stays attached to send after you reply.",
+        );
+      }
       sendMut.mutate({
-        content: text,
+        content: buildResolveAnswer(dockPayload, answerSelections, draft),
         mentions: [dockRequest.senderId],
         inReplyTo: dockRequest.id,
         resolves: { request: dockRequest.id, kind: "answered" },
       });
       return;
     }
+
+    if (!text && images.length === 0) return;
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
@@ -1486,56 +1497,44 @@ export function ChatView({
     [cachedMessages, messagesData],
   );
 
-  // ── Request dock: the most recent live open question directed at me pins
-  // its questions + options directly above the composer (the timeline card
-  // suppresses its inline answer block — the answering surface exists once).
-  // Single send button, one contract: clicking an option REPLACES the draft
-  // with the canonical answer text; sending a clean answer direct-resolves
-  // via `metadata.resolves`; sending any other text is a plain reply routed
-  // to the asking agent to judge — the question stays open.
+  // ── Blocking request: the OLDEST (FIFO) live open question directed at me.
+  // It pins its questions + options directly above the composer, the timeline
+  // hides every item after it, and the block lifts only once it resolves —
+  // then the next-oldest unanswered question takes over. The timeline card for
+  // this request suppresses its inline answer block so the answering surface
+  // (dock options + composer) exists exactly once.
   //
-  // The selection state is DERIVED from the draft (`recoverAnswerSelections`),
-  // never stored: the draft is the single source of truth, so the send
-  // mutation's own draft lifecycle (onMutate clears, onError restores) keeps
-  // resolve semantics across a failed-send retry for free, and hand-typing
-  // the exact option text counts as a clean answer (accepted semantics).
-  // Watchers never dock — the read-only branch renders no composer, and
-  // suppressing the timeline card without a dock would leave zero answering
-  // surfaces.
+  // Two decoupled answer channels, unified on send: option clicks set
+  // `answerSelections` (kept here as state, NEVER written into the composer, so
+  // a click only highlights the option and leaves typed text untouched), and
+  // the composer holds free text only. Sending merges both into one canonical
+  // reply that ALWAYS carries `metadata.resolves` (kind="answered") — clicking
+  // an option or typing free text both resolve the question; there is no
+  // separate "leave it open for the asker to judge" path on this surface.
+  // Watchers never block — the read-only branch renders no composer.
+  // `findBlockingRequest` only returns a request whose structured payload
+  // parses, so `dockPayload` is always non-null when `dockRequest` is set — a
+  // request with no usable answer surface is skipped rather than blocking the
+  // timeline with no way to answer.
   const dockRequest = useMemo(
-    () => (readOnly ? null : findDockableRequest(mergedMessages, myAgentId)),
+    () => (readOnly ? null : findBlockingRequest(mergedMessages, myAgentId)),
     [readOnly, mergedMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
   const dockRequestId = dockRequest?.id;
-  const dockSelections = useMemo<Record<string, string>>(
-    () => (dockPayload ? recoverAnswerSelections(draft, dockPayload.questions) : {}),
-    [dockPayload, draft],
-  );
-  const dockDirectResolve =
-    dockRequest != null &&
-    dockPayload != null &&
-    pendingImages.length === 0 &&
-    draft.trim().length > 0 &&
-    draft.trim() === buildAnswerDraft(dockPayload, dockSelections) &&
-    allRequiredSelected(dockPayload, dockSelections);
+  // Option selections, keyed by prompt — decoupled from the composer draft.
+  const [answerSelections, setAnswerSelections] = useState<Record<string, string>>({});
+  // Sending now resolves iff every required question is answered through either
+  // channel (a selected option, or free text for a free-text question).
+  const dockCanResolve =
+    dockRequest != null && dockPayload != null && allRequiredAnswered(dockPayload, answerSelections, draft);
   const pickDockOption = (prompt: string, option: string) => {
-    if (!dockPayload) return;
-    const nextDraft = buildAnswerDraft(dockPayload, { ...dockSelections, [prompt]: option });
-    autoPrimedDraftRef.current = false;
-    setDraft(nextDraft);
-    setCursor(nextDraft.length);
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    });
+    setAnswerSelections((prev) => ({ ...prev, [prompt]: option }));
   };
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
-    // focus-primed `@`; once the dock appears, the asker is the default route.
+    // focus-primed `@`; once the block appears, the asker is the default route.
     autoPrimedDraftRef.current = false;
     focusPrimedRef.current = false;
     setDraft("");
@@ -1546,25 +1545,22 @@ export function ChatView({
       el.setSelectionRange(0, 0);
     });
   }, [dockRequestId, draft]);
-  // When the dock re-pins to a DIFFERENT request (a newer question arrived,
-  // or the current one resolved under us), drop a draft the old dock
-  // authored — otherwise a staged clean answer silently retargets and would
-  // thread under the new question as a confusing bare reply. Typed
-  // discussion text never matches the old request's canonical answer shape
-  // and is kept. Functional setDraft returns the same string in the keep
-  // case, so React bails out of the no-op update.
-  const prevDockRef = useRef<{ id: string; payload: OpenQuestionRequest } | null>(null);
+  // Reset the per-question answer state when the block moves to a DIFFERENT
+  // request (the current one resolved, or a newer one became the oldest live
+  // question). Selections always reset; the free-text draft is dropped only on
+  // a question→question handoff so an answer typed for one question doesn't
+  // bleed into the next — never when the block first appears (prev=null) or
+  // fully clears (next=null), where the send mutation's onMutate already owns
+  // the draft.
+  const prevDockIdRef = useRef<string | null>(null);
   useEffect(() => {
-    const prev = prevDockRef.current;
-    prevDockRef.current = dockRequest && dockPayload ? { id: dockRequest.id, payload: dockPayload } : null;
-    if (!prev || prev.id === dockRequest?.id) return;
-    setDraft((current) => {
-      const trimmed = current.trim();
-      if (trimmed.length === 0) return current;
-      const derived = recoverAnswerSelections(trimmed, prev.payload.questions);
-      return Object.keys(derived).length > 0 && trimmed === buildAnswerDraft(prev.payload, derived) ? "" : current;
-    });
-  }, [dockRequest, dockPayload]);
+    const prevId = prevDockIdRef.current;
+    const nextId = dockRequestId ?? null;
+    prevDockIdRef.current = nextId;
+    if (prevId === nextId) return;
+    setAnswerSelections({});
+    if (prevId && nextId) setDraft("");
+  }, [dockRequestId]);
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];
@@ -1620,6 +1616,21 @@ export function ChatView({
   }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
+
+  // Blocking truncation: while a question blocks me (the FIFO-oldest live
+  // request directed at me), hide every timeline item AFTER that request's
+  // card — the conversation does not continue until I answer. The block is
+  // viewer-local (`dockRequestId` is undefined for watchers / non-targets and
+  // in the read-only view), so everyone else keeps the full timeline. If the
+  // blocking request isn't in the loaded window (cutoff === -1) we don't
+  // truncate — there's nothing to anchor on, and the dock still pins the
+  // answer surface.
+  const visibleItems = useMemo<TimelineItem[]>(() => {
+    if (!dockRequestId) return items;
+    const cutoff = items.findIndex((it) => it.kind === "message" && it.data.id === dockRequestId);
+    return cutoff === -1 ? items : items.slice(0, cutoff + 1);
+  }, [items, dockRequestId]);
+  const hiddenByBlock = itemCount - visibleItems.length;
 
   // M2: scroll-position snapshot — synchronous IndexedDB lookup of
   // where the user's viewport bottom was the last time they left
@@ -2388,12 +2399,20 @@ export function ChatView({
   );
 
   // Group-chat mention gate, shared by the send button (disabled / title /
-  // dimming) and handleSend's Enter-key backstop. A live dock lifts the gate:
-  // the pinned question makes its asker the default recipient (a clean answer
-  // direct-resolves; an edited/typed reply routes to the asker to judge —
-  // exactly what the dock's helper line promises), so no typed @mention is
-  // required while a question is docked.
+  // dimming) and handleSend's Enter-key backstop. A blocking question lifts the
+  // gate: the pinned question makes its asker the default recipient, so no
+  // typed @mention is required while a question blocks me.
   const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && dockRequest == null;
+
+  // Unified send-disabled gate. While a question blocks me the only send is the
+  // answer, enabled exactly when every required question is answered
+  // (`dockCanResolve`) — an options-only answer carries no composer text, so
+  // the usual empty-draft / mention gate does not apply. Otherwise the normal
+  // rules: need text or an image, and (group chats) an addressed @mention.
+  const sendDisabled =
+    sendMut.isPending ||
+    uploading ||
+    (dockRequest != null ? !dockCanResolve : (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -2848,7 +2867,7 @@ export function ChatView({
                   </div>
                 )}
                 <div className="flex flex-col" style={{ gap: 4 }}>
-                  {items.flatMap((item, idx) => {
+                  {visibleItems.flatMap((item, idx) => {
                     let node: ReactNode = null;
                     if (item.kind === "workgroup") {
                       // Default to folded while chatDetail is still loading —
@@ -2917,6 +2936,19 @@ export function ChatView({
                     }
                     return node;
                   })}
+                  {/* Blocking truncation marker: the conversation past the
+                      question is hidden until I answer it above. Keeps the cut
+                      from reading as a load error / empty tail. */}
+                  {hiddenByBlock > 0 ? (
+                    <div
+                      className="mono text-caption"
+                      style={{ color: "var(--fg-4)", textAlign: "center", padding: "var(--sp-3) 0 var(--sp-1)" }}
+                    >
+                      {`Answer the question above to see ${hiddenByBlock} newer ${
+                        hiddenByBlock === 1 ? "message" : "messages"
+                      }`}
+                    </div>
+                  ) : null}
                 </div>
                 <div ref={messagesEndRef} />
               </div>
@@ -2932,7 +2964,7 @@ export function ChatView({
                 anchors to the outer wrapper's visible bounds instead of
                 being affected by the scroll container's internal
                 `overflow-auto` + `position: relative` interaction (rev 8). */}
-            {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
+            {pillCount > 0 && !dockRequestId ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
           </div>
 
           {/* Input. Outer band keeps full-width border-top + side padding so
@@ -3012,8 +3044,8 @@ export function ChatView({
                       <RequestDock
                         requestId={dockRequest.id}
                         payload={dockPayload}
-                        selections={dockSelections}
-                        directResolve={dockDirectResolve}
+                        selections={answerSelections}
+                        directResolve={dockCanResolve}
                         draftEmpty={draft.trim().length === 0}
                         askerName={chatScopedAgentName(dockRequest.senderId)}
                         onPick={pickDockOption}
@@ -3347,12 +3379,7 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
-                            disabled={
-                              sendMut.isPending ||
-                              uploading ||
-                              (!draft.trim() && pendingImages.length === 0) ||
-                              sendBlockedByMentionGate
-                            }
+                            disabled={sendDisabled}
                             title={
                               sendBlockedByMentionGate
                                 ? "@mention a member to send — a group message must address someone"
@@ -3361,11 +3388,7 @@ export function ChatView({
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              (sendMut.isPending ||
-                                uploading ||
-                                (!draft.trim() && pendingImages.length === 0) ||
-                                sendBlockedByMentionGate) &&
-                                "opacity-40 cursor-not-allowed",
+                              sendDisabled && "opacity-40 cursor-not-allowed",
                             )}
                             style={{
                               width: 28,

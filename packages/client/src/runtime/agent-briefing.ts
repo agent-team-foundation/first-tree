@@ -614,44 +614,61 @@ function askingHumansBlock(): string {
 When you need something only a human can give — a decision, sign-off, or an
 answer — ask with a **structured request** instead of folding the question
 into a plain \`chat send\`. A request raises a tracked open question on the
-human's side (red-dot / open-question count) that stays until they answer;
-a plain send does not.
+human's side (red-dot / open-question count) AND **blocks that chat for the
+human**: their UI pins the question and hides every message after it until
+they answer, so the ask cannot be scrolled past. When several questions are
+open for them, they clear them oldest-first.
 
 \`\`\`bash
 ${bin} chat send <human> --request \\
   "<background/context the human needs to decide>" \\
-  --question "<the single ask>" \\
-  --option "<choice A>" --option "<choice B>"
+  --question "<the single ask>"
 \`\`\`
 
-The body carries the context; \`--question\` is **only** the ask; \`--option\`
-(repeatable) offers explicit choices. A request is **human-directed only** — the
-server rejects \`--request\` unless the recipient is a human member, so you cannot
-open a tracked question against another agent (reach agents with a plain \`chat
-send <name>\`).
+The body carries the context; \`--question\` is **only** the ask. A request is
+**human-directed only** — the server rejects \`--request\` unless the recipient
+is a human member, so you cannot open a tracked question against another agent
+(reach agents with a plain \`chat send <name>\`).
 
-### When the human replies — discuss, then resolve
+### Prefer a free-text answer; add options only when each is a clean pick
 
-The human's reply comes back as an ordinary message. It does **not** clear the
-red dot on its own, and neither does any plain reply you send back: replying
-threads onto the question (a focused "chat about this" exchange) but leaves it
-**open** so you can clarify back-and-forth without prematurely marking it
-answered. The open question stays tracked until you **explicitly resolve** it.
-
-Once you've got what you need, judge the reply and close the loop with one of:
+By DEFAULT ask a free-text question — **omit \`--option\`**. Dense option lists
+are hard to choose from: when the choices carry a lot of information or overlap
+in meaning, the human cannot weigh them at a glance, so a free-text answer is
+the better ask.
 
 \`\`\`bash
-# You have the answer — resolve it and clear their red dot (body = the answer):
+${bin} chat send <human> --request "<context>" \\
+  --question "<ask>" --option "<A>" --option "<B>"
+\`\`\`
+
+Add \`--option\` (repeatable) **only** when every option is semantically single
+— a short, unambiguous, mutually-exclusive pick (e.g. Approve / Hold, Friday /
+Monday). If an option needs a clause to be understood, or two options could
+both be "right", drop the options and let them answer in free text.
+
+### How it resolves
+
+The human answers in their web UI, and **any answer resolves the question**:
+picking an option OR typing free text both clear the red dot and unblock the
+chat. Their answer comes back to you as the resolving reply — the question does
+not linger in a separate "discuss" state. If their answer pushes back or you
+need more, **re-ask**: a new \`--request\` opens a fresh question (and a fresh
+block).
+
+You can also resolve from the CLI:
+
+\`\`\`bash
+# Resolve on their behalf when answered out-of-band (body = the answer):
 ${bin} chat send <human> "<the confirmed answer>" --answer <requestId>
 
-# The question no longer applies — withdraw it (body = the reason). Re-asking
-# opens a NEW question; it never auto-supersedes the old one:
+# Withdraw a question that became moot (body = the reason). Re-asking opens a
+# NEW question; it never auto-supersedes the old one:
 ${bin} chat send <human> "<reason>" --close <requestId>
 \`\`\`
 
 \`<requestId>\` is the id of your original \`--request\` message. Only you (the
-asker) or the human you asked may resolve it; if they answer cleanly in the web
-UI, it's already cleared — no action needed.
+asker) or the human you asked may resolve it.
 
 Reach for a request on any real fork: needs approval, ambiguous requirements, a
 safety-sensitive action, or any change to core data structures or the database.`;

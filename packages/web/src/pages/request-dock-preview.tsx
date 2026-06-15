@@ -1,7 +1,7 @@
 import type { OpenQuestionRequest } from "@first-tree/shared";
 import { useState } from "react";
 import { RequestDock } from "../components/chat/request-dock.js";
-import { allRequiredSelected, buildAnswerDraft, recoverAnswerSelections } from "../components/chat/request-state.js";
+import { allRequiredAnswered } from "../components/chat/request-state.js";
 
 /**
  * DEV-only visual review for `RequestDock` — the open question pinned above
@@ -9,12 +9,11 @@ import { allRequiredSelected, buildAnswerDraft, recoverAnswerSelections } from "
  * routes (DEV-only in `app.tsx`).
  *
  * Each mode renders the production dock against a mock composer that mirrors
- * chat-view's wiring contract — including the derived-selection model: the
- * draft is the single source of truth and the selection highlight is derived
- * from it via `recoverAnswerSelections`, so clicking an option REPLACES the
- * draft, editing the text away from a clean answer drops the highlight, and
- * the helper line flips between resolve / judge / empty. The "send" button
- * just echoes which path the real composer would take.
+ * chat-view's wiring contract — including the decoupled-selection model:
+ * clicking an option sets a stored selection (it does NOT touch the composer
+ * draft), the composer holds free text only, and sending ALWAYS resolves once
+ * every required question is answered through either channel. The "send"
+ * button just echoes that the real composer would resolve.
  */
 
 const MODES: Record<string, { label: string; payload: OpenQuestionRequest }> = {
@@ -112,17 +111,16 @@ const MODES: Record<string, { label: string; payload: OpenQuestionRequest }> = {
 
 function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestionRequest }) {
   const [draft, setDraft] = useState("");
+  const [selections, setSelections] = useState<Record<string, string>>({});
   const [sentAs, setSentAs] = useState<string | null>(null);
 
-  // Mirrors chat-view's derived-selection model: no stored selection state.
-  const selections = recoverAnswerSelections(draft, payload.questions);
-  const directResolve =
-    draft.trim().length > 0 &&
-    draft.trim() === buildAnswerDraft(payload, selections) &&
-    allRequiredSelected(payload, selections);
+  // Mirrors chat-view's decoupled-selection model: option clicks live in their
+  // own state, the composer is free text only, and sending resolves once every
+  // required question is answered through either channel.
+  const directResolve = allRequiredAnswered(payload, selections, draft);
 
   const pick = (prompt: string, option: string) => {
-    setDraft(buildAnswerDraft(payload, { ...selections, [prompt]: option }));
+    setSelections((prev) => ({ ...prev, [prompt]: option }));
     setSentAs(null);
   };
 
@@ -161,7 +159,7 @@ function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestio
           <textarea
             value={draft}
             onChange={(e) => edit(e.target.value)}
-            placeholder="Pick an option above, or type to discuss…"
+            placeholder="Pick an option above, or type a free-text answer…"
             className="text-body"
             style={{
               flex: 1,
@@ -177,14 +175,11 @@ function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestio
           <button
             type="button"
             className="text-body"
-            disabled={draft.trim().length === 0}
+            disabled={!directResolve}
             onClick={() => {
-              setSentAs(
-                directResolve
-                  ? "→ resolves.answered (direct resolve, red dot cleared)"
-                  : "→ plain reply (agent judges; question stays open)",
-              );
+              setSentAs("→ resolves.answered (red dot cleared)");
               setDraft("");
+              setSelections({});
             }}
             style={{
               border: "none",
@@ -192,8 +187,8 @@ function ModeBlock({ modeKey, payload }: { modeKey: string; payload: OpenQuestio
               background: "var(--primary)",
               color: "var(--primary-on)",
               padding: "var(--sp-1_5) var(--sp-3)",
-              cursor: draft.trim().length === 0 ? "not-allowed" : "pointer",
-              opacity: draft.trim().length === 0 ? 0.4 : 1,
+              cursor: directResolve ? "pointer" : "not-allowed",
+              opacity: directResolve ? 1 : 0.4,
             }}
           >
             Send
@@ -216,8 +211,8 @@ export function RequestDockPreviewPage() {
         RequestDock preview
       </h1>
       <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
-        Click an option → it fills the box (replace, not append). The highlight derives from the draft: text that is a
-        clean answer (clicked or hand-typed) resolves on send; anything else goes to the agent to judge.
+        Click an option → it highlights but does NOT touch the composer (decoupled). The composer is for free text. Once
+        every required question is answered through either channel, sending resolves the question.
       </p>
       {Object.entries(MODES).map(([key, m]) => (
         <ModeBlock key={key} modeKey={key} payload={m.payload} />
