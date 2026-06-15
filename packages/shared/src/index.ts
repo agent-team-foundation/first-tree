@@ -453,7 +453,9 @@ export {
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";
 export {
+  type CompleteOnboarding,
   type CreateOrgFromMe,
+  completeOnboardingSchema,
   createOrgFromMeSchema,
   type MeMembership,
   meMembershipSchema,
