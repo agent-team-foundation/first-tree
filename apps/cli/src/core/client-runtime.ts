@@ -38,6 +38,16 @@ type AgentEntry = {
    * authoritative `runtimeProvider`.
    */
   config: AgentConfig;
+  /**
+   * Set while `entry.slot.start()` is in flight (resolves — never rejects —
+   * when that start settles). A runtime switch must await this before it stops
+   * and replaces the slot: the server pushes the `agent:pinned` backfill right
+   * after `client:registered`, so a switch can land mid-startup, and stopping a
+   * slot does not cancel its in-flight `start()`. Without the await the orphaned
+   * `start()` keeps binding / scheduling timers on a slot no longer reachable
+   * through `entry.slot`.
+   */
+  startInFlight?: Promise<void>;
 };
 
 type AgentStartState = "idle" | "starting" | "running" | "suspended-skipped" | "failed";
@@ -642,8 +652,17 @@ export class ClientRuntime {
     }
 
     entry.state = "starting";
+    const startPromise = entry.slot.start();
+    // Publish the in-flight start (settled, never rejecting) so a concurrent
+    // runtime switch can await it before tearing the slot down. Set
+    // synchronously here — before yielding to the event loop — so an
+    // `agent:pinned` push that arrives the moment startup begins always sees it.
+    entry.startInFlight = startPromise.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
-      const identity = await entry.slot.start();
+      const identity = await startPromise;
       entry.state = "running";
       print.check(true, `${entry.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
       return "connected";
@@ -657,6 +676,8 @@ export class ClientRuntime {
       entry.state = "failed";
       print.check(false, `${entry.name}: connection failed`, msg);
       return "failed";
+    } finally {
+      entry.startInFlight = undefined;
     }
   }
 
@@ -672,7 +693,9 @@ export class ClientRuntime {
    * Re-entrancy: one switch per agent at a time. A request landing mid-swap
    * is queued (latest value wins) and applied once the active swap completes
    * — see {@link queuedRuntimeSwitch} for why dropping it would strand the
-   * agent on the wrong provider.
+   * agent on the wrong provider. A switch landing mid-startup (before the
+   * initial `slot.start()` settles) first awaits that start so the teardown
+   * sees a fully-built slot — see {@link AgentEntry.startInFlight}.
    */
   private async switchAgentRuntime(entry: AgentEntry, to: string, source: string): Promise<void> {
     const agentId = entry.slot.agentId;
@@ -683,6 +706,11 @@ export class ClientRuntime {
     }
     this.runtimeSwitchesInFlight.add(agentId);
     try {
+      // If the slot is still completing its initial start, let it settle first
+      // so `performRuntimeSwitch`'s `stop()` tears down everything `start()`
+      // built instead of racing an orphaned in-flight startup.
+      const inFlight = entry.startInFlight;
+      if (inFlight) await inFlight;
       await this.performRuntimeSwitch(entry, to, source);
     } finally {
       this.runtimeSwitchesInFlight.delete(agentId);

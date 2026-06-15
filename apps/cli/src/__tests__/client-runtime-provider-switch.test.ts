@@ -446,6 +446,48 @@ describe("ClientRuntime runtime-provider switching (issue #552)", () => {
     await rt.stop();
   });
 
+  it("defers a switch until an in-flight slot start settles", async () => {
+    // The server pushes the agent:pinned backfill right after
+    // client:registered, so a switch can land while the initial slot.start()
+    // is still in flight. Stopping a slot does not cancel its in-flight
+    // start(), so the switch must await it first or it orphans a half-started
+    // slot (review finding: Defer slot switches while startup is in flight).
+    const yamlPath = writeAgentYaml("alpha", "agentId: agent-1\nruntime: claude-code\n");
+    const rt = await makeRuntime();
+    addAgent(rt, "alpha", "agent-1", "claude-code");
+    const slot0 = slotInstances[0];
+    if (!slot0) throw new Error("initial slot missing");
+    let releaseStart: () => void = () => undefined;
+    slot0.start.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseStart = () => resolve({ displayName: "alpha", agentId: "agent-1" });
+        }),
+    );
+
+    const startAll = rt.start();
+    await vi.waitFor(() => expect(slot0.start).toHaveBeenCalled());
+
+    // Switch lands while slot0.start() is still pending.
+    firePinned("agent-1", "alpha", "codex");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The switch must NOT have torn down the half-started slot yet.
+    expect(slot0.stop).not.toHaveBeenCalled();
+    expect(slotInstances).toHaveLength(1);
+
+    // Start settles → the deferred switch now proceeds cleanly.
+    releaseStart();
+    await startAll;
+    await vi.waitFor(() => expect(slot0.stop).toHaveBeenCalled());
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    const newSlot = slotInstances[1];
+    if (!newSlot) throw new Error("switched slot missing");
+    expect(newSlot.type).toBe("codex");
+    await vi.waitFor(() => expect(newSlot.start).toHaveBeenCalled());
+    expect(readFileSync(yamlPath, "utf8")).toContain("runtime: codex");
+    await rt.stop();
+  });
+
   it("ignores bind rejections that are not runtime_provider_mismatch", async () => {
     const reconcile = await import("../core/runtime-provider-reconcile.js");
     writeAgentYaml("alpha", "agentId: agent-1\nruntime: claude-code\n");
