@@ -8,7 +8,12 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { deriveRepoLocalPath, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SOURCE_REPOS_DIRNAME,
+} from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -155,17 +160,18 @@ export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): st
  * a doc the agent wrote in the workspace could never be previewed.
  *
  * Resolution:
- *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
- *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
- *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
- *    (the old behaviour) made the runtime resolve it against its own
- *    `process.cwd()` — the launch dir, not the session workspace — so it
- *    silently failed to find any doc and cloud preview was dead.
+ *  - exactly one repo → that source repo's clone, the unambiguous markdown-link
+ *    root. The clone is materialised at `<sessionRoot>/source-repos/<localPath>`
+ *    (the `sourcesRoot` layer), so the base MUST be that ABSOLUTE path.
+ *    Returning a bare relative `localPath` (the old behaviour) made the runtime
+ *    resolve it against its own `process.cwd()` — the launch dir, not the
+ *    session workspace — so it silently failed to find any doc and cloud
+ *    preview was dead.
  *  - zero or multiple repos → the session doc root.
  */
 export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
   const localPath = singleRepoLocalPathFromPayload(payload);
-  return localPath ? join(sessionRoot, localPath) : sessionRoot;
+  return localPath ? join(sessionRoot, SOURCE_REPOS_DIRNAME, localPath) : sessionRoot;
 }
 
 /**
@@ -198,8 +204,13 @@ export function singleRepoLocalPathFromPayload(payload: AgentRuntimeConfigPayloa
  */
 export function selfFenceFromRuntimeConfig(payload: AgentRuntimeConfigPayload | null, sessionRoot: string): SelfFence {
   if (!payload) return { agentHome: sessionRoot };
-  const singleRepoLocalPath = singleRepoLocalPathFromPayload(payload);
-  return singleRepoLocalPath ? { agentHome: sessionRoot, singleRepoLocalPath } : { agentHome: sessionRoot };
+  const name = singleRepoLocalPathFromPayload(payload);
+  // The SelfFence's `singleRepoLocalPath` is the source repo's path RELATIVE to
+  // `agentHome`; the snapshot pipeline resolves it as `resolve(agentHome, …)`.
+  // Under the source-repos/ layout that relative path is `source-repos/<name>`.
+  return name
+    ? { agentHome: sessionRoot, singleRepoLocalPath: `${SOURCE_REPOS_DIRNAME}/${name}` }
+    : { agentHome: sessionRoot };
 }
 
 function repoLocalPath(repo: GitRepo): string {

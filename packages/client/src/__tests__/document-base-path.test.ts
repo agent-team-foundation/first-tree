@@ -38,20 +38,21 @@ describe("documentBasePathFromRuntimeConfig", () => {
     expect(result).toBe(PER_CHAT);
   });
 
-  it("returns an ABSOLUTE repo worktree path (sessionRoot + derived localPath) for a single repo", () => {
+  it("returns an ABSOLUTE source-repo clone path (sessionRoot + source-repos/ + localPath) for a single repo", () => {
     // Regression: the old code returned a bare relative localPath
     // ("first-tree"), which the runtime resolved against its own
     // process.cwd() (the launch dir, not the per-chat workspace) and failed to
-    // find any doc — leaving single-repo cloud preview dead.
+    // find any doc — leaving single-repo cloud preview dead. The clone now
+    // lives under the `source-repos/` layer, so the base is `<root>/source-repos/<name>`.
     expect(documentBasePathFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), PER_CHAT)).toBe(
-      `${PER_CHAT}/first-tree`,
+      `${PER_CHAT}/source-repos/first-tree`,
     );
   });
 
-  it("honours an explicit localPath for a single repo", () => {
+  it("honours an explicit localPath for a single repo (under source-repos/)", () => {
     expect(
       documentBasePathFromRuntimeConfig(payload([{ url: "https://x/y.git", localPath: "custom-dir" }]), PER_CHAT),
-    ).toBe(`${PER_CHAT}/custom-dir`);
+    ).toBe(`${PER_CHAT}/source-repos/custom-dir`);
   });
 
   it("falls back to the session doc root when a single repo's localPath is blank", () => {
@@ -93,7 +94,7 @@ describe("resolveSessionDocRoot — per-agent-home vs legacy per-chat layout", (
       payload([{ url: "https://github.com/agent-team-foundation/first-tree.git" }]),
       resolveSessionDocRoot(workspaceRoot, "another-new-chat"),
     );
-    expect(base).toBe(join(workspaceRoot, "first-tree"));
+    expect(base).toBe(join(workspaceRoot, "source-repos", "first-tree"));
   });
 });
 
@@ -123,10 +124,13 @@ describe("singleRepoLocalPathFromPayload + selfFenceFromRuntimeConfig", () => {
     expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "   " }]))).toBeNull();
   });
 
-  it("selfFenceFromRuntimeConfig packs agentHome + optional singleRepoLocalPath for the snapshot pipeline", () => {
+  it("selfFenceFromRuntimeConfig packs agentHome + the agentHome-relative source-repos/ path", () => {
+    // singleRepoLocalPath is the repo's path RELATIVE to agentHome — under the
+    // source-repos/ layout that is `source-repos/<name>`, resolved by the
+    // snapshot pipeline as `resolve(agentHome, "source-repos/<name>")`.
     expect(selfFenceFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), "/ws/coder")).toEqual({
       agentHome: "/ws/coder",
-      singleRepoLocalPath: "first-tree",
+      singleRepoLocalPath: "source-repos/first-tree",
     });
     expect(selfFenceFromRuntimeConfig(payload([]), "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
   });
