@@ -4,10 +4,13 @@ import { REPROBE_MAX_AGE_MS, shouldFullReprobe } from "../runtime/capabilities/i
 
 /**
  * Reconnect re-probe policy (PR-2b): on a WS reconnect the daemon either runs
- * a full real re-probe (spends a smoke) or a free resolve+auth re-validate.
- *   - full   ⟸ empty snapshot, any non-ok provider, or older than the TTL
- *   - re-validate ⟸ all-ok and fresh: resolve+auth re-run for real, but the
- *     smoke is short-circuited to the cached `ok`.
+ * a full real re-probe of all providers (spends a smoke each) or a per-provider
+ * re-validate.
+ *   - full       ⟸ empty snapshot OR any entry older than the TTL
+ *   - re-validate ⟸ otherwise (incl. a snapshot that merely has a non-ok
+ *     provider): each fresh-ok provider re-runs resolve+auth for real but the
+ *     smoke is short-circuited to the cached `ok` and its prior entry is kept;
+ *     a non-ok provider is fully re-probed so it can recover.
  */
 
 const okEntry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
