@@ -27,10 +27,9 @@ import { z } from "zod";
 // users who pass `""` get a validation error from `min(1)` below.
 
 // Shared URL schema for repo URLs persisted in per-org settings. Accepts
-// three forms — all three end up cloned by user agents, and the client's
-// fallback layer (see `git-mirror-manager.ts`) transparently swaps between
-// HTTPS and SSH when one direction's credentials are missing on a given
-// machine. Used by both `context_tree.repo` and `source_repos[].url`.
+// three forms — all three end up cloned by the agents themselves (per the
+// briefing protocol), using whichever transport the host machine's git
+// credentials support. Used by both `context_tree.repo` and `source_repos[].url`.
 //
 //   1. `https://host[:port]/path[.git]`
 //   2. `ssh://[user@]host[:port]/path[.git]`         (URL form)

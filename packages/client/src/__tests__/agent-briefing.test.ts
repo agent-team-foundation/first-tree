@@ -74,7 +74,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "# Identity",
       "# Working in First Tree (First Tree Managed)",
       "## Working Directory",
-      "## Worktrees",
+      "## Worktrees (how you read AND write a bare source repo)",
       "## Communication",
       "## Workspace Collaboration",
       "## GitHub Entity Attention",
@@ -86,7 +86,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Core Model",
       "## Reading the Tree",
       "## Writing the Tree",
-      "## Tree Location",
+      "## Tree Location (agent-managed clone)",
       "# Skills (First Tree Managed)",
       "## First Tree Family",
       "## Current Chat Context (First Tree Managed, per-chat)",
@@ -516,14 +516,18 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("persistent state");
   });
 
-  it("emits the Worktrees block (on-demand convention) regardless of source repos presence", () => {
+  it("emits the Worktrees block (read + write worktree convention) regardless of source repos presence", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Worktrees");
     expect(briefing).toContain("No worktrees are pre-created");
-    expect(briefing).toContain("git worktree add");
-    // The on-demand path must use the agent home as the prefix; only
-    // `<task-name>` / `<new-branch>` are literal placeholders.
+    // Bare-clone worktree commands run against the clone with `git -C <source>`.
+    expect(briefing).toContain("worktree add");
+    // Bare-clone model: both a read worktree and a task (write) worktree are
+    // documented. Only `<name>` / `<task-name>` / `<new-branch>` are literal
+    // placeholders; the home prefix is interpolated.
+    expect(briefing).toContain(`${AGENT_HOME}/worktrees/<name>-read`);
     expect(briefing).toContain(`${AGENT_HOME}/worktrees/<task-name>`);
+    expect(briefing).toContain("worktree remove");
     // No literal `<placeholder>` for the home prefix — LLMs sometimes copy
     // those verbatim.
     expect(briefing).not.toContain("<agent-home>/worktrees/");
@@ -544,7 +548,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     ];
     const briefing = buildAgentBriefing(makeOpts({ sourceRepos }));
 
-    expect(briefing).toContain("## Source Repositories");
+    expect(briefing).toContain("## Source Repositories (agent-managed, bare)");
     // Top-level paths — no `worktrees/` prefix.
     expect(briefing).toContain(`\`${AGENT_HOME}/api\``);
     expect(briefing).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
@@ -554,13 +558,34 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
-    // Per-agent-source-repo: standalone clones are kept current each chat, but
-    // the agent must not edit them in place (that would block the auto-update).
-    expect(briefing).toContain("keeps each one current");
-    expect(briefing).toContain("latest default branch");
-    expect(briefing).toContain("**not** edit");
-    expect(briefing).toContain("git fetch origin");
+    // Agent-managed bare protocol: the agent maintains bare clones itself
+    // and reads/writes only through worktrees.
+    expect(briefing).toContain("**You manage these clones yourself**");
+    expect(briefing).toContain("bare");
+    expect(briefing).toContain("git clone --bare <url> <path>");
+    // refspec config makes refs/remotes/origin/* available for worktrees.
+    expect(briefing).toContain("git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'");
+    // localPath is a single directory name (nested paths are rejected at the
+    // schema layer), so the clone needs no `mkdir -p` of a parent.
+    expect(briefing).toContain("single directory name directly under your workspace");
+    expect(briefing).not.toContain("mkdir -p");
+    // Read goes through a worktree, not the clone path; skills scan there too.
+    expect(briefing).toContain("Read through a worktree, not the clone path.");
+    expect(briefing).toContain("first-tree-seed");
+    expect(briefing).toContain("first-tree-sync");
+    expect(briefing).toContain("fetch origin");
     expect(briefing).toContain("origin/main");
+    // Fail-closed repoint guard — carries main's #1058 invariant (a source
+    // path repointed from repoA to repoB must not silently serve the old
+    // clone) into the agent-managed protocol. The agent verifies the existing
+    // clone's origin against the declared url and blocks on a mismatch instead
+    // of reusing it unconditionally.
+    expect(briefing).toContain("fail closed");
+    expect(briefing).toContain("git -C <path> remote get-url origin");
+    expect(briefing).toMatch(/does NOT match/);
+    // Reuse is now CONDITIONAL on the origin matching — not an unconditional
+    // "reuse the existing path as-is".
+    expect(briefing).toContain("**If it matches**, reuse the clone");
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
@@ -805,6 +830,50 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // The retired onboarding skill must not be named — there is no
     // in-agent flow to bind a workspace anymore.
     expect(stub).not.toContain("first-tree-onboarding");
+  });
+
+  it("shell-quotes interpolated branch / URL / path in the Tree Location clone command (S5)", () => {
+    // baixiaohang #4 / S5: branch / URL / tree path can legitimately carry
+    // spaces, `$`, or other shell metacharacters (e.g. a `feature with space`
+    // branch, a `release/$VERSION` branch, a path under a username with a
+    // dot). Without quoting, a literal copy-paste of the briefing's `git
+    // clone` line either parses wrong (extra positional args) or expands a
+    // shell variable that is empty / wrong on the agent's host.
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: "/var/lib/context trees/example",
+        contextTreeRepoUrl: "https://example.com/release/$VERSION.git",
+        contextTreeBranch: "feature with space",
+      }),
+    );
+    const treeLocation = briefing.slice(briefing.indexOf("## Tree Location"));
+
+    // The clone command lives inside an indented code block — match against
+    // its single-quoted form. The interpolated branch must NOT appear bare
+    // (which would let the shell split on the space).
+    expect(treeLocation).toContain(
+      "git clone --branch 'feature with space' --single-branch 'https://example.com/release/$VERSION.git' '/var/lib/context trees/example'",
+    );
+    // The path also flows into the `rm` / `pull` / `worktree add` snippets —
+    // every interpolated absolute path must be single-quoted there too.
+    expect(treeLocation).toContain("rm '/var/lib/context trees/example'");
+    expect(treeLocation).toContain("git -C '/var/lib/context trees/example' pull --ff-only");
+    expect(treeLocation).toContain("git -C '/var/lib/context trees/example' worktree add");
+  });
+
+  it("escapes an embedded single quote in the Tree Location quoted values (S5 edge)", () => {
+    // POSIX-safe single quoting closes the quoted block, inserts an escaped
+    // quote, then reopens — verify the canonical `'\''` form lands in the
+    // briefing for a branch / path that already contains a quote.
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        contextTreePath: "/tmp/it's-fine",
+        contextTreeRepoUrl: "https://example.com/x.git",
+        contextTreeBranch: "main",
+      }),
+    );
+    const treeLocation = briefing.slice(briefing.indexOf("## Tree Location"));
+    expect(treeLocation).toContain("'/tmp/it'\\''s-fine'");
   });
 });
 

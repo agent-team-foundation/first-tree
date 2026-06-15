@@ -206,17 +206,26 @@ gap to a human instead of trying to self-bind.
 
 ### 2. Tree HEAD freshness
 
-The tree lives at `<workspaceRoot>/<manifest.tree>` — a git repo. Verify
-it is not stale:
+The tree lives at `<workspaceRoot>/<manifest.tree>` — a git repo you
+maintain yourself (the runtime never runs git on it).
 
-```bash
-git -C <workspaceRoot>/<manifest.tree> fetch origin
-git -C <workspaceRoot>/<manifest.tree> log -1 --since=24h --oneline
-```
+If that path **does not exist**, the workspace is agent-managed and
+materialising the tree is your job: follow the **Tree Location** block
+in your `AGENTS.md` / `CLAUDE.md` briefing to clone the upstream tree
+repo into the path (the briefing carries the upstream URL, branch, and
+a ready `git clone` command). If the path exists as a **symlink**
+(legacy shared-pool layout), remove only the symlink and clone per the
+briefing.
 
-If `log` is empty (no commit in 24h) or the local HEAD is behind
-`origin/main`, `git pull` before reading any tree content. Stale tree
-content is the #1 source of advice that conflicts with current decisions.
+Once the directory exists you do **not** need a manual fetch/pull:
+`first-tree tree tree` (the reader command, see `first-tree-read`)
+runs `git pull --ff-only` on the context repo before every listing, so
+freshness is a built-in tool guarantee rather than a step you have to
+remember. It degrades to the local copy with a warning when the remote
+is unreachable (offline / missing credentials → report to a human and
+read local), and `--no-pull` opts out for a deliberately stable
+snapshot. Stale tree content is the #1 source of advice that conflicts
+with current decisions, so let the default pull run.
 
 ### 3. Source vs. workspace vs. tree role-fork
 

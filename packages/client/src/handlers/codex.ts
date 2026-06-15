@@ -34,7 +34,6 @@ import {
   createContextTreeGitWriteTracker,
 } from "../runtime/context-tree-git-status.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -43,11 +42,7 @@ import type {
   SessionMessage,
 } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
 
@@ -61,8 +56,6 @@ type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
-
-type Worktree = { clonePath: string };
 
 /**
  * Turn-level retry budget for transient codex failures.
@@ -499,11 +492,9 @@ export function toolFileRefsForTerminalCodexTool(input: {
 export const createCodexHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
-  const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
   let codex: Codex | null = null;
@@ -535,10 +526,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let drainScheduled = false;
   let drainInProgress = false;
   const queuedMessages: SessionMessage[] = [];
-  const ownedWorktrees: Worktree[] = [];
   /**
-   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced
-   * in the per-session AGENTS.md so the LLM knows the absolute paths.
+   * Predeclared source repos the agent config declares — pure declaration
+   * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
+   * so the LLM knows the absolute paths and upstream coordinates.
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
@@ -616,6 +607,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      contextTreeRepoUrl,
+      contextTreeBranch,
     });
   }
 
@@ -636,29 +629,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  async function prepareSourceRepos(
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    sessionCtx: SessionContext,
-    payloadResolved: boolean,
-  ): Promise<void> {
-    // Delegate to the shared helper (runtime/source-repos.ts) so the
-    // standalone-clone materialisation + per-clone lock + decision-B in-use
-    // refcount stay in one place across the SDK, TUI, and codex handlers. The
-    // returned list feeds the per-session AGENTS.md "Source Repositories" block
-    // on the next `buildAgentBriefing` call.
-    //
-    // `payloadResolved` is forwarded so the shared helper can decide whether
-    // its empty `gitRepos: []` is authoritative — see
-    // `PrepareSourceReposParams.payloadResolved` and PR #869 P0-2.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace: workspaceCwd,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved,
-    });
+  /**
+   * Derive the prompt-facing source-repo list from the runtime config's
+   * `gitRepos` — pure declaration, no git. The agent itself clones and
+   * refreshes `<workspaceCwd>/<localPath>/` per the protocol in its
+   * briefing. The list feeds the per-session AGENTS.md "Source
+   * Repositories" block on the next `buildAgentBriefing` call.
+   */
+  function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {
+    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
   }
 
   function emitToolCall(
@@ -1256,8 +1235,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       // gitRepos first so the per-chat briefing can list the predeclared
-      // worktree paths the agent should know about.
-      await prepareSourceRepos(payload, cwd, sessionCtx, payloadResolved);
+      // source-repo paths the agent should know about.
+      declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
@@ -1315,7 +1294,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // `<binName> tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
-      await prepareSourceRepos(payload, cwd, sessionCtx, resumePayloadResolved);
+      declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
@@ -1375,24 +1354,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
       thread = null;
       codex = null;
 
-      // Only session-private worktrees (currently none — predeclared ones
-      // intentionally skip `ownedWorktrees.push`) get torn down here. Future
-      // ad-hoc worktree creation sites can opt in by pushing to
-      // `ownedWorktrees`.
-      if (ctx) releaseSourceReposForSession(ctx);
-      if (gitMirrorManager) {
-        for (const wt of ownedWorktrees) {
-          try {
-            await gitMirrorManager.removeSourceRepo({ clonePath: wt.clonePath });
-          } catch (err) {
-            ctx?.log(
-              `codex worktree cleanup failed (${wt.clonePath}): ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
-        ownedWorktrees.length = 0;
-      }
-
+      // Source repos, the Context Tree clone, and on-demand worktrees under
+      // `<cwd>/worktrees/<name>/` are all agent-managed state — the agent
+      // creates, refreshes, and removes them per its briefing protocol; the
+      // runtime touches none of them on shutdown.
+      //
       // cwd points at the persistent agent home — NO rmSync. The legacy
       // behaviour that wiped per-chat workspaces went away with the cwd
       // model change.
