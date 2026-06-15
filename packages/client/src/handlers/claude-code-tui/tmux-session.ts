@@ -172,15 +172,38 @@ export type WaitForReadyInput = {
 };
 
 /**
+ * Claude Code 2.1.170 may show a one-time workspace trust dialog before the
+ * normal TUI surface when a fresh agent workspace has never been opened by the
+ * local user. First Tree creates and owns these agent workspaces; without
+ * acknowledging this dialog the handler never reaches the ready marker.
+ */
+export function isWorkspaceTrustPrompt(pane: string): boolean {
+  return (
+    pane.includes("Quick safety check:") &&
+    pane.includes("Yes, I trust this folder") &&
+    pane.includes("Enter to confirm")
+  );
+}
+
+/**
  * Poll capture-pane until both the bypass-permissions marker and a `❯`
  * input prompt line are visible. Resolves on success, throws on timeout.
+ * If Claude shows its workspace trust prompt first, acknowledge it once and
+ * keep waiting for the actual ready surface.
  */
 export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const pollIntervalMs = input.pollIntervalMs ?? 250;
   const started = Date.now();
+  let acceptedWorkspaceTrust = false;
   while (Date.now() - started < timeoutMs) {
     const pane = await capturePane(input.name);
+    if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
+      acceptedWorkspaceTrust = true;
+      await sendKey(input.name, "Enter");
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
     if (pane.includes(READY_MARKER) && pane.split("\n").some((line) => USER_RE.test(line))) {
       return;
     }
