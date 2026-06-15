@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { agentSessionRegistryPath } from "@first-tree/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
@@ -61,18 +62,35 @@ describe("listPinnedAgents", () => {
 
 describe("reconcileLocalRuntimeProviders", () => {
   let agentsDir: string;
+  let home: string;
   let fetchMock: ReturnType<typeof vi.fn>;
+  const originalHome = process.env.FIRST_TREE_HOME;
 
   beforeEach(() => {
     agentsDir = mkdtempSync(join(tmpdir(), "ft-first-tree-reconcile-"));
+    // Sandbox the channel home so `agentSessionRegistryPath` (used by the
+    // runtime-switch registry clear) resolves under a temp dir, never the
+    // developer's real `<home>/data/sessions`.
+    home = mkdtempSync(join(tmpdir(), "ft-first-tree-reconcile-home-"));
+    process.env.FIRST_TREE_HOME = home;
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
     rmSync(agentsDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
+    else process.env.FIRST_TREE_HOME = originalHome;
     vi.unstubAllGlobals();
   });
+
+  function seedSessionRegistry(name: string): string {
+    const path = agentSessionRegistryPath(name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, entries: { "chat-1": { claudeSessionId: "sess-old" } } }));
+    return path;
+  }
 
   function seedAgentDir(name: string, yamlContent: Record<string, unknown>): string {
     const dir = join(agentsDir, name);
@@ -106,6 +124,41 @@ describe("reconcileLocalRuntimeProviders", () => {
     // Sibling keys must survive the rewrite.
     expect(after.agentId).toBe("agent-1");
     expect(after.workspaceLabel).toBe("alpha-ws");
+  });
+
+  it("clears the persisted session registry when it switches an agent's runtime", async () => {
+    // Offline-rebind path (PR #1043 review R3 follow-up): reconciliation, not
+    // an `agent:pinned` push, applies the switch before the slot first binds.
+    // The old provider's session ids in `sessions/<name>.json` would otherwise
+    // be hydrated by the new handler (a Claude session id is meaningless to
+    // Codex `resumeThread`), so the registry must be cleared here too.
+    const yamlPath = seedAgentDir("alpha", { agentId: "agent-1", runtime: "claude-code" });
+    const registryPath = seedSessionRegistry("alpha");
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-1", clientId: "cli-1", runtimeProvider: "codex" }]), {
+        status: 200,
+      }),
+    );
+
+    await reconcileLocalRuntimeProviders({ serverUrl: "http://first-tree.test", accessToken: "tok", agentsDir });
+
+    expect((parseYaml(readFileSync(yamlPath, "utf-8")) as { runtime?: string }).runtime).toBe("codex");
+    expect(existsSync(registryPath)).toBe(false);
+  });
+
+  it("preserves the session registry when the runtime already matches the server", async () => {
+    seedAgentDir("beta", { agentId: "agent-2", runtime: "codex" });
+    const registryPath = seedSessionRegistry("beta");
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-2", clientId: "cli-1", runtimeProvider: "codex" }]), {
+        status: 200,
+      }),
+    );
+
+    await reconcileLocalRuntimeProviders({ serverUrl: "http://first-tree.test", accessToken: "tok", agentsDir });
+
+    // No switch happened, so the live session ids must survive.
+    expect(existsSync(registryPath)).toBe(true);
   });
 
   it("leaves agent.yaml untouched when runtime already matches the server", async () => {

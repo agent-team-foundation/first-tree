@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { agentSessionRegistryPath } from "@first-tree/client";
 import type { ClientCapabilities, RuntimeProvider, SkillDescriptor } from "@first-tree/shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
@@ -75,6 +76,22 @@ export async function reconcileLocalRuntimeProviders(opts: {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       opts.log?.("warn", `agent ${parsed.agentId}: failed to rewrite yaml — ${msg}`);
+      // Yaml unchanged → the slot still starts on the old provider, for which
+      // the persisted session registry is still valid. Leave it alone.
+      continue;
+    }
+    // The provider actually changed on disk. The persisted session registry
+    // holds the OLD provider's native session ids, which the new handler
+    // cannot resume (a Claude session id is meaningless to Codex
+    // `resumeThread` and vice versa). Clear it so every chat cold-starts under
+    // the new provider — the live `agent:pinned` hot-swap path clears the same
+    // file; this covers the offline-rebind path where reconciliation (not a
+    // pin push) applies the switch before the slot first binds.
+    try {
+      rmSync(agentSessionRegistryPath(subdir.name), { force: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      opts.log?.("warn", `agent ${parsed.agentId}: failed to clear session registry after runtime switch — ${msg}`);
     }
   }
 }
