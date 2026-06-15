@@ -47,6 +47,49 @@ export const completeOnboardingSchema = z.object({
 export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
 
 /**
+ * Discriminates *which* kickoff this is for the same (human, agent) pair, so the
+ * idempotency key doesn't conflate distinct intents:
+ *   - "intro" — "meet your agent" with no tree work (admin connected no repo,
+ *     or an invitee launching while the team isn't set up yet).
+ *   - "tree"  — wake the agent to seed/read the team's Context Tree (admin with
+ *     repos, invitee on a ready team, AND the `/build-tree` recovery surface).
+ *
+ * Without this, an admin who first does an "intro" kickoff and later runs
+ * `/build-tree` with the same agent would resolve to the intro chat, and the
+ * send-if-empty guard would skip the tree-seeding bootstrap — the UI completes
+ * but the agent is never woken to build the tree.
+ */
+export const kickoffKindSchema = z.enum(["intro", "tree"]);
+export type KickoffKind = z.infer<typeof kickoffKindSchema>;
+
+/**
+ * Body for `POST /me/onboarding/kickoff` — the idempotent server-side tail of
+ * onboarding. Folds the three previously browser-orchestrated steps (create
+ * the first chat, send the bootstrap message, stamp completion) into one
+ * resumable request: re-running it (a reopened tab, a network retry, the
+ * build-tree recovery surface) reuses the same kickoff chat instead of
+ * creating duplicates, and stamps completion only once the chat exists.
+ *
+ * `agentUuid` is the bootstrap agent the chat is opened with. `bootstrap` is
+ * the first message body. `kind` separates the intro vs tree-building intents
+ * (see `kickoffKindSchema`). `organizationId` scopes the membership whose
+ * completion is stamped (defaults to the caller's default membership).
+ */
+export const kickoffOnboardingSchema = z.object({
+  organizationId: z.string().optional(),
+  agentUuid: z.string().min(1),
+  bootstrap: z.string().min(1),
+  kind: kickoffKindSchema,
+});
+export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
+
+/** Response for `POST /me/onboarding/kickoff` — the (stable) kickoff chat id. */
+export const kickoffOnboardingResultSchema = z.object({
+  chatId: z.string(),
+});
+export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSchema>;
+
+/**
  * Body for `POST /me/onboarding/events`. The web SPA reports key
  * milestones so the server can log them as a single funnel-trackable
  * stream alongside server-emitted events (`team_created`, `dismissed`).

@@ -47,13 +47,21 @@ export type CreateLegacyEmptyWebChatInput = {
   description?: string | null;
 };
 
-type CreateLegacyEmptyAgentChatInput = {
+export type CreateLegacyEmptyAgentChatInput = {
   mode: "legacy-empty-agent";
   creatorAgentId: string;
   participantAgentIds: readonly string[];
   topic?: string | null;
   description?: string | null;
   metadata?: Record<string, unknown>;
+  /**
+   * When set, the chat is created with this idempotency key written to
+   * `chats.onboarding_kickoff_key` and the INSERT becomes
+   * `ON CONFLICT DO NOTHING`: a concurrent caller that already inserted the
+   * row wins, and we return that existing chat instead of a duplicate. Used by
+   * the onboarding kickoff endpoint to make chat creation safe to retry.
+   */
+  onboardingKickoffKey?: string;
 };
 
 export type CreateChatInput = CreateTaskChatInput | CreateLegacyEmptyWebChatInput;
@@ -84,6 +92,7 @@ type AgentIdentityForCreate = {
 
 export async function createChat(db: Database, input: CreateTaskChatInput): Promise<CreateTaskChatResult>;
 export async function createChat(db: Database, input: CreateLegacyEmptyWebChatInput): Promise<LegacyCreateChatResult>;
+export async function createChat(db: Database, input: CreateLegacyEmptyAgentChatInput): Promise<LegacyCreateChatResult>;
 export async function createChat(
   db: Database,
   input: CreateChatInput,
@@ -95,7 +104,7 @@ export async function createChat(
 ): Promise<LegacyCreateChatResult>;
 export async function createChat(
   db: Database,
-  inputOrCreatorId: CreateChatInput | string,
+  inputOrCreatorId: CreateChatInput | CreateLegacyEmptyAgentChatInput | string,
   data?: LegacyCreateChat,
 ): Promise<CreateTaskChatResult | LegacyCreateChatResult> {
   if (typeof inputOrCreatorId === "string") {
@@ -115,6 +124,7 @@ export async function createChat(
     case "task":
       return createTaskChat(db, inputOrCreatorId);
     case "legacy-empty-web":
+    case "legacy-empty-agent":
       return createLegacyEmptyChat(db, inputOrCreatorId);
   }
 }
@@ -190,18 +200,35 @@ async function createLegacyEmptyChat(
     );
   }
 
+  const kickoffKey = input.mode === "legacy-empty-agent" ? (input.onboardingKickoffKey ?? null) : null;
+
   return db.transaction(async (tx) => {
-    const [chat] = await tx
-      .insert(chats)
-      .values({
-        id: chatId,
-        organizationId: orgId,
-        type: "group",
-        topic: input.topic ?? null,
-        description: input.description ?? null,
-        metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
-      })
-      .returning();
+    const values = {
+      id: chatId,
+      organizationId: orgId,
+      type: "group",
+      topic: input.topic ?? null,
+      description: input.description ?? null,
+      onboardingKickoffKey: kickoffKey,
+      metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
+    };
+    // With a kickoff key, the INSERT is idempotent: a concurrent caller that
+    // already created this chat wins, our INSERT no-ops, and we return the
+    // existing row (with its participants) rather than a duplicate.
+    const [chat] = kickoffKey
+      ? await tx.insert(chats).values(values).onConflictDoNothing({ target: chats.onboardingKickoffKey }).returning()
+      : await tx.insert(chats).values(values).returning();
+
+    if (!chat) {
+      if (!kickoffKey) throw new Error("Unexpected: INSERT RETURNING produced no row");
+      const [existing] = await tx.select().from(chats).where(eq(chats.onboardingKickoffKey, kickoffKey)).limit(1);
+      if (!existing) throw new Error("Unexpected: kickoff-key conflict but no existing chat row");
+      const existingParticipants = await tx
+        .select()
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, existing.id), eq(chatMembership.accessMode, "speaker")));
+      return { ...existing, participants: existingParticipants };
+    }
 
     // Mode is derived per-row by `addChatParticipants` from
     // `(chats.type, agents.type)` — `services/participant-mode.ts` is the

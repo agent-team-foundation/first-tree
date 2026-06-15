@@ -9,23 +9,12 @@ export const users = pgTable("users", {
   avatarUrl: text("avatar_url"),
   /** "active" | "suspended" */
   status: text("status").notNull().default("active"),
-  /**
-   * Set when the user clicks `✕` on the onboarding stepper. Decoupled from
-   * `onboardingStep` so the stepper can keep rendering across all three
-   * UI steps (server-side onboardingStep flips to `completed` at the end of
-   * Step 2 — Step 3 is purely client-driven). NULL = stepper renders.
-   * See first-tree-context:agent-hub/onboarding.md (was §8. in source design)
-   */
-  onboardingDismissedAt: timestamp("onboarding_dismissed_at", { withTimezone: true }),
-  /**
-   * Set when the user actually walks Step 3 to success (admin Continue,
-   * invitee Confirm/Continue). Distinct from `onboardingDismissedAt`:
-   * dismissed = "hid the stepper UI" (reversible from Settings → Resume);
-   * completed = "setup is done" — permanently removes the Settings →
-   * Onboarding entry point and the Resume button. `inferOnboardingStep()`
-   * does NOT consult this column; it remains a pure UI-gate.
-   */
-  onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+  // NOTE: the account-level `onboarding_dismissed_at` / `onboarding_completed_at`
+  // columns were retired here — per-membership onboarding state now lives on
+  // `members` (`onboarding_suppressed_at` / `onboarding_suppressed_reason` /
+  // `onboarding_completed_at`). Migration 0062 stopped writing the user-level
+  // columns; nothing has read them since (the `/me` payload sources these from
+  // the membership row), so they are dropped to remove the dead-state foot-gun.
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

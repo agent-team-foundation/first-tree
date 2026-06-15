@@ -81,6 +81,7 @@ const resourceMocks = vi.hoisted(() => ({
 
 const onboardingEventMocks = vi.hoisted(() => ({
   reportOnboardingEvent: vi.fn(),
+  kickoffOnboarding: vi.fn(),
 }));
 
 const meChatMocks = vi.hoisted(() => ({
@@ -684,6 +685,7 @@ beforeEach(() => {
   meChatMocks.createMeChat.mockResolvedValue({ chatId: "chat-created" });
   meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
+  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-onboarding" });
   orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
     repo: "https://github.com/acme/context-tree",
     branch: "main",
@@ -1686,11 +1688,14 @@ describe("web DOM interaction coverage", () => {
     await click(findButton(adminExisting.container, "Start"));
     await waitForText("Starting your agent", adminExisting.container);
     expect(agentApiMocks.listManagedAgents).toHaveBeenCalled();
-    expect(chatApiMocks.createAgentChat).toHaveBeenCalledWith("agent-1");
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith(
-      "chat-onboarding",
-      expect.stringContaining("https://github.com/acme/context-tree"),
-      ["agent-1"],
+    // Chat-create + bootstrap + completion are now one idempotent server call.
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: "org-1",
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("https://github.com/acme/context-tree"),
+        kind: "tree",
+      }),
     );
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
       type: "repo",
@@ -1705,7 +1710,6 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(adminExisting.root);
 
     // Admin · no repo → honestly just "meet your agent" (intro), no provisioning.
-    chatApiMocks.sendChatMessage.mockRejectedValueOnce(new Error("message failed"));
     const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: [],
@@ -1714,7 +1718,9 @@ describe("web DOM interaction coverage", () => {
     });
     await waitForText("No repo connected", adminNoProject.container);
     await click(findButton(adminNoProject.container, "Meet your agent"));
-    expect(chatApiMocks.createAgentChat).toHaveBeenLastCalledWith("agent-1");
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentUuid: "agent-1", kind: "intro" }),
+    );
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
@@ -1744,10 +1750,12 @@ describe("web DOM interaction coverage", () => {
     await click(findButton(inviteeReady.container, "Start working"));
     // Pin the invitee bootstrap (a swap back to buildBindBootstrap would still
     // send a string — assert the joining-teammate voice).
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith(
-      "chat-onboarding",
-      expect.stringContaining("just joined the team"),
-      ["agent-1"],
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("just joined the team"),
+        kind: "tree",
+      }),
     );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
       "tree_chat_started",

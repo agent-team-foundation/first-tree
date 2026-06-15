@@ -2,6 +2,7 @@ import {
   completeOnboardingSchema,
   createOrgFromMeSchema,
   joinByInvitationSchema,
+  kickoffOnboardingSchema,
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
@@ -31,6 +32,8 @@ import {
   listActiveMemberships,
   selfCreateOrganization,
 } from "../services/membership.js";
+import { notifyRecipients } from "../services/notifier.js";
+import { kickoffOnboarding } from "../services/onboarding-kickoff.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
@@ -211,6 +214,33 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.log.info({ event: "onboarding.completed", userId }, "onboarding funnel: setup completed");
     }
     return reply.status(200).send({ ok: true });
+  });
+
+  /**
+   * POST /me/onboarding/kickoff — idempotent server-side tail of onboarding.
+   * Folds the three steps the browser used to orchestrate sequentially (create
+   * the first chat → send the bootstrap message → stamp completion) into one
+   * resumable request. Re-running it (reopened tab, network retry, build-tree
+   * recovery) reuses the same kickoff chat and stamps completion only once,
+   * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
+   * decoupled-from-reality states the client-orchestrated flow could produce.
+   */
+  app.post("/me/onboarding/kickoff", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = kickoffOnboardingSchema.parse(request.body);
+    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const result = await kickoffOnboarding(app.db, {
+      memberId,
+      humanAgentId,
+      targetAgentId: body.agentUuid,
+      bootstrap: body.bootstrap,
+      kind: body.kind,
+    });
+    if (result.sent) {
+      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
+      app.log.info({ event: "onboarding.kickoff", userId, chatId: result.chatId }, "onboarding funnel: kickoff");
+    }
+    return reply.status(200).send({ chatId: result.chatId });
   });
 
   /**
@@ -576,4 +606,25 @@ async function resolveOnboardingMembershipId(
   );
   if (!picked) throw new NotFoundError("No active membership found");
   return picked.id;
+}
+
+/**
+ * Resolve the onboarding membership AND its 1:1 human agent — the kickoff
+ * endpoint needs both: `memberId` to stamp completion and `humanAgentId` to
+ * create the chat / send the bootstrap as the caller. Reuses
+ * `resolveOnboardingMembershipId` for the default-membership selection logic.
+ */
+async function resolveOnboardingMember(
+  app: FastifyInstance,
+  userId: string,
+  organizationId?: string,
+): Promise<{ memberId: string; humanAgentId: string }> {
+  const memberId = await resolveOnboardingMembershipId(app, userId, organizationId);
+  const [row] = await app.db
+    .select({ agentId: members.agentId })
+    .from(members)
+    .where(eq(members.id, memberId))
+    .limit(1);
+  if (!row) throw new NotFoundError("Membership not found");
+  return { memberId, humanAgentId: row.agentId };
 }

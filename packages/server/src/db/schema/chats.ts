@@ -1,5 +1,5 @@
 import { desc } from "drizzle-orm";
-import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";
 
 /** Communication container. All messages between agents flow within a Chat. */
@@ -24,6 +24,18 @@ export const chats = pgTable(
      * conversation list. Do NOT reintroduce nested-chat semantics here.
      */
     parentChatId: text("parent_chat_id"),
+    /**
+     * Idempotency key for the onboarding kickoff chat (`POST /me/onboarding/kickoff`).
+     * Set to `<humanAgentId>:<targetAgentId>` ONLY for the chat created by the
+     * onboarding finale; NULL for every other chat. The unique index below makes
+     * re-running kickoff (reopened tab, retry, build-tree recovery) reuse the one
+     * existing chat via `INSERT ... ON CONFLICT DO NOTHING` instead of creating a
+     * duplicate. Postgres treats multiple NULLs as distinct, so ordinary chats —
+     * including additional chats a user opens with the same agent later — never
+     * collide. Mirrors the 1:1 binding pattern used by
+     * `github_app_installations.hub_organization_id`.
+     */
+    onboardingKickoffKey: text("onboarding_kickoff_key"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     /**
      * Conversation-list projection columns (chat-first workspace).
@@ -35,5 +47,8 @@ export const chats = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("idx_chats_org_last_message").on(table.organizationId, desc(table.lastMessageAt))],
+  (table) => [
+    index("idx_chats_org_last_message").on(table.organizationId, desc(table.lastMessageAt)),
+    uniqueIndex("uq_chats_onboarding_kickoff_key").on(table.onboardingKickoffKey),
+  ],
 );
