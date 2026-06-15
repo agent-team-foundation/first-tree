@@ -254,6 +254,134 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
   });
 });
 
+describe("buildMessageDocumentSnapshots — wide self-fence over the agent home", () => {
+  // The self-fence resolves over the FULL agent home (worktrees, source repos,
+  // agent-home docs), with an optional source-repo `localPath` that promotes a
+  // bare relative mention so an absolute + relative reference to the same repo
+  // doc share one canonical `source.path`. Re-added as refs-model coverage
+  // (these were inline-model tests dropped in #1062's rewrite).
+  let agentHome: string;
+  let agentHomeReal: string;
+  let outside: string;
+
+  beforeAll(async () => {
+    agentHome = await mkdtemp(join(tmpdir(), "doc-snap-home-"));
+    agentHomeReal = await realpath(agentHome);
+    // A single-repo checkout at the agent-home top (`<home>/first-tree`).
+    await mkdir(join(agentHome, "first-tree", "docs"), { recursive: true });
+    await writeFile(join(agentHome, "first-tree", "docs", "intro.md"), "# intro\n", "utf8");
+    // The #1063 layout: source repos under `<home>/source-repos/<name>`.
+    await mkdir(join(agentHome, "source-repos", "first-tree", "docs"), { recursive: true });
+    await writeFile(join(agentHome, "source-repos", "first-tree", "docs", "guide.md"), "# guide\n", "utf8");
+    // A worktree-scoped doc deep under the home.
+    await mkdir(join(agentHome, "worktrees", "task-x", "docs"), { recursive: true });
+    await writeFile(join(agentHome, "worktrees", "task-x", "docs", "design.md"), "# design\n", "utf8");
+    // An agent-home-scoped note (not under any repo).
+    await mkdir(join(agentHome, "docs"), { recursive: true });
+    await writeFile(join(agentHome, "docs", "note.md"), "# note\n", "utf8");
+    // A hidden-segment doc that must stay rejected.
+    await mkdir(join(agentHome, ".agent"), { recursive: true });
+    await writeFile(join(agentHome, ".agent", "secret.md"), "# secret\n", "utf8");
+
+    outside = await mkdtemp(join(tmpdir(), "doc-snap-home-outside-"));
+    await writeFile(join(outside, "external.md"), "# external\n", "utf8");
+  });
+
+  afterAll(async () => {
+    await rm(agentHome, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("captures a worktree-scoped absolute path (wide fence over the full agent home)", async () => {
+    const stub = stubUploader();
+    const abs = join(agentHomeReal, "worktrees", "task-x", "docs", "design.md");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `wrote ${abs} now`,
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("worktrees/task-x/docs/design.md");
+    expect(stub.uploads).toHaveLength(1);
+    expect(rewrittenText).toBe(`wrote [worktrees/task-x/docs/design.md](attachment:${fakeUploadId(1)}) now`);
+  });
+
+  it("promotes a relative source-repo mention so abs + rel share one source.path (singleRepoLocalPath: first-tree)", async () => {
+    const stub = stubUploader();
+    const abs = join(agentHomeReal, "first-tree", "docs", "intro.md");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `abs ${abs} and rel docs/intro.md`,
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+    // Both mentions resolve to the SAME promoted canonical path → one upload,
+    // both rewrites point at the same attachment.
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("first-tree/docs/intro.md");
+    expect(stub.uploads).toHaveLength(1);
+    expect(rewrittenText).toBe(
+      `abs [first-tree/docs/intro.md](attachment:${fakeUploadId(1)}) and rel [first-tree/docs/intro.md](attachment:${fakeUploadId(1)})`,
+    );
+  });
+
+  it("promotes a relative mention under the source-repos/<name> layout (#1063)", async () => {
+    const stub = stubUploader();
+    const abs = join(agentHomeReal, "source-repos", "first-tree", "docs", "guide.md");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `abs ${abs} and rel docs/guide.md`,
+      { agentHome: agentHomeReal, singleRepoLocalPath: "source-repos/first-tree" },
+      opts(stub.uploader),
+    );
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("source-repos/first-tree/docs/guide.md");
+    expect(stub.uploads).toHaveLength(1);
+    expect(rewrittenText).toBe(
+      `abs [source-repos/first-tree/docs/guide.md](attachment:${fakeUploadId(1)}) and rel [source-repos/first-tree/docs/guide.md](attachment:${fakeUploadId(1)})`,
+    );
+  });
+
+  it("captures an agent-home-scoped note (outside any source repo)", async () => {
+    const stub = stubUploader();
+    const abs = join(agentHomeReal, "docs", "note.md");
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      `see ${abs} here`,
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("docs/note.md");
+    expect(stub.uploads).toHaveLength(1);
+    expect(rewrittenText).toBe(`see [docs/note.md](attachment:${fakeUploadId(1)}) here`);
+  });
+
+  it("rejects an absolute path OUTSIDE the agent home — no upload, no rewrite", async () => {
+    const stub = stubUploader();
+    const abs = join(outside, "external.md");
+    const text = `external doc at ${abs} here`;
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots(
+      text,
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+    expect(refs).toEqual([]);
+    expect(stub.uploads).toEqual([]);
+    expect(rewrittenText).toBe(text);
+  });
+
+  it("keeps a hidden-segment mention rejected (.agent/secret.md)", async () => {
+    const stub = stubUploader();
+    const { refs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+      "see .agent/secret.md",
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+    expect(refs).toEqual([]);
+    expect(stub.uploads).toEqual([]);
+    expect(rewrittenText).toBe("see .agent/secret.md");
+    expect(failedMentions).toEqual([{ raw: ".agent/secret.md", reason: "hidden-segment" }]);
+  });
+});
+
 describe("buildMessageDocumentSnapshots — orgId plumbing", () => {
   it("passes the orgId through to every upload", async () => {
     const root = await mkdtemp(join(tmpdir(), "doc-snap-org-"));
