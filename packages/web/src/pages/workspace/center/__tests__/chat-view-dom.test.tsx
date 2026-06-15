@@ -861,6 +861,63 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("enables Send and resolves when an option question is answered with free text (no option picked)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-opt",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [
+              {
+                id: "q1",
+                prompt: "Deploy color?",
+                kind: "single",
+                options: ["Blue-green", "Rolling update"],
+                required: true,
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), dockMessages),
+      "/",
+    );
+
+    await waitForText(container, "Awaiting your answer");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    // No option picked + empty composer → Send disabled.
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(true);
+
+    // Typing a free-text answer (without picking an option) must enable Send —
+    // this was the reported bug.
+    await setValue(textarea, "Neither — let's hold the deploy");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+
+    // ...and sending resolves the question with the free text as the answer.
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected free-text answer send");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "Deploy color? → Neither — let's hold the deploy",
+      ["agent-1"],
+      { inReplyTo: "req-opt", resolves: { request: "req-opt", kind: "answered" } },
+    );
+
+    await act(async () => root.unmount());
+  });
+
   it("does not clear a user-typed @ after an earlier focus auto-prime", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([

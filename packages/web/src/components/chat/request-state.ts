@@ -242,22 +242,24 @@ export function findBlockingRequest(thread: readonly Message[], viewerAgentId: s
 }
 
 /**
- * Whether every REQUIRED question is answered, treating the blocking surface's
- * two answer channels as equals: a single-select question is answered by an
- * option `selection` (keyed by prompt), a free-text question by the composer's
- * `freeText`. Drives the send button's enabled state. Unlike
- * `allRequiredSelected`, a required free-text question CAN be satisfied here —
- * a typed answer now resolves rather than going to the asking agent to judge.
+ * Whether the viewer has answered enough to send, treating the blocking
+ * surface's two answer channels as equals. Free text alone is a complete answer
+ * to the whole request — typing an answer resolves the question even for an
+ * option (single-select) question, so the human is never forced to pick a
+ * listed option. Absent free text, every required question must be answered by
+ * its own option selection. Drives the send button's enabled state.
  */
 export function allRequiredAnswered(
   payload: OpenQuestionRequest,
   selections: Record<string, string>,
   freeText: string,
 ): boolean {
-  const hasFree = freeText.trim().length > 0;
-  return payload.questions.every((q) =>
-    !q.required ? true : q.kind === "single" ? Boolean(selections[q.prompt]) : hasFree,
-  );
+  // Any free text is itself the answer — enable send (it stands in as the
+  // answer for every question via `buildResolveAnswer`).
+  if (freeText.trim().length > 0) return true;
+  // No free text: each required question needs an option pick. A required
+  // free-text question is unsatisfied here, since it has no free text.
+  return payload.questions.every((q) => !q.required || (q.kind === "single" && Boolean(selections[q.prompt])));
 }
 
 /**
@@ -279,15 +281,25 @@ export function buildResolveAnswer(
 ): string {
   const note = freeText.trim();
   const lines = payload.questions
-    .map((q) => ({ q, answer: q.kind === "single" ? (selections[q.prompt] ?? "") : note }))
-    // Drop optional questions the viewer left unanswered — otherwise the
-    // resolving content carries `"<prompt> → —"` placeholder lines that the
-    // resolved card would echo as the "answer". Required questions are always
-    // answered by the send gate, so they always survive.
+    .map((q) => ({
+      q,
+      // An option question is answered by its selection; if none was picked the
+      // free text stands in as the answer (so free-text-only answers an option
+      // question too). A free-text question is answered by the free text.
+      answer: q.kind === "single" ? (selections[q.prompt] ?? note) : note,
+    }))
+    // Drop optional questions the viewer left unanswered through both channels —
+    // otherwise the resolving content carries `"<prompt> → —"` placeholder lines
+    // the resolved card would echo as the "answer". Required questions are
+    // always answered by the send gate, so they survive.
     .filter(({ q, answer }) => q.required || answer.length > 0)
     .map(({ q, answer }) => `${q.prompt} → ${answer || "—"}`);
-  const hasFree = payload.questions.some((q) => q.kind === "free");
-  if (!hasFree && note) lines.push(note);
+  // The note is used as an answer for any question lacking an option selection
+  // (a free-text question, or an option question answered by free text), so only
+  // append it as a standalone trailing note when every question was answered by
+  // its own selection.
+  const noteConsumed = payload.questions.some((q) => !selections[q.prompt]);
+  if (note && !noteConsumed) lines.push(note);
   return lines.join("\n");
 }
 

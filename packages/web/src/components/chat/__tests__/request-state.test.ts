@@ -400,9 +400,12 @@ describe("allRequiredAnswered / buildResolveAnswer (blocking surface — both ch
     allowExtra: false,
   };
 
-  it("a required single needs a selection; free text does not satisfy it", () => {
+  it("free text satisfies a required option question — no option pick needed (the reported bug)", () => {
     expect(allRequiredAnswered(single, {}, "")).toBe(false);
-    expect(allRequiredAnswered(single, {}, "just typing")).toBe(false);
+    // Free text alone enables send for an option question (was incorrectly false).
+    expect(allRequiredAnswered(single, {}, "let's hold off")).toBe(true);
+    expect(buildResolveAnswer(single, {}, "let's hold off")).toBe("Ship? → let's hold off");
+    // An option pick alone still works.
     expect(allRequiredAnswered(single, { "Ship?": "yes" }, "")).toBe(true);
   });
 
@@ -411,9 +414,9 @@ describe("allRequiredAnswered / buildResolveAnswer (blocking surface — both ch
     expect(allRequiredAnswered(withFree, {}, "looks risky")).toBe(true);
   });
 
-  it("a mixed request needs both channels", () => {
+  it("mixed request: free text alone enables send; option-only without free text does not (free question unanswered)", () => {
     expect(allRequiredAnswered(mixed, { "Strategy?": "blue-green" }, "")).toBe(false);
-    expect(allRequiredAnswered(mixed, {}, "some notes")).toBe(false);
+    expect(allRequiredAnswered(mixed, {}, "some notes")).toBe(true);
     expect(allRequiredAnswered(mixed, { "Strategy?": "blue-green" }, "some notes")).toBe(true);
   });
 
