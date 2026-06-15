@@ -8,8 +8,8 @@ boundary matters.
 - **Sync** discovers what changed, fixes **structural** gaps directly,
   and hands off **substantive** gaps to `first-tree-write`.
 - **`first-tree-write`** is given a specific source and turns it into a
-  specific tree update target, then loads `first-tree-context` for the
-  writing rules and "default to not writing" filter.
+  specific tree update target using its own writing rules and
+  "default to not writing" filter.
 
 Sync starts from the tree (Phase 2–3) **and** the code (Phase 4); it
 asks "what disagrees?" and "what isn't registered?". A
@@ -76,5 +76,5 @@ on adjacent drift:
   `decisionLocksCode: true` is set on the node.
 - They both must use `tree verify` before a final commit.
 
-The shared parts let `first-tree-context` own the methodology; sync and
-`first-tree-write` own the _when_ and _what_ of applying it.
+The shared concepts live in `first-tree-context`; sync owns broad drift
+classification, and `first-tree-write` owns source-backed write methodology.

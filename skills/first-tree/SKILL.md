@@ -242,7 +242,7 @@ Once hygiene checks pass, drop into the right sub-skill:
 
 - Talk to another agent / create a task chat / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
 - Read context before acting based on the user's task / path / feature signal → **`first-tree-read`**
-- Write tree updates from a specific source (PR / doc / note) → **`first-tree-write`**, then load **`first-tree-context`** for the writing rules
+- Write tree updates from a specific source (PR / doc / note) → **`first-tree-write`**; it owns the source-backed write workflow and rules
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
 - Workspace appears unbound / cwd is not under a tree → operator action: surface to a human (binding is a web-console flow, not an agent flow)
 

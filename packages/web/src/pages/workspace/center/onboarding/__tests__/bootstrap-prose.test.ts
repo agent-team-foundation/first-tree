@@ -17,7 +17,7 @@ describe("kickoff bootstrap prose", () => {
     // the agent is told the repo is already connected and pointed at reading /
     // reflecting — never at performing a manual bind + PR-back.
     expect(message).toContain("connected");
-    expect(message).toContain("first-tree-context");
+    expect(message).toContain("first-tree-write");
     expect(message).not.toContain("bind the repo to that existing tree");
     expect(message).not.toContain("PR back to the source");
     // A populated team tree must never invoke the one-shot seed skill.
@@ -37,7 +37,7 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("- https://github.com/acme/api");
     expect(message).toContain("Existing tree: https://github.com/acme/context");
     expect(message).toContain("connected");
-    expect(message).toContain("first-tree-context");
+    expect(message).toContain("first-tree-write");
     expect(message).not.toContain("bind every repo to that existing tree");
   });
 

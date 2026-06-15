@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { casePassed, deriveMetrics, withAccidentalWriteHit } from "../metrics.js";
 import type { EvalMetrics, FixtureValidation } from "../types.js";
 
 const TARGET_PATH = "systems/server/auth/jwt";
+const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const HELP_ARGV = ["tree", "tree", "--help"];
 const TREE_TREE_ARGV = ["tree", "tree"];
 const TARGET_TREE_ARGV = ["tree", "tree", "systems/server/auth"];
@@ -60,6 +64,15 @@ function metrics(events: readonly unknown[]): EvalMetrics {
 }
 
 describe("first-tree-write metrics pass criteria", () => {
+  it("keeps the write skill self-contained instead of mandating first-tree-context loads", () => {
+    const skillPath = resolve(CURRENT_DIR, "../../../../../skills/first-tree-write/SKILL.md");
+    const skillText = readFileSync(skillPath, "utf8");
+
+    expect(skillText).not.toContain("skills/first-tree-context/SKILL.md");
+    expect(skillText).not.toContain("../first-tree-context/SKILL.md");
+    expect(skillText).not.toMatch(/\bload\s+(?:and\s+apply\s+)?`?first-tree-context`?/iu);
+  });
+
   it("passes trigger cases only when write skill is loaded, tree tree is called, target is observed, and commands succeed", () => {
     const result = metrics([
       skillReadEvent("first-tree-write"),
@@ -149,5 +162,16 @@ describe("first-tree-write metrics pass criteria", () => {
 
     expect(casePassed(true, readOnlyResult, { allowReadSkillTreeLookupOnNonTrigger: true })).toBe(false);
     expect(casePassed(true, writeResult, { allowReadSkillTreeLookupOnNonTrigger: true })).toBe(true);
+  });
+
+  it("does not require context skill reads for write-trigger success", () => {
+    const result = metrics([
+      skillReadEvent("first-tree-write"),
+      firstTreeCall(TREE_TREE_ARGV),
+      firstTreeResult(TREE_TREE_ARGV, 0, `context-tree/\n└── ${TARGET_PATH}/ [Systems Server Auth Jwt]`),
+      assistantTextEvent(`Planned write target: ${TARGET_PATH}`),
+    ]);
+
+    expect(casePassed(true, result, { allowReadSkillTreeLookupOnNonTrigger: false })).toBe(true);
   });
 });

@@ -61,7 +61,7 @@ ownership-stale              — owners list no longer matches reality
 
 `code-not-synced` has two subtypes because the fix shape is different:
 structural gaps need registration (sync handles), substantive gaps need
-authorship (`first-tree-write` handles, using `first-tree-context` rules). See
+authorship (`first-tree-write` handles with its source-backed write rules). See
 `references/drift-taxonomy.md`.
 
 Definitions, signals, and worked examples in
@@ -118,8 +118,8 @@ and tree manually; the fix phase opens PRs via `gh`.
     node or registry entry.
   - **substantive** — new decision / constraint / rationale (e.g. a new
     AGENTS.md section, a merged RFC). Sync surfaces the source pointer
-    and hands off to `first-tree-write`, which loads `first-tree-context`
-    and applies the "default to not writing" filter.
+    and hands off to `first-tree-write`, which applies its source gate,
+    Double Test, and default-to-not-writing filter.
 
   Sync never composes decision prose from code. "The tree could say more"
   about an existing topic is not drift — that is `first-tree-write`'s job.

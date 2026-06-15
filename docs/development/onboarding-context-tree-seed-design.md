@@ -154,7 +154,7 @@ add agent-driven repo creation.
   - *Bind / existing-tree* (`buildBindBootstrap`, O1): the W1 binding
     (`workspace.json`) is now written automatically by the runtime, so the agent
     no longer "binds the repo + opens a PR back to source." Its task reduces to
-    *read the tree (`first-tree-context`) and, if warranted, reflect the new
+    *read the tree and, if warranted, use `first-tree-write` to reflect the new
     source into it.* Remove the manual-bind framing and the non-existent
     "first-tree onboarding skill" name.
   - 409 from `initialize` (tree already exists) is treated as success (O4);

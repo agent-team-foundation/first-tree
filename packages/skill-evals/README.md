@@ -53,6 +53,8 @@ runs `codex exec --json` with a shimmed `first-tree` binary.
 Expected trigger-case evidence:
 
 - `first-tree-write/SKILL.md` was loaded from the workspace skill install.
+- `first-tree-context/SKILL.md` is not required for write-trigger success;
+  `first-tree-write` is self-contained for source-backed write rules.
 - `first-tree tree tree` succeeded during the model phase.
 - The expected target path, currently `systems/server/auth/jwt`, appeared in a
   tree listing or in the model's stated planned target after a successful tree

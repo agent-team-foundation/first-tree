@@ -28,7 +28,6 @@ export type EvalMetrics = BaseEvalMetrics & {
     argv: readonly string[];
     exitCode: number;
   }[];
-  contextSkillFileReadObserved: boolean;
   readSkillFileReadObserved: boolean;
   readSkillHit: boolean;
   targetMentionedInOutput: boolean;

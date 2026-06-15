@@ -5,7 +5,6 @@ import type { EvalMetrics, FixtureValidation } from "./types.js";
 
 const WRITE_SKILL_PATH = "first-tree-write/SKILL.md";
 const READ_SKILL_PATH = "first-tree-read/SKILL.md";
-const CONTEXT_SKILL_PATH = "first-tree-context/SKILL.md";
 
 const WRITE_INTENT_PATTERNS = [
   /\bwrite\b/iu,
@@ -49,7 +48,7 @@ export function deriveMetrics(
   expectedTargetPath: string,
 ): EvalMetrics {
   const base = deriveBaseMetrics(events, fixtureValidation, {
-    observedSkillPaths: [WRITE_SKILL_PATH, READ_SKILL_PATH, CONTEXT_SKILL_PATH],
+    observedSkillPaths: [WRITE_SKILL_PATH, READ_SKILL_PATH],
     runnerExitCode,
   });
   const writeSkillFileReadObserved = base.observedSkillReads.some(
@@ -57,9 +56,6 @@ export function deriveMetrics(
   );
   const readSkillFileReadObserved = base.observedSkillReads.some(
     (read) => read.skillPath === READ_SKILL_PATH && read.observed,
-  );
-  const contextSkillFileReadObserved = base.observedSkillReads.some(
-    (read) => read.skillPath === CONTEXT_SKILL_PATH && read.observed,
   );
   const treeTreeCalls = base.firstTreeArgv.filter(isTreeListingArgv).length;
   const treeTreeSucceeded = base.firstTreeCommandResults.some(
@@ -84,7 +80,6 @@ export function deriveMetrics(
   return {
     accidentalWriteHit: false,
     commandFailuresDuringModel,
-    contextSkillFileReadObserved,
     firstTreeArgv: base.firstTreeArgv,
     firstTreeCalls: base.firstTreeCalls,
     firstTreeCommandResults: base.firstTreeCommandResults,

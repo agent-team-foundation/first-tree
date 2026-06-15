@@ -6,9 +6,9 @@ description: Operational workflow for source-backed Context Tree writes. Use onl
 # First Tree Write
 
 This skill owns the operational path from a concrete source artifact to the
-right Context Tree target. It does not replace `first-tree-context`; load
-`skills/first-tree-context/SKILL.md` before drafting and apply its writing
-rules as the source of truth.
+right Context Tree target. It is self-contained for source-backed writes:
+target selection, source filtering, drafting rules, ownership gates, and
+verification all live here.
 
 ## Source Gate
 
@@ -41,7 +41,7 @@ general preference, or an unsourced summary.
      node whenever the source can be captured there without mixing unrelated
      decisions.
    - Create a new leaf only when the source has a distinct identity, anchor,
-     and owner/linkability boundary under the rules in `first-tree-context`.
+     and owner/linkability boundary.
    - Do not create a new top-level domain without explicit human tree-owner
      approval.
 
@@ -59,19 +59,95 @@ general preference, or an unsourced summary.
    - Read ownership-adjacent `members/<id>/NODE.md` files when ownership or
      review scope affects the write.
 
-6. Load and apply `first-tree-context`.
-   - Read `skills/first-tree-context/SKILL.md`.
-   - Apply the Double Test, smallest-correct-edit rule, source-system boundary,
-     no code-detail rule, no history narrative rule, no PR-reference rule, and
-     human gate for ownership changes.
+6. Apply the write rules in this skill.
    - Capture durable decisions, constraints, rationale, ownership, and
-     cross-domain relationships only. Leave implementation detail in source.
+     cross-domain relationships only.
+   - Leave implementation details, diffs, request shapes, constants, test
+     fixtures, and local refactor mechanics in the source repo.
+   - If the source does not pass the Double Test below, write nothing and
+     explain why.
 
 7. Edit and verify.
    - Keep the edit narrowly scoped to the chosen node or new leaf plus required
      parent index changes.
    - Run `first-tree tree verify` from the context repo before committing.
    - Non-zero verify output blocks the commit; fix the tree structure first.
+
+## Write Rules
+
+### Source-System Boundary
+
+The tree is not a second source repo or implementation wiki. If a fact would
+rot when the next refactor lands, keep it in the source system.
+
+Write only durable material:
+
+- decisions and current constraints a future agent must respect
+- rationale that would not be obvious from the source diff alone
+- ownership or review-path facts, when a human owner approves the change
+- cross-domain relationships between tree topics
+
+Do not write:
+
+- function signatures, class names, request / response shapes, retry constants,
+  feature flags, tests, fixtures, snapshots, or build settings
+- step-by-step implementation walkthroughs
+- bug fixes or refactors that do not change a public contract or durable
+  decision
+- source PR / issue / commit references inside node bodies
+
+### Double Test
+
+Before drafting, apply both questions to every candidate fact in the source:
+
+1. **Decision question.** Does this source establish or change something a
+   future agent must respect when making cross-domain choices?
+2. **Durability question.** If the underlying PR, commit, or note were
+   rewritten, would the decision still stand?
+
+Write the candidate only when both answers are yes. If either answer is no,
+leave it in the source repo and report the skipped write.
+
+### Smallest Correct Edit
+
+Default to editing an existing node. Add a new leaf only when the source cannot
+fit an existing node without mixing unrelated decisions and the new leaf has a
+clear identity, anchor, owner boundary, and linkability boundary.
+
+Do not add a new directory or top-level domain as part of a routine write
+unless a human tree owner explicitly approves the structural change.
+
+### Current-State Prose
+
+Write present-tense claims: what is true now and why it matters.
+
+Do not append history narrative, update banners, "previously / originally"
+paragraphs, "since <date>" status notes, or superseded-by footers. Past states
+belong in `git log` and source history. When a decision changes, rewrite the
+node in place so it states the new current truth.
+
+### No PR References In Nodes
+
+The triggering source proves that the write is grounded, but node bodies should
+not cite delivery artifacts. Do not add `## Source` sections, `Shipped in #123`
+notes, inline PR / issue / commit citations, or source-link footers.
+
+The audit trail for which source changed the tree lives in git history and PR
+descriptions, not in durable node prose.
+
+### Ownership And `decisionLocksCode`
+
+Do not unilaterally edit `owners`. Ownership changes require explicit human
+approval from the relevant tree owner or listed owner.
+
+`decisionLocksCode: true` reverses the usual drift default: the tree wins over
+the code, and code drift should escalate to a human. Set or remove this flag
+only on explicit human instruction.
+
+### Verification Gate
+
+Run `first-tree tree verify` from the context repo before committing. Non-zero
+output blocks the commit.
 
 ## Output Expectations
 

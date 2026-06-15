@@ -18,7 +18,7 @@ per finding, whether to:
 | `tree-wrong`                  | auto-fix when the correction is small; needs-human if rationale changes                                   | Always link the offending PR / commit so reviewers see the source of truth.                                         |
 | `tree-outdated`               | needs-human                                                                                               | Superseding decisions cross domains; require an owner.                                                              |
 | `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md routing entries, `workspace.json.sources` additions, org.yaml dep registration, member stubs. |
-| `code-not-synced/substantive` | context-handoff (always)                                                                                  | Sync surfaces the source pointer and stops. Substantive content goes through `first-tree-write`, which loads `first-tree-context`'s "default to not writing" filter. |
+| `code-not-synced/substantive` | context-handoff (always)                                                                                  | Sync surfaces the source pointer and stops. Substantive content goes through `first-tree-write`, which owns the source gate and "default to not writing" filter. |
 | `cross-domain-broken`         | auto-fix when the new target is unambiguous; needs-human when the link could go to multiple replacements. |
 | `ownership-stale`             | needs-human always                                                                                        | Ownership changes are high-trust and require a person.                                                              |
 
@@ -106,7 +106,7 @@ source PR to reflect, you can also hand off — same shape.
 
 Sync's job ends when each drift is classified and routed.
 `first-tree-write` turns one specific source into one tree update target
-and uses `first-tree-context` for the writing rules.
+and applies its own writing rules.
 See `references/boundary.md`.
 
 ## What This Workflow Does NOT Do

@@ -3,7 +3,7 @@ name: first-tree-context
 version: 0.8.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree concept and writing-principles guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, Double Test, Node Shape, and hard rules for durable tree content. Use `first-tree-read` for task-scoped tree reads before acting. For source-backed write / update / reflect / capture requests, use `first-tree-write` first, then load this skill for writing rules.
+description: Context Tree concept and writing-principles guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, Double Test, Node Shape, and hard rules for durable tree content. Use `first-tree-read` for task-scoped tree reads before acting. For source-backed write / update / reflect / capture requests, use `first-tree-write`; it owns the operational workflow and write rules.
 ---
 
 # First Tree — Context
@@ -15,9 +15,9 @@ the judgment guidelines that turn source material into correct edits.
 
 Use `first-tree-read` for task-scoped tree reads before acting. Use
 `first-tree-write` for the operational workflow of taking a specific
-source artifact to a chosen tree target. This skill explains the
-source-system boundary and the read discipline needed before writing; it
-does not own the operational reader or write-targeting workflow.
+source artifact to a chosen tree target, including the write rules for
+that workflow. This skill remains the concept and reference guide; it is
+not a mandatory dependency for source-backed write tasks.
 
 ## What A Context Tree Is
 

@@ -73,7 +73,7 @@ export type BuildAgentBriefingOptions = {
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · GitHub Entity Attention ·
  *        Asking Humans · Chat Topic & Description · CLI Overview
- *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
+ *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree`
  *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
  *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
@@ -111,10 +111,10 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // `# Required Reading` — sits AFTER `# Working in First Tree` so the
   // agent first reads the inline workspace-collab basics (chat send,
   // working directory, communication contract) it needs to operate at
-  // all, then hits the hard mandate to load `first-tree` and
-  // `first-tree-context` before doing any real work. Placing it
+  // all, then hits the hard mandate to load `first-tree` before
+  // doing any real work. Placing it
   // immediately before `# Context Tree` also keeps the mandate adjacent
-  // to the content domains the two skills cover. Gated on
+  // to the context-management routing it introduces. Gated on
   // `contextTreePath !== null` for the same reason `skillsSection`
   // gates `firstTreeFamilyMap`: a tree-less agent has no First Tree
   // skill payloads installed on disk (`installFirstTreeIntegration`
@@ -258,10 +258,9 @@ prompt.*`,
 // --- # Required Reading -----------------------------------------------------
 
 /**
- * Hard mandate that the agent load `first-tree` and `first-tree-context`
- * before doing any non-trivial work, regardless of whether the user
- * mentioned chat / context keywords that would otherwise trigger
- * progressive disclosure.
+ * Hard mandate that the agent load `first-tree` before doing any
+ * non-trivial work, regardless of whether the user mentioned chat /
+ * context keywords that would otherwise trigger progressive disclosure.
  *
  * Rationale: the inline briefing is a routing index, not a substitute. The
  * skill payloads carry rules that are NOT duplicated here:
@@ -272,14 +271,8 @@ prompt.*`,
  *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
  *    and the mandatory pre-task hygiene (workspace binding check /
  *    tree HEAD freshness / role-fork).
- *  - `first-tree-context` ships the Context Tree concept model, the
- *    Source-System Boundary, the authorship read-discipline, the Hard
- *    Rules 1-7 (default to not writing / read before write / smallest
- *    correct edit / no diffs / verify gate / ownership through humans /
- *    `decisionLocksCode`), the Double Test, Node Shape, and the
- *    Worked Examples.
  *
- * Both are gated on `contextTreePath !== null` because the runtime only
+ * This section is gated on `contextTreePath !== null` because the runtime only
  * installs the SKILL.md payloads to disk when a Context Tree is bound
  * (see `runtime/first-tree-skills/installer.ts` and the short-circuit in
  * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
@@ -288,15 +281,14 @@ prompt.*`,
 function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
   const firstTreeSkillPath = `${workspacePath}/.agents/skills/first-tree/SKILL.md`;
-  const contextSkillPath = `${workspacePath}/.agents/skills/first-tree-context/SKILL.md`;
   return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
-load both skills below — loading them **is** the first step of the
+load the skill below — loading it **is** the first step of the
 pre-task hygiene the \`first-tree\` skill itself describes. The
 \`# Working in First Tree\` section above carries the minimum
 mechanics you need to operate at all (chat send, working directory,
-CLI surface); the skills below carry the durable rules in full, with
+CLI surface); the skill below carries the durable rules in full, with
 the inline briefing only summarising the slices needed for those
 workspace-collab basics.
 
@@ -305,25 +297,21 @@ workspace-collab basics.
    the Hosting-Daemon mental model (and its do-not-stop-yourself
    invariant), the CLI Namespace Map, and the mandatory pre-task
    hygiene (workspace binding check / tree HEAD freshness / role-fork).
-2. **\`first-tree-context\`** — what a Context Tree is, the
-   source-system boundary, authorship read-discipline, and the Hard
-   Rules + Double Test that govern every tree write.
 
 If your runtime does not automatically inject the full skill body after
 selecting a skill from the skill listing, read the local payload files
 directly before acting:
 
 - \`${firstTreeSkillPath}\`
-- \`${contextSkillPath}\`
 
-These two are unconditional. The remaining First Tree skills
-(\`first-tree-read\`, \`first-tree-write\`, \`first-tree-sync\`) load on
+This skill is unconditional. The remaining First Tree skills
+(\`first-tree-context\`, \`first-tree-read\`, \`first-tree-write\`,
+\`first-tree-sync\`) load on
 demand based on the task signal as listed in the First Tree Family map below.
 
-Skipping either skill costs you the daemon-lifecycle invariants, the
-full Communication Principles, the source-system boundary, and the
-write-side Hard Rules + Double Test — content the inline briefing
-either omits or only summarises. Acting without them is the #1
+Skipping this skill costs you the daemon-lifecycle invariants, the
+full Communication Principles, and the pre-task hygiene — content the
+inline briefing either omits or only summarises. Acting without it is the #1
 source of advice that conflicts with reality.`;
 }
 
@@ -952,7 +940,7 @@ guidance:
 
 | Task | Skill |
 |---|---|
-| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` (targeting workflow), then \`first-tree-context\` (writing rules) |
+| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` (source-backed workflow and write rules) |
 | Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
 
 Do not invent ad-hoc tree edits without loading the skill — the
@@ -1054,9 +1042,9 @@ function firstTreeFamilyMap(): string {
   // list against the prebuild copy script.
   return `## First Tree Family
 
-\`first-tree\` and \`first-tree-context\` are **unconditional** — load
-them on every task per \`# Required Reading\` above. The remaining
-rows load on demand: each skill's \`description\` field drives
+\`first-tree\` is **unconditional** — load it on every task per
+\`# Required Reading\` above. The remaining rows load on demand: each
+skill's \`description\` field drives
 progressive disclosure when you mention its domain. For general /
 harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 …) trust the auto-injected list.
@@ -1064,7 +1052,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | Skill | Load when |
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and writing principles |
+| \`first-tree-context\` | Context Tree concept/reference questions — concept model, source-system boundary, node anatomy, and durable-content principles |
 | \`first-tree-write\`   | source-backed Context Tree writes from a concrete PR / doc / note / pasted source |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |

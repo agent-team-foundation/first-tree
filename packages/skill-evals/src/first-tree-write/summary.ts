@@ -72,7 +72,6 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - installedSkillSet: ${summary.installedSkillSet}
 - writeSkillFileReadObserved: ${markdownBool(summary.metrics.writeSkillFileReadObserved)}
 - readSkillFileReadObserved: ${markdownBool(summary.metrics.readSkillFileReadObserved)}
-- contextSkillFileReadObserved: ${markdownBool(summary.metrics.contextSkillFileReadObserved)}
 - treeTreeSucceeded: ${markdownBool(summary.metrics.treeTreeSucceeded)}
 - targetPathObserved: ${markdownBool(summary.metrics.targetPathObserved)}
 - targetObservedInTreeListing: ${markdownBool(summary.metrics.targetObservedInTreeListing)}

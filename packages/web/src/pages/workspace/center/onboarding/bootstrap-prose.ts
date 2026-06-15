@@ -2,7 +2,7 @@
  * The two kickoff bootstrap messages the onboarding "Your Context Tree" step
  * sends to a freshly-created agent, chosen by the user's "new vs existing tree"
  * choice. Prose, not shell recipes: the agent's workspace has the shipped
- * First Tree skills (`first-tree`, `first-tree-context`, `first-tree-sync`,
+ * First Tree skills (`first-tree`, `first-tree-write`, `first-tree-sync`,
  * `first-tree-seed`), and those skills own the concrete flow. These messages
  * only state the goal + the source repos (and, for the existing path, the
  * tree URL) and defer the mechanics, so they don't drift as the CLI / skills
@@ -20,7 +20,8 @@
  *     populated, and the binding (workspace.json) is written automatically by
  *     the runtime — so the agent is NOT asked to bind or open a PR back to the
  *     source. `first-tree-seed` does not apply to a populated tree; the agent
- *     reads the tree and uses `first-tree-context` for any further writes. Sent
+ *     reads the tree and uses `first-tree-write` for any further source-backed
+ *     writes. Sent
  *     for the admin who just connected repos to an already-existing team tree.
  *   - new tree (buildCreateBootstrap): Cloud has already created the empty tree
  *     repo, written `context_tree`, and (on this session) the runtime writes
@@ -56,8 +57,8 @@ export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: strin
     ? "My source repo is now connected to our team's existing Context Tree."
     : "My source repos are now connected to our team's existing Context Tree.";
   const skillLine = single
-    ? "Read the tree first to get oriented — start at its root NODE.md. If this repo introduces decisions, ownership, or context worth recording, use the first-tree-context skill to reflect them into the tree — show me the diff and walk me through any PR before it's pushed."
-    : "Read the tree first to get oriented — start at its root NODE.md. If these repos introduce decisions, ownership, or context worth recording, use the first-tree-context skill to reflect them into the tree — show me the diffs and walk me through any PRs before they're pushed.";
+    ? "Read the tree first to get oriented — start at its root NODE.md. If this repo introduces decisions, ownership, or context worth recording, use the first-tree-write skill to reflect them into the tree — show me the diff and walk me through any PR before it's pushed."
+    : "Read the tree first to get oriented — start at its root NODE.md. If these repos introduce decisions, ownership, or context worth recording, use the first-tree-write skill to reflect them into the tree — show me the diffs and walk me through any PRs before they're pushed.";
   return [
     opener,
     "",
