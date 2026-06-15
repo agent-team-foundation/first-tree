@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { fail, success } from "../../cli/output.js";
-import { createSdk, handleSdkError } from "../_shared/local-agent.js";
+import { fail } from "../../cli/output.js";
+import { applyChatUpdate } from "./update.js";
 
 type Options = {
   chat?: string;
@@ -12,19 +12,22 @@ type Options = {
 
 function describe(): string {
   return (
-    "Set or clear a chat's topic and/or description. The topic is the short " +
-    "display label the workspace chat list shows; the description is a longer " +
-    "running summary of the work and its current state, surfaced to the agent " +
-    "each turn and used to locate the chat via `chat list`. By default acts on " +
-    "the caller's current chat (FIRST_TREE_CHAT_ID); use --chat <id> to target " +
-    "another. Owner-gated: the chat's creator may set topic or description, and " +
-    "when no agent owner is present (human-created chats, or the creator left) " +
-    "every worker agent counts as the owner; a non-owner agent in a chat whose " +
-    "agent creator is still present is refused."
+    "[DEPRECATED — use `chat update`] Set or clear a chat's topic and/or " +
+    "description. The topic is the short display label the workspace chat list " +
+    "shows; the description is the chat's work summary + status report, surfaced " +
+    "to the agent each turn and used to locate the chat via `chat list`. By " +
+    "default acts on the caller's current chat (FIRST_TREE_CHAT_ID); use --chat " +
+    "<id> to target another. Owner-gated: the chat's creator may set topic or " +
+    "description, and when no agent owner is present (human-created chats, or the " +
+    "creator left) every worker agent counts as the owner; a non-owner agent in " +
+    "a chat whose agent creator is still present is refused."
   );
 }
 
 async function run(topicArg: string | undefined, options: Options): Promise<void> {
+  // Deprecation notice on stderr so JSON stdout (success payload) stays clean.
+  console.error("warning: `chat set-topic` is deprecated; use `chat update` instead.");
+
   const chatId = options.chat ?? process.env.FIRST_TREE_CHAT_ID;
   if (!chatId) {
     fail(
@@ -71,18 +74,12 @@ async function run(topicArg: string | undefined, options: Options): Promise<void
     body.description = trimmed;
   }
 
-  try {
-    const sdk = createSdk(options.agent);
-    const updated = await sdk.updateChat(chatId, body);
-    success(updated);
-  } catch (error) {
-    handleSdkError(error);
-  }
+  await applyChatUpdate(chatId, body, options.agent);
 }
 
 export function registerChatSetTopicCommand(chat: Command): void {
   chat
-    .command("set-topic [topic]")
+    .command("set-topic [topic]", { hidden: true })
     .alias("rename")
     .description(describe())
     .option("--chat <chatId>", "Target chat id (default: FIRST_TREE_CHAT_ID)")

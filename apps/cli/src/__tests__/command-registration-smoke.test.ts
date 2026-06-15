@@ -78,7 +78,16 @@ describe("CLI command registration", () => {
       "status",
       "workspace",
     ]);
-    expect(subcommands(root, "chat")).toEqual(["create", "history", "invite", "list", "open", "send", "set-topic"]);
+    expect(subcommands(root, "chat")).toEqual([
+      "create",
+      "history",
+      "invite",
+      "list",
+      "open",
+      "send",
+      "set-topic",
+      "update",
+    ]);
     expect(subcommands(root, "daemon")).toEqual([
       "doctor",
       "home-info",

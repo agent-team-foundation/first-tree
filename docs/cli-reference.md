@@ -265,10 +265,11 @@ first-tree chat
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
-├── set-topic [topic]                                # set/clear topic + description (chat self-description)
-│     --clear                                        #   clear the topic (falls back to auto-derived title)
-│     --description <text> / --clear-description     #   set/clear the running work-state summary
+├── update                                           # update topic and/or description (each independently)
+│     --topic <text> / --clear-topic                 #   set/clear the short display label
+│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown)
 │     --chat <chatId> / --agent <name>               #   target another chat / the named agent
+├── set-topic [topic]                                # [DEPRECATED — use `update`] hidden alias
 └── open <agent-name>                                # interactive REPL
 ```
 
@@ -340,17 +341,21 @@ first-tree chat send code-agent "now we can talk"
 first-tree chat list
 first-tree chat history <chatId>
 
-# Self-description: a short topic label + a longer running work summary,
-# both set through set-topic. Agents read descriptions via `chat list` to
-# self-locate across threads (see the agent briefing's "Chat Topic & Description").
-# Owner-gated: the chat's creator may set topic/description, and when no agent
-# owner is present (human-created chats — Web / GitHub-sourced — or the creator
-# left) every worker agent counts as the owner; a non-owner agent in a chat
-# whose agent creator is still present is refused with 403.
-first-tree chat set-topic "review PR #916"
-first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
-first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"
-first-tree chat set-topic --clear-description
+# Self-description: a short topic label + a work summary + status report,
+# updated independently through `chat update` (topic and description each on
+# their own). The description carries task background + plan + progress, renders
+# as Markdown, and shows at the top of the chat's right sidebar; agents also read
+# it via `chat list` to self-locate (see the agent briefing's "Chat Topic &
+# Description"). Keep blockers / decisions OUT of it — raise `chat send <human>
+# --request` for those. Owner-gated: the chat's creator may update it, and when
+# no agent owner is present (human-created chats — Web / GitHub-sourced — or the
+# creator left) every worker agent counts as the owner; a non-owner agent in a
+# chat whose agent creator is still present is refused with 403.
+first-tree chat update --topic "review PR #916"
+first-tree chat update --description "Reviewing PR #916. **Plan:** address review findings, re-verify. **Progress:** 2/3 findings fixed."
+first-tree chat update --topic "ship plan" --description "Drafting; next: hand to QA."
+first-tree chat update --clear-description
+# `chat set-topic` still works as a deprecated alias.
 
 # Interactive
 first-tree chat open code-agent

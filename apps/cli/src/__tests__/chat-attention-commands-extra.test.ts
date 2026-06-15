@@ -408,6 +408,50 @@ describe("chat command behavior", () => {
     await expect(runChat(["set-topic"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
   });
 
+  it("updates topic and description independently via `chat update`", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["update", "--topic", "  Launch plan  ", "--chat", "chat-1", "--agent", "nova"]);
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("nova");
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { topic: "Launch plan" });
+
+    await runChat(["update", "--clear-topic"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", { topic: null });
+
+    await runChat(["update", "--description", "  reviewing PR #42  ", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "reviewing PR #42" });
+
+    await runChat(["update", "--clear-description"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", { description: null });
+
+    await runChat(["update", "--topic", "Launch plan", "--description", "drafting steps"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", {
+      topic: "Launch plan",
+      description: "drafting steps",
+    });
+
+    await expect(runChat(["update", "--topic", "x", "--clear-topic"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["update", "--description", "x", "--clear-description"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["update", "--topic", "   "])).rejects.toMatchObject({ code: "EMPTY_TOPIC", exitCode: 2 });
+    await expect(runChat(["update", "--description", "   "])).rejects.toMatchObject({
+      code: "EMPTY_DESCRIPTION",
+      exitCode: 2,
+    });
+    await expect(runChat(["update"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
+
+    delete process.env.FIRST_TREE_CHAT_ID;
+    await expect(runChat(["update", "--topic", "Launch"])).rejects.toMatchObject({
+      code: "NO_CHAT_CONTEXT",
+      exitCode: 2,
+    });
+  });
+
   it("opens an interactive chat, polls, sends input, handles send failures, and closes cleanly", async () => {
     const emitter = new EventEmitter() as EventEmitter & { prompt: () => void };
     emitter.prompt = vi.fn();

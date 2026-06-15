@@ -1095,6 +1095,7 @@ describe("page SSR smoke coverage", () => {
       renderPage(
         <ChatRightSidebar
           chatId="chat-1"
+          description={null}
           participants={CHAT_PARTICIPANTS}
           participantsLoading={false}
           managedByMe={new Map([["agent-1", true]])}
