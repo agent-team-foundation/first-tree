@@ -21,7 +21,8 @@ import { type AttachmentRef, documentContextSchema } from "@first-tree/shared";
  * exact same fence as the runtime — no config reconstruction. Uploads need an
  * org: it is resolved from the target chat (`getChatDetail`), so capture only
  * runs when a `chatId` is supplied (i.e. `chat send`; `chat create` has no chat
- * yet, so its initial message degrades doc mentions to plain text).
+ * yet, so its initial message degrades doc mentions to plain text — KNOWN GAP,
+ * out of scope for this PR, tracked as follow-up #1069).
  *
  * Returns the (possibly rewritten) content + the metadata to merge (an
  * `attachments` array and/or a `documentContext` failedMentions roster). When

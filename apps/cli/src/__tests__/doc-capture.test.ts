@@ -57,7 +57,11 @@ describe("captureOutboundDocs (chat send L3 capture)", () => {
     expect(out.attachments).toBeUndefined();
   });
 
-  it("pass-through when no chatId is supplied (org unresolvable, e.g. chat create)", async () => {
+  // KNOWN GAP (tracked in #1069), not an endorsed final behavior: `chat create`'s
+  // initial message can't resolve an upload org without a chatId, so doc capture is
+  // a pass-through there and mentions degrade to plain text. `chat send` captures
+  // normally. Closing this gap (org resolution without a chatId) is follow-up #1069.
+  it("pass-through when no chatId is supplied (org unresolvable, e.g. chat create — see #1069)", async () => {
     const { sdk } = stubSdk();
     const out = await captureOutboundDocs("see design.md please", { sdk }, { FIRST_TREE_DOC_BASE: base });
     expect(out.content).toBe("see design.md please");
