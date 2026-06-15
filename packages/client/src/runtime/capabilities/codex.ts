@@ -1,9 +1,14 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry, CapabilityRuntimeSource } from "@first-tree/shared";
-import { findCodexExecutableOnPath, formatCodexBinaryMissingMessage, verifyCodexExecutable } from "../codex-binary.js";
+import {
+  type CodexExecutableVerification,
+  findCodexExecutableOnPath,
+  formatCodexBinaryMissingMessage,
+  verifyCodexExecutable,
+} from "../codex-binary.js";
 import {
   type AuthPrecheckOutcome,
   commandFailureDigest,
@@ -68,11 +73,41 @@ function locateCodexSdkAnchor(): string {
   throw new Error("not found in any parent node_modules");
 }
 
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replicate the codex-sdk's own `resolveNativePackage` EXACTLY (dist/index.js):
+ * the modern layout is used only when BOTH `bin/<codex>` and the
+ * `codex-package.json` marker are present; otherwise the legacy
+ * `codex/<codex>` layout. Returns null when neither resolves — which is
+ * precisely when `new Codex()` throws "Unable to locate Codex CLI binaries"
+ * and the handler falls back to a system PATH codex.
+ *
+ * Matching the marker check (not just `existsSync(bin/codex)`) keeps the probe
+ * and the runtime on one binary-resolution contract: a partial install with
+ * the binary present but the marker missing is NOT reported as bundled,
+ * because the SDK would not spawn it either.
+ */
+export function resolveBundledBinaryInPackageRoot(packageRoot: string): string | null {
+  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const modernPath = join(packageRoot, "bin", binaryName);
+  if (isFile(modernPath) && isFile(join(packageRoot, "codex-package.json"))) return modernPath;
+  const legacyPath = join(packageRoot, "codex", binaryName);
+  if (isFile(legacyPath)) return legacyPath;
+  return null;
+}
+
 /**
  * Locate the bundled codex binary by replaying the SDK's resolution chain:
  * `@openai/codex-sdk` → its `@openai/codex` dep → the per-platform vendor
- * package → `vendor/<triple>/bin/codex` (or the legacy `vendor/<triple>/codex/`
- * layout). Errors describe which link of the chain broke.
+ * package → vendor root, then the SDK's own `resolveNativePackage` layout
+ * check. Errors describe which link of the chain broke.
  */
 export async function resolveBundledCodexBinary(): Promise<
   { ok: true; binary: string } | { ok: false; error: string }
@@ -108,13 +143,13 @@ export async function resolveBundledCodexBinary(): Promise<
     };
   }
 
-  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
   const packageRoot = join(vendorRoot, triple);
-  const modernPath = join(packageRoot, "bin", binaryName);
-  if (existsSync(modernPath)) return { ok: true, binary: modernPath };
-  const legacyPath = join(packageRoot, "codex", binaryName);
-  if (existsSync(legacyPath)) return { ok: true, binary: legacyPath };
-  return { ok: false, error: `codex binary not found under ${packageRoot}` };
+  const binary = resolveBundledBinaryInPackageRoot(packageRoot);
+  if (binary) return { ok: true, binary };
+  return {
+    ok: false,
+    error: `codex binary not found under ${packageRoot} (need bin/codex + codex-package.json marker, or legacy codex/codex)`,
+  };
 }
 
 /** Resolved runtime binary + provenance — mirrors the handler's bundled-first,
@@ -129,33 +164,56 @@ export type CodexBinaryResolution =
     }
   | { ok: false; error: string };
 
+/** Injectable seams for `resolveCodexRuntimeBinary` (tests only). */
+export type CodexRuntimeResolveDeps = {
+  resolveBundled?: () => Promise<{ ok: true; binary: string } | { ok: false; error: string }>;
+  verifyBundled?: (binary: string) => Promise<{ ok: true; version: string | null } | { ok: false; error: string }>;
+  findOnPath?: (env?: Record<string, string | undefined>) => string | null;
+  verifyPath?: (path: string, env?: Record<string, string | undefined>) => CodexExecutableVerification;
+};
+
 /**
- * Resolve the codex binary the runtime would actually spawn, in the same
- * order as the handler: prefer the SDK-bundled vendor binary; if it is
- * missing or not launchable, fall back to a validated system `codex` on
- * PATH. Returns the binary path (for the login-status precheck + doctor
- * smoke) plus the `runtimeSource`/`runtimePath` provenance reported to the UI.
+ * Resolve the codex binary the runtime would actually spawn, on the SAME
+ * contract as the handler (`createCodexClientWithBinaryFallback`):
+ *
+ *   - bundled vendor binary present (per the SDK's own `resolveNativePackage`
+ *     layout check) → that binary, `runtimeSource: "bundled"`. The handler
+ *     spawns it unconditionally — `new Codex()` does not re-validate it — so
+ *     the probe must NOT fall back to PATH on a `--version` failure here; a
+ *     nonlaunchable bundle surfaces in the `codex doctor` smoke instead.
+ *   - bundle NOT found (the SDK throws "Unable to locate Codex CLI binaries",
+ *     which is exactly what triggers the handler's fallback) → a validated
+ *     system `codex` on PATH (`runtimeSource: "path"`), else binary-missing.
+ *
+ * Returns the binary path (for the login-status precheck + doctor smoke) plus
+ * the `runtimeSource`/`runtimePath` provenance reported to the UI.
  */
-export async function resolveCodexRuntimeBinary(env: NodeJS.ProcessEnv = process.env): Promise<CodexBinaryResolution> {
-  const bundled = await resolveBundledCodexBinary();
+export async function resolveCodexRuntimeBinary(
+  env: NodeJS.ProcessEnv = process.env,
+  deps: CodexRuntimeResolveDeps = {},
+): Promise<CodexBinaryResolution> {
+  const resolveBundled = deps.resolveBundled ?? resolveBundledCodexBinary;
+  const verifyBundled = deps.verifyBundled ?? ((binary: string) => verifyLaunchable("codex", binary));
+  const findOnPath = deps.findOnPath ?? findCodexExecutableOnPath;
+  const verifyPath = deps.verifyPath ?? verifyCodexExecutable;
+
+  const bundled = await resolveBundled();
   if (bundled.ok) {
-    const verified = await verifyLaunchable("codex", bundled.binary);
-    if (verified.ok) {
-      return {
-        ok: true,
-        binary: bundled.binary,
-        runtimeSource: "bundled",
-        runtimePath: null,
-        version: verified.version,
-      };
-    }
-    // Bundled binary present but not launchable — fall through to the system
-    // PATH fallback (matches the handler's "validate before use" contract).
+    // `--version` is best-effort, for the version string only — it does NOT
+    // gate the decision or trigger a PATH fallback (see contract above).
+    const verified = await verifyBundled(bundled.binary);
+    return {
+      ok: true,
+      binary: bundled.binary,
+      runtimeSource: "bundled",
+      runtimePath: null,
+      version: verified.ok ? verified.version : null,
+    };
   }
 
-  const pathBinary = findCodexExecutableOnPath(env);
+  const pathBinary = findOnPath(env);
   if (pathBinary) {
-    const verification = verifyCodexExecutable(pathBinary, env);
+    const verification = verifyPath(pathBinary, env);
     if (verification.ok) {
       const match = (verification.output ?? "").match(/\d+\.\d+(?:\.\d+)?/);
       return {
@@ -172,8 +230,7 @@ export async function resolveCodexRuntimeBinary(env: NodeJS.ProcessEnv = process
     };
   }
 
-  const reason = bundled.ok ? "the SDK-bundled codex binary is present but not launchable" : bundled.error;
-  return { ok: false, error: formatCodexBinaryMissingMessage(reason) };
+  return { ok: false, error: formatCodexBinaryMissingMessage(bundled.error) };
 }
 
 /** Minimal slice of the `codex doctor --json` report the classifier reads. */

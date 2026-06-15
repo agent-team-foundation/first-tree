@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeExecutableResolution } from "../handlers/claude-executable.js";
 import {
   classifyClaudeSmokeFailure,
@@ -11,6 +14,7 @@ import {
   classifyDoctorReport,
   parseDoctorReport,
   probeCodexCapability,
+  resolveBundledBinaryInPackageRoot,
   resolveBundledCodexBinary,
   resolveCodexRuntimeBinary,
 } from "../runtime/capabilities/codex.js";
@@ -25,6 +29,7 @@ import {
   truncateError,
   verifyLaunchable,
 } from "../runtime/capabilities/launch-probe.js";
+import type { CodexExecutableVerification } from "../runtime/codex-binary.js";
 
 /**
  * Launch-verified capability probes — the contract under test:
@@ -827,6 +832,114 @@ describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modul
       expect(res.binary).toMatch(/[/\\]codex(\.exe)?$/);
       expect(res.runtimePath).toBeNull();
     }
+  });
+});
+
+/**
+ * Regression for PR #996 review (codex-assistant): the probe's binary
+ * resolution must match the codex-sdk's own `resolveNativePackage` so the
+ * probe and the runtime never disagree on which binary backs codex.
+ */
+describe("resolveBundledBinaryInPackageRoot (SDK resolveNativePackage parity)", () => {
+  let root: string;
+  const codexName = process.platform === "win32" ? "codex.exe" : "codex";
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ft-codex-vendor-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const writeExecutable = (path: string): void => {
+    writeFileSync(path, "#!/bin/sh\nexit 0\n");
+    chmodSync(path, 0o755);
+  };
+
+  it("modern layout: returns bin/codex only when the codex-package.json marker is also present", () => {
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeExecutable(join(root, "bin", codexName));
+    writeFileSync(join(root, "codex-package.json"), "{}");
+    expect(resolveBundledBinaryInPackageRoot(root)).toBe(join(root, "bin", codexName));
+  });
+
+  it("modern binary present but marker MISSING → not bundled (the SDK would not spawn it)", () => {
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeExecutable(join(root, "bin", codexName));
+    // No codex-package.json marker, no legacy layout.
+    expect(resolveBundledBinaryInPackageRoot(root)).toBeNull();
+  });
+
+  it("falls back to the legacy codex/<codex> layout when the modern marker is absent", () => {
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeExecutable(join(root, "bin", codexName)); // present but no marker
+    mkdirSync(join(root, "codex"), { recursive: true });
+    writeExecutable(join(root, "codex", codexName));
+    expect(resolveBundledBinaryInPackageRoot(root)).toBe(join(root, "codex", codexName));
+  });
+
+  it("returns null when neither layout resolves", () => {
+    expect(resolveBundledBinaryInPackageRoot(root)).toBeNull();
+  });
+});
+
+describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
+  const found = async (): Promise<{ ok: true; binary: string }> => ({ ok: true, binary: "/vendor/bin/codex" });
+  const notFound = async (): Promise<{ ok: false; error: string }> => ({ ok: false, error: "codex binary not found" });
+  const verifyOk = async (): Promise<{ ok: true; version: string | null }> => ({ ok: true, version: "0.134.0" });
+
+  it("bundled present but NONLAUNCHABLE stays `bundled` — no PATH fallback (handler never falls back here)", async () => {
+    // The SDK's `new Codex()` spawns a resolved bundled binary unconditionally;
+    // a `--version` failure must NOT divert the probe to PATH, or the probe
+    // would smoke/report a different binary than the runtime actually uses.
+    const findOnPath = vi.fn(() => "/usr/local/bin/codex");
+    const res = await resolveCodexRuntimeBinary(
+      {},
+      {
+        resolveBundled: found,
+        verifyBundled: async () => ({ ok: false, error: "codex --version: spawn EACCES" }),
+        findOnPath,
+      },
+    );
+    expect(res).toMatchObject({ ok: true, runtimeSource: "bundled", binary: "/vendor/bin/codex", runtimePath: null });
+    if (res.ok) expect(res.version).toBeNull(); // best-effort version, null when --version failed
+    expect(findOnPath).not.toHaveBeenCalled();
+  });
+
+  it("bundle NOT found → validated system PATH codex (`path` source)", async () => {
+    const verifyPath = (): CodexExecutableVerification => ({ ok: true, output: "codex-cli 0.140.0" });
+    const res = await resolveCodexRuntimeBinary(
+      {},
+      { resolveBundled: notFound, findOnPath: () => "/usr/local/bin/codex", verifyPath },
+    );
+    expect(res).toMatchObject({
+      ok: true,
+      runtimeSource: "path",
+      binary: "/usr/local/bin/codex",
+      runtimePath: "/usr/local/bin/codex",
+      version: "0.140.0",
+    });
+  });
+
+  it("bundle NOT found + PATH codex fails validation → binary-missing", async () => {
+    const verifyPath = (): CodexExecutableVerification => ({ ok: false, reason: "`codex --version` timed out" });
+    const res = await resolveCodexRuntimeBinary(
+      {},
+      { resolveBundled: notFound, findOnPath: () => "/usr/local/bin/codex", verifyPath },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("Codex runtime binary is missing");
+  });
+
+  it("bundle NOT found + no PATH codex → binary-missing", async () => {
+    const res = await resolveCodexRuntimeBinary({}, { resolveBundled: notFound, findOnPath: () => null });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("Codex runtime binary is missing");
+  });
+
+  it("bundled present + launchable → `bundled` with version", async () => {
+    const res = await resolveCodexRuntimeBinary({}, { resolveBundled: found, verifyBundled: verifyOk });
+    expect(res).toMatchObject({ ok: true, runtimeSource: "bundled", version: "0.134.0" });
   });
 });
 
