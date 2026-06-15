@@ -299,6 +299,37 @@ describe("Agent Visibility", () => {
       expect(names).toContain("qhuman-needle");
     });
 
+    it("addressableOnly hides removed human mirrors while the regular roster can still resolve them", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+      const username = `removed-picker-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const createRes = await adminReq("POST", `/api/v1/orgs/${admin.organizationId}/members`, {
+        username,
+        displayName: "Removed Picker",
+        role: "member",
+      });
+      const created = createRes.json<{ id: string; agentId: string }>();
+      const deleteRes = await adminReq("DELETE", `/api/v1/orgs/${admin.organizationId}/members/${created.id}`);
+      expect(deleteRes.statusCode).toBe(204);
+
+      const regular = await adminReq(
+        "GET",
+        `/api/v1/orgs/${admin.organizationId}/agents?query=${encodeURIComponent(username)}`,
+      );
+      expect(regular.statusCode).toBe(200);
+      expect(regular.json<{ items: Array<{ uuid: string; status: string }> }>().items).toContainEqual(
+        expect.objectContaining({ uuid: created.agentId, status: "suspended" }),
+      );
+
+      const picker = await adminReq(
+        "GET",
+        `/api/v1/orgs/${admin.organizationId}/agents?query=${encodeURIComponent(username)}&addressableOnly=true`,
+      );
+      expect(picker.statusCode).toBe(200);
+      const pickerIds = picker.json<{ items: Array<{ uuid: string }> }>().items.map((agent) => agent.uuid);
+      expect(pickerIds).not.toContain(created.agentId);
+    });
+
     it("treats ILIKE wildcards in user input as literals", async () => {
       const app = getApp();
       const { req: adminReq, admin } = await authedRequest(app);
@@ -559,6 +590,33 @@ describe("Agent Visibility", () => {
 
       const res = await memberB.req("POST", `/api/v1/orgs/${adminBundle.admin.organizationId}/chats`, {
         participantIds: [privateAgent.uuid],
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("rejects removed human mirrors before web task chat creation writes participants", async () => {
+      const app = getApp();
+      const adminBundle = await authedRequest(app);
+      const username = `removed-task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const createRes = await adminBundle.req("POST", `/api/v1/orgs/${adminBundle.admin.organizationId}/members`, {
+        username,
+        displayName: "Removed Task Target",
+        role: "member",
+      });
+      const created = createRes.json<{ id: string; agentId: string }>();
+      const deleteRes = await adminBundle.req(
+        "DELETE",
+        `/api/v1/orgs/${adminBundle.admin.organizationId}/members/${created.id}`,
+      );
+      expect(deleteRes.statusCode).toBe(204);
+
+      const res = await adminBundle.req("POST", `/api/v1/orgs/${adminBundle.admin.organizationId}/chats`, {
+        mode: "task",
+        initialRecipientAgentIds: [created.agentId],
+        initialRecipientNames: [],
+        contextParticipantAgentIds: [],
+        contextParticipantNames: [],
+        initialMessage: { source: "web", format: "text", content: "hello" },
       });
       expect(res.statusCode).toBe(404);
     });

@@ -27,7 +27,7 @@ export function ProfileTab() {
       />
       {/* Agent lifecycle is identity-level, so destructive controls stay at the
           end of Profile instead of mixing with runtime configuration. */}
-      {ctx.canManageAgent && (
+      {ctx.canManageAgent && ctx.agent.type !== "human" && (
         <DangerZone
           agent={ctx.agent}
           suspendPending={ctx.suspendPending}

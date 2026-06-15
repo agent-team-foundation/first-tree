@@ -13,12 +13,15 @@ export function listAgents(params?: {
   /** Case-insensitive substring match against `name` + `displayName`.
    *  Whitespace is trimmed server-side; pass a non-empty string. */
   query?: string;
+  /** Restrict to identities that can be added to a new chat participant set. */
+  addressableOnly?: boolean;
 }): Promise<PaginatedAgents> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.type) qs.set("type", params.type);
   if (params?.query) qs.set("query", params.query);
+  if (params?.addressableOnly) qs.set("addressableOnly", "true");
   const query = qs.toString();
   return api.get<PaginatedAgents>(withOrg(`/agents${query ? `?${query}` : ""}`));
 }

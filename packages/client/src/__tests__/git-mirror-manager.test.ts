@@ -164,6 +164,66 @@ function seedBareRepo(branch = "main"): { url: string; tip: string; prev: string
   return { url: bare, tip, prev };
 }
 
+function seedRepointReposWithSharedBase(): {
+  a: { url: string; tip: string };
+  b: { url: string; tip: string };
+} {
+  const dir = mkdtempSync(join(tmpdir(), "ftt-repoint-"));
+  const base = join(dir, "base");
+  mkdirSync(base, { recursive: true });
+  execSync("git init -q -b main", { cwd: base });
+  execSync("git config user.email t@e.com && git config user.name t", { cwd: base });
+  writeFileSync(join(base, "README.md"), "base");
+  execSync("git add . && git commit -q -m base", {
+    cwd: base,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
+      GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
+    },
+  });
+
+  const aSeed = join(dir, "a-seed");
+  execSync(`git clone -q ${base} ${aSeed}`);
+  execSync("git config user.email t@e.com && git config user.name t", { cwd: aSeed });
+  writeFileSync(join(aSeed, "repo-a.txt"), "a");
+  execSync("git add . && git commit -q -m a-tip", {
+    cwd: aSeed,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: "2020-01-01T00:00:01Z",
+      GIT_COMMITTER_DATE: "2020-01-01T00:00:01Z",
+    },
+  });
+  const aTip = execSync("git rev-parse HEAD", { cwd: aSeed }).toString().trim();
+  const aBare = join(dir, "a.git");
+  execSync(`git init -q --bare ${aBare}`);
+  execSync(`git push -q ${aBare} main`, { cwd: aSeed });
+  execSync("git symbolic-ref HEAD refs/heads/main", { cwd: aBare });
+
+  const bSeed = join(dir, "b-seed");
+  execSync(`git clone -q ${base} ${bSeed}`);
+  execSync("git config user.email t@e.com && git config user.name t", { cwd: bSeed });
+  execSync("git checkout -q -b trunk", { cwd: bSeed });
+  execSync("git branch -D main", { cwd: bSeed });
+  writeFileSync(join(bSeed, "repo-b.txt"), "b");
+  execSync("git add . && git commit -q -m b-tip", {
+    cwd: bSeed,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: "2020-01-01T00:00:02Z",
+      GIT_COMMITTER_DATE: "2020-01-01T00:00:02Z",
+    },
+  });
+  const bTip = execSync("git rev-parse HEAD", { cwd: bSeed }).toString().trim();
+  const bBare = join(dir, "b.git");
+  execSync(`git init -q --bare ${bBare}`);
+  execSync(`git push -q ${bBare} trunk`, { cwd: bSeed });
+  execSync("git symbolic-ref HEAD refs/heads/trunk", { cwd: bBare });
+
+  return { a: { url: aBare, tip: aTip }, b: { url: bBare, tip: bTip } };
+}
+
 /** Push one new commit to `main` of a bare upstream; returns the new tip sha. */
 function pushCommit(url: string, marker: string): string {
   const tmp = mkdtempSync(join(tmpdir(), "ftt-push-"));
@@ -250,11 +310,14 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
   });
 
   it("reconciles origin url + default branch when the configured url repoints to a different repo", async () => {
-    const a = seedBareRepo("main");
+    const { a, b } = seedRepointReposWithSharedBase();
     // Repo B has a DIFFERENT default branch name — exercises the origin/HEAD
     // refresh in reconcileOrigin (a plain fetch would leave origin/HEAD on
-    // "main", which doesn't exist in B).
-    const b = seedBareRepo("trunk");
+    // "main", which doesn't exist in B). A and B intentionally share a base
+    // commit but diverge at their tips, matching the flaky failure shape: the
+    // local-commits guard must not treat repo A's old HEAD as same-repo work
+    // after the origin URL repoints to repo B.
+    expect(a.tip).not.toBe(b.tip);
     const m = makeManager();
     const clonePath = join(newDataDir(), "repo");
     // First materialise against repo A.
@@ -266,7 +329,34 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     const r2 = await m.ensureSourceRepo({ url: b.url, clonePath });
     expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(b.url);
     expect(gitIn(clonePath, "rev-parse HEAD")).toBe(b.tip);
+    expect(r2.outcome).toBe("updated");
+    expect(r2.headCommit).toBe(b.tip);
     expect(r2.branch).toBe("trunk");
+  });
+
+  it("fails closed before repointing origin when the configured url changes and the checkout is dirty", async () => {
+    const { a, b } = seedRepointReposWithSharedBase();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    await m.ensureSourceRepo({ url: a.url, clonePath });
+    writeFileSync(join(clonePath, "README.md"), "dirty local edit");
+
+    await expect(m.ensureSourceRepo({ url: b.url, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(a.url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(a.tip);
+  });
+
+  it("fails closed before repointing origin when the configured url changes and the checkout is in use", async () => {
+    const { a, b } = seedRepointReposWithSharedBase();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    await m.ensureSourceRepo({ url: a.url, clonePath });
+
+    await expect(m.ensureSourceRepo({ url: b.url, clonePath, activelyInUse: true })).rejects.toBeInstanceOf(
+      GitMirrorError,
+    );
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(a.url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(a.tip);
   });
 
   it("preserves local commits ahead of upstream instead of resetting (skipped-local-commits)", async () => {
@@ -287,6 +377,25 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     expect(existsSync(join(clonePath, "local.txt"))).toBe(true);
     expect(localHead).not.toBe(tip);
     expect(upstream).not.toBe(localHead);
+  });
+
+  it("keeps local commits protected when origin is missing before fetch", async () => {
+    const { url, tip } = seedBareRepo();
+    const m = makeManager();
+    const clonePath = join(newDataDir(), "repo");
+    await m.ensureSourceRepo({ url, clonePath });
+    execSync("git config user.email t@e.com && git config user.name t", { cwd: clonePath });
+    writeFileSync(join(clonePath, "local.txt"), "agent work");
+    execSync("git add . && git commit -q -m local-work", { cwd: clonePath });
+    const localHead = gitIn(clonePath, "rev-parse HEAD");
+    execSync("git remote remove origin", { cwd: clonePath });
+
+    const r = await m.ensureSourceRepo({ url, clonePath });
+    expect(r.outcome).toBe("skipped-local-commits");
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(localHead);
+    expect(existsSync(join(clonePath, "local.txt"))).toBe(true);
+    expect(localHead).not.toBe(tip);
   });
 
   it("degrades to the existing checkout when a SAME-repo fetch fails transiently (stale-offline)", async () => {
@@ -327,9 +436,17 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     const clonePath = join(newDataDir(), "repo");
     const first = await m.ensureSourceRepo({ url, clonePath });
     expect(first.headCommit).toBe(tip);
-    await expect(m.ensureSourceRepo({ url: "https://127.0.0.1:1/different.git", clonePath })).rejects.toBeInstanceOf(
-      GitMirrorError,
-    );
+    const unreachable = "https://127.0.0.1:1/different.git";
+    await expect(m.ensureSourceRepo({ url: unreachable, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(tip);
+
+    // Regression: the failed confirmation fetch must not leave origin pointing
+    // at the unconfirmed URL. Otherwise the retry looks like a same-repo outage
+    // and degrades to stale-offline while serving the old checkout.
+    await expect(m.ensureSourceRepo({ url: unreachable, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(tip);
   }, 30_000);
 
   it("still degrades when the configured ref already matches the checked-out HEAD", async () => {

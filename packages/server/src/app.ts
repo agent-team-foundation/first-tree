@@ -83,6 +83,7 @@ import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
 import { forceDisconnect } from "./services/connection-manager.js";
+import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
@@ -671,6 +672,11 @@ export async function buildApp(config: Config) {
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
+    const mirrorRepair = await repairMembershipHumanMirrors(db);
+    const repaired = mirrorRepair.activeMirrorsRepaired + mirrorRepair.inactiveMirrorsRepaired;
+    if (repaired > 0) {
+      app.log.info({ ...mirrorRepair }, "membership human mirrors repaired");
+    }
     await backfillResourcesPhase1(db).catch((err) => {
       app.log.warn({ err }, "resources phase1 backfill failed");
     });

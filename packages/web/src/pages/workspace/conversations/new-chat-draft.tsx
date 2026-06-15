@@ -114,7 +114,7 @@ export function NewChatDraft({
    *  `@`-autocomplete results come from the server-search hook below so
    *  orgs above the 100-row cap can still reach every addable agent
    *  (issue 494). */
-  const { data: orgAgentsPage } = useOrgAgents();
+  const { data: orgAgentsPage } = useOrgAgents({ addressableOnly: true });
 
   /** Map of every uuid we have ever shown to the user this session —
    *  seeded from the first page and grown with each search round-trip
@@ -187,7 +187,7 @@ export function NewChatDraft({
   const trigger = useMemo(() => detectMentionTrigger(draft, cursor), [draft, cursor]);
   const triggerQuery = trigger?.query ?? "";
   const debouncedTriggerQuery = useDebouncedValue(triggerQuery, 100);
-  const { data: triggerSearchPage } = useOrgAgentsSearch(debouncedTriggerQuery);
+  const { data: triggerSearchPage } = useOrgAgentsSearch(debouncedTriggerQuery, { addressableOnly: true });
   useEffect(() => {
     if (!triggerSearchPage?.items) return;
     mergeKnown(triggerSearchPage.items);
@@ -200,7 +200,9 @@ export function NewChatDraft({
    *  hook dedupes by query key, so if both surfaces happen to search
    *  the same term React Query coalesces them into one fetch. */
   const debouncedPickerSearch = useDebouncedValue(pickerSearch, 200);
-  const { data: pickerSearchPage, isFetching: pickerFetching } = useOrgAgentsSearch(debouncedPickerSearch);
+  const { data: pickerSearchPage, isFetching: pickerFetching } = useOrgAgentsSearch(debouncedPickerSearch, {
+    addressableOnly: true,
+  });
   useEffect(() => {
     if (!pickerSearchPage?.items) return;
     mergeKnown(pickerSearchPage.items);

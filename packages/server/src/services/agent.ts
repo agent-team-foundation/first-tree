@@ -30,7 +30,7 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
-import { agentVisibilityCondition } from "./access-control.js";
+import { agentAddressableCondition, agentVisibilityCondition } from "./access-control.js";
 import { AGENT_DETACH_CHANNEL } from "./notifier.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
@@ -262,7 +262,7 @@ async function resolveAgentClient(
   const [manager] = await db
     .select({ userId: members.userId })
     .from(members)
-    .where(eq(members.id, data.managerId))
+    .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
     .limit(1);
   if (!manager) {
     throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -342,6 +342,12 @@ function assertDelegateMentionAllowed(sourceType: string): void {
   }
 }
 
+function assertNonHumanLifecycleTarget(agent: { type: string }): void {
+  if (agent.type === AGENT_TYPES.HUMAN) {
+    throw new BadRequestError("Human agent lifecycle is managed by member leave/remove/restore.");
+  }
+}
+
 /**
  * Pick the first admin member in the org for internal system agents. Throws
  * if the org has no admin — the caller should surface the error so an admin
@@ -351,7 +357,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   const [row] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin")))
+    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin"), eq(members.status, "active")))
     .orderBy(members.createdAt)
     .limit(1);
   if (!row) {
@@ -405,7 +411,26 @@ export async function createAgent(
   let managerId: string;
 
   if (data.managerId && data.organizationId) {
-    // Branch 2: trust explicit pair (bootstrap / tests).
+    // Branch 2: explicit pair. If the manager row already exists, validate it
+    // like the public API path; if it does not, this is the member bootstrap
+    // path that inserts the human agent before inserting the member row in the
+    // same transaction, so the deferred FK validates it at commit time.
+    const [manager] = await db
+      .select({ id: members.id, organizationId: members.organizationId, status: members.status })
+      .from(members)
+      .where(eq(members.id, data.managerId))
+      .limit(1);
+    if (!manager && data.type !== AGENT_TYPES.HUMAN) {
+      throw new BadRequestError(`Manager "${data.managerId}" not found`);
+    }
+    if (manager) {
+      if (manager.status !== "active") {
+        throw new BadRequestError(`Manager "${data.managerId}" not found`);
+      }
+      if (manager.organizationId !== data.organizationId) {
+        throw new BadRequestError("Manager must belong to the same organization as the agent");
+      }
+    }
     orgId = data.organizationId;
     managerId = data.managerId;
   } else if (data.managerId) {
@@ -413,7 +438,7 @@ export async function createAgent(
     const [manager] = await db
       .select({ id: members.id, organizationId: members.organizationId })
       .from(members)
-      .where(eq(members.id, data.managerId))
+      .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
       .limit(1);
     if (!manager) {
       throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -735,9 +760,11 @@ export async function listAgentsForMember(
   cursor?: string,
   type?: string,
   query?: string,
+  addressableOnly = false,
 ) {
   // agentVisibilityCondition already includes org + status + visibility filtering
   const conditions = [agentVisibilityCondition(scope.organizationId, scope.memberId)];
+  if (addressableOnly) conditions.push(agentAddressableCondition());
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
   if (query) {
@@ -835,26 +862,12 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) {
-    // Closes the type-flip leak: without this guard a PATCH like
-    // `{type: "agent"}` on a human row with a non-null delegateMention
-    // would leave behind `type=agent + delegateMention=<uuid>`, violating
-    // the invariant that only humans carry a delegate. The caller must
-    // either clear delegateMention in the same patch or flip type to human
-    // (no-op for the invariant).
-    if (data.type !== AGENT_TYPES.HUMAN && agent.delegateMention !== null && data.delegateMention !== null) {
-      throw new BadRequestError(
-        "Cannot change type away from `human` while delegateMention is set — clear delegateMention in the same patch.",
-      );
-    }
-    updates.type = data.type;
+    throw new BadRequestError("Agent type is immutable");
   }
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) {
     if (data.delegateMention !== null) {
-      // Effective type honors a same-patch `type` update; without this the
-      // guard would read the stale pre-update value when the caller flips
-      // type → "human" and sets delegateMention in one PATCH.
-      assertDelegateMentionAllowed(data.type ?? agent.type);
+      assertDelegateMentionAllowed(agent.type);
       await validateDelegateMentionTarget(db, data.delegateMention, agent.organizationId);
     }
     updates.delegateMention = data.delegateMention;
@@ -872,7 +885,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     const [manager] = await db
       .select({ id: members.id, organizationId: members.organizationId })
       .from(members)
-      .where(eq(members.id, data.managerId))
+      .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
       .limit(1);
     if (!manager) {
       throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -982,13 +995,14 @@ export async function rebindAgent(db: Database, uuid: string, data: RebindAgent)
  */
 export async function reactivateAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ uuid: agents.uuid, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
     .from(agents)
     .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be reactivated.");
   }
@@ -1010,15 +1024,18 @@ export async function reactivateAgent(db: Database, uuid: string) {
  * and every agent-selector-authorised HTTP call.
  */
 export async function suspendAgent(db: Database, uuid: string) {
-  const [agent] = await db
-    .update(agents)
-    .set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() })
-    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
-    .returning();
+  const [existing] = await db
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
+    .from(agents)
+    .where(eq(agents.uuid, uuid))
+    .limit(1);
 
-  if (!agent) {
+  if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
+
+  await db.update(agents).set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() }).where(eq(agents.uuid, uuid));
 
   const refreshed = await selectAgentRowWithRuntime(db, uuid);
   if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
@@ -1031,13 +1048,14 @@ export async function suspendAgent(db: Database, uuid: string) {
  */
 export async function deleteAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ uuid: agents.uuid, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
     .from(agents)
     .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be deleted. Suspend the agent first.");
   }
