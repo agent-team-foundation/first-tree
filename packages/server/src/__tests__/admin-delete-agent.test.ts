@@ -84,9 +84,14 @@ describe("Admin DELETE Agent API", () => {
 
   it("returns 404 for already deleted agent", async () => {
     const app = getApp();
-    const { req } = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
-    const agent = await createAgent(app.db, { name: "double-del", type: "human" });
+    const agent = await createAgent(app.db, {
+      name: "double-del",
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
     await suspendAgent(app.db, agent.uuid);
     await req("DELETE", `/api/v1/agents/${agent.uuid}`);
 

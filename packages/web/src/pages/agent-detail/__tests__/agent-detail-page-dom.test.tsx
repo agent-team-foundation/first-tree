@@ -1032,4 +1032,17 @@ describe("AgentDetailPage", () => {
 
     await act(async () => toDelete.root.unmount());
   });
+
+  it("does not render agent lifecycle danger controls for human agents", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+
+    agentMocks.getAgent.mockResolvedValueOnce(agent({ type: "human" }));
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    expect(view.container.textContent).not.toContain("Agent lifecycle");
+    expect(view.container.textContent).not.toContain("Deletion");
+    expect(view.container.querySelector('button[aria-label="Suspend"]')).toBeNull();
+
+    await act(async () => view.root.unmount());
+  });
 });

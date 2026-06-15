@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -6,9 +7,10 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createChat } from "../services/chat.js";
+import * as memberService from "../services/member.js";
 import { sendMessage } from "../services/message.js";
 import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "../services/participant-invite.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Layer-2 invite service contract. Both the agent-JWT path
@@ -82,6 +84,42 @@ describe("inviteParticipantsToChat", () => {
         errorOnAlreadySpeaker: true,
       }),
     ).rejects.toThrow(/Agents not found/);
+  });
+
+  it("rejects removed human mirrors as explicit invite targets", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `invite-admin-${randomUUID().slice(0, 8)}` });
+    const target = await memberService.createMember(app.db, admin.organizationId, {
+      username: `invite-removed-${randomUUID().slice(0, 8)}`,
+      displayName: "Invite Removed",
+      role: "member",
+    });
+    await memberService.deleteMember(app.db, target.id, admin.organizationId);
+
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [] });
+    await expect(
+      inviteParticipantsToChat(app.db, {
+        chatId: chat.id,
+        callerAgentId: admin.humanAgentUuid,
+        targetAgentIds: [target.agentId],
+        errorOnAlreadySpeaker: true,
+      }),
+    ).rejects.toThrow(/Inactive participant/);
+  });
+
+  it("rejects removed human mirrors during legacy chat creation", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `legacy-admin-${randomUUID().slice(0, 8)}` });
+    const target = await memberService.createMember(app.db, admin.organizationId, {
+      username: `legacy-removed-${randomUUID().slice(0, 8)}`,
+      displayName: "Legacy Removed",
+      role: "member",
+    });
+    await memberService.deleteMember(app.db, target.id, admin.organizationId);
+
+    await expect(
+      createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [target.agentId] }),
+    ).rejects.toThrow(/inactive participant/);
   });
 
   it("rejects cross-org targets with BadRequestError", async () => {
@@ -216,11 +254,11 @@ describe("inviteParticipantsToChat", () => {
     // here we pin it on the underlying invite service so any future Layer-3
     // shell that delegates to invite inherits the assertion for free.
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "human" });
+    const owner = await createTestAdmin(app, { username: `backfill-owner-${randomUUID().slice(0, 8)}` });
     const peer = await createTestAgent(app, { type: "agent" });
     const newcomer = await createTestAgent(app, { type: "agent" });
 
-    const chat = await createChat(app.db, owner.agent.uuid, {
+    const chat = await createChat(app.db, owner.humanAgentUuid, {
       type: "group",
       participantIds: [peer.agent.uuid],
     });
@@ -228,7 +266,7 @@ describe("inviteParticipantsToChat", () => {
       await sendMessage(
         app.db,
         chat.id,
-        owner.agent.uuid,
+        owner.humanAgentUuid,
         {
           source: "api",
           format: "text",
@@ -240,7 +278,7 @@ describe("inviteParticipantsToChat", () => {
 
     await inviteParticipantsToChat(app.db, {
       chatId: chat.id,
-      callerAgentId: owner.agent.uuid,
+      callerAgentId: owner.humanAgentUuid,
       targetAgentIds: [newcomer.agent.uuid],
       errorOnAlreadySpeaker: true,
     });
@@ -293,7 +331,7 @@ describe("assertChatVisibleInOrgOrNotFound", () => {
 
   it("404s when the chat does not exist", async () => {
     const app = getApp();
-    const caller = await createTestAgent(app, { type: "human" });
+    const caller = await createTestAdmin(app, { username: `visible-missing-${randomUUID().slice(0, 8)}` });
     await expect(
       assertChatVisibleInOrgOrNotFound(app.db, "00000000-0000-0000-0000-000000000000", caller.organizationId),
     ).rejects.toThrow(NotFoundError);
@@ -301,7 +339,7 @@ describe("assertChatVisibleInOrgOrNotFound", () => {
 
   it("404s when the chat is in a different org from the caller (probing protection)", async () => {
     const app = getApp();
-    const caller = await createTestAgent(app, { type: "human" });
+    const caller = await createTestAdmin(app, { username: `visible-cross-${randomUUID().slice(0, 8)}` });
     const chatOwner = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, chatOwner.agent.uuid, { type: "group", participantIds: [] });
 
@@ -323,8 +361,8 @@ describe("assertChatVisibleInOrgOrNotFound", () => {
 
   it("passes when chat exists and is in the caller's org", async () => {
     const app = getApp();
-    const caller = await createTestAgent(app, { type: "human" });
-    const chat = await createChat(app.db, caller.agent.uuid, { type: "group", participantIds: [] });
+    const caller = await createTestAdmin(app, { username: `visible-pass-${randomUUID().slice(0, 8)}` });
+    const chat = await createChat(app.db, caller.humanAgentUuid, { type: "group", participantIds: [] });
     await expect(assertChatVisibleInOrgOrNotFound(app.db, chat.id, caller.organizationId)).resolves.toBeUndefined();
   });
 });

@@ -1,11 +1,12 @@
 import {
+  AGENT_TYPES,
   agentPinnedMessageSchema,
   createAgentSchema,
   listAgentsQuerySchema,
   paginationQuerySchema,
 } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { ForbiddenError } from "../../errors.js";
+import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
@@ -49,8 +50,8 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
-    const { limit, cursor, type, query } = listAgentsQuerySchema.parse(request.query);
-    const result = await agentService.listAgentsForMember(app.db, scope, limit, cursor, type, query);
+    const { limit, cursor, type, query, addressableOnly } = listAgentsQuerySchema.parse(request.query);
+    const result = await agentService.listAgentsForMember(app.db, scope, limit, cursor, type, query, addressableOnly);
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,
@@ -121,6 +122,9 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const body = createAgentSchema.parse(request.body);
+    if (body.type === AGENT_TYPES.HUMAN) {
+      throw new BadRequestError("Human agents are created through the member lifecycle");
+    }
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
     const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;

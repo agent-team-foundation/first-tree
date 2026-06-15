@@ -16,22 +16,20 @@ type App = ReturnType<ReturnType<typeof useTestApp>>;
 describe("agent github-entities routes", () => {
   const getApp = useTestApp();
 
-  async function seedOrgAgent(app: App, orgId: string, memberId: string, type: "human" | "agent"): Promise<string> {
+  async function seedOrgAgent(app: App, orgId: string, memberId: string): Promise<string> {
     const uuid = randomUUID();
     await app.db.insert(agents).values({
       uuid,
-      name: `${type}-${uuid.slice(0, 8)}`,
+      name: `agent-${uuid.slice(0, 8)}`,
       organizationId: orgId,
-      type,
-      displayName: type,
+      type: "agent",
+      displayName: "agent",
       inboxId: `inbox_${uuid}`,
       managerId: memberId,
       status: "active",
     });
     return uuid;
   }
-
-  const seedHuman = (app: App, orgId: string, memberId: string) => seedOrgAgent(app, orgId, memberId, "human");
 
   async function createChatWith(a: Awaited<ReturnType<typeof createTestAgent>>, participantIds: string[]) {
     const res = await a.request("POST", "/api/v1/agent/chats", { type: "group", participantIds });
@@ -42,7 +40,7 @@ describe("agent github-entities routes", () => {
   it("follow without an App installation is 422 with operator guidance", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { name: `gh-a-${randomUUID().slice(0, 6)}` });
-    const human = await seedHuman(app, a.organizationId, a.memberId);
+    const human = a.humanAgentUuid;
     const chatId = await createChatWith(a, [human]);
 
     const res = await a.request("POST", `/api/v1/agent/chats/${chatId}/github-entities`, {
@@ -55,7 +53,7 @@ describe("agent github-entities routes", () => {
   it("follow in an agents-only chat still resolves a pair via the supervising human watcher", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { name: `gh-b-${randomUUID().slice(0, 6)}` });
-    const peerAgent = await seedOrgAgent(app, a.organizationId, a.memberId, "agent");
+    const peerAgent = await seedOrgAgent(app, a.organizationId, a.memberId);
     const chatId = await createChatWith(a, [peerAgent]);
 
     const res = await a.request("POST", `/api/v1/agent/chats/${chatId}/github-entities`, {
@@ -73,7 +71,7 @@ describe("agent github-entities routes", () => {
   it("a non-participant is rejected", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { name: `gh-d-${randomUUID().slice(0, 6)}` });
-    const human = await seedHuman(app, a.organizationId, a.memberId);
+    const human = a.humanAgentUuid;
     const chatId = await createChatWith(a, [human]);
 
     const stranger = await createTestAgent(app, { name: `gh-e-${randomUUID().slice(0, 6)}` });
@@ -86,7 +84,7 @@ describe("agent github-entities routes", () => {
   it("following lists the chat's wired entities; unfollow is idempotent over HTTP", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { name: `gh-f-${randomUUID().slice(0, 6)}` });
-    const human = await seedHuman(app, a.organizationId, a.memberId);
+    const human = a.humanAgentUuid;
     const chatId = await createChatWith(a, [human]);
 
     await app.db.insert(githubEntityChatMappings).values({

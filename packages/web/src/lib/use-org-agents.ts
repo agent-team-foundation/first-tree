@@ -5,10 +5,10 @@ type PaginatedAgents = Awaited<ReturnType<typeof listAgents>>;
 
 /**
  * Shared cache for `GET /orgs/:orgId/agents?limit=100` — the org-wide agent
- * roster used by the participant picker, the `[+]` add-member dropdown, the
- * identity-map hooks (UUID → name / slug / chip), and the bindings page.
+ * roster used by identity-map hooks (UUID → name / slug / chip), navigation,
+ * and picker surfaces that do not request the active-only addressable view.
  *
- * Centralising on a single `queryKey` (`["agents", "org-list"]`) is the
+ * Centralising under the `["agents", "org-list"]` prefix is the
  * point: prior to this hook the picker used `["org-agents"]` while the
  * identity-map hooks used `["agents", "name-map"]`, so React Query held two
  * independent caches for the same HTTP request — two GETs on mount and two
@@ -32,10 +32,14 @@ type PaginatedAgents = Awaited<ReturnType<typeof listAgents>>;
  * above that threshold reach agents past the first page via
  * {@link useOrgAgentsSearch} (issue 494).
  */
-export function useOrgAgents(options?: { enabled?: boolean }): UseQueryResult<PaginatedAgents> {
+export function useOrgAgents(options?: {
+  enabled?: boolean;
+  addressableOnly?: boolean;
+}): UseQueryResult<PaginatedAgents> {
+  const addressableOnly = options?.addressableOnly ?? false;
   return useQuery({
-    queryKey: ["agents", "org-list"],
-    queryFn: () => listAgents({ limit: 100 }),
+    queryKey: ["agents", "org-list", { addressableOnly }],
+    queryFn: () => listAgents({ limit: 100, addressableOnly }),
     refetchInterval: 30_000,
     staleTime: 30_000,
     enabled: options?.enabled ?? true,
@@ -58,12 +62,16 @@ export function useOrgAgents(options?: { enabled?: boolean }): UseQueryResult<Pa
  * Caller is responsible for debouncing the input — wiring this directly to
  * an onChange handler would issue one fetch per keystroke.
  */
-export function useOrgAgentsSearch(query: string): UseQueryResult<PaginatedAgents> {
+export function useOrgAgentsSearch(
+  query: string,
+  options?: { addressableOnly?: boolean },
+): UseQueryResult<PaginatedAgents> {
   const trimmed = query.trim();
-  const unfiltered = useOrgAgents();
+  const addressableOnly = options?.addressableOnly ?? false;
+  const unfiltered = useOrgAgents({ addressableOnly });
   const search = useQuery({
-    queryKey: ["agents", "org-list", "search", trimmed],
-    queryFn: () => listAgents({ limit: 100, query: trimmed }),
+    queryKey: ["agents", "org-list", { addressableOnly }, "search", trimmed],
+    queryFn: () => listAgents({ limit: 100, query: trimmed, addressableOnly }),
     // Search results stay fresh briefly so re-opening the picker with the
     // same term doesn't re-hit the server; expire fast enough that a newly
     // added agent shows up under search within a reasonable window.
