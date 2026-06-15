@@ -101,9 +101,9 @@ type SlotDeliveryKind = "fresh" | "recovery";
  * Two layouts coexist after the per-agent-home redesign (#506) and its
  * legacy-resume hotfix (#530):
  *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
- *    `acquireAgentHome`), with predeclared source repos materialised at the
- *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
- *    dir is ever created.
+ *    `acquireAgentHome`), with predeclared source repos materialised under the
+ *    `source-repos/` dir (`<workspaceRoot>/source-repos/<localPath>`). No
+ *    `<workspaceRoot>/<chatId>/` dir is ever created.
  *  - LEGACY chats (created before #506) keep their original per-chat cwd
  *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
  *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
