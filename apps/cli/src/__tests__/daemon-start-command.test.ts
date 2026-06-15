@@ -78,6 +78,7 @@ let home: string;
 let runtimeInstance: {
   addAgent: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
+  setAgentsDir: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
 };
 
@@ -124,6 +125,7 @@ beforeEach(() => {
   runtimeInstance = {
     addAgent: vi.fn(),
     start: vi.fn(async () => undefined),
+    setAgentsDir: vi.fn(),
     watchAgentsDir: vi.fn(() => {
       throw new Error("stop after watch");
     }),
@@ -248,6 +250,12 @@ describe("daemon start command", () => {
       expect.objectContaining({ currentVersion: "0.0.0-test" }),
     );
     expect(runtimeInstance.addAgent).toHaveBeenCalledWith("nova", expect.objectContaining({ agentId: "agent-1" }));
+    // The agents dir must be recorded BEFORE start(), so a startup `agent:pinned`
+    // backfill can persist a runtime switch to agent.yaml.
+    expect(runtimeInstance.setAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
+    expect(runtimeInstance.setAgentsDir.mock.invocationCallOrder[0]).toBeLessThan(
+      runtimeInstance.start.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(runtimeInstance.start).toHaveBeenCalled();
     expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: "client_1234abcd", capabilities: { "claude-code": { state: "ok" } } }),

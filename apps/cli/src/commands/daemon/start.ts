@@ -243,6 +243,13 @@ export function registerDaemonStartCommand(daemon: Command): void {
           runtime.addAgent(name, agentConfig);
         }
 
+        // Record the agents dir BEFORE start(): the server pushes the
+        // `agent:pinned` backfill right after `client:registered` (inside
+        // start()), and a runtime switch it triggers must be able to persist
+        // to `agent.yaml`. `watchAgentsDir` below additionally starts the fs
+        // watcher once startup has settled.
+        runtime.setAgentsDir(agentsDir);
+
         await runtime.start();
 
         // Post-register capabilities upload — the `clients` row only exists

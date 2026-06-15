@@ -369,10 +369,24 @@ export class ClientRuntime {
     print.status("", `${connected} agent(s) running${skippedSuffix}. Press Ctrl+C to stop.`);
   }
 
+  /**
+   * Record the agents directory WITHOUT starting the fs watcher. Must be
+   * called before {@link start} so a startup `agent:pinned` backfill — which
+   * the server pushes right after `client:registered`, before
+   * {@link watchAgentsDir} runs — can persist a runtime switch to
+   * `agent.yaml` (via {@link rewriteAgentYamlRuntime}) and auto-register new
+   * agents. Without it, a switch applied during startup updates the live slot
+   * but never reaches disk, so the agent reloads the old provider after the
+   * next restart (unless pre-flight reconcile happens to repair it).
+   */
+  setAgentsDir(agentsDir: string): void {
+    this.agentsDir = agentsDir;
+  }
+
   watchAgentsDir(agentsDir: string): void {
     // Record the directory even if the watcher bails (e.g. dir missing) so
     // the `agent:pinned` handler knows where to materialise configs.
-    this.agentsDir = agentsDir;
+    this.setAgentsDir(agentsDir);
     if (this.watcher) return;
     if (!existsSync(agentsDir)) return;
 
