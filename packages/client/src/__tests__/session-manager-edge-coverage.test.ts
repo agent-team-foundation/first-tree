@@ -577,6 +577,36 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
+  it("drains same-chat buffered delivery after explicit resume at the concurrency limit", async () => {
+    const resume = vi.fn().mockResolvedValue("resumed-paused");
+    const inject = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
+    const paused = makeSessionRecord("chat-paused", {
+      status: "suspended",
+      claudeSessionId: "old-paused-session",
+      handler: handler({ resume, inject }),
+    });
+    const sm = makeManager({ concurrency: 1 });
+    internals(sm).sessions.set("chat-paused", paused);
+
+    await sm.handleCommand("chat-paused", "session:suspend");
+
+    const entry = mockEntry({ id: 101, chatId: "chat-paused" });
+    await sm.dispatch(entry);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused" && item.message)).toBe(true);
+
+    await sm.handleCommand("chat-paused", "session:resume");
+    await Promise.resolve();
+
+    expect(resume).toHaveBeenCalledWith(undefined, "old-paused-session", expect.anything());
+    expect(inject).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxEntryId: 101, chatId: "chat-paused" }),
+      expect.anything(),
+    );
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused")).toBe(false);
+    expect(sm.activeCount).toBe(1);
+    await sm.shutdown();
+  });
+
   it("queues recovery redelivery instead of preempting a working session", async () => {
     const working = handler({
       async start(message, ctx) {

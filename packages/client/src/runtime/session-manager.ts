@@ -1549,6 +1549,24 @@ export class SessionManager {
     if (nextIndex < 0) return;
     const next = this.pendingQueue[nextIndex];
     if (!next) return;
+    const existing = this.sessions.get(next.chatId);
+    if (existing?.status === "active") {
+      this.pendingQueue.splice(nextIndex, 1);
+      if (!next.message) {
+        this.drainPendingQueue();
+        return;
+      }
+      this.routeMessage(next.chatId, next.message, next.deliveryKind).catch((err) => {
+        const hasInboxEntryId = next.message?.inboxEntryId !== undefined;
+        this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
+        if (next.message && hasInboxEntryId) {
+          this.inboxDelivery.retryTurn(next.chatId, next.message, "pending_drain_failed");
+        } else {
+          this.pendingQueue.unshift(next);
+        }
+      });
+      return;
+    }
     if (
       this._activeCount >= this.config.concurrency &&
       !this.findOldestActiveSession(
