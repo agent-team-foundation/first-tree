@@ -35,3 +35,40 @@ Fixture-only validation is available without model calls:
 ```bash
 pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures
 ```
+
+## first-tree-write
+
+```bash
+pnpm --filter @first-tree/skill-evals eval:first-tree-write
+pnpm --filter @first-tree/skill-evals eval:first-tree-write -- --case write-source-trigger
+pnpm --filter @first-tree/skill-evals eval:first-tree-write -- --case read-and-write-installed-read-trigger --verbose
+pnpm --filter @first-tree/skill-evals eval:first-tree-write -- --json
+pnpm --filter @first-tree/skill-evals eval:first-tree-write -- --case write-source-trigger --validate-fixtures --verbose
+```
+
+The runner creates isolated temporary workspaces, installs the repo-local
+`first-tree-write` skill and, for dual-skill cases, `first-tree-read`, then
+runs `codex exec --json` with a shimmed `first-tree` binary.
+
+Expected trigger-case evidence:
+
+- `first-tree-write/SKILL.md` was loaded from the workspace skill install.
+- `first-tree tree tree` succeeded during the model phase.
+- The expected target path, currently `systems/server/auth/jwt`, appeared in a
+  tree listing or in the model's stated planned target after a successful tree
+  listing.
+- Model-phase `first-tree` commands returned zero.
+
+Expected non-trigger evidence:
+
+- `first-tree-write/SKILL.md` was not loaded.
+- No write-specific target selection or write intent appears in the final
+  output.
+- Dual-skill read-only cases may use `first-tree-read` and `first-tree tree
+  tree`, but must still avoid the write skill.
+
+Fixture-only validation is available without model calls:
+
+```bash
+pnpm --filter @first-tree/skill-evals validate:first-tree-write-fixtures
+```

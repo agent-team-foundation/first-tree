@@ -3,7 +3,7 @@ name: first-tree
 version: 0.7.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: "Top-level First Tree skill — entry-point router and canonical home for the rules every in-chat agent must follow. Covers what First Tree is (workspace collaboration arm + Context management arm), the three-principal model (Server / Client / Agent), the canonical Communication Principles (who-do-I-talk-to decision guide, task-chat creation, courtesy-send guard, channel-binary substitution), what the background daemon does and why you must not stop/restart it from inside yourself, a CLI Namespace Map of which command lives where, and the mandatory pre-task hygiene (binding check, tree HEAD freshness, role classification). Full `chat create` / `chat send` / `chat invite` CLI mechanics live in `references/agent-communication.md`. For task-scoped Context Tree reads use `first-tree-read`; for Context Tree concepts/writes use `first-tree-context`. Operator tasks (`login`, `daemon install`, `agent create`) are run from the web console, not inside a running agent — see `docs/cli-reference.md`."
+description: "Top-level First Tree skill — entry-point router and canonical home for in-chat agent rules. Covers First Tree's workspace collaboration and Context management arms, the Server / Client / Agent model, Communication Principles, daemon boundaries, CLI namespace map, and mandatory pre-task hygiene. For task-scoped Context Tree reads use `first-tree-read`; for source-backed Context Tree writes use `first-tree-write`; for Context Tree concepts and writing principles use `first-tree-context`. Full chat mechanics live in `references/agent-communication.md`. Operator tasks (`login`, `daemon install`, `agent create`) are web-console / human flows, not running-agent flows."
 ---
 
 # First Tree — Top-Level Skill
@@ -24,7 +24,7 @@ arms — pick the right one before acting:
 | Arm | What it does | Sub-skills |
 |---|---|---|
 | **Workspace collaboration** | How agents talk to each other (and ask humans) inside a shared workspace (`chat create`, `chat send`, `chat ask`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
-| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-read` · `first-tree-context` (write operating guide) · `first-tree-sync` |
+| **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-read` · `first-tree-write` · `first-tree-context` (concepts + writing principles) · `first-tree-sync` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
 another agent or the human in chat), then the context ops.
@@ -242,7 +242,7 @@ Once hygiene checks pass, drop into the right sub-skill:
 
 - Talk to another agent / create a task chat / read full `chat send` mechanics → stay in **this skill** and read `references/agent-communication.md`
 - Read context before acting based on the user's task / path / feature signal → **`first-tree-read`**
-- Write tree updates from a specific source (PR / doc / note) → **`first-tree-context`**
+- Write tree updates from a specific source (PR / doc / note) → **`first-tree-write`**, then load **`first-tree-context`** for the writing rules
 - "Is the tree up to date?" (no specific source attached) → **`first-tree-sync`**
 - Workspace appears unbound / cwd is not under a tree → operator action: surface to a human (binding is a web-console flow, not an agent flow)
 

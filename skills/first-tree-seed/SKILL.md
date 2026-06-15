@@ -3,7 +3,7 @@ name: first-tree-seed
 version: 0.2.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-context`. Do not use to audit drift on an existing tree — that is `first-tree-sync`.
+description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-write`. Do not use to audit drift on an existing tree — that is `first-tree-sync`.
 ---
 
 # First Tree — Seed
@@ -13,19 +13,19 @@ provisioned Context Tree. It owns the one-time bootstrap from "Cloud
 just gave me an empty tree repo" to "the tree has real top + second
 level structure plus initial leaf nodes drawn from the bound source
 repos". Every subsequent write — one PR at a time, one decision at a
-time — belongs to `first-tree-context`, not here.
+time — belongs to `first-tree-write`, not here.
 
 ## When To Use This Skill
 
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-context` (incremental write)                   |
+| Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental write)                     |
 | First content pass on the bound sources                               | Audit drift between merged code and an existing tree → `first-tree-sync`                             |
 | Invoked by name — by a human, or by a future kickoff prompt once Cloud provisions before sending (see Trigger) | Workspace is unbound → surface to a human (binding is a web-console operator action, not an agent's) |
 
 The skill is **single-shot per tree**. If a previous seed already
 landed (PR1 merged), do not re-run; route any further work through
-`first-tree-context` or `first-tree-sync`.
+`first-tree-write` or `first-tree-sync`.
 
 ## Required Reading
 
@@ -57,7 +57,7 @@ new-tree onboarding at a skill that refuses; that wiring is tracked
 as a separate Cloud-side change.
 
 Once the seed has landed, the same self-check fails and the skill
-refuses; route subsequent work through `first-tree-context` or
+refuses; route subsequent work through `first-tree-write` or
 `first-tree-sync`.
 
 ### Self-check before starting (all must pass; stop on any failure)
@@ -77,8 +77,8 @@ refuses; route subsequent work through `first-tree-context` or
      dotfile-prefixed dir.
 
    If any of those fail, the tree is non-empty — refuse with a
-   one-line explanation pointing at `first-tree-context` /
-   `first-tree-sync`. Do **not** prompt the user to clear the tree
+  one-line explanation pointing at `first-tree-write` /
+  `first-tree-sync`. Do **not** prompt the user to clear the tree
    yourself; deleting nodes is human-owned.
 3. **All declared sources present on disk.** Each source clone lives at
    `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` — the
@@ -549,7 +549,7 @@ holds, whichever comes first:
 - **Twelve leaves drafted in this domain.** Empirical cap from
   observing real seed runs; not a hard architectural limit. A single
   seed pass should not create a sixty-leaf domain — defer the rest
-  to `first-tree-context` writes after the user has reviewed PR2.
+  to `first-tree-write` writes after the user has reviewed PR2.
   Adjust in a future skill version if real usage shows the number is
   consistently too low or too high.
 
@@ -635,11 +635,11 @@ After all sub-agents return:
      sub-agent.
   2. **Escalations** — items sub-agents flagged as out of scope.
   3. **Known gaps** — the union of all per-domain known gaps.
-  4. **Next steps** — point the user at `first-tree-context` for any
+  4. **Next steps** — point the user at `first-tree-write` for any
      follow-up writes and `first-tree-sync` for periodic drift audits.
 
 After PR2 opens, the seed skill is done. Subsequent writes are owned
-by `first-tree-context`; subsequent drift audits by
+by `first-tree-write`; subsequent drift audits by
 `first-tree-sync`.
 
 ### Recovery path: PR1 merged, Phase 2 abandoned
@@ -650,17 +650,17 @@ ends up with real structure but zero leaves. **This is not a
 re-seed condition** — the seed self-check sees a populated tree
 (`<tree>/<domain>/NODE.md` files exist) and refuses. Instead:
 
-- Future writes go through `first-tree-context` one source at a
+- Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
 - A team that wants to back-fill the missing leaf content can
   invoke `first-tree-sync` to scan for `code-not-synced/substantive`
-  drift; sync's hand-off back to `first-tree-context` then performs
+  drift; sync's hand-off back to `first-tree-write` then performs
   the writes one source at a time.
 
 Communicate this fallback to the user in PR1's body so the choice
 is visible: "If you merge PR1 without coming back for Phase 2, the
 tree is fully usable but empty; later writes go through
-`first-tree-context` / `first-tree-sync`."
+`first-tree-write` / `first-tree-sync`."
 
 ---
 
@@ -704,7 +704,7 @@ make them visible at the seed-specific surface.
   domain has weak evidence and the user does not opt it in, leave it
   out.
 - Run twice on the same tree. If PR1 has already merged, hand off
-  to `first-tree-context` or `first-tree-sync`.
+  to `first-tree-write` or `first-tree-sync`.
 
 ## References
 
@@ -715,4 +715,4 @@ make them visible at the seed-specific surface.
   source-system boundary
 - [`../first-tree-sync/SKILL.md`](../first-tree-sync/SKILL.md) —
   ongoing drift audit, owned hand-off back into
-  `first-tree-context`
+  `first-tree-write`

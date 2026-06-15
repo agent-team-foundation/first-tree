@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 const BUNDLED_SKILLS = [
   "first-tree",
   "first-tree-context",
+  "first-tree-write",
   "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",

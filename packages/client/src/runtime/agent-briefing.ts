@@ -317,8 +317,8 @@ directly before acting:
 - \`${contextSkillPath}\`
 
 These two are unconditional. The remaining First Tree skills
-(\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
-task signal as listed in the First Tree Family map below.
+(\`first-tree-read\`, \`first-tree-write\`, \`first-tree-sync\`) load on
+demand based on the task signal as listed in the First Tree Family map below.
 
 Skipping either skill costs you the daemon-lifecycle invariants, the
 full Communication Principles, the source-system boundary, and the
@@ -952,7 +952,7 @@ guidance:
 
 | Task | Skill |
 |---|---|
-| Reflect one specific PR / doc / note into the tree | \`first-tree-context\` (Writing the Tree) |
+| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` (targeting workflow), then \`first-tree-context\` (writing rules) |
 | Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
 
 Do not invent ad-hoc tree edits without loading the skill — the
@@ -1064,7 +1064,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | Skill | Load when |
 |---|---|
 | \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
+| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and writing principles |
+| \`first-tree-write\`   | source-backed Context Tree writes from a concrete PR / doc / note / pasted source |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |
@@ -1083,6 +1084,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree",
   "first-tree-context",
+  "first-tree-write",
   "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",

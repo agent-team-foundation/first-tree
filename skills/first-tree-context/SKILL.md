@@ -3,20 +3,21 @@ name: first-tree-context
 version: 0.8.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree concept and writing guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, and how to write tree updates from a specific source (PR / doc / note). Use `first-tree-read` for task-scoped tree reads before acting; use this skill when the user asks to reflect a PR / doc / note into the tree, update the tree from source material, or write a decision to the tree.
+description: Context Tree concept and writing-principles guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, Double Test, Node Shape, and hard rules for durable tree content. Use `first-tree-read` for task-scoped tree reads before acting. For source-backed write / update / reflect / capture requests, use `first-tree-write` first, then load this skill for writing rules.
 ---
 
 # First Tree — Context
 
-Read this skill when you need the Context Tree concept model or when a
-specific source artifact should be reflected into the tree. It is the
-operating guide for authorship: a few principles, a small set of hard
-rules, and the judgment guidelines that turn source material into
-correct edits.
+Read this skill when you need the Context Tree concept model or the
+writing principles that govern durable tree content. It is the operating
+guide for authorship: a few principles, a small set of hard rules, and
+the judgment guidelines that turn source material into correct edits.
 
-Use `first-tree-read` for task-scoped tree reads before acting. This
-skill explains the source-system boundary and the read discipline needed
-before writing; it does not own the operational reader workflow.
+Use `first-tree-read` for task-scoped tree reads before acting. Use
+`first-tree-write` for the operational workflow of taking a specific
+source artifact to a chosen tree target. This skill explains the
+source-system boundary and the read discipline needed before writing; it
+does not own the operational reader or write-targeting workflow.
 
 ## What A Context Tree Is
 

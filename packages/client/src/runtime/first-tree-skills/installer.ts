@@ -58,6 +58,7 @@ export const CORE_SKILL_NAMES = [] as const;
 export const TREE_SKILL_NAMES = [
   "first-tree",
   "first-tree-context",
+  "first-tree-write",
   "first-tree-read",
   "first-tree-sync",
   "first-tree-seed",

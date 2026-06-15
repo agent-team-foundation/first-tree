@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 
-import { formatCommand, isTreeTreeSelectorArgv } from "../shared/commands.js";
+import { formatCommand } from "../shared/commands.js";
 import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
 
 function markdownBool(value: boolean): string {
@@ -10,10 +10,6 @@ function markdownBool(value: boolean): string {
 export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): string | null {
   const notes: string[] = [];
   const nonZeroResults = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
-  const selectorCallCount = metrics.firstTreeArgv.filter(isTreeTreeSelectorArgv).length;
-  const selectorExitCodes = metrics.firstTreeCommandResults
-    .filter((result) => isTreeTreeSelectorArgv(result.argv))
-    .map((result) => result.exitCode);
 
   if (nonZeroResults.length > 0) {
     const detail = nonZeroResults
@@ -22,34 +18,24 @@ export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): strin
     notes.push(`first-tree command(s) returned non-zero exit code(s): ${detail}.`);
   }
 
-  if (expectedTrigger && !metrics.helpSucceeded) {
-    if (!metrics.helpAttempted && metrics.helpExitCodes.length === 0) {
-      notes.push("Required first-tree tree tree --help command did not run during model phase.");
-    } else {
-      const exitCodes = metrics.helpExitCodes.length > 0 ? metrics.helpExitCodes.join(", ") : "none";
-      notes.push(`Required first-tree tree tree --help command did not succeed; observed exit code(s): ${exitCodes}.`);
-    }
+  if (expectedTrigger && !metrics.writeSkillFileReadObserved) {
+    notes.push("Required first-tree-write/SKILL.md load was not observed.");
   }
 
-  if (expectedTrigger && !metrics.selectionSucceeded) {
-    if (selectorCallCount === 0 && selectorExitCodes.length === 0) {
-      notes.push("Required first-tree tree tree selector command did not run during model phase.");
-    } else {
-      const exitCodes = selectorExitCodes.length > 0 ? selectorExitCodes.join(", ") : "none";
-      notes.push(
-        `Required first-tree tree tree selector command did not succeed; observed exit code(s): ${exitCodes}.`,
-      );
-    }
+  if (expectedTrigger && !metrics.treeTreeSucceeded) {
+    notes.push("Required first-tree tree tree listing did not succeed during model phase.");
   }
 
-  if (expectedTrigger && !metrics.expectedFactsObserved) {
-    notes.push(
-      "Expected Context Tree facts were not surfaced in the model output; inspect events.jsonl for the final assistant messages.",
-    );
+  if (expectedTrigger && !metrics.targetPathObserved) {
+    notes.push("Expected target path was not observed in a tree listing or in the final planned target.");
   }
 
-  if (!expectedTrigger && metrics.expectedFactHits.length > 0) {
-    notes.push(`Off-topic case surfaced Context Tree fact(s): ${metrics.expectedFactHits.join(" | ")}.`);
+  if (!expectedTrigger && metrics.writeSkillFileReadObserved) {
+    notes.push("Non-write prompt loaded first-tree-write/SKILL.md.");
+  }
+
+  if (!expectedTrigger && metrics.writeIntentInOutput) {
+    notes.push("Non-write prompt produced write-specific intent text.");
   }
 
   return notes.length > 0 ? notes.join(" ") : null;
@@ -73,29 +59,32 @@ function commandResultRows(metrics: EvalMetrics): string {
     .join("\n");
 }
 
-function expectedFactRows(metrics: EvalMetrics): string {
-  if (metrics.expectedFactHits.length === 0) return "- none";
-  return metrics.expectedFactHits.map((fact) => `- ${fact}`).join("\n");
-}
-
 export function writeCaseSummaries(summary: CaseRunSummary): void {
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
   const drift = summary.driftNote ? `\n## Drift Evidence\n\n${summary.driftNote}\n` : "";
-  const markdown = `# first-tree-read Eval: ${summary.caseId}
+  const markdown = `# first-tree-write Eval: ${summary.caseId}
 
 ## Result
 
 - passed: ${markdownBool(summary.passed)}
 - expectedTrigger: ${markdownBool(summary.expectedTrigger)}
-- skillHit: ${markdownBool(summary.metrics.skillHit)}
-- skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
-- expectedFactsObserved: ${markdownBool(summary.metrics.expectedFactsObserved)}
-- helpSucceeded: ${markdownBool(summary.metrics.helpSucceeded)}
-- selectionSucceeded: ${markdownBool(summary.metrics.selectionSucceeded)}
+- installedSkillSet: ${summary.installedSkillSet}
+- writeSkillFileReadObserved: ${markdownBool(summary.metrics.writeSkillFileReadObserved)}
+- readSkillFileReadObserved: ${markdownBool(summary.metrics.readSkillFileReadObserved)}
+- contextSkillFileReadObserved: ${markdownBool(summary.metrics.contextSkillFileReadObserved)}
+- treeTreeSucceeded: ${markdownBool(summary.metrics.treeTreeSucceeded)}
+- targetPathObserved: ${markdownBool(summary.metrics.targetPathObserved)}
+- targetObservedInTreeListing: ${markdownBool(summary.metrics.targetObservedInTreeListing)}
+- targetMentionedInOutput: ${markdownBool(summary.metrics.targetMentionedInOutput)}
+- writeIntentInOutput: ${markdownBool(summary.metrics.writeIntentInOutput)}
 - modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+
+## Expected Target
+
+\`${summary.expectedTargetPath}\`
 
 ## Prompt
 
@@ -106,10 +95,6 @@ ${summary.prompt}
 ## Fixture Validation
 
 ${validationRows(summary.fixtureValidation)}
-
-## Expected Fact Hits
-
-${expectedFactRows(summary.metrics)}
 
 ## first-tree Command Results
 
@@ -132,24 +117,24 @@ export function formatSummaryTable(batch: BatchSummary): string {
   const rows = batch.cases.map((summary) => [
     summary.caseId,
     String(summary.expectedTrigger),
-    String(summary.metrics.skillHit),
-    String(summary.metrics.firstTreeCalls),
-    String(summary.metrics.skillFileReadObserved),
-    String(summary.metrics.expectedFactsObserved),
-    String(summary.metrics.helpSucceeded),
-    String(summary.metrics.selectionSucceeded),
+    summary.installedSkillSet,
+    String(summary.metrics.writeSkillFileReadObserved),
+    String(summary.metrics.readSkillFileReadObserved),
+    String(summary.metrics.treeTreeSucceeded),
+    String(summary.metrics.targetPathObserved),
+    String(summary.metrics.writeIntentInOutput),
     String(summary.metrics.modelFirstTreeCommandsOk),
     String(summary.passed),
   ]);
   const header = [
     "case_id",
     "expected_trigger",
-    "skill_hit",
-    "first_tree_calls",
-    "skill_file_read",
-    "expected_facts_observed",
-    "helpSucceeded",
-    "selectionSucceeded",
+    "installed_skills",
+    "write_skill_read",
+    "read_skill_read",
+    "treeTreeSucceeded",
+    "targetPathObserved",
+    "writeIntentInOutput",
     "modelFirstTreeCommandsOk",
     "passed",
   ];

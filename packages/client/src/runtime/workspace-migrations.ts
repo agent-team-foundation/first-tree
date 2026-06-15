@@ -288,7 +288,6 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         "first-tree-cloud",
         "first-tree-github-scan",
         "first-tree-onboarding",
-        "first-tree-write",
         "github-scan",
       ];
       let removed = 0;

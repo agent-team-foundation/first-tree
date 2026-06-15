@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Write"
+  short_description: "Write source-backed decisions into the Context Tree"
+  default_prompt: "Use $first-tree-write to capture this source-backed decision in the Context Tree after selecting the right target node."

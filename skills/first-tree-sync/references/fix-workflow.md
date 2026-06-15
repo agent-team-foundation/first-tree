@@ -6,7 +6,7 @@ per finding, whether to:
 - **auto-fix** — open a tree-repo PR with the correction (structural
   edits only; never decision prose)
 - **context-handoff** — surface the source pointer and invoke
-  `first-tree-context`
+  `first-tree-write`
 - **needs-human** — leave a label or comment for human disambiguation
 - **skip** — the finding is a false positive or out of scope
 
@@ -18,7 +18,7 @@ per finding, whether to:
 | `tree-wrong`                  | auto-fix when the correction is small; needs-human if rationale changes                                   | Always link the offending PR / commit so reviewers see the source of truth.                                         |
 | `tree-outdated`               | needs-human                                                                                               | Superseding decisions cross domains; require an owner.                                                              |
 | `code-not-synced/structural`  | auto-fix                                                                                                  | Skeleton-only changes: NODE.md routing entries, `workspace.json.sources` additions, org.yaml dep registration, member stubs. |
-| `code-not-synced/substantive` | context-handoff (always)                                                                                  | Sync surfaces the source pointer and stops. Substantive content goes through `first-tree-context`'s "default to not writing" filter. |
+| `code-not-synced/substantive` | context-handoff (always)                                                                                  | Sync surfaces the source pointer and stops. Substantive content goes through `first-tree-write`, which loads `first-tree-context`'s "default to not writing" filter. |
 | `cross-domain-broken`         | auto-fix when the new target is unambiguous; needs-human when the link could go to multiple replacements. |
 | `ownership-stale`             | needs-human always                                                                                        | Ownership changes are high-trust and require a person.                                                              |
 
@@ -85,19 +85,19 @@ Always log the skip reason. Skipped findings should still appear in the
 `drifts[]` output with `route: "skip"` so downstream tooling can audit the
 audit.
 
-## Hand-Off To `first-tree-context`
+## Hand-Off To `first-tree-write`
 
 Every `code-not-synced/substantive` finding hands off to
-`first-tree-context` — this is the default route, not an opt-in.
+`first-tree-write` — this is the default route, not an opt-in.
 Mechanics:
 
 1. Group the substantive findings in the audit output under a "context
    candidates" header. Each entry shows `sourcePointer` and `summary`.
 2. Print one invocation suggestion per finding:
    ```
-   /first-tree-context source=<sourcePointer>
+   /first-tree-write source=<sourcePointer>
    ```
-3. Stop. Do not auto-invoke `first-tree-context` — that would bypass
+3. Stop. Do not auto-invoke `first-tree-write` — that would bypass
    its "default to not writing" filter and the user's review of which
    gaps are actually tree-worthy.
 
@@ -105,7 +105,8 @@ For `tree-stale` / `tree-wrong` cases where the user gave you a specific
 source PR to reflect, you can also hand off — same shape.
 
 Sync's job ends when each drift is classified and routed.
-`first-tree-context` turns one specific source into one tree update.
+`first-tree-write` turns one specific source into one tree update target
+and uses `first-tree-context` for the writing rules.
 See `references/boundary.md`.
 
 ## What This Workflow Does NOT Do

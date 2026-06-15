@@ -170,17 +170,10 @@ describe("workspace-migrations registry", () => {
   });
 
   it("v1-orphan-skills removes hardcoded legacy skill payloads + matching .claude symlinks", () => {
-    // Plant each of the 6 retired skills on disk in the canonical layout
+    // Plant each retired skill on disk in the canonical layout
     // (`.agents/skills/<name>/SKILL.md` + `.claude/skills/<name>` symlink).
     // The migration must remove all of them in one pass.
-    const legacy = [
-      "attention",
-      "first-tree-cloud",
-      "first-tree-github-scan",
-      "first-tree-onboarding",
-      "first-tree-write",
-      "github-scan",
-    ];
+    const legacy = ["attention", "first-tree-cloud", "first-tree-github-scan", "first-tree-onboarding", "github-scan"];
     mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
     for (const name of legacy) {
       const agentsDir = join(workspace, ".agents", "skills", name);

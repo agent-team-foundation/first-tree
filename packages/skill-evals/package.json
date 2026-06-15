@@ -6,8 +6,10 @@
   "description": "Opt-in live model evaluations for First Tree skills.",
   "scripts": {
     "eval:first-tree-read": "tsx src/first-tree-read/index.ts",
+    "eval:first-tree-write": "tsx src/first-tree-write/index.ts",
     "test": "vitest run --passWithNoTests",
     "validate:first-tree-read-fixtures": "tsx src/first-tree-read/index.ts --validate-fixtures",
+    "validate:first-tree-write-fixtures": "tsx src/first-tree-write/index.ts --validate-fixtures",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

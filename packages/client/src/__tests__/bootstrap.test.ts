@@ -363,6 +363,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
   const TREE_SKILLS = [
     "first-tree",
     "first-tree-context",
+    "first-tree-write",
     "first-tree-read",
     "first-tree-sync",
     "first-tree-seed",
@@ -456,6 +457,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     const bundledMixed = makeFixtureSkillsRoot("drift-mixed", [
       { name: "first-tree", version: "2.0.0" },
       { name: "first-tree-context", version: "1.0.0" },
+      { name: "first-tree-write", version: "1.0.0" },
       { name: "first-tree-read", version: "1.0.0" },
       { name: "first-tree-sync", version: "1.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
@@ -502,7 +504,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // first-tree installs successfully, the others all fail.
     expectSkillInstalled(workspace, "first-tree");
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-sync"))).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-context, first-tree-read, first-tree-sync");
+    expect(logs.join("\n")).toContain("failed first-tree-context, first-tree-write, first-tree-read");
     expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-context)");
   });
 
@@ -781,6 +783,7 @@ describe("CLI-version pin contract (handler invariants)", () => {
   const TREE_SKILLS = [
     "first-tree",
     "first-tree-context",
+    "first-tree-write",
     "first-tree-read",
     "first-tree-sync",
     "first-tree-seed",

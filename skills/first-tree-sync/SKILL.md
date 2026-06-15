@@ -3,7 +3,7 @@ name: first-tree-sync
 version: 0.6.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-context` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
+description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or on a freshly onboarded tree. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead — not this skill — when the user has already named a specific PR / doc / note as the source material.
 ---
 
 # First Tree Sync
@@ -11,7 +11,7 @@ description: Audit and repair drift between merged code and the Context Tree in 
 Read this first:
 
 - `../first-tree-context/SKILL.md` — the Context Tree operating guide
-  (concepts, source-system boundary, read + write sections). Under the
+  (concepts, source-system boundary, read + writing-rules sections). Under the
   simplify-context-skill pass, the `functions` / `maintenance` /
   `structure` references were folded back into this single file, so
   loading the SKILL.md is enough.
@@ -28,14 +28,14 @@ directions**:
   register it? (catches `code-not-synced`)
 
 Classify every gap, then route each finding to auto-fix,
-`first-tree-context` handoff, needs-human, or skip.
+`first-tree-write` handoff, needs-human, or skip.
 
 Two phases, in order:
 
 1. **audit** — produce a `drifts[]` list. Read-only, human-paced. Combines
    a tree→code pass (Phase 1–3) with a code→tree sweep (Phase 4).
 2. **fix** — for each drift, decide auto-fix /
-   `first-tree-context` handoff / needs-human / skip and act on that
+   `first-tree-write` handoff / needs-human / skip and act on that
    decision.
 
 Each phase has a dedicated reference; follow them in order.
@@ -44,7 +44,7 @@ Each phase has a dedicated reference; follow them in order.
 
 | Use this skill                                       | Use a different skill                                                                |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-context`           |
+| User asks "is the tree up to date?"                  | User has a specific PR / doc to reflect into the tree → `first-tree-write`             |
 | Audit drift since a release                          | Repo is unbound → surface to a human (workspace binding is an operator action)        |
 
 ## The Six Drift Types
@@ -61,7 +61,7 @@ ownership-stale              — owners list no longer matches reality
 
 `code-not-synced` has two subtypes because the fix shape is different:
 structural gaps need registration (sync handles), substantive gaps need
-authorship (`first-tree-context` handles). See
+authorship (`first-tree-write` handles, using `first-tree-context` rules). See
 `references/drift-taxonomy.md`.
 
 Definitions, signals, and worked examples in
@@ -111,18 +111,18 @@ and tree manually; the fix phase opens PRs via `gh`.
 - **Audit produces a list; fix takes actions.** Do not write tree updates
   inside the audit phase.
 - **Sync may add structural skeletons; substantive content goes through
-  `first-tree-context`.** `code-not-synced` splits into two subtypes (see
+  `first-tree-write`.** `code-not-synced` splits into two subtypes (see
   `references/drift-taxonomy.md`):
   - **structural** — new dir / submodule / dependency / member that the
     tree's skeleton does not yet register. Sync may auto-fix with a stub
     node or registry entry.
   - **substantive** — new decision / constraint / rationale (e.g. a new
     AGENTS.md section, a merged RFC). Sync surfaces the source pointer
-    and hands off to `first-tree-context`, which applies the "default to
-    not writing" filter.
+    and hands off to `first-tree-write`, which loads `first-tree-context`
+    and applies the "default to not writing" filter.
 
   Sync never composes decision prose from code. "The tree could say more"
-  about an existing topic is not drift — that is `first-tree-context`'s job.
+  about an existing topic is not drift — that is `first-tree-write`'s job.
 
 ## References
 

@@ -2,13 +2,17 @@ import { appendEvent, readEvents } from "../shared/events.js";
 import { createEvalReporter } from "../shared/reporter.js";
 import { runCodex } from "../shared/runner.js";
 import { createFirstTreeShim, createRunPaths, setupFixture, validateFixture } from "./fixture.js";
-import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
+import { casePassed, deriveMetrics, fixtureOnlyPassed, withAccidentalWriteHit } from "./metrics.js";
 import { driftNote, writeCaseSummaries } from "./summary.js";
-import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
+import type { CaseRunSummary, CliOptions, FirstTreeWriteEvalCase } from "./types.js";
 
-export async function runFirstTreeReadCase(
+function allowReadSkillTreeLookupOnNonTrigger(evalCase: FirstTreeWriteEvalCase): boolean {
+  return evalCase.installedSkillSet === "read-write";
+}
+
+export async function runFirstTreeWriteCase(
   packageRoot: string,
-  evalCase: FirstTreeReadEvalCase,
+  evalCase: FirstTreeWriteEvalCase,
   options: CliOptions,
   runStartedAt: string,
 ): Promise<CaseRunSummary> {
@@ -28,21 +32,23 @@ export async function runFirstTreeReadCase(
   const runnerExitCode = options.validateFixtures
     ? 0
     : await runCodex(options, evalCase.id, evalCase.prompt, paths, reporter);
-  const metrics = deriveMetrics(
-    readEvents(paths.eventsPath),
-    fixtureValidation,
-    runnerExitCode,
-    evalCase.expectedFacts,
+  const metrics = withAccidentalWriteHit(
+    deriveMetrics(readEvents(paths.eventsPath), fixtureValidation, runnerExitCode, evalCase.expectedTargetPath),
+    evalCase.expectedTrigger,
   );
   const passed = options.validateFixtures
     ? fixtureOnlyPassed(fixtureValidation)
-    : casePassed(evalCase.expectedTrigger, metrics);
+    : casePassed(evalCase.expectedTrigger, metrics, {
+        allowReadSkillTreeLookupOnNonTrigger: allowReadSkillTreeLookupOnNonTrigger(evalCase),
+      });
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(metrics, evalCase.expectedTrigger),
+    expectedTargetPath: evalCase.expectedTargetPath,
     expectedTrigger: evalCase.expectedTrigger,
     fixtureValidation,
+    installedSkillSet: evalCase.installedSkillSet,
     metrics,
     passed,
     prompt: evalCase.prompt,

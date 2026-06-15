@@ -434,11 +434,15 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(contextRow).toContain("unconditional");
     expect(contextRow).toContain("`# Required Reading`");
     expect(contextRow).toContain("concept model");
-    expect(contextRow).toContain("source-driven tree writes");
+    expect(contextRow).toContain("writing principles");
     expect(contextRow).not.toContain("read context before acting");
 
     // On-demand rows must NOT pick up the unconditional label by
     // accident — they're triggered by keyword / task signal.
+    const writeRow = familyMap.match(/\|\s*`first-tree-write`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(writeRow).not.toContain("unconditional");
+    expect(writeRow).toContain("source-backed");
+
     const readRow = familyMap.match(/\|\s*`first-tree-read`\s*\|[^\n]*/)?.[0] ?? "";
     expect(readRow).not.toContain("unconditional");
     expect(readRow).toContain("before acting");
@@ -904,16 +908,14 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const writingBlock = briefing.slice(briefing.indexOf("## Writing the Tree"));
 
     // The surviving rows must point at shipped skills.
+    expect(writingBlock).toContain("`first-tree-write`");
     expect(writingBlock).toContain("`first-tree-context`");
     expect(writingBlock).toContain("`first-tree-sync`");
 
     // Retired skills must not appear:
-    //   - `first-tree-write` was folded into `first-tree-context` under
-    //     the simplify-context-skill pass (PR #843).
     //   - `first-tree-onboarding` was retired with the old tree
     //     provisioning commands.
     //   - `first-tree-github-scan` predates both and never shipped.
-    expect(writingBlock).not.toContain("`first-tree-write`");
     expect(writingBlock).not.toContain("`first-tree-onboarding`");
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });

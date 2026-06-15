@@ -178,7 +178,7 @@ through worktrees*):
    Split the file by `## ` and `### ` headings. For each section without
    a corresponding tree node, routing entry, or `soft_links` reference,
    emit `code-not-synced/substantive`. Record the heading and the
-   line-range in `sourcePointer` so `first-tree-context` knows what to
+   line-range in `sourcePointer` so `first-tree-write` knows what to
    read.
 
 6. **Decision docs**
@@ -212,7 +212,7 @@ Optional scope flag (currently agent-side; no CLI flag yet):
 
 Phase 4 is **structural-aware, not content-aware**: it asks "is this
 thing registered?" not "what does it say?". Reading code to extract
-decision prose is `first-tree-context`'s job, not sync's.
+decision prose is `first-tree-write`'s job, not sync's.
 
 ## Output Shape
 
@@ -248,7 +248,7 @@ table for the user.
   apply.
 - Do not draft decision prose during audit. Phase 4 records the source
   pointer for substantive gaps and stops; the prose itself is
-  `first-tree-context`'s job.
+  `first-tree-write`'s job.
 - Do not auto-bind unbound submodules discovered in Phase 4 step 2. Emit
   a `code-not-synced/structural` finding and surface it to a human —
   binding a source repo to a tree is an operator action taken from the

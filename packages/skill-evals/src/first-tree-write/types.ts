@@ -7,11 +7,14 @@ import type {
   WorkspaceKind,
 } from "../shared/types.js";
 
-export type FirstTreeReadEvalCase = {
+export type InstalledSkillSet = "write" | "read-write";
+
+export type FirstTreeWriteEvalCase = {
   description: string;
-  expectedFacts: readonly string[];
+  expectedTargetPath: string;
   expectedTrigger: boolean;
   id: string;
+  installedSkillSet: InstalledSkillSet;
   prompt: string;
   promptAlternates: readonly string[];
   workspaceKind: WorkspaceKind;
@@ -20,22 +23,32 @@ export type FirstTreeReadEvalCase = {
 export type { CliOptions, CommandResult, FixtureValidation, RunPaths, WorkspaceKind };
 
 export type EvalMetrics = BaseEvalMetrics & {
-  expectedFactHits: readonly string[];
-  expectedFactsObserved: boolean;
-  helpAttempted: boolean;
-  helpCalls: number;
-  helpExitCodes: readonly number[];
-  helpSucceeded: boolean;
-  selectionSucceeded: boolean;
-  skillFileReadObserved: boolean;
-  skillHit: boolean;
+  accidentalWriteHit: boolean;
+  commandFailuresDuringModel: readonly {
+    argv: readonly string[];
+    exitCode: number;
+  }[];
+  contextSkillFileReadObserved: boolean;
+  readSkillFileReadObserved: boolean;
+  readSkillHit: boolean;
+  targetMentionedInOutput: boolean;
+  targetObservedAfterTreeListing: boolean;
+  targetObservedInTreeListing: boolean;
+  targetPathObserved: boolean;
+  treeTreeCalls: number;
+  treeTreeSucceeded: boolean;
+  writeIntentInOutput: boolean;
+  writeSkillFileReadObserved: boolean;
+  writeSkillHit: boolean;
 };
 
 export type CaseRunSummary = {
   caseId: string;
   driftNote: string | null;
+  expectedTargetPath: string;
   expectedTrigger: boolean;
   fixtureValidation: FixtureValidation;
+  installedSkillSet: InstalledSkillSet;
   metrics: EvalMetrics;
   passed: boolean;
   prompt: string;
