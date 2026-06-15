@@ -172,6 +172,13 @@ break markdown rendering downstream.
 - Pass content as a **raw string** — never `JSON.stringify` it first.
   Wrapping in outer quotes + `\n` escapes produces a literal
   `"@x ...\n..."` row that the UI cannot render as markdown.
+- Never write the body as a one-line quoted argument with `\n` escapes
+  (`chat send <name> "line1\n\n**line2**"`) — POSIX shells do not expand
+  `\n` inside quotes, so the literal backslash-n reaches the server and
+  the row renders as one long unformatted line. The CLI **rejects** this
+  shape (`ESCAPED_NEWLINES`, exit 2) before anything is sent; retry via
+  the stdin form below. Stdin bodies are not checked — pipe the body if
+  literal `\n` text is intentional.
 - For multi-line / markdown / special chars (quotes, `$`, backticks,
   newlines), use **stdin** with real newlines, plus `-f markdown`:
 

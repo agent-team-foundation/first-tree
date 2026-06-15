@@ -46,7 +46,10 @@ vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAgentMock }));
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 vi.mock("../core/doc-capture.js", () => docCaptureMock);
-vi.mock("../commands/chat/_shared/io.js", () => ioMocks);
+vi.mock("../commands/chat/_shared/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/chat/_shared/io.js")>()),
+  readStdin: ioMocks.readStdin,
+}));
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
