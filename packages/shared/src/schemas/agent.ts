@@ -148,7 +148,9 @@ export const createAgentSchema = z.object({
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const updateAgentSchema = z.object({
-  type: agentTypeSchema.optional(),
+  // Agent kind is established at creation. Human mirrors are owned by the
+  // member lifecycle, so generic PATCH must not support human <-> agent flips.
+  type: z.never().optional(),
   /**
    * Phase 2 of the agent-naming refactor promoted `displayName` to NOT NULL
    * at the DB level, so null is no longer an accepted update — clearing the
@@ -311,5 +313,13 @@ export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;
 export const listAgentsQuerySchema = paginationQuerySchema.extend({
   type: agentTypeSchema.optional(),
   query: z.string().trim().max(60).optional(),
+  addressableOnly: z
+    .preprocess((value) => {
+      if (value === undefined || value === "") return undefined;
+      if (value === true || value === "true" || value === "1") return true;
+      if (value === false || value === "false" || value === "0") return false;
+      return value;
+    }, z.boolean().optional())
+    .default(false),
 });
 export type ListAgentsQuery = z.infer<typeof listAgentsQuerySchema>;

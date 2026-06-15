@@ -129,6 +129,11 @@ describe("Phase 2: displayName is non-null on the wire", () => {
     expect(res.success).toBe(true);
   });
 
+  it("updateAgentSchema rejects type updates", () => {
+    expect(updateAgentSchema.safeParse({ type: "agent" }).success).toBe(false);
+    expect(updateAgentSchema.safeParse({ type: "human" }).success).toBe(false);
+  });
+
   it("updateAgentSchema accepts omitted displayName (leaves row untouched)", () => {
     const res = updateAgentSchema.safeParse({});
     expect(res.success).toBe(true);

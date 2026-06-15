@@ -155,6 +155,7 @@ describe("PATCH /me/onboarding", () => {
         status: "left",
       })
       .where(eq(members.id, admin.memberId));
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, admin.humanAgentUuid));
 
     // Rejoin (the invite-join / OAuth-invite path funnels through
     // ensureMembership): the row is reactivated, not recreated…
@@ -183,6 +184,31 @@ describe("PATCH /me/onboarding", () => {
       .from(members)
       .where(eq(members.id, admin.memberId));
     expect(row).toEqual({ suppressedAt: null, suppressedReason: null, completedAt: null, status: "active" });
+
+    const [mirror] = await app.db
+      .select({ status: agents.status, name: agents.name })
+      .from(agents)
+      .where(eq(agents.uuid, admin.humanAgentUuid));
+    expect(mirror?.status).toBe("active");
+    expect(mirror?.name).not.toBeNull();
+  });
+
+  it("ordinary membership rejoin does not restore an admin-removed member", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { ensureMembership } = await import("../services/membership.js");
+
+    await app.db.update(members).set({ status: "removed" }).where(eq(members.id, admin.memberId));
+
+    await expect(
+      ensureMembership(app.db, {
+        userId: admin.userId,
+        organizationId: admin.organizationId,
+        role: "member",
+        displayName: "Test Admin",
+        username: admin.username,
+      }),
+    ).rejects.toThrow(/removed by an admin/);
   });
 
   it("rejects a suppress timestamp without a suppress reason at the database boundary", async () => {

@@ -1,5 +1,7 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
@@ -164,6 +166,19 @@ describe("Admin Agents API", () => {
     expect(body.metadata.role).toBe("testing");
   });
 
+  it("rejects public creation of standalone human agents", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+
+    const res = await req("POST", `/api/v1/orgs/${ctx.organizationId}/agents`, {
+      name: `api-human-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "API Human",
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
   it("updates an agent via PATCH", async () => {
     const app = getApp();
     const { req } = await authedRequest(app);
@@ -195,6 +210,59 @@ describe("Admin Agents API", () => {
     const reactivateRes = await req("POST", `/api/v1/agents/${agent.uuid}/reactivate`);
     expect(reactivateRes.statusCode).toBe(200);
     expect(reactivateRes.json().status).toBe("active");
+  });
+
+  it("rejects direct lifecycle changes for human agents", async () => {
+    const app = getApp();
+    const { req } = await authedRequest(app);
+    const human = await createAgent(app.db, {
+      name: `human-lifecycle-${Date.now()}`,
+      type: "human",
+      displayName: "Human Lifecycle",
+    });
+
+    const suspendRes = await req("POST", `/api/v1/agents/${human.uuid}/suspend`);
+    expect(suspendRes.statusCode).toBe(400);
+
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, human.uuid));
+
+    const reactivateRes = await req("POST", `/api/v1/agents/${human.uuid}/reactivate`);
+    expect(reactivateRes.statusCode).toBe(400);
+
+    const deleteRes = await req("DELETE", `/api/v1/agents/${human.uuid}`);
+    expect(deleteRes.statusCode).toBe(400);
+
+    const [row] = await app.db
+      .select({ status: agents.status, name: agents.name })
+      .from(agents)
+      .where(eq(agents.uuid, human.uuid))
+      .limit(1);
+    expect(row).toEqual({ status: "suspended", name: human.name });
+  });
+
+  it("keeps human mirrors human when PATCH tries to type-flip before lifecycle calls", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+
+    const patchRes = await req("PATCH", `/api/v1/agents/${ctx.humanAgentUuid}`, {
+      type: "agent",
+      delegateMention: null,
+    });
+    expect(patchRes.statusCode).toBe(400);
+
+    const suspendRes = await req("POST", `/api/v1/agents/${ctx.humanAgentUuid}/suspend`);
+    expect(suspendRes.statusCode).toBe(400);
+
+    const deleteRes = await req("DELETE", `/api/v1/agents/${ctx.humanAgentUuid}`);
+    expect(deleteRes.statusCode).toBe(400);
+
+    const [row] = await app.db
+      .select({ type: agents.type, status: agents.status, name: agents.name })
+      .from(agents)
+      .where(eq(agents.uuid, ctx.humanAgentUuid))
+      .limit(1);
+    expect(row).toMatchObject({ type: "human", status: "active" });
+    expect(row?.name).not.toBeNull();
   });
 
   it("deletes only suspended agents", async () => {
