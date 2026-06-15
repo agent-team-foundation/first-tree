@@ -1,9 +1,12 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent, suspendAgent } from "../services/agent.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
@@ -42,8 +45,8 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       .sign(secret);
   }
 
-  async function seedConnectedClient(suffix: string) {
-    const orgId = await resolveDefaultOrgId(app.db);
+  async function seedConnectedClient(suffix: string, organizationId?: string) {
+    const orgId = organizationId ?? (await resolveDefaultOrgId(app.db));
     const userId = uuidv7();
     const memberId = uuidv7();
     const clientId = `cli-pin-${suffix}-${crypto.randomUUID().slice(0, 6)}`;
@@ -447,6 +450,93 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
 
       ws.send(
         JSON.stringify({ type: "session:state", agentId: agent.uuid, chatId: "chat-after-suspend", state: "active" }),
+      );
+      const error = await waitForFrame(ws, (m) => (m as { type?: string }).type === "error");
+      expect(error.message).toBe("Agent not bound");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("org deletion force-disconnects bound runtime agents and rejects later runtime frames", async () => {
+    const orgId = uuidv7();
+    await app.db.insert(organizations).values({
+      id: orgId,
+      name: `delete-ws-${crypto.randomUUID().slice(0, 6)}`,
+      displayName: "Delete WS",
+    });
+    const seed = await seedConnectedClient("org-delete-force", orgId);
+    const ws = await openRegisteredSocket(seed);
+    const agent = await createAgent(app.db, {
+      name: `pin-org-delete-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Org Delete Bound",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+    });
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: "bind-org-delete",
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+          runtimeVersion: "test",
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const [presenceBefore] = await app.db
+        .select({ status: agentPresence.status, clientId: agentPresence.clientId })
+        .from(agentPresence)
+        .where(eq(agentPresence.agentId, agent.uuid))
+        .limit(1);
+      expect(presenceBefore).toMatchObject({ status: "online", clientId: seed.clientId });
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) => (m as { type?: string; agentId?: string }).type === "agent:force_disconnect",
+      );
+      const deleteRes = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/orgs/${seed.organizationId}`,
+        headers: { authorization: `Bearer ${seed.token}` },
+      });
+      expect(deleteRes.statusCode).toBe(200);
+
+      const frame = await forcePromise;
+      expect(frame).toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "organization_deleted",
+      });
+
+      const [presenceAfter] = await app.db
+        .select({
+          status: agentPresence.status,
+          clientId: agentPresence.clientId,
+          runtimeState: agentPresence.runtimeState,
+        })
+        .from(agentPresence)
+        .where(eq(agentPresence.agentId, agent.uuid))
+        .limit(1);
+      expect(presenceAfter).toMatchObject({ status: "offline", clientId: null, runtimeState: null });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:state",
+          agentId: agent.uuid,
+          chatId: "chat-after-org-delete",
+          state: "active",
+        }),
       );
       const error = await waitForFrame(ws, (m) => (m as { type?: string }).type === "error");
       expect(error.message).toBe("Agent not bound");

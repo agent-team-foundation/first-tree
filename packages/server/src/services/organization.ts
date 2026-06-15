@@ -157,9 +157,12 @@ export async function deleteOrganization(db: Database, id: string) {
       .returning({ id: members.id });
 
     return {
-      activeMemberCount: memberRows.length,
-      agentCount: agentRows.length,
-      historyRetained: true as const,
+      impact: {
+        activeMemberCount: memberRows.length,
+        agentCount: agentRows.length,
+        historyRetained: true as const,
+      },
+      deletedAgentIds: agentRows.map((row) => row.id),
     };
   });
 }

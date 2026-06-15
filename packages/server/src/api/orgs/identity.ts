@@ -1,7 +1,9 @@
 import { updateOrganizationSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import { forceDisconnect } from "../../services/connection-manager.js";
 import * as orgService from "../../services/organization.js";
+import * as presenceService from "../../services/presence.js";
 
 /**
  * Class B — `/api/v1/orgs/:orgId` itself: read & rename the org row.
@@ -36,7 +38,11 @@ export async function orgIdentityRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { orgId: string } }>("/", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
-    const impact = await orgService.deleteOrganization(app.db, scope.organizationId);
+    const { impact, deletedAgentIds } = await orgService.deleteOrganization(app.db, scope.organizationId);
+    for (const agentId of deletedAgentIds) {
+      forceDisconnect(agentId, "organization_deleted");
+      await presenceService.unbindAgent(app.db, agentId);
+    }
     return reply.send(impact);
   });
 }
