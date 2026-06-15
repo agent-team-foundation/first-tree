@@ -37,10 +37,12 @@ import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type {
   AgentHandler,
   AgentIdentity,
+  DeliveryToken,
   HandlerFactory,
   SessionContext,
   SessionMessage,
 } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
@@ -525,7 +527,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
   });
   let drainScheduled = false;
   let drainInProgress = false;
-  const queuedMessages: SessionMessage[] = [];
+  const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
   /**
    * Predeclared source repos the agent config declares — pure declaration
    * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
@@ -819,11 +821,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * fuses queued messages into one input. Completion acks through the last
    * consumed message id instead of shifting a count from SessionManager state.
    */
-  async function runTurn(input: Input, sessionCtx: SessionContext, messages: readonly SessionMessage[]): Promise<void> {
+  async function runTurn(
+    input: Input,
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    token: DeliveryToken,
+  ): Promise<void> {
     const activeThread = thread;
-    if (!activeThread) return;
+    if (!activeThread) {
+      token.retry(messages, "codex_missing_thread");
+      return;
+    }
 
-    sessionCtx.markMessagesConsumed(messages);
+    token.processingStarted(messages);
     const abort = new AbortController();
     currentAbort = abort;
     gitWriteTracker.captureBaseline();
@@ -1107,7 +1117,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // silent / no-text, SDK turn.failed, forwardResult failure) are
     // terminal for this turn — redelivery would either replay an already-
     // delivered reply or re-hit the same failure.
-    await sessionCtx.finishTurn(messages, { status: succeeded ? "success" : "error", terminal: true });
+    await token.complete(messages, { status: succeeded ? "success" : "error", terminal: true });
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1144,31 +1154,50 @@ export const createCodexHandler: HandlerFactory = (config) => {
       const drained = queuedMessages.splice(0);
       const sessionCtx = ctx;
       drainInProgress = true;
-      void mergeAndRun(drained, sessionCtx).finally(() => {
-        drainInProgress = false;
-        scheduleQueuedMessagesDrain();
-      });
+      void mergeAndRun(drained, sessionCtx)
+        .catch((err) => {
+          sessionCtx.log(`codex queued turn failed: ${err instanceof Error ? err.message : String(err)}`);
+          for (const queued of drained) queued.token.retry(queued.message, "codex_queued_turn_failed");
+        })
+        .finally(() => {
+          drainInProgress = false;
+          scheduleQueuedMessagesDrain();
+        });
     });
   }
 
-  async function mergeAndRun(drained: SessionMessage[], sessionCtx: SessionContext): Promise<void> {
+  async function mergeAndRun(
+    drained: Array<{ message: SessionMessage; token: DeliveryToken }>,
+    sessionCtx: SessionContext,
+  ): Promise<void> {
     const inputs: string[] = [];
-    for (const m of drained) {
+    const messages = drained.map((entry) => entry.message);
+    const token = drained[0]?.token;
+    if (!token) return;
+    let hadFormatFailure = false;
+    for (const m of messages) {
       try {
         inputs.push(await sessionCtx.formatInboundContent(m));
       } catch (err) {
+        hadFormatFailure = true;
         sessionCtx.log(`codex inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (inputs.length === 0) {
-      // Every fused message failed `formatInboundContent` — semantically a
-      // permanent failure for this batch (redelivery would re-hit the same
-      // format errors). Ack the entries so they don't leak in
-      // the coordinator ledger and pile up server-side as `delivered` rows.
-      await sessionCtx.finishTurn(drained, { status: "error", terminal: true, errorKind: "deterministic" });
+    if (hadFormatFailure || inputs.length === 0) {
+      // The provider has not seen this exact batch, so there is no durable
+      // terminal evidence for any failed entry. Keep the whole batch recoverable
+      // rather than ACKing a gap or delivering a partial fused prompt.
+      for (const queued of drained) queued.token.retry(queued.message, "codex_queued_turn_format_failed");
       return;
     }
-    await runTurn(inputs.join("\n\n"), sessionCtx, drained);
+    await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+  }
+
+  function retryQueuedMessages(reason: string): void {
+    const drained = queuedMessages.splice(0);
+    for (const queued of drained) {
+      queued.token.retry(queued.message, reason);
+    }
   }
 
   /**
@@ -1204,7 +1233,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
   }
 
   return {
-    async start(message, sessionCtx) {
+    async start(message, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
       // by every chat session for this agent.
@@ -1254,7 +1285,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       threadIsFresh = true;
 
       const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx, [message]);
+      await runTurn(input, sessionCtx, [message], deliveryToken);
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1264,10 +1295,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       if (!threadId) {
         throw new Error("codex did not assign a thread id during the first turn");
       }
-      return threadId;
+      return hasExplicitDeliveryToken
+        ? { sessionId: threadId, route: { kind: "owned", mode: "processing" } }
+        : threadId;
     },
 
-    async resume(message, sessionId, sessionCtx) {
+    async resume(message, sessionId, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       cwd = acquireAgentHome(workspaceRoot);
 
@@ -1310,23 +1345,28 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx, [message]);
+        await runTurn(input, sessionCtx, [message], deliveryToken);
       }
-      return sessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : sessionId;
     },
 
-    inject(message) {
+    inject(message, token) {
       // Fire-and-forget — Codex turns are run-to-completion, so the message
       // is buffered and drained on the next available turn. Queue every
       // inject instead of only mid-turn injects so the async gap before
       // `runTurn()` sets `currentTurnPromise` cannot start parallel turns
       // and desynchronise completion from the messages actually consumed.
-      if (!ctx) return;
-      queuedMessages.push(message);
+      if (!ctx) return { kind: "rejected", reason: "no_active_context", retryable: true };
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      queuedMessages.push({ message, token: deliveryToken });
       scheduleQueuedMessagesDrain();
+      return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {
+      retryQueuedMessages("codex_suspend_before_terminal");
       currentAbort?.abort();
       try {
         await currentTurnPromise;
@@ -1340,6 +1380,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     },
 
     async shutdown() {
+      retryQueuedMessages("codex_shutdown_before_terminal");
       // suspend() releases the active turn. Per agent-session-cwd-redesign
       // we no longer rm the cwd or auto-remove predeclared worktrees — both
       // are agent-scoped persistent resources shared across chats.

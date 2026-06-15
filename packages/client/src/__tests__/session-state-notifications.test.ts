@@ -232,7 +232,7 @@ describe("SessionManager: state-before-runtime ordering (codex review P2)", () =
   // (agent, chat) is dropped. Runtime projection is now coordinator-derived,
   // so SessionManager must emit `active` before it projects the fresh
   // delivery to `working`, and both must happen before handler.start().
-  it("emits active before coordinator-derived working runtime and before handler.start", async () => {
+  it("emits active before coordinator-derived idle runtime and before handler.start", async () => {
     const emissions: Array<{ kind: "state" | "runtime"; value: string }> = [];
     let observedActiveBeforeHandlerCompletion = false;
 
@@ -262,7 +262,7 @@ describe("SessionManager: state-before-runtime ordering (codex review P2)", () =
     // Belt-and-braces: the first emission overall must be the active state
     // notification (no runtime frame slipped in before it).
     expect(emissions[0]).toEqual({ kind: "state", value: "active" });
-    expect(emissions[1]).toEqual({ kind: "runtime", value: "working" });
+    expect(emissions[1]).toEqual({ kind: "runtime", value: "idle" });
 
     await sm.shutdown();
   });

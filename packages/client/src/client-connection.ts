@@ -123,7 +123,7 @@ export type BoundAgent = {
 };
 
 export type SessionCommand = {
-  type: "session:suspend" | "session:terminate";
+  type: "session:suspend" | "session:resume" | "session:terminate";
   agentId: string;
   chatId: string;
 };
@@ -1372,7 +1372,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "session:suspend" || type === "session:terminate") {
+    if (type === "session:suspend" || type === "session:resume" || type === "session:terminate") {
       const agentId = msg.agentId as string;
       const chatId = msg.chatId as string;
       if (agentId && chatId) {

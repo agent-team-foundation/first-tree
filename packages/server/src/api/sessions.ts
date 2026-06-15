@@ -66,6 +66,24 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  app.post<{ Params: { uuid: string; chatId: string } }>("/:uuid/sessions/:chatId/resume", async (request, reply) => {
+    const { agent, scope } = await requireAgentAccess(request, app.db, "manage");
+    const result = await sessionService.resumeSession(
+      app.db,
+      agent.uuid,
+      request.params.chatId,
+      scope.organizationId,
+      app.notifier,
+    );
+    if (result.transitioned) sendToAgent(agent.uuid, { type: "session:resume", chatId: request.params.chatId });
+    return reply.status(200).send({
+      agentId: agent.uuid,
+      chatId: request.params.chatId,
+      state: result.state,
+      transitioned: result.transitioned,
+    });
+  });
+
   app.post<{ Params: { uuid: string; chatId: string } }>(
     "/:uuid/sessions/:chatId/terminate",
     async (request, reply) => {

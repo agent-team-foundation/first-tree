@@ -402,6 +402,17 @@ export async function suspendSession(
   return transitionSessionState(db, agentId, chatId, "suspended", ["active"], organizationId, notifier);
 }
 
+/** Commit `suspended → active`. No-op on active/evicted. Throws if row is missing. */
+export async function resumeSession(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  organizationId: string,
+  notifier?: Notifier,
+): Promise<StateTransitionResult> {
+  return transitionSessionState(db, agentId, chatId, "active", ["suspended"], organizationId, notifier);
+}
+
 /** Commit `suspended → evicted` (terminal — listings hide it, revival defense blocks resurrection). */
 export async function archiveSession(
   db: Database,

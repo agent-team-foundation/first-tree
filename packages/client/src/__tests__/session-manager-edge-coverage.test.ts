@@ -73,7 +73,7 @@ function handler(overrides: Partial<AgentHandler> = {}): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue("session-id"),
     resume: vi.fn().mockResolvedValue("session-id"),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -331,7 +331,12 @@ describe("SessionManager edge coverage", () => {
     expect(sm.getEvictedChatIds()).toContain("chat-500");
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-500" }));
-    expect(resumed.resume).toHaveBeenCalledWith(expect.anything(), "persisted-500", expect.anything());
+    expect(resumed.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "persisted-500",
+      expect.anything(),
+      expect.anything(),
+    );
 
     internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "evicted-extra", lastActivity: 2_000 });
     internals(sm).persistRegistry();
@@ -509,7 +514,12 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("queues recovery redelivery instead of preempting a working session", async () => {
-    const working = handler();
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
     const recovered = handler();
     const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
     const sm = makeManager({
@@ -534,7 +544,12 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("keeps the recovery window open across multiple queued recovered frames", async () => {
-    const working = handler();
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
     const recovered = handler();
     const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
     const sm = makeManager({
@@ -563,8 +578,9 @@ describe("SessionManager edge coverage", () => {
     const lifecycles: Array<{ chatId: string; phase: "start" | "resume" }> = [];
     const makeTrackedHandler = () =>
       handler({
-        async start(message) {
+        async start(message, ctx) {
           lifecycles.push({ chatId: message.chatId, phase: "start" });
+          if (message.chatId === "chat-working") ctx.markMessagesConsumed(message);
           return `session-${message.chatId}`;
         },
         async resume(message) {
@@ -615,6 +631,7 @@ describe("SessionManager edge coverage", () => {
           async start(message, ctx) {
             firstMessage = message;
             firstContext = ctx;
+            ctx.markMessagesConsumed(message);
             return "session-chat-working";
           },
         });
@@ -830,7 +847,12 @@ describe("SessionManager edge coverage", () => {
 
     await internals(sm).runRetry("chat-retry-from-evicted");
 
-    expect(resumeFails.resume).toHaveBeenCalledWith(expect.anything(), "evicted-session", expect.anything());
+    expect(resumeFails.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "evicted-session",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(retrying.retryAttempt).toBeGreaterThan(1);
     await sm.shutdown();
   });
@@ -1041,8 +1063,9 @@ describe("SessionManager edge coverage", () => {
     const sm = makeManager({
       handlers: [
         handler({
-          async start(_message, ctx) {
+          async start(message, ctx) {
             captured = ctx;
+            ctx.markMessagesConsumed(message);
             return "runtime-session";
           },
         }),

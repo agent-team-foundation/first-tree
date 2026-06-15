@@ -8,7 +8,14 @@ import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
+import {
+  type AgentHandler,
+  type DeliveryToken,
+  deliveryTokenFromSessionContext,
+  type HandlerFactory,
+  type SessionContext,
+  type SessionMessage,
+} from "../../runtime/handler.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
@@ -150,7 +157,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let turnRunning = false;
   let ctx: SessionContext | null = null;
   let configTempDir: string | null = null;
-  const queuedMessages: SessionMessage[] = [];
+  const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
   // Per-chat state captured at session start — feeds the unified briefing
   // (AGENTS.md / CLAUDE.md symlink) that claude reads at startup via
   // `--setting-sources user,project`. The TUI handler can't update the
@@ -368,11 +375,16 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     }
   }
 
-  async function runTurn(text: string, sessionCtx: SessionContext, messages: readonly SessionMessage[]): Promise<void> {
+  async function runTurn(
+    text: string,
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    token: DeliveryToken,
+  ): Promise<void> {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
-    sessionCtx.markMessagesConsumed(messages);
+    token.processingStarted(messages);
     turnAborted = false;
 
     const state: TurnState = { finalTexts: [] };
@@ -491,10 +503,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
     if (disposition.ack) {
-      await sessionCtx.finishTurn(messages, { status: disposition.status, terminal: true });
+      await token.complete(messages, { status: disposition.status, terminal: true });
     } else {
       const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
-      sessionCtx.retryTurn(messages, reason);
+      token.retry(messages, reason);
     }
     resetProcessor();
   }
@@ -510,36 +522,45 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   function pump(): void {
     if (turnRunning || lifecycleFence.stopRequested || queuedMessages.length === 0) return;
     const sessionCtx = ctx;
-    if (!sessionCtx || !tmuxSessionName) return;
+    if (!sessionCtx || !tmuxSessionName) {
+      retryQueuedMessages("tui_pump_not_ready");
+      return;
+    }
     const drained = queuedMessages.splice(0);
+    const messages = drained.map((entry) => entry.message);
+    const token = drained[0]?.token;
+    if (!token) return;
     turnRunning = true;
     const promise = (async () => {
       const inputs: string[] = [];
-      for (const m of drained) {
+      let hadFormatFailure = false;
+      for (const m of messages) {
         try {
           inputs.push(await sessionCtx.formatInboundContent(m));
         } catch (err) {
+          hadFormatFailure = true;
           sessionCtx.log(`tui inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
         }
         if (lifecycleFence.stopRequested) {
-          retryQueuedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
+          retryDrainedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
           return;
         }
       }
       if (lifecycleFence.stopRequested) {
-        retryQueuedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
+        retryDrainedMessagesForRecovery(sessionCtx, drained, "queued_turn_stopped_before_paste");
         return;
       }
-      if (inputs.length === 0) {
-        await sessionCtx.finishTurn(drained, { status: "error", terminal: true, errorKind: "deterministic" });
+      if (hadFormatFailure || inputs.length === 0) {
+        retryDrainedMessagesForRecovery(sessionCtx, drained, "tui_queued_turn_format_failed");
         return;
       }
-      await runTurn(inputs.join("\n\n"), sessionCtx, drained);
+      await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
     })();
     currentTurnPromise = promise;
     void promise
       .catch((err) => {
         sessionCtx.log(`tui queued turn failed: ${err instanceof Error ? err.message : String(err)}`);
+        retryDrainedMessagesForRecovery(sessionCtx, drained, "tui_queued_turn_failed");
       })
       .finally(() => {
         turnRunning = false;
@@ -550,20 +571,27 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       });
   }
 
-  function retryQueuedMessagesForRecovery(
-    sessionCtx: SessionContext,
-    messages: readonly SessionMessage[],
+  function retryDrainedMessagesForRecovery(
+    sessionCtx: SessionContext | null,
+    messages: readonly { message: SessionMessage; token: DeliveryToken }[],
     reason: string,
   ): void {
     if (messages.length === 0) return;
-    sessionCtx.log(`tui ${reason}: retrying ${messages.length} queued message(s) through inbox recovery`);
-    sessionCtx.retryTurn(messages, reason);
+    sessionCtx?.log(`tui ${reason}: retrying ${messages.length} queued message(s) through inbox recovery`);
+    for (const queued of messages) {
+      queued.token.retry(queued.message, reason);
+    }
+  }
+
+  function retryQueuedMessages(reason: string): void {
+    const drained = queuedMessages.splice(0);
+    retryDrainedMessagesForRecovery(ctx, drained, reason);
   }
 
   function dropQueuedMessagesForRecovery(reason: string): void {
     if (queuedMessages.length > 0) {
-      ctx?.log(`tui ${reason}: dropping ${queuedMessages.length} queued message(s) for inbox recovery`);
-      queuedMessages.length = 0;
+      const drained = queuedMessages.splice(0);
+      retryDrainedMessagesForRecovery(ctx, drained, reason);
     }
   }
 
@@ -610,8 +638,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   }
 
   return {
-    async start(message, sessionCtx) {
+    async start(message, sessionCtx, token) {
       return lifecycleFence.run(async () => {
+        const hasExplicitDeliveryToken = token !== undefined;
+        const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
         // Hold turnRunning across the whole bootstrap so an inject arriving while
         // the session is still being prepared queues instead of racing pump()
         // into a second turn the instant startClaude sets tmuxSessionName.
@@ -650,17 +680,23 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           markWorkspaceInitComplete(cwd);
 
           const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
-          if (lifecycleFence.stopRequested) return sessionId;
+          if (lifecycleFence.stopRequested) {
+            deliveryToken.retry(message, "tui_start_stopped_before_turn");
+            return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
+          }
 
           const inputText = await sessionCtx.formatInboundContent(message);
-          if (lifecycleFence.stopRequested) return sessionId;
-          currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
+          if (lifecycleFence.stopRequested) {
+            deliveryToken.retry(message, "tui_start_stopped_before_turn");
+            return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
+          }
+          currentTurnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
           try {
             await currentTurnPromise;
           } finally {
             currentTurnPromise = null;
           }
-          return sessionId;
+          return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "processing" } } : sessionId;
         } finally {
           turnRunning = false;
           // Drain any messages injected during bootstrap / the first turn.
@@ -669,8 +705,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       });
     },
 
-    async resume(message, sessionId, sessionCtx) {
+    async resume(message, sessionId, sessionCtx, token) {
       return lifecycleFence.run(async () => {
+        const hasExplicitDeliveryToken = token !== undefined;
+        const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
         turnRunning = true;
         try {
           await orphanSweep(clientId);
@@ -703,17 +741,29 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
 
           if (message) {
-            if (lifecycleFence.stopRequested) return restartedId;
+            if (lifecycleFence.stopRequested) {
+              deliveryToken.retry(message, "tui_resume_stopped_before_turn");
+              return hasExplicitDeliveryToken
+                ? { sessionId: restartedId, route: { kind: "owned", mode: "queued" } }
+                : restartedId;
+            }
             const inputText = await sessionCtx.formatInboundContent(message);
-            if (lifecycleFence.stopRequested) return restartedId;
-            currentTurnPromise = runTurn(inputText, sessionCtx, [message]);
+            if (lifecycleFence.stopRequested) {
+              deliveryToken.retry(message, "tui_resume_stopped_before_turn");
+              return hasExplicitDeliveryToken
+                ? { sessionId: restartedId, route: { kind: "owned", mode: "queued" } }
+                : restartedId;
+            }
+            currentTurnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
             try {
               await currentTurnPromise;
             } finally {
               currentTurnPromise = null;
             }
           }
-          return restartedId;
+          return hasExplicitDeliveryToken
+            ? { sessionId: restartedId, route: message ? { kind: "owned", mode: "processing" } : null }
+            : restartedId;
         } finally {
           turnRunning = false;
           setImmediate(pump);
@@ -721,13 +771,16 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       });
     },
 
-    inject(message) {
+    inject(message, token) {
       // Always enqueue, then let the single serialised pump() decide when to
       // run. This removes the prior races where an inject arriving in the
       // narrow window around turn completion / startup could either start a
       // second concurrent turn or be stranded with no drain scheduled.
-      queuedMessages.push(message);
-      pump();
+      if (!ctx) return { kind: "rejected", reason: "tui_not_ready", retryable: true };
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      queuedMessages.push({ message, token: deliveryToken });
+      setImmediate(pump);
+      return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {

@@ -52,6 +52,7 @@ function makeSessionManager(opts: {
   onStateChange?: (chatId: string, state: SessionState) => void;
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
   sdk?: FirstTreeHubSDK;
+  recoverChat?: (chatId: string) => Promise<void>;
 }) {
   const factory: HandlerFactory = () => {
     const next = opts.handlers.shift();
@@ -77,6 +78,7 @@ function makeSessionManager(opts: {
     ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
     onSessionEvent: opts.onSessionEvent,
+    recoverChat: opts.recoverChat,
   });
 }
 
@@ -93,7 +95,7 @@ function failingHandler(): AgentHandler {
   return {
     start: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git worktree add failed: branch already in use")),
     resume: vi.fn(),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   };
@@ -103,7 +105,7 @@ function workingHandler(sessionId = "session-after-recovery"): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue(sessionId),
     resume: vi.fn().mockResolvedValue(sessionId),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   };
@@ -189,9 +191,11 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-recovery");
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      recoverChat,
     });
 
     // First dispatch: fails. Now reports `active` (pre-start) then `errored`
@@ -201,8 +205,9 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-recover", state: "active" },
       { chatId: "chat-recover", state: "errored" },
     ]);
+    expect(recoverChat).toHaveBeenCalledWith("chat-recover");
 
-    // Second dispatch: routes as a fresh start (no `existing` entry).
+    // Second dispatch after accepted recovery can route as a fresh start.
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recover" }));
 
     // The recovered session emits `active` (notifySessionState dedupes against
@@ -222,12 +227,14 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-broken-emit");
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       onSessionEvent: () => {
         throw new Error("event sink down");
       },
+      recoverChat,
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-emit-throw" }));
@@ -235,10 +242,10 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-emit-throw", state: "active" },
       { chatId: "chat-emit-throw", state: "errored" },
     ]);
+    expect(recoverChat).toHaveBeenCalledWith("chat-emit-throw");
 
-    // The next dispatch must route through `startNewSession` (no stale entry
-    // left behind by the throwing emit) — verified by the fresh handler's
-    // `start` being called and the state moving back to active.
+    // After accepted recovery, the next dispatch routes through
+    // `startNewSession` (no stale entry left behind by the throwing emit).
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-emit-throw" }));
     expect(working.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.at(-1)).toEqual({ chatId: "chat-emit-throw", state: "active" });

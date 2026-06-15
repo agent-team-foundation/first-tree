@@ -181,7 +181,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(res.statusCode).toBe(404);
   });
 
-  it("Resume route is removed — 404 on POST", async () => {
+  it("Resume on a suspended row transitions to active and returns 200", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `resume-x-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
@@ -192,13 +192,16 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       clientId: admin.clientId,
     });
     const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+    await seedSession(app, agent.uuid, chat.id, "suspended");
 
     const res = await app.inject({
       method: "POST",
       url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/resume`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ state: "active", transitioned: true });
+    expect(await readState(app, agent.uuid, chat.id)).toBe("active");
   });
 
   it("allows an evicted row to be overwritten when the client starts a fresh runtime session", async () => {

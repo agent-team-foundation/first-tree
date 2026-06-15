@@ -170,6 +170,10 @@ export function suspendSession(agentId: string, chatId: string): Promise<Session
   return api.post<SessionMutationResponse>(`/agents/${agentId}/sessions/${chatId}/suspend`);
 }
 
+export function resumeSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
+  return api.post<SessionMutationResponse>(`/agents/${agentId}/sessions/${chatId}/resume`);
+}
+
 export function terminateSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
   return api.post<SessionMutationResponse>(`/agents/${agentId}/sessions/${chatId}/terminate`);
 }
