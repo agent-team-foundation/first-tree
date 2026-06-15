@@ -36,7 +36,10 @@ export const attachmentRefSchema = z.object({
   mimeType: z.string().min(1),
   filename: z.string().min(1),
   size: z.number().int().nonnegative(),
-  sha256: z.string().length(64).optional(),
+  sha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, "sha256 must be 64 lowercase hex chars")
+    .optional(),
   // SECURITY: `source.path` (and `sourcePath`) is UNTRUSTED, DISPLAY-ONLY
   // metadata. A ref's bytes are self-supplied by the sender and downloads are
   // capability-based (valid session + unguessable attachmentId), so a malicious
@@ -70,6 +73,9 @@ const ATTACHMENT_KINDS_SET = new Set<string>(ATTACHMENT_KINDS);
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Lowercase-hex sha256 shape, mirroring `attachmentRefSchema.sha256`. */
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
 /**
  * Hand-rolled guard for {@link AttachmentRef} — kept cheap (instead of
  * `schema.safeParse`) because every inbound message in chat-view / runtime
@@ -85,7 +91,7 @@ export function isAttachmentRef(value: unknown): value is AttachmentRef {
   if (typeof v.mimeType !== "string" || v.mimeType.length === 0) return false;
   if (typeof v.filename !== "string" || v.filename.length === 0) return false;
   if (typeof v.size !== "number" || !Number.isInteger(v.size) || v.size < 0) return false;
-  if (v.sha256 !== undefined && (typeof v.sha256 !== "string" || v.sha256.length !== 64)) return false;
+  if (v.sha256 !== undefined && (typeof v.sha256 !== "string" || !SHA256_RE.test(v.sha256))) return false;
   if (v.source !== undefined) {
     if (!v.source || typeof v.source !== "object") return false;
     const s = v.source as Record<string, unknown>;
