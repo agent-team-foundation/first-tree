@@ -9,6 +9,7 @@ import {
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
+  canonicalGitRepoUrl,
   classifyShellCommandIo,
   contextTreeIoSourceSchema,
   type SessionEvent,
@@ -109,34 +110,6 @@ type InternalContextTreeIoDecision =
       reason: ContextTreeIoSkipReason;
     };
 
-function canonicalRepoUrl(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-
-  const scpLike = /^(?:[^@/\s]+@)?([^:]+):(.+)$/.exec(trimmed);
-  if (scpLike && !trimmed.includes("://")) {
-    const host = scpLike[1];
-    const rawPath = scpLike[2];
-    if (!host || !rawPath) return null;
-    const path = normalizeRepoPath(rawPath);
-    return path ? `${host.toLowerCase()}/${path}` : null;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const path = normalizeRepoPath(url.pathname);
-    return path ? `${url.hostname.toLowerCase()}/${path}` : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeRepoPath(rawPath: string): string | null {
-  let path = rawPath.replace(/^\/+/, "").replace(/\/+$/, "");
-  if (path.endsWith(".git")) path = path.slice(0, -4);
-  return path.length > 0 ? path : null;
-}
-
 function normalizeTargetPath(rawPath: string, targetKind: ContextTreeIoTargetKind): string | null {
   const trimmed = rawPath.trim().replaceAll("\\", "/");
   if (trimmed.length === 0 || trimmed.includes("\0")) return null;
@@ -230,8 +203,8 @@ function normalizeFileRef(
   const parsed = toolFileRefSchema.safeParse(ref);
   if (!parsed.success) return { ok: false, reason: "ref_schema_invalid" };
 
-  const expectedRepo = canonicalRepoUrl(bindingRepo);
-  const reportedRepo = canonicalRepoUrl(parsed.data.repoUrl);
+  const expectedRepo = canonicalGitRepoUrl(bindingRepo);
+  const reportedRepo = canonicalGitRepoUrl(parsed.data.repoUrl);
   if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) {
     return { ok: false, reason: "ref_repo_mismatch" };
   }

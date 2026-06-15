@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   toolFileRefsFromCodexFileChange,
 } from "../handlers/codex.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.js";
 
 describe("Codex Context Tree file refs", () => {
   it("collects explicit path fields and object keys from file_change payloads", () => {
@@ -245,6 +247,61 @@ describe("Codex file refs through the W1 workspace symlink", () => {
         repoUrl: "https://github.com/acme/first-tree-context.git",
         repoBranch: "main",
         repoRelativePath: "NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+});
+
+describe("Codex file refs in a tree PR worktree (repo identity)", () => {
+  let root: string;
+  let sharedClone: string;
+  let treeWorktree: string;
+
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", ["-C", cwd, ...args])
+      .toString("utf8")
+      .trim();
+  }
+
+  beforeEach(() => {
+    clearGitRepoIdentityCacheForTests();
+    root = mkdtempSync(join(tmpdir(), "first-tree-codex-worktree-"));
+    sharedClone = join(root, "context-tree-repos", "abc123");
+    mkdirSync(sharedClone, { recursive: true });
+    git(join(root, "context-tree-repos"), "init", "abc123");
+    git(sharedClone, "config", "user.email", "agent@example.com");
+    git(sharedClone, "config", "user.name", "Agent");
+    git(sharedClone, "remote", "add", "origin", "git@github.com:acme/first-tree-context.git");
+    writeFileSync(join(sharedClone, "NODE.md"), "root");
+    git(sharedClone, "add", ".");
+    git(sharedClone, "commit", "-m", "initial");
+    treeWorktree = join(root, "worktrees", "task-tree");
+    mkdirSync(join(root, "worktrees"), { recursive: true });
+    git(sharedClone, "worktree", "add", treeWorktree, "-b", "task-branch");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    clearGitRepoIdentityCacheForTests();
+  });
+
+  it("maps file_change paths inside the tree PR worktree to the binding repo", () => {
+    const refs = toolFileRefsFromCodexFileChange({
+      changes: [{ path: join(treeWorktree, "system", "new-node.md") }],
+      workspaceCwd: root,
+      contextTreePath: sharedClone,
+      contextTreeRepoUrl: "https://github.com/acme/first-tree-context.git",
+      contextTreeBranch: "main",
+    });
+
+    expect(refs).toEqual([
+      {
+        origin: "file_change",
+        localPath: join(treeWorktree, "system", "new-node.md"),
+        repoUrl: "https://github.com/acme/first-tree-context.git",
+        repoBranch: "main",
+        repoRelativePath: "system/new-node.md",
         pathKind: "file",
       },
     ]);

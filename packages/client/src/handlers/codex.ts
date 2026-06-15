@@ -24,7 +24,11 @@ import {
   formatCodexBinaryMissingMessage,
   isCodexBinaryMissingError,
 } from "../runtime/codex-binary.js";
-import { contextTreeRelativePathOf, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import {
+  type ContextTreeAttribution,
+  resolveContextTreeRelativePath,
+  toolFileRefsFromShellCommand,
+} from "../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
@@ -374,14 +378,13 @@ export function buildCodexAgentBriefing(
 
 function contextTreeTargetPathOf(
   filePath: string,
-  contextTreePath: string | null,
+  attribution: ContextTreeAttribution,
   workspaceCwd: string,
 ): string | null {
-  if (!contextTreePath) return null;
   const absolutePath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceCwd, filePath);
-  // Canonical comparison so a symlink alias of the tree (W1 cloud layout's
-  // `<workspace>/context-tree` link) maps the same as the real clone path.
-  const rel = contextTreeRelativePathOf(absolutePath, contextTreePath);
+  // Containment (canonical, symlink-safe) or repo identity (tree PR
+  // worktrees — any checkout whose origin remote IS the Context Tree repo).
+  const rel = resolveContextTreeRelativePath(absolutePath, attribution);
   return rel === null || rel === "/" ? null : rel;
 }
 
@@ -423,7 +426,11 @@ export function toolFileRefsFromCodexFileChange(input: {
     const fileKey = isAbsolute(filePath) ? filePath : resolve(input.workspaceCwd, filePath);
     if (seen.has(fileKey)) continue;
     seen.add(fileKey);
-    const repoRelativePath = contextTreeTargetPathOf(filePath, input.contextTreePath, input.workspaceCwd);
+    const repoRelativePath = contextTreeTargetPathOf(
+      filePath,
+      { contextTreePath: input.contextTreePath, contextTreeRepoUrl: input.contextTreeRepoUrl },
+      input.workspaceCwd,
+    );
     refs.push({
       origin: "file_change",
       localPath: filePath,
