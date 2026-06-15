@@ -9,6 +9,7 @@ import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
+import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { createToolCallProcessor, mapMcpServers } from "../claude-code.js";
@@ -560,6 +561,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // Pure declaration — the agent itself clones/refreshes the repos per
         // its briefing protocol; the listed paths may not exist yet.
         sourceReposForPrompt = declaredSourceRepos(cwd, payload);
+        await materializeResourceSkills(cwd, payload, sessionCtx);
         ensureAgentBootstrap({
           workspace: cwd,
           sessionCtx,
@@ -605,6 +607,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
         // Pure declaration — same as the start() path.
         sourceReposForPrompt = declaredSourceRepos(cwd, payload);
+        await materializeResourceSkills(cwd, payload, sessionCtx);
         // Same shared bootstrap as start(): ensureAgentBootstrap handles the
         // sentinel + CLI-version drift internally, so a stale or failed
         // integration is re-run on resume instead of being skipped.

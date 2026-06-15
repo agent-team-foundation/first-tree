@@ -120,7 +120,7 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // skill payloads installed on disk (`installFirstTreeIntegration`
   // is short-circuited in `agent-bootstrap.ts`), so mandating a load
   // would point at files that don't exist.
-  const requiredReading = requiredReadingSection(opts.contextTreePath);
+  const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
   if (requiredReading) sections.push(requiredReading);
 
   sections.push(
@@ -285,8 +285,10 @@ prompt.*`,
  * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
  * point at files that aren't there.
  */
-function requiredReadingSection(contextTreePath: string | null): string | null {
+function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
+  const firstTreeSkillPath = `${workspacePath}/.agents/skills/first-tree/SKILL.md`;
+  const contextSkillPath = `${workspacePath}/.agents/skills/first-tree-context/SKILL.md`;
   return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
@@ -306,6 +308,13 @@ workspace-collab basics.
 2. **\`first-tree-context\`** — what a Context Tree is, the
    source-system boundary, authorship read-discipline, and the Hard
    Rules + Double Test that govern every tree write.
+
+If your runtime does not automatically inject the full skill body after
+selecting a skill from the skill listing, read the local payload files
+directly before acting:
+
+- \`${firstTreeSkillPath}\`
+- \`${contextSkillPath}\`
 
 These two are unconditional. The remaining First Tree skills
 (\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the

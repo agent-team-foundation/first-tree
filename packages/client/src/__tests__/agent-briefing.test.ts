@@ -325,6 +325,12 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).toMatch(/you MUST\s+load both skills below/);
     expect(briefing).toContain("**`first-tree`**");
     expect(briefing).toContain("**`first-tree-context`**");
+    // Claude Code's transcript exposes a skill listing, but native skill-body
+    // injection is still provider-owned. The briefing must give a direct
+    // filesystem fallback so "unconditional" is actionable even when the
+    // provider only listed the skill names.
+    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
+    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
     // Bootstrapping framing — the mandate IS the first step of the
     // skill-described pre-task hygiene, not "even before" those
     // checks (which would be self-contradictory: you can't run the
