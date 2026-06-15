@@ -177,10 +177,13 @@ export type CodexRuntimeResolveDeps = {
  * contract as the handler (`createCodexClientWithBinaryFallback`):
  *
  *   - bundled vendor binary present (per the SDK's own `resolveNativePackage`
- *     layout check) → that binary, `runtimeSource: "bundled"`. The handler
- *     spawns it unconditionally — `new Codex()` does not re-validate it — so
- *     the probe must NOT fall back to PATH on a `--version` failure here; a
- *     nonlaunchable bundle surfaces in the `codex doctor` smoke instead.
+ *     layout check) → launch-verify it. Launchable → that binary,
+ *     `runtimeSource: "bundled"`. Present but NONLAUNCHABLE → resolve failure
+ *     (→ `missing`): NOT a PATH fallback (the handler resolves to this same
+ *     bundled binary, never a system codex once the bundle is found), and NOT
+ *     left for the auth precheck — a launch failure must be classified as
+ *     non-available here, before `codex login status` on the same bad binary
+ *     would be miscategorised as `unauthenticated`/`available: true`.
  *   - bundle NOT found (the SDK throws "Unable to locate Codex CLI binaries",
  *     which is exactly what triggers the handler's fallback) → a validated
  *     system `codex` on PATH (`runtimeSource: "path"`), else binary-missing.
@@ -199,15 +202,22 @@ export async function resolveCodexRuntimeBinary(
 
   const bundled = await resolveBundled();
   if (bundled.ok) {
-    // `--version` is best-effort, for the version string only — it does NOT
-    // gate the decision or trigger a PATH fallback (see contract above).
     const verified = await verifyBundled(bundled.binary);
+    if (!verified.ok) {
+      // Present but nonlaunchable — see contract above. Report non-available
+      // here (→ `missing`); do not fall back to PATH, do not defer to the auth
+      // precheck.
+      return {
+        ok: false,
+        error: `the SDK-bundled codex binary at ${bundled.binary} could not be launched (${verified.error})`,
+      };
+    }
     return {
       ok: true,
       binary: bundled.binary,
       runtimeSource: "bundled",
       runtimePath: null,
-      version: verified.ok ? verified.version : null,
+      version: verified.version,
     };
   }
 

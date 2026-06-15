@@ -760,6 +760,33 @@ describe("probeCodexCapability", () => {
     expect(entry.error).toContain("Codex runtime binary is missing");
   });
 
+  it("nonlaunchable bundled binary → capability `missing` (NOT unauthenticated); precheck + smoke skipped", async () => {
+    // Regression for PR #996 review (codex-assistant): a present-but-nonlaunchable
+    // bundled binary must classify as non-available in resolve. Otherwise, with
+    // no CODEX_API_KEY, `codex login status` runs on the same bad binary, fails
+    // (e.g. spawn EACCES), and runLaunchProbe would map that to
+    // `unauthenticated`/`available: true` — masking the launch failure. Wire the
+    // real resolver so the launch-verify gate is exercised end-to-end.
+    const loginStatus = vi.fn(loggedIn);
+    const runSmoke = vi.fn(smokeOk);
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: (env) =>
+        resolveCodexRuntimeBinary(env, {
+          resolveBundled: async () => ({ ok: true, binary: "/vendor/bin/codex" }),
+          verifyBundled: async () => ({ ok: false, error: "codex --version: spawn EACCES" }),
+          findOnPath: () => "/usr/local/bin/codex", // present, but must NOT be consulted
+        }),
+      loginStatus,
+      runSmoke,
+      env: {}, // no CODEX_API_KEY → precheck would otherwise hit the bad binary
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toContain("could not be launched");
+    expect(loginStatus).not.toHaveBeenCalled();
+    expect(runSmoke).not.toHaveBeenCalled();
+  });
+
   it("runtime source is reported even on the unauthenticated path (no smoke spent)", async () => {
     const runSmoke = vi.fn(smokeOk);
     const entry = await probeCodexCapability({
@@ -888,10 +915,12 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
   const notFound = async (): Promise<{ ok: false; error: string }> => ({ ok: false, error: "codex binary not found" });
   const verifyOk = async (): Promise<{ ok: true; version: string | null }> => ({ ok: true, version: "0.134.0" });
 
-  it("bundled present but NONLAUNCHABLE stays `bundled` — no PATH fallback (handler never falls back here)", async () => {
-    // The SDK's `new Codex()` spawns a resolved bundled binary unconditionally;
-    // a `--version` failure must NOT divert the probe to PATH, or the probe
-    // would smoke/report a different binary than the runtime actually uses.
+  it("bundled present but NONLAUNCHABLE → resolve failure (not available) — no PATH fallback", async () => {
+    // The runtime resolves to this same bundled binary and would fail spawning
+    // it. The probe must report non-available HERE (→ `missing`), NOT (a) fall
+    // back to PATH — the handler never does once the bundle resolves — and NOT
+    // (b) leave it for the auth precheck, which would mask the launch failure
+    // as `unauthenticated`/`available: true`.
     const findOnPath = vi.fn(() => "/usr/local/bin/codex");
     const res = await resolveCodexRuntimeBinary(
       {},
@@ -901,8 +930,11 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
         findOnPath,
       },
     );
-    expect(res).toMatchObject({ ok: true, runtimeSource: "bundled", binary: "/vendor/bin/codex", runtimePath: null });
-    if (res.ok) expect(res.version).toBeNull(); // best-effort version, null when --version failed
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain("could not be launched");
+      expect(res.error).toContain("spawn EACCES");
+    }
     expect(findOnPath).not.toHaveBeenCalled();
   });
 
