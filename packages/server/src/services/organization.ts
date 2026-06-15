@@ -1,8 +1,11 @@
 import type { CreateOrganizationInput, UpdateOrganization } from "@first-tree/shared";
-import { eq } from "drizzle-orm";
+import { and, count, eq, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
+import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 
 /**
@@ -54,7 +57,11 @@ export async function createOrganization(db: Database, data: CreateOrganizationI
 }
 
 export async function getOrganization(db: Database, id: string) {
-  const [org] = await db.select().from(organizations).where(eq(organizations.id, id)).limit(1);
+  const [org] = await db
+    .select()
+    .from(organizations)
+    .where(and(eq(organizations.id, id), eq(organizations.status, "active")))
+    .limit(1);
   if (!org) {
     throw new NotFoundError(`Organization "${id}" not found`);
   }
@@ -70,7 +77,11 @@ export async function updateOrganization(db: Database, id: string, data: UpdateO
   if (data.features !== undefined) updates.features = data.features;
 
   try {
-    const [org] = await db.update(organizations).set(updates).where(eq(organizations.id, id)).returning();
+    const [org] = await db
+      .update(organizations)
+      .set(updates)
+      .where(and(eq(organizations.id, id), eq(organizations.status, "active")))
+      .returning();
 
     if (!org) {
       throw new NotFoundError(`Organization "${id}" not found`);
@@ -83,6 +94,77 @@ export async function updateOrganization(db: Database, id: string, data: UpdateO
     }
     throw err;
   }
+}
+
+async function readOrganizationDeletionImpact(db: Pick<Database, "select">, id: string) {
+  const [memberRow] = await db
+    .select({ value: count() })
+    .from(members)
+    .where(and(eq(members.organizationId, id), eq(members.status, "active")));
+  const [agentRow] = await db
+    .select({ value: count() })
+    .from(agents)
+    .where(and(eq(agents.organizationId, id), ne(agents.status, "deleted")));
+
+  return {
+    activeMemberCount: memberRow?.value ?? 0,
+    agentCount: agentRow?.value ?? 0,
+    historyRetained: true as const,
+  };
+}
+
+export async function previewOrganizationDeletion(db: Database, id: string) {
+  const org = await getOrganization(db, id);
+  if (org.name === "default") {
+    throw new BadRequestError('The reserved "default" organization cannot be deleted');
+  }
+
+  return readOrganizationDeletionImpact(db, id);
+}
+
+export async function deleteOrganization(db: Database, id: string) {
+  return db.transaction(async (tx) => {
+    const [org] = await tx
+      .select()
+      .from(organizations)
+      .where(and(eq(organizations.id, id), eq(organizations.status, "active")))
+      .limit(1);
+    if (!org) {
+      throw new NotFoundError(`Organization "${id}" not found`);
+    }
+    if (org.name === "default") {
+      throw new BadRequestError('The reserved "default" organization cannot be deleted');
+    }
+
+    const now = new Date();
+    await tx
+      .update(organizations)
+      .set({ status: "deleted", name: `deleted-${id}`, updatedAt: now })
+      .where(and(eq(organizations.id, id), eq(organizations.status, "active")));
+    await tx
+      .update(githubAppInstallations)
+      .set({ hubOrganizationId: null, updatedAt: now })
+      .where(eq(githubAppInstallations.hubOrganizationId, id));
+    const agentRows = await tx
+      .update(agents)
+      .set({ status: "deleted", name: null, updatedAt: now })
+      .where(and(eq(agents.organizationId, id), ne(agents.status, "deleted")))
+      .returning({ id: agents.uuid });
+    const memberRows = await tx
+      .update(members)
+      .set({ status: "left" })
+      .where(and(eq(members.organizationId, id), eq(members.status, "active")))
+      .returning({ id: members.id });
+
+    return {
+      impact: {
+        activeMemberCount: memberRows.length,
+        agentCount: agentRows.length,
+        historyRetained: true as const,
+      },
+      deletedAgentIds: agentRows.map((row) => row.id),
+    };
+  });
 }
 
 /**

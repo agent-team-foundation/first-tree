@@ -6,6 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
 import { selectAgentRowWithRuntime } from "../services/agent.js";
@@ -59,7 +60,15 @@ async function resolveCallerInOrg(
   const [row] = await db
     .select({ id: members.id, role: members.role, agentId: members.agentId })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, orgId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+      ),
+    )
     .limit(1);
   if (!row) throw new NotFoundError("Resource not found");
   if (row.role !== "admin" && row.role !== "member") {
@@ -83,7 +92,15 @@ export async function resolveOrgViewer(
   const [row] = await db
     .select({ id: members.id, role: members.role, agentId: members.agentId })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.organizationId, orgId),
+        eq(members.status, "active"),
+        eq(organizations.status, "active"),
+      ),
+    )
     .limit(1);
   if (!row || (row.role !== "admin" && row.role !== "member")) return null;
   return { memberId: row.id, humanAgentId: row.agentId };

@@ -277,8 +277,10 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
         mirrorName: agents.name,
       })
       .from(members)
+      .innerJoin(organizations, eq(organizations.id, members.organizationId))
       .innerJoin(users, eq(users.id, members.userId))
       .innerJoin(agents, eq(agents.uuid, members.agentId))
+      .where(eq(organizations.status, "active"))
       .for("update");
 
     let activeMirrorsRepaired = 0;
@@ -421,7 +423,9 @@ export async function listActiveMemberships(db: Database, userId: string) {
     })
     .from(members)
     .innerJoin(organizations, eq(members.organizationId, organizations.id))
-    .where(and(eq(members.userId, userId), eq(members.status, MEMBER_STATUSES.ACTIVE)))
+    .where(
+      and(eq(members.userId, userId), eq(members.status, MEMBER_STATUSES.ACTIVE), eq(organizations.status, "active")),
+    )
     .orderBy(desc(members.createdAt));
   return rows;
 }
@@ -469,11 +473,13 @@ export async function findActiveMembership(db: Database, userId: string, organiz
   const [row] = await db
     .select({ memberId: members.id, role: members.role })
     .from(members)
+    .innerJoin(organizations, eq(members.organizationId, organizations.id))
     .where(
       and(
         eq(members.userId, userId),
         eq(members.organizationId, organizationId),
         eq(members.status, MEMBER_STATUSES.ACTIVE),
+        eq(organizations.status, "active"),
       ),
     )
     .limit(1);

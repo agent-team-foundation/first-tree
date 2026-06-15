@@ -12,6 +12,7 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ClientUserMismatchError, ConflictError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
 
@@ -227,7 +228,8 @@ export async function listMyPinnedAgents(
     })
     .from(agents)
     .innerJoin(clients, eq(agents.clientId, clients.id))
-    .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted")));
+    .innerJoin(organizations, eq(agents.organizationId, organizations.id))
+    .where(and(eq(clients.userId, scope.userId), eq(organizations.status, "active"), ne(agents.status, "deleted")));
   return rows.filter(
     (r): r is { agentId: string; clientId: string; runtimeProvider: RuntimeProvider; status: string } =>
       r.clientId !== null,
