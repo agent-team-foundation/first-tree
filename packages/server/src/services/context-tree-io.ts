@@ -615,7 +615,7 @@ type ReconcileTelemetryWrite = {
 // path is "NODE.md"; both must collapse to the SAME key (root is the tree's
 // highest-signal node, so a root edit must reconcile, not split into two rows).
 // A non-empty sentinel also keeps root out of the "skip empty key" path.
-const ROOT_NODE_KEY = " root";
+const ROOT_NODE_KEY = "<root>";
 
 // Human-facing node path: strip a leading slash, the `.md` suffix, and a
 // trailing `NODE` segment (so `members/x/NODE.md` → `members/x`, `NODE.md` and
