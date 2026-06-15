@@ -91,7 +91,11 @@ function useIsMobileDocPreview(): boolean {
 }
 
 type PreviewState =
-  | { kind: "text"; text: string; integrityWarning: boolean }
+  // `integrityWarning`: had an expected sha256 and it did NOT match (tamper/corruption).
+  // `unverified`: a ref was expected (deep-link with a docMsg) but could not be recovered
+  // (e.g. the message is older than the recovery window), so the fetched bytes could not be
+  // checked against a checksum — shown to the user rather than left as a silent blank drawer.
+  | { kind: "text"; text: string; integrityWarning: boolean; unverified: boolean }
   | { kind: "too-large"; sizeBytes: number };
 
 /**
@@ -219,12 +223,18 @@ export function DocPreviewDrawer() {
           integrityWarning = false;
         }
       }
-      return { kind: "text", text: fetched.text, integrityWarning };
+      // A ref was expected (deep-link carried a docMsg) but couldn't be recovered →
+      // we fetch anyway (capability-authed by attachmentId) but flag it unverified
+      // rather than render a silent blank drawer.
+      const unverified = !expected && Boolean(docMsgId);
+      return { kind: "text", text: fetched.text, integrityWarning, unverified };
     },
-    // Don't fetch while a ref is still being recovered: a seeded ref is
-    // present, or there's nothing to recover (`!recoveryEnabled` — orphan or
-    // already-resolved), or recovery has produced the ref.
-    enabled: Boolean(docAttachmentId) && (Boolean(seededRef) || !recoveryEnabled || Boolean(recoveredRef)),
+    // Hold the fetch only while recovery is still in flight (`awaitingRecovery`).
+    // Once recovery SETTLES — whether it produced the ref or missed (e.g. the
+    // message is older than the recovery window) — we fetch: with the ref it
+    // verifies (sha256 in the key); on a miss it fetches unverified (flagged
+    // above) instead of leaving the drawer stuck idle/blank.
+    enabled: Boolean(docAttachmentId) && !awaitingRecovery,
   });
 
   // SECURITY: `docRef.source.path` is UNTRUSTED, DISPLAY-ONLY metadata supplied
@@ -464,6 +474,10 @@ export function DocPreviewDrawer() {
             {previewQuery.data.integrityWarning ? (
               <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
                 Integrity check failed — the fetched content does not match the captured checksum.
+              </div>
+            ) : previewQuery.data.unverified ? (
+              <div className="mb-3 rounded-[var(--radius-panel)] border border-warn bg-warn-soft p-2 text-caption text-warn">
+                Couldn't verify integrity — the document reference is unavailable (showing fetched content).
               </div>
             ) : null}
             <Markdown components={markdownComponents}>{previewQuery.data.text}</Markdown>

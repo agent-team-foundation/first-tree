@@ -240,6 +240,24 @@ describe("DocPreviewDrawer", () => {
     expect(dom.textContent).toContain("Plan");
   });
 
+  // R4 follow-up (codex-assistant #2): a cold deep-link whose `docMsg` is OLDER
+  // than the recovery window (message not returned by listChatMessages) misses
+  // recovery. It must still fetch (capability-authed by attachmentId) and render,
+  // flagged "unverified" — NOT sit at a silent blank drawer. Would render blank
+  // before the fix (enabled gate stayed false forever on a recovery miss).
+  it("fetches unverified instead of going blank when the ref can't be recovered", async () => {
+    chatsMocks.listChatMessages.mockResolvedValue({ items: [], nextCursor: null });
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-out-of-window&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />);
+    await flush();
+
+    expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
+    expect(attachmentsMocks.fetchAttachmentText).toHaveBeenCalledWith(ATT_ID);
+    expect(dom.textContent).toContain("Plan");
+    expect(dom.textContent).toContain("Couldn't verify integrity");
+  });
+
   it("renders a fetch error inline rather than throwing", async () => {
     attachmentsMocks.fetchAttachmentText.mockRejectedValueOnce(new Error("Unable to load"));
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
