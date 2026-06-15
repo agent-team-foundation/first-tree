@@ -407,7 +407,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * so the subsequent fetch + `checkout -B` track the configured upstream
    * instead of silently serving the old one.
    */
-  type OriginUrlState = "matched" | "different" | "missing-or-unreadable";
+  type OriginUrlState =
+    | { kind: "matched"; currentUrl: string }
+    | { kind: "different"; currentUrl: string }
+    | { kind: "missing-or-unreadable" };
 
   /**
    * Classify the current `remote.origin.url` before reconciling it. A confirmed
@@ -418,10 +421,12 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     try {
       const { stdout } = await git(["config", "--get", "remote.origin.url"], absTarget, 10_000);
       const current = stdout.trim();
-      if (!current) return "missing-or-unreadable";
-      return canonicalizeRepoUrl(current) === canonicalizeRepoUrl(url) ? "matched" : "different";
+      if (!current) return { kind: "missing-or-unreadable" };
+      return canonicalizeRepoUrl(current) === canonicalizeRepoUrl(url)
+        ? { kind: "matched", currentUrl: current }
+        : { kind: "different", currentUrl: current };
     } catch {
-      return "missing-or-unreadable";
+      return { kind: "missing-or-unreadable" };
     }
   }
 
@@ -653,6 +658,21 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     );
   }
 
+  async function rollbackUnconfirmedOrigin(absTarget: string, previousOriginUrl: string | undefined): Promise<void> {
+    try {
+      if (previousOriginUrl) {
+        await git(["remote", "set-url", "origin", previousOriginUrl], absTarget, 10_000);
+      } else {
+        await git(["remote", "remove", "origin"], absTarget, 10_000);
+      }
+    } catch (err) {
+      log?.warn(
+        { clonePath: absTarget, previousOriginUrl, err: err instanceof Error ? err.message : String(err) },
+        "failed to roll back unconfirmed source-repo origin after fetch failure",
+      );
+    }
+  }
+
   return {
     get legacyMirrorsRoot() {
       return legacyMirrorsRoot;
@@ -711,8 +731,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         // unreadable origin is ambiguous: fetch failures must fail closed, but a
         // successful fetch must still protect same-repo local commits.
         const originStateBeforeFetch = await originUrlState(absTarget, url);
-        const originMatchedBeforeFetch = originStateBeforeFetch === "matched";
-        const originDiffersBeforeFetch = originStateBeforeFetch === "different";
+        const originMatchedBeforeFetch = originStateBeforeFetch.kind === "matched";
+        const originDiffersBeforeFetch = originStateBeforeFetch.kind === "different";
+        const previousOriginUrl =
+          originStateBeforeFetch.kind === "missing-or-unreadable" ? undefined : originStateBeforeFetch.currentUrl;
         if (!originMatchedBeforeFetch) {
           if (activelyInUse) {
             throw repointBlockedError(absTarget, url, "another live session is using the checkout");
@@ -726,6 +748,9 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           await fetchClone(absTarget, url);
         } catch (err) {
           const stderr = err instanceof Error ? err.message : String(err);
+          if (!originMatchedBeforeFetch) {
+            await rollbackUnconfirmedOrigin(absTarget, previousOriginUrl);
+          }
 
           // Degrade-on-transient-fetch-failure: when GitHub is briefly
           // unreachable (a network blip, not an auth/corrupt/TLS-trust fault)

@@ -436,9 +436,17 @@ describe("GitMirrorManager — source repo lifecycle (per-agent clone)", () => {
     const clonePath = join(newDataDir(), "repo");
     const first = await m.ensureSourceRepo({ url, clonePath });
     expect(first.headCommit).toBe(tip);
-    await expect(m.ensureSourceRepo({ url: "https://127.0.0.1:1/different.git", clonePath })).rejects.toBeInstanceOf(
-      GitMirrorError,
-    );
+    const unreachable = "https://127.0.0.1:1/different.git";
+    await expect(m.ensureSourceRepo({ url: unreachable, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(tip);
+
+    // Regression: the failed confirmation fetch must not leave origin pointing
+    // at the unconfirmed URL. Otherwise the retry looks like a same-repo outage
+    // and degrades to stale-offline while serving the old checkout.
+    await expect(m.ensureSourceRepo({ url: unreachable, clonePath })).rejects.toBeInstanceOf(GitMirrorError);
+    expect(gitIn(clonePath, "config --get remote.origin.url")).toBe(url);
+    expect(gitIn(clonePath, "rev-parse HEAD")).toBe(tip);
   }, 30_000);
 
   it("still degrades when the configured ref already matches the checked-out HEAD", async () => {
