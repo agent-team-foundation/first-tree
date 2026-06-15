@@ -117,6 +117,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -186,6 +187,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -207,6 +209,74 @@ describe("deliverNormalizedEvent", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
     expect(delegateEntries).toHaveLength(0);
+  });
+
+  it("echo (#942): excludes the actor from addressing — card still written, actor not woken", async () => {
+    // The delegate is a live speaker of the bound chat, so it would normally
+    // be woken. When the delegate is ALSO the event's actor (its own GitHub
+    // action, surfaced as `target.actorAgentId`), #942 excludes it from
+    // `addressedToAgentIds`: the card still lands (public record) but the
+    // actor is not woken / red-dotted. With `actorAgentId = null` the same
+    // speaker-delegate IS woken — the two deliveries below pin both sides.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId, agentId: human, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId, agentId: delegate, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#205",
+      chatId,
+      boundVia: "direct",
+    });
+    const baseTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    } satisfies Omit<AudienceTarget, "actorAgentId">;
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#205",
+    });
+
+    // (1) actor === delegate: excluded from addressing → card written, no wake.
+    const echoStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: delegate }]);
+    expect(echoStats.delivered).toBe(1);
+    const afterEcho = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
+    expect(afterEcho).toHaveLength(0);
+
+    // (2) actor !== delegate (null): the speaker-delegate IS woken.
+    const okStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: null }]);
+    expect(okStats.delivered).toBe(1);
+    const afterOk = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
+    expect(afterOk.length).toBeGreaterThan(0);
   });
 
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
@@ -250,6 +320,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -304,6 +375,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -372,6 +444,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -416,6 +489,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -451,6 +525,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "review_requested",
       involveLogin: humanName.toLowerCase(),
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -525,6 +600,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null, // forces the runtime guard to throw
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const ok: AudienceTarget = {
       humanAgentId: goodHuman,
@@ -533,6 +609,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: goodChatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -600,6 +677,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
