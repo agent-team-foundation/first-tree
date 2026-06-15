@@ -5,7 +5,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { docAttachmentRefQueryKey } from "../../pages/workspace/center/chat-view.js";
+import { docAttachmentRefQueryKey, docMessageAttachmentRefsQueryKey } from "../../pages/workspace/center/chat-view.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -133,6 +133,19 @@ const docRef = {
   source: { path: "docs/plan.md" },
 };
 
+const SIBLING_ID = "00000000-0000-4000-8000-000000000002";
+// `details.md` relative to the current doc's `docs/plan.md` resolves to
+// `docs/details.md` — the sibling's source.path.
+const siblingRef = {
+  attachmentId: SIBLING_ID,
+  kind: "document" as const,
+  mimeType: "text/markdown",
+  filename: "details.md",
+  size: 10,
+  sha256: "c".repeat(64),
+  source: { path: "docs/details.md" },
+};
+
 beforeEach(() => {
   vi.resetModules();
   setupDom();
@@ -236,6 +249,56 @@ describe("DocPreviewDrawer", () => {
     });
     await flush();
     expect(dom.textContent).toContain("Unable to load");
+  });
+
+  // R1: a relative in-doc link to a sibling doc in the SAME message resolves on
+  // the seeded (normal click) path — the click handler seeds the full per-message
+  // ref list, so the drawer maps `details.md` → the sibling attachment without
+  // fetching the messages window. Would no-op before the fix (recovery is
+  // disabled when a seeded ref exists, so the sibling map was empty).
+  it("resolves a same-message sibling link on the seeded path (no recovery fetch)", async () => {
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
+      client.setQueryData(docAttachmentRefQueryKey(SIBLING_ID), siblingRef);
+      // Seed the FULL per-message ref list — the seeded enumeration path.
+      client.setQueryData(docMessageAttachmentRefsQueryKey("msg-1"), [docRef, siblingRef]);
+    });
+    await flush();
+
+    // Recovery is disabled on the seeded path — the messages window is never read.
+    expect(chatsMocks.listChatMessages).not.toHaveBeenCalled();
+
+    const siblingLink = [...dom.querySelectorAll("a")].find((a) => a.textContent === "details");
+    expect(siblingLink).toBeTruthy();
+    await click(siblingLink ?? null);
+    expect(latestSearch).toContain(`docAttachment=${SIBLING_ID}`);
+  });
+
+  // R2: on a cold deep-link (no seeded ref) the fetch must WAIT for the ref to
+  // be recovered, then verify the bytes against the recovered ref's sha256.
+  // Here the recovered ref's sha256 mismatches the fetched bytes, so the
+  // integrity warning can only appear if verification ran against the recovered
+  // ref — proving the fetch did not race ahead of recovery. Would not warn
+  // before the fix (fetch ran with an undefined ref → verification skipped, and
+  // the attachmentId-only key never recomputed when the ref later resolved).
+  it("verifies bytes against the recovered ref on a cold deep-link", async () => {
+    chatsMocks.listChatMessages.mockResolvedValue({
+      items: [{ id: "msg-1", metadata: { attachments: [docRef] } }],
+      nextCursor: null,
+    });
+    // Fetched bytes hash to something other than docRef.sha256 ("aaaa...").
+    attachmentsMocks.sha256Hex.mockResolvedValue("d".repeat(64));
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />);
+    await flush();
+
+    expect(chatsMocks.listChatMessages).toHaveBeenCalledWith("chat-1", { limit: 50 });
+    // Verification ran against the recovered ref (the fetch waited for it).
+    expect(attachmentsMocks.sha256Hex).toHaveBeenCalled();
+    expect(dom.textContent).toContain("Integrity check failed");
   });
 
   it("uses mobile focus handling and escape close", async () => {

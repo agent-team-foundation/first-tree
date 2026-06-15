@@ -178,6 +178,35 @@ describe("buildMessageDocumentSnapshots — capture + attachment-link rewrite", 
     expect(rewrittenText).toBe("just chatting");
     expect(uploads).toEqual([]);
   });
+
+  // R4: the capture cap was raised from 256KB to the 10MB upload cap. A doc
+  // larger than the OLD 256KB ceiling but well under the upload cap must now be
+  // captured (it used to fail `too-large`). Would fail before the fix.
+  it("captures a doc larger than the legacy 256KB cap (capture cap = upload cap)", async () => {
+    const big = `# big\n${"x".repeat(400 * 1024)}\n`;
+    await writeFile(join(root, "big.md"), big, "utf8");
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots("see big.md", root, opts(uploader));
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.source?.path).toBe("big.md");
+    expect(failedMentions).toEqual([]);
+    expect(uploads).toHaveLength(1);
+  });
+
+  // R4: a doc above the 10MB upload cap still degrades to `too-large` (the blob
+  // store would reject the upload anyway), so the new ceiling is the upload cap.
+  it("fails a doc above the 10MB upload cap as too-large", async () => {
+    const huge = `# huge\n${"y".repeat(11 * 1024 * 1024)}\n`;
+    await writeFile(join(root, "huge.md"), huge, "utf8");
+    const { refs, failedMentions, rewrittenText } = await buildMessageDocumentSnapshots(
+      "see huge.md",
+      root,
+      opts(uploader),
+    );
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "huge.md", reason: "too-large" }]);
+    expect(rewrittenText).toBe("see huge.md");
+    expect(uploads).toEqual([]);
+  });
 });
 
 describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => {

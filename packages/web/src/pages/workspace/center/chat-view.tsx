@@ -415,9 +415,14 @@ function TextRow({
           // synchronously and an in-doc cross-link to a sibling doc in the same
           // message hits cache too. The drawer fetches the bytes on demand from
           // `GET /attachments/:id`.
-          for (const ref of docAttachmentRefs.values()) {
+          const messageRefs = [...docAttachmentRefs.values()];
+          for (const ref of messageRefs) {
             queryClient.setQueryData(docAttachmentRefQueryKey(ref.attachmentId), ref);
           }
+          // Also seed the FULL per-message ref list under its own key so the
+          // drawer can enumerate same-message siblings on the seeded path
+          // (relative `other.md` links) without re-fetching the messages window.
+          queryClient.setQueryData(docMessageAttachmentRefsQueryKey(msg.id), messageRefs);
           const next = new URLSearchParams(searchParams);
           next.set("docChat", msg.chatId);
           next.set("docMsg", msg.id);
@@ -598,6 +603,18 @@ function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
  */
 export function docAttachmentRefQueryKey(attachmentId: string): readonly unknown[] {
   return ["chat-doc-attachment-ref", attachmentId] as const;
+}
+
+/**
+ * React Query key for the FULL list of doc `AttachmentRef`s a single message
+ * carries, keyed by messageId. The chat-view click handler seeds this so the
+ * drawer can enumerate same-message sibling docs (relative `other.md` links)
+ * on the seeded (no-fetch) path — `docAttachmentRefQueryKey` alone is keyed by
+ * attachmentId and can't be enumerated. The cold-load / deep-link path falls
+ * back to recovering the list from the chat's messages window.
+ */
+export function docMessageAttachmentRefsQueryKey(msgId: string): readonly unknown[] {
+  return ["chat-doc-message-attachment-refs", msgId] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
@@ -812,7 +829,7 @@ export function ChatView({
   // expects. Stash whether the sidebar was visible at the moment doc-preview
   // opened so we can auto-restore it when the preview closes — the user did
   // not ask to dismiss the sidebar, they only opened a doc.
-  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docPath"));
+  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docAttachment"));
   const sidebarBeforeDocPreviewRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (hasDocPreview) {
@@ -835,10 +852,14 @@ export function ChatView({
     if (hasDocPreview) {
       const next = new URLSearchParams(searchParams);
       next.delete("docChat");
+      next.delete("docMsg");
+      // Current owner of which doc is open (attachment-ref model).
+      next.delete("docAttachment");
+      // Legacy params from the pre-convergence `docPath` model — still cleared
+      // so a stale URL minted before the migration also clears cleanly.
       next.delete("docAgent");
       next.delete("docPath");
       next.delete("docBase");
-      next.delete("docMsg");
       setSearchParams(next, { replace: true });
       sidebarBeforeDocPreviewRef.current = true;
       return;

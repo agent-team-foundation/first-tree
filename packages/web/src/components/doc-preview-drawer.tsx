@@ -17,7 +17,7 @@ import { listChatMessages } from "../api/chats.js";
 import { attachmentIdFromHref } from "../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../lib/safe-href.js";
 import { cn } from "../lib/utils.js";
-import { docAttachmentRefQueryKey } from "../pages/workspace/center/chat-view.js";
+import { docAttachmentRefQueryKey, docMessageAttachmentRefsQueryKey } from "../pages/workspace/center/chat-view.js";
 import { Button } from "./ui/button.js";
 import { Markdown } from "./ui/markdown.js";
 
@@ -190,10 +190,18 @@ export function DocPreviewDrawer() {
     };
   }, [hasDocRef, isMobile]);
 
-  // Fetch + verify the doc bytes. React Query caches by attachmentId (immutable
-  // blob), so re-opens / in-doc cross-links are network-free.
+  // Fetch + verify the doc bytes.
+  //
+  // The query key includes the expected sha256 so a late-arriving ref (cold
+  // deep-link, where the ref is recovered AFTER first render) forces a
+  // refetch+reverify rather than serving a previously-fetched-but-unverified
+  // cached state. Combined with the `enabled` gate below — which holds the
+  // fetch until recovery settles whenever a ref is recoverable — this enforces
+  // the invariant: whenever a ref with a sha256 is available, the rendered
+  // preview was verified against it. A truly ref-less orphan (no msgId to
+  // recover from) still fetches unverified, which is acceptable.
   const previewQuery = useQuery<PreviewState>({
-    queryKey: ["doc-attachment-preview", docAttachmentId],
+    queryKey: ["doc-attachment-preview", docAttachmentId, docRef?.sha256 ?? null],
     queryFn: async (): Promise<PreviewState> => {
       const id = docAttachmentId ?? "";
       const fetched = await fetchAttachmentText(id);
@@ -213,7 +221,10 @@ export function DocPreviewDrawer() {
       }
       return { kind: "text", text: fetched.text, integrityWarning };
     },
-    enabled: hasDocRef && Boolean(docAttachmentId),
+    // Don't fetch while a ref is still being recovered: a seeded ref is
+    // present, or there's nothing to recover (`!recoveryEnabled` — orphan or
+    // already-resolved), or recovery has produced the ref.
+    enabled: Boolean(docAttachmentId) && (Boolean(seededRef) || !recoveryEnabled || Boolean(recoveredRef)),
   });
 
   // SECURITY: `docRef.source.path` is UNTRUSTED, DISPLAY-ONLY metadata supplied
@@ -234,18 +245,25 @@ export function DocPreviewDrawer() {
   const siblingRefsByPath = useMemo(() => {
     const map = new Map<string, AttachmentRef>();
     if (!docMsgId) return map;
-    // Seeded siblings: the click handler stashes every ref of the message under
-    // its own attachmentId key. We can only enumerate via the messages cache,
-    // so read recovery/messages data when present.
+    // Seeded siblings (common click path): the chat-view click handler stashes
+    // the message's FULL ref list under a per-message key. Read it so relative
+    // `other.md` links resolve without re-fetching the messages window.
+    const seededMessageRefs =
+      queryClient.getQueryData<AttachmentRef[]>(docMessageAttachmentRefsQueryKey(docMsgId)) ?? [];
+    for (const r of seededMessageRefs) {
+      if (r.kind === "document" && r.source?.path) map.set(r.source.path, r);
+    }
+    // Recovered siblings (cold load / deep link): the click cache is empty, so
+    // enumerate from the recovered messages window instead.
     const message = recoveryMessages.data?.items.find((item) => item.id === docMsgId);
-    const refs = message ? attachmentRefsFromMetadata(message.metadata) : [];
-    for (const r of refs) {
+    const recoveredRefs = message ? attachmentRefsFromMetadata(message.metadata) : [];
+    for (const r of recoveredRefs) {
       if (r.kind === "document" && r.source?.path) map.set(r.source.path, r);
     }
     // Always include the current ref so a self-link resolves.
     if (docRef?.source?.path) map.set(docRef.source.path, docRef);
     return map;
-  }, [docMsgId, recoveryMessages.data, docRef]);
+  }, [docMsgId, queryClient, recoveryMessages.data, docRef]);
 
   const openSiblingAttachment = useCallback(
     (attachmentId: string) => {

@@ -150,6 +150,26 @@ describe("validateMessageAttachmentRefs", () => {
     ).rejects.toThrow(BadRequestError);
   });
 
+  // R5: the strict reader now full-schema-parses each ref, so a ref with a
+  // schema-invalid sha256 (wrong length) is rejected before any DB lookup —
+  // not just the uuid-shape check the hand-rolled guard performed.
+  it("rejects a ref whose sha256 is the wrong length (full schema parse)", async () => {
+    await expect(
+      validateMessageAttachmentRefs(readerWith({ mimeType: "text/markdown", sizeBytes: 12 }), {
+        attachments: [baseRef({ sha256: "abc" })],
+      }),
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  // R5: schema parse attributes the failing index for diagnostics.
+  it("reports the failing ref index in the BadRequestError attributes", async () => {
+    await expect(
+      validateMessageAttachmentRefs(readerWith({ mimeType: "text/markdown", sizeBytes: 12 }), {
+        attachments: [baseRef(), baseRef({ size: -1 })],
+      }),
+    ).rejects.toMatchObject({ attrs: { "attachment_ref.index": 1 } });
+  });
+
   it("rejects a non-array attachments field", async () => {
     await expect(validateMessageAttachmentRefs(readerWith(null), { attachments: "nope" })).rejects.toThrow(
       BadRequestError,

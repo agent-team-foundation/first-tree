@@ -1,6 +1,6 @@
 import {
   type AttachmentRef,
-  attachmentRefsFromMetadata,
+  attachmentRefSchema,
   documentContextSchema,
   MAX_MESSAGE_ATTACHMENT_REFS,
 } from "@first-tree/shared";
@@ -106,9 +106,12 @@ export async function validateMessageAttachmentRefs(
 
 /**
  * Read `metadata.attachments[]`, rejecting a present-but-malformed array as a
- * client bug. `attachmentRefsFromMetadata` (the lenient reader used on render)
- * silently drops bad entries; on the send path we want a loud failure instead
- * so a misbehaving runtime can't ship a half-broken roster.
+ * client bug. The render-side `attachmentRefsFromMetadata` reader silently drops
+ * bad entries; on the send path we want a loud failure instead so a misbehaving
+ * runtime can't ship a half-broken roster. Each entry is validated with the full
+ * `attachmentRefSchema` (uuid id + sha256 length + field types), not just the
+ * hand-rolled `isAttachmentRef` guard, so any schema-invalid ref is rejected
+ * with a clean 400 rather than slipping through.
  */
 function readAttachmentRefsStrict(metadata: Record<string, unknown> | undefined): AttachmentRef[] {
   if (!metadata) return [];
@@ -117,9 +120,16 @@ function readAttachmentRefsStrict(metadata: Record<string, unknown> | undefined)
   if (!Array.isArray(raw)) {
     throw new BadRequestError("metadata.attachments must be an array of attachment references");
   }
-  const refs = attachmentRefsFromMetadata(metadata);
-  if (refs.length !== raw.length) {
-    throw new BadRequestError("metadata.attachments contains a malformed attachment reference");
+  const refs: AttachmentRef[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const parsed = attachmentRefSchema.safeParse(raw[i]);
+    if (!parsed.success) {
+      throw new BadRequestError("metadata.attachments contains a malformed attachment reference", {
+        "attachment_ref.index": i,
+        "attachment_ref.parse_error": parsed.error.message.slice(0, 200),
+      });
+    }
+    refs.push(parsed.data);
   }
   return refs;
 }

@@ -731,6 +731,32 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  // R3: opening an attachment preview (new `docChat` + `docAttachment` params)
+  // collapses the right sidebar so the preview rail gets the slot, then restores
+  // it when the preview params clear. Keys on the new params — before the fix
+  // `hasDocPreview` still read the legacy `docPath`, so the collapse never fired.
+  it("collapses the right sidebar while an attachment preview is open, restores after", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+
+    // With no doc-preview params the sidebar is open → Participants visible.
+    const open = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+    await waitForText(open.container, "Participants");
+    await act(async () => open.root.unmount());
+
+    // With the attachment-preview params present the sidebar collapses →
+    // Participants no longer rendered even though localStorage says "open".
+    const preview = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      undefined,
+      "/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001",
+    );
+    await waitForText(preview.container, "Launch planning");
+    await flush();
+    expect(preview.container.textContent).not.toContain("Participants");
+    await act(async () => preview.root.unmount());
+  });
+
   it("sends text, blocks unaddressed image sends, then sends uploaded image batches", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");

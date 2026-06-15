@@ -6,6 +6,7 @@ import {
   buildWorkspaceDocKey,
   type DocSnapshotFailReason,
   type FailedDocMention,
+  MAX_ATTACHMENT_BYTES,
   MAX_FAILED_DOC_MENTION_RAW_LEN,
   MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
   MAX_MESSAGE_ATTACHMENT_REFS,
@@ -15,13 +16,15 @@ import {
 } from "@first-tree/shared";
 
 /**
- * Per-file raw byte cap for a doc capture. The attachments blob store caps a
- * single upload at 10MB, but a markdown doc that big would render to a multi-MB
- * string and choke the preview drawer, so the capture side keeps the original
- * conservative ceiling. Files above this are dropped (the mention stays plain
- * text) rather than uploaded.
+ * Per-file raw byte cap for a doc capture, aligned with the attachment UPLOAD
+ * cap (10MB) rather than a separate, smaller capture ceiling. A doc up to the
+ * upload limit is captured and uploaded; the preview drawer enforces its own
+ * far-smaller render cap (~1MB) and falls back to an authenticated download for
+ * anything larger, so a huge markdown never chokes the UI. Files above the
+ * upload cap hit `too-large` and stay plain text (the blob store would reject
+ * the upload anyway).
  */
-const MAX_DOC_CAPTURE_BYTES = 256 * 1024;
+const MAX_DOC_CAPTURE_BYTES = MAX_ATTACHMENT_BYTES;
 /** MIME the runtime assigns to markdown doc captures. */
 const DOC_CAPTURE_MIME = "text/markdown";
 /** Bounded retries for a single doc upload before giving up and degrading the
