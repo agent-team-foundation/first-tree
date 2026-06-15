@@ -15,7 +15,7 @@ type PaginatedAgents = Awaited<ReturnType<typeof listAgents>>;
  * 30-second poll cycles. See issue 495.
  *
  * The `["agents", …]` prefix is intentional: agent mutation flows (create
- * in `new-agent-dialog.tsx`, rebind in `re-bind-dialog.tsx`, role/visibility
+ * in `new-agent-dialog.tsx`, role/visibility
  * changes in `team/index.tsx`, etc.) call `invalidateQueries({ queryKey:
  * ["agents"] })` to force a roster refetch instead of waiting on the poll.
  * Sharing that prefix keeps pickers and name-maps in step with those
