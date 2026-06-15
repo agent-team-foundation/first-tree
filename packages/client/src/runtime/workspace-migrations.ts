@@ -162,7 +162,7 @@ function hasLegacySnapshotSignature(dir: string): boolean {
  * "Yes" only when the live `ctx.currentSourceRepoNames` is non-null — the
  * caller resolved a payload from the server / cache for this session. When
  * it's `null` (cache miss, default-payload fallback), callers MUST return
- * `"deferred"`: persisted `.first-tree-workspace/managed.json::sourceRepos` proves a
+ * `"deferred"`: a prior session's persisted state proves a
  * PREVIOUS config, not the current one, and falling back to it after a
  * fresh config edit (web-console add + immediate cache miss on the next
  * start) is the same "unknown config looks authoritative" deletion class

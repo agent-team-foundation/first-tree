@@ -76,8 +76,7 @@ describe("workspace-migrations registry", () => {
         schemaVersion: 1,
         cliVersion: "test",
         updatedAt: new Date().toISOString(),
-        sourceRepos: ["first-tree"],
-        skills: [],
+        skills: ["first-tree"],
       }),
     );
 
@@ -103,25 +102,20 @@ describe("workspace-migrations registry", () => {
     expect(existsSync(join(userUuidDir, "user-data.json"))).toBe(true);
   });
 
-  it("v1-uuid-snapshots leaves a UUID-named directory that's currently in source_repos config (PR #869 P0)", () => {
+  it("v1-uuid-snapshots leaves a UUID-named directory that's currently in source-repo config (PR #869 P0)", () => {
     // Edge case: agent config has a `gitRepos.localPath` shaped like a UUID.
     // The migration must NOT delete it even when it has a top-level
-    // AGENTS.md (e.g. the cloned repo happens to ship one).
+    // AGENTS.md (e.g. the cloned repo happens to ship one) — the live
+    // `currentSourceRepoNames` set spares any UUID dir still in config.
     const uuidRepo = join(workspace, "fedcba98-7654-4321-9abc-def012345678");
     mkdirSync(uuidRepo);
     writeFileSync(join(uuidRepo, "AGENTS.md"), "# this repo happens to ship AGENTS.md\n");
-    writeFileSync(
-      join(workspace, ".first-tree-workspace", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: ["fedcba98-7654-4321-9abc-def012345678"],
-        skills: [],
-      }),
-    );
 
-    applyPendingMigrations(workspace, () => {});
+    // Resolved config (non-null) so the migration RUNS rather than deferring;
+    // the UUID dir is spared because it's the agent's current source repo.
+    applyPendingMigrations(workspace, () => {}, {
+      currentSourceRepoNames: new Set(["fedcba98-7654-4321-9abc-def012345678"]),
+    });
 
     expect(existsSync(uuidRepo)).toBe(true);
   });

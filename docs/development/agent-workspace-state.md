@@ -27,7 +27,7 @@ sit on disk forever. The state files below are that record.
 
 | Path (relative to workspace root) | Owner | What it is |
 | --- | --- | --- |
-| `.first-tree-workspace/managed.json` | `runtime/managed-state.ts` | Schema-versioned record of the CLI-managed resources currently materialised in this workspace. The live array is `skills` (skill names), diffed on every session start to discover removals. `sourceRepos` is a legacy field — no current code writes or reconciles it (source repos are agent-managed). |
+| `.first-tree-workspace/managed.json` | `runtime/managed-state.ts` | Schema-versioned record of the CLI-managed resources currently materialised in this workspace. Holds one array — `skills` (skill names) — diffed on every session start to discover removals. (Source repos and the Context Tree clone are agent-managed; the runtime never deletes a repo clone, so they carry no entry here. A legacy record that still has the retired `sourceRepos` key is read-compatible — the reader ignores unknown keys.) |
 | `.first-tree-workspace/migrations-applied.json` | `runtime/workspace-migrations.ts` | Set of one-shot directory-structure migration ids that have already run in this workspace. Each migration runs at most once even if it's later removed from the registry; the marker stays as forward protection. |
 
 Both files use atomic writes (temp + rename) so a crashed writer never
@@ -40,13 +40,10 @@ leaves a half-formed JSON record on disk.
   "schemaVersion": 1,
   "cliVersion": "0.3.2",
   "updatedAt": "2026-06-08T15:50:00.000Z",
-  "sourceRepos": ["first-tree", "first-tree-context"],
   "skills": ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"]
 }
 ```
 
-- **`sourceRepos`** — the `localPath` of each repo from `payload.gitRepos`
-  the CLI cloned at workspace top level.
 - **`skills`** — the names of skills installed under
   `<workspace>/.agents/skills/<name>/` (with matching `.claude/skills/<name>`
   symlinks).
