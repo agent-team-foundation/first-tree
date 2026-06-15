@@ -43,7 +43,7 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
-├── daemon ...               Background daemon (start, stop, status, doctor)
+├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
 └── tree ...                 Validate and browse Context Trees
 ```
@@ -439,7 +439,8 @@ first-tree daemon
 ├── stop
 ├── restart
 ├── status
-└── doctor
+├── doctor
+└── probe [--no-upload] [--json]
 ```
 
 | Subcommand | Purpose |
@@ -448,7 +449,8 @@ first-tree daemon
 | `stop` | Stop the service (preserves auto-start; bring it back with `start`). |
 | `restart` | Restart the service. |
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
-| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, and the installed service file; report each step. |
+| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
+| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). The daemon otherwise probes only at startup, so this refreshes a client's advertised capabilities after a provider is installed / logged in — without a restart. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.
