@@ -18,8 +18,9 @@ import { UserMenu } from "../components/user-menu.js";
  * open and skips its `navigate("/")` (react-router forbids nesting a
  * MemoryRouter here), so the re-pinned order is visible immediately.
  *
- * `api.get` is patched for `/me/organizations` only — every other path
- * falls through to the real client (same approach as the DOM tests).
+ * `api.get` is patched for `/me/organizations` only while the current route
+ * is `/preview/user-menu` — every other path and every non-preview route falls
+ * through to the real client.
  */
 
 const MOCK_ORGS: OrgBrief[] = [
@@ -33,11 +34,26 @@ const MOCK_ORGS: OrgBrief[] = [
   { id: "org-8", name: "design-playground", displayName: "design-playground", role: "member" },
 ];
 
-const originalGet = api.get.bind(api);
-api.get = (async (path: string, ...rest: never[]) => {
-  if (path === "/me/organizations") return MOCK_ORGS;
-  return (originalGet as (path: string, ...rest: never[]) => Promise<unknown>)(path, ...rest);
-}) as typeof api.get;
+type ApiGet = typeof api.get;
+
+declare global {
+  interface Window {
+    __ftUserMenuPreviewOriginalGet?: ApiGet;
+  }
+}
+
+// Patch at module load so the UserMenu effect sees the mock on first render.
+// The interception is path-gated and the original is stashed for HMR, matching
+// the safer preview-shim pattern used by onboarding-preview.tsx.
+window.__ftUserMenuPreviewOriginalGet ??= api.get;
+const originalGet = window.__ftUserMenuPreviewOriginalGet;
+api.get = (<T,>(path: string): Promise<T> => {
+  if (window.location.pathname.startsWith("/preview/user-menu") && path === "/me/organizations") {
+    // The generic API client cannot infer that this string path maps to OrgBrief[].
+    return Promise.resolve(MOCK_ORGS as T);
+  }
+  return originalGet<T>(path);
+}) as ApiGet;
 
 export function UserMenuPreviewPage() {
   // Default to a mid-list org so the pin-to-top behaviour is visible
