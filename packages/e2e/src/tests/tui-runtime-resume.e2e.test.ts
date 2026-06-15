@@ -24,7 +24,11 @@ let fixture: TuiAgentFixture;
 
 beforeAll(async () => {
   const handle = readCurrentHandle();
-  fixture = await createTuiAgent({ handle, displayName: "tui-runtime-resume agent" });
+  fixture = await createTuiAgent({
+    handle,
+    displayName: "tui-runtime-resume agent",
+    bindMode: "after-env-patch",
+  });
 });
 
 describe("tui-runtime-resume — suspended session resumes and forwards output", () => {

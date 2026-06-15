@@ -23,7 +23,11 @@ let fixture: TuiAgentFixture;
 
 beforeAll(async () => {
   const handle = readCurrentHandle();
-  fixture = await createTuiAgent({ handle, displayName: "tui-runtime-basic agent" });
+  fixture = await createTuiAgent({
+    handle,
+    displayName: "tui-runtime-basic agent",
+    bindMode: "after-env-patch",
+  });
 });
 
 afterAll(async () => {

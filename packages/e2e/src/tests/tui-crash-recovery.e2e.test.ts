@@ -33,6 +33,7 @@ beforeAll(async () => {
   fixture = await createTuiAgent({
     handle,
     displayName: "tui-crash-recovery agent",
+    bindMode: "after-env-patch",
     knobs: { crashAfterTurns: 1 },
   });
 });
