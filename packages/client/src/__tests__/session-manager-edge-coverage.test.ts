@@ -299,7 +299,11 @@ describe("SessionManager edge coverage", () => {
     expect(recoverChat).toHaveBeenCalledTimes(1);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
-    internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued"), deliveryKind: "fresh" });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-queued",
+      message: makeMessage("chat-queued"),
+      deliveryKind: "fresh",
+    });
     internals(sm).evictedMappings.set("chat-queued", { claudeSessionId: "queued-session", lastActivity: 1 });
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
 
@@ -1005,7 +1009,11 @@ describe("SessionManager edge coverage", () => {
         throw new Error("factory failed during drain");
       },
     });
-    internals(sm).pendingQueue.push({ chatId: "chat-drain", message: makeMessage("chat-drain"), deliveryKind: "fresh" });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-drain",
+      message: makeMessage("chat-drain"),
+      deliveryKind: "fresh",
+    });
     internals(sm).drainPendingQueue();
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
 

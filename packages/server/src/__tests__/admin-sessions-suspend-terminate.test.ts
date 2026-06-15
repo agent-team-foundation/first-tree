@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
 import { describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
@@ -233,7 +233,9 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ state: "suspended", transitioned: false });
-      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "session:resume", chatId: chat.id, agentId: agent.uuid }));
+      expect(ws.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "session:resume", chatId: chat.id, agentId: agent.uuid }),
+      );
       expect(await readState(app, agent.uuid, chat.id)).toBe("suspended");
     } finally {
       removeClientConnection(admin.clientId, ws as unknown as WebSocket);
