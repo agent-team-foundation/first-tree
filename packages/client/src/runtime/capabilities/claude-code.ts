@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,9 @@ import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "..
 import { detectClaudeAuth } from "./claude-shared.js";
 import {
   type AuthPrecheckOutcome,
+  commandFailureDigest,
   type ResolveOutcome,
+  runCommand,
   runLaunchProbe,
   type SmokeOutcome,
   truncateError,
@@ -20,27 +22,57 @@ export const CLAUDE_SMOKE_TIMEOUT_MS = 60_000;
 /** Prompt for the 1-turn smoke — cheapest possible real session. */
 export const CLAUDE_SMOKE_PROMPT = "Reply with exactly: OK";
 
-async function readSdkVersion(): Promise<string | null> {
-  // The Anthropic SDK does not expose `./package.json` via `exports` and only
-  // ships ESM `default` (no CJS `require` condition). Use ESM resolution, then
-  // walk up from the entry file to the package root.
-  try {
-    const entryUrl = await import.meta.resolve("@anthropic-ai/claude-agent-sdk");
-    let dir = dirname(fileURLToPath(entryUrl));
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = join(dir, "package.json");
-      if (existsSync(candidate)) {
-        const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as { name?: unknown; version?: unknown };
-        if (pkg.name === "@anthropic-ai/claude-agent-sdk" && typeof pkg.version === "string") return pkg.version;
-      }
-      const parent = dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  } catch {
-    // fall through
+/**
+ * Locate the SDK's bundled `cli.js` — the exact artifact the SDK spawns
+ * (`node <sdk-dir>/cli.js`) when `query()` is given no
+ * `pathToClaudeCodeExecutable`. Vite SSR (vitest) strips
+ * `import.meta.resolve`, so when it is unavailable we walk parent
+ * `node_modules` to the same package (realpath'd so pnpm symlinks resolve
+ * exactly like Node's own resolution would) — mirrors codex's anchor.
+ */
+function locateSdkCliJs(): string {
+  if (typeof import.meta.resolve === "function") {
+    return join(dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))), "cli.js");
   }
-  return null;
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 12; depth += 1) {
+    const candidate = join(dir, "node_modules", "@anthropic-ai", "claude-agent-sdk", "cli.js");
+    if (existsSync(candidate)) return realpathSync(candidate);
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("not found in any parent node_modules");
+}
+
+/**
+ * Launch-verify the SDK's bundled `cli.js` via `node <cli.js> --version`.
+ *
+ * This is the resolve-stage proof for the no-on-disk-binary path: when no
+ * real `claude` resolves, the runtime spawns this bundled artifact, so a
+ * missing/broken bundle must resolve to `missing` HERE — before the auth
+ * precheck can short-circuit to `unauthenticated`/`available: true` (the
+ * bind-gate false positive this probe exists to remove). `--version` is
+ * fast (~0.25s), needs no credentials, and yields the real Claude CLI
+ * version (e.g. `2.1.84`), which is more useful than the SDK package version.
+ */
+export async function verifyBundledClaudeArtifact(): Promise<
+  { ok: true; version: string | null } | { ok: false; error: string }
+> {
+  let cliJs: string;
+  try {
+    cliJs = locateSdkCliJs();
+  } catch (err) {
+    return {
+      ok: false,
+      error: `@anthropic-ai/claude-agent-sdk bundled cli.js could not be located: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!existsSync(cliJs)) return { ok: false, error: `SDK bundled cli.js missing at ${cliJs}` };
+  const res = await runCommand(process.execPath, [cliJs, "--version"], { timeoutMs: 10_000 });
+  if (!res.ok) return { ok: false, error: commandFailureDigest("`node cli.js --version`", res) };
+  const match = res.stdout.match(/\d+\.\d+(?:\.\d+)?/);
+  return { ok: true, version: match ? match[0] : null };
 }
 
 /**
@@ -118,9 +150,9 @@ async function defaultClaudeSdkSmoke(binary: string | undefined): Promise<SmokeO
  */
 export type ClaudeCodeProbeDeps = {
   importSdk?: () => Promise<unknown>;
-  readSdkVersion?: () => Promise<string | null>;
   resolveExecutable?: (opts?: { env?: NodeJS.ProcessEnv }) => ClaudeExecutableResolution;
   verifyBinary?: (binary: string) => Promise<{ ok: true; version: string | null } | { ok: false; error: string }>;
+  verifyBundledArtifact?: () => Promise<{ ok: true; version: string | null } | { ok: false; error: string }>;
   detectAuth?: () => { authenticated: boolean; method: "api_key" | "oauth" | "none" };
   runSmoke?: (binary: string | undefined) => Promise<SmokeOutcome>;
 };
@@ -129,25 +161,25 @@ export type ClaudeCodeProbeDeps = {
  * Launch-verified probe for the `claude-code` (SDK) runtime.
  *
  * Stage map:
- *   1. resolve — the SDK package must import, and when a real `claude` binary
- *      resolves (env override / PATH / well-known dirs) it must pass a real
- *      `--version` spawn. No binary resolved is NOT a failure here: the
- *      runtime then uses the SDK's bundled native binary, and the smoke
- *      exercises that path for real (a missing bundle surfaces as the SDK's
- *      own "Native CLI binary not found" → `missing`).
+ *   1. resolve — the SDK package must import, AND the artifact the runtime
+ *      would spawn must pass a real `--version` launch: a resolved on-disk
+ *      `claude` (env override / PATH / well-known dirs), or — when none
+ *      resolves — the SDK's bundled `cli.js` (`node cli.js --version`). A
+ *      missing/broken bundle fails HERE (`missing`), so it can no longer be
+ *      masked by a failing auth precheck downstream.
  *   2. auth precheck — the marker-file/env heuristic is only a NEGATIVE gate:
  *      no credentials → `unauthenticated` without spending a smoke. It no
  *      longer has the authority to declare the machine authenticated.
  *   3. smoke — 1-turn haiku query through the SDK; the only path to `ok`.
  *
- * `sdkVersion` carries the resolved CLI's real version when a binary was
- * found, otherwise the SDK package version (the engine the runtime embeds).
+ * `sdkVersion` carries the launch-verified CLI's real version (the resolved
+ * binary's, or the bundled `cli.js`'s).
  */
 export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}): Promise<CapabilityEntry> {
   const importSdk = deps.importSdk ?? (() => import("@anthropic-ai/claude-agent-sdk"));
-  const readVersion = deps.readSdkVersion ?? readSdkVersion;
   const resolveExecutable = deps.resolveExecutable ?? resolveClaudeCodeExecutable;
   const verifyBinary = deps.verifyBinary ?? ((binary: string) => verifyLaunchable("claude", binary));
+  const verifyBundledArtifact = deps.verifyBundledArtifact ?? verifyBundledClaudeArtifact;
   const detectAuth = deps.detectAuth ?? detectClaudeAuth;
   const runSmoke = deps.runSmoke ?? defaultClaudeSdkSmoke;
 
@@ -170,9 +202,13 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
         resolvedBinary = resolution.path;
         return { ok: true, binary: resolution.path, version: verified.version };
       }
-      // No on-disk binary — the SDK will use its bundled native binary. The
-      // smoke is the real verification of that launch path.
-      return { ok: true, version: await readVersion() };
+      // No on-disk binary — the SDK will spawn its bundled `cli.js` via node.
+      // Launch-verify that artifact now so a missing/broken bundle resolves to
+      // `missing` regardless of auth state (the smoke still exercises the full
+      // path, but it only runs after a passing auth precheck).
+      const verified = await verifyBundledArtifact();
+      if (!verified.ok) return { ok: false, error: verified.error };
+      return { ok: true, version: verified.version };
     },
     authPrecheck: async (): Promise<AuthPrecheckOutcome> => {
       const auth = detectAuth();
