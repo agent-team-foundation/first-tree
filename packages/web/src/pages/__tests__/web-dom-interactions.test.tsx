@@ -1370,6 +1370,9 @@ describe("web DOM interaction coverage", () => {
     );
     await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
     await waitForText("Delete current team", menu.container);
+    expect((menu.container.textContent ?? "").indexOf("Delete current team")).toBeLessThan(
+      (menu.container.textContent ?? "").indexOf("Create new team"),
+    );
     await click(
       [...menu.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Delete current team"),

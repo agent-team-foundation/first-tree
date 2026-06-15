@@ -70,6 +70,7 @@ export function UserMenu() {
   const hasHiddenTeams = orderedOrgs.length > COLLAPSED_TEAM_LIMIT;
   const visibleOrgs = teamsExpanded ? orderedOrgs : orderedOrgs.slice(0, COLLAPSED_TEAM_LIMIT);
   const hiddenTeamCount = Math.max(0, orderedOrgs.length - COLLAPSED_TEAM_LIMIT);
+  const canDeleteCurrentTeam = !!organizationId && currentRole === "admin";
 
   const switchOrg = async (id: string) => {
     if (id === organizationId) {
@@ -152,16 +153,19 @@ export function UserMenu() {
               <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
                 <div className="px-4 py-1 text-eyebrow text-muted-foreground">Current team</div>
                 {orgs.length === 1 ? (
-                  <div
-                    className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body"
-                    style={{ color: "var(--fg)" }}
-                  >
-                    <span style={{ width: 14, display: "inline-flex" }}>
-                      <Check className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{orderedOrgs[0]?.displayName}</span>
-                    <RoleBadge role={orderedOrgs[0]?.role ?? currentRole} />
-                  </div>
+                  <>
+                    <div
+                      className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body"
+                      style={{ color: "var(--fg)" }}
+                    >
+                      <span style={{ width: 14, display: "inline-flex" }}>
+                        <Check className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{orderedOrgs[0]?.displayName}</span>
+                      <RoleBadge role={orderedOrgs[0]?.role ?? currentRole} />
+                    </div>
+                    {canDeleteCurrentTeam && <DeleteCurrentTeamMenuItem onClick={openDeleteTeam} />}
+                  </>
                 ) : (
                   <div>
                     <div style={teamsExpanded ? { maxHeight: "var(--sp-75)", overflowY: "auto" } : undefined}>
@@ -198,6 +202,7 @@ export function UserMenu() {
                         <span>{teamsExpanded ? "Show fewer teams" : `View ${hiddenTeamCount} more teams`}</span>
                       </button>
                     )}
+                    {canDeleteCurrentTeam && <DeleteCurrentTeamMenuItem onClick={openDeleteTeam} />}
                   </div>
                 )}
               </div>
@@ -241,18 +246,6 @@ export function UserMenu() {
                   <span>Invite teammates</span>
                 </button>
               )}
-              {organizationId && currentRole === "admin" && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={openDeleteTeam}
-                  className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
-                  style={{ color: "var(--state-error)" }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>Delete current team</span>
-                </button>
-              )}
             </div>
 
             {/* User actions */}
@@ -278,6 +271,23 @@ export function UserMenu() {
       <TeamSetupModal action={setupAction} onClose={() => setSetupAction(null)} />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </>
+  );
+}
+
+function DeleteCurrentTeamMenuItem({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+      style={{ color: "var(--state-error)" }}
+    >
+      <span style={{ width: 14, display: "inline-flex" }}>
+        <Trash2 className="h-3.5 w-3.5" />
+      </span>
+      <span>Delete current team</span>
+    </button>
   );
 }
 
