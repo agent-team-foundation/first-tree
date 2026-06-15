@@ -286,10 +286,14 @@ export function computeWorkspaceStatus(workspaceRoot: string): WorkspaceStatus {
   const missingBoundSources = boundSources.filter((entry) => !entry.present);
 
   // Unbound git siblings are scanned where the bound sources live (sourcesBase).
-  // `manifest.tree` lives at the workspace root, not under a sourcesRoot, so
-  // excluding it is a no-op in the agent-managed layout and the necessary guard
-  // in the flat layout (where sourcesBase === workspaceRoot).
-  const declaredNames = new Set<string>([manifest.tree, ...manifest.sources]);
+  // Exclude `manifest.tree` only in the FLAT layout, where tree and sources
+  // share the workspace-root namespace. With `sourcesRoot` set the tree lives at
+  // `<ws>/<tree>` (outside sourcesBase), so a clone at `<sourcesBase>/<tree-name>`
+  // (e.g. a source literally named `context-tree`, now schema-valid) is a real
+  // unbound sibling and must NOT be filtered out by the tree name.
+  const declaredNames = manifest.sourcesRoot
+    ? new Set<string>(manifest.sources)
+    : new Set<string>([manifest.tree, ...manifest.sources]);
   const unboundGitSiblings: WorkspaceUnboundSibling[] = [];
   for (const childName of listImmediateChildDirs(sourcesBase)) {
     if (declaredNames.has(childName)) {

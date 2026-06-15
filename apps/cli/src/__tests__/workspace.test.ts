@@ -191,6 +191,21 @@ describe("computeWorkspaceStatus", () => {
     expect(status.unboundGitSiblings.map((entry) => entry.name)).toEqual(["scratch"]);
   });
 
+  it("lists an unbound source sibling named like the tree when sourcesRoot is set", () => {
+    // Under sourcesRoot the tree lives at <ws>/context (outside source-repos/),
+    // so an unbound clone at <ws>/source-repos/context is a real sibling and
+    // must NOT be filtered out just because its name equals the tree name.
+    makeGitRepo(workspaceRoot, "context"); // tree (regular clone) at the workspace root
+    const sourcesDir = join(workspaceRoot, "source-repos");
+    makeBareGitRepo(sourcesDir, "context"); // unbound bare clone literally named like the tree
+    makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: [], sourcesRoot: "source-repos" });
+
+    const status = computeWorkspaceStatus(workspaceRoot);
+
+    expect(status.treePresent).toBe(true);
+    expect(status.unboundGitSiblings.map((entry) => entry.name)).toEqual(["context"]);
+  });
+
   it("reports tree absent when the tree subdir is missing", () => {
     makeWorkspaceManifest(workspaceRoot, { tree: "context", sources: [] });
 
