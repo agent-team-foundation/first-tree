@@ -969,6 +969,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
+              // Reject a runtime-provider mismatch BEFORE any first-bind claim.
+              // The claim below is the one-shot NULL → ID that fixes an agent's
+              // client for life (re-bind is removed), so a client running a
+              // different runtime must never be allowed to pin an unbound agent
+              // — otherwise it claims the agent, gets rejected here, and no
+              // other client can recover it (they would only see WRONG_CLIENT).
+              // The client repair path re-fetches authoritative state and
+              // respawns the right handler before retrying the bind.
+              if (bindRequest.runtimeType !== agent.runtimeProvider) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
+                return;
+              }
+
               // First-bind path: agent.clientId is NULL (e.g. created before
               // the operator brought up a client, or migrated from pre-M1 with
               // no presence record). The race-safe UPDATE returns 0 rows if
@@ -988,15 +1001,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
-                return;
-              }
-
-              // Reject if the connecting client is running a different runtime
-              // provider than the one pinned on the agent. The client repair
-              // path will re-fetch authoritative state and respawn the right
-              // handler before retrying the bind.
-              if (bindRequest.runtimeType !== agent.runtimeProvider) {
-                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
                 return;
               }
 

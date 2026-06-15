@@ -12,7 +12,7 @@
  *
  *   1. Per-agent / per-member recompute fan-out
  *      (`recomputeWatchersForAgent`, `recomputeWatchersForMember`).
- *      These translate an agent-rebind or member-status flip into a
+ *      These translate a manager reassignment or member-status flip into a
  *      set of chat-scoped recomputes. The underlying chat-scoped
  *      operation `recomputeChatWatchers` itself lives in
  *      `participant-mode.ts` next to the speaker writer that owns

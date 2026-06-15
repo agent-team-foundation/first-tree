@@ -14,6 +14,7 @@ import {
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
+  runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
@@ -126,7 +127,7 @@ function clientCapabilitiesReported(metadata: unknown): boolean {
  * `state: "unauthenticated"`. A `missing` or `error` entry is *reported* but
  * not usable, so we explicitly reject those rather than treating mere key
  * presence as support. Auth state is left to the user to fix at runtime
- * (the re-bind dialog surfaces an `unauthenticated` hint).
+ * (the new-agent dialog surfaces an `unauthenticated` hint).
  */
 function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvider): boolean {
   if (!metadata || typeof metadata !== "object") return false;
@@ -897,6 +898,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   // First-set clientId (NULL → ID): validate ownership against the agent's
   // current manager. Reuses the resolveAgentClient ownership check so the
   // semantics match agent creation.
+  //
+  // With re-bind removed, this first bind is the ONLY path an unbound agent
+  // gets a computer, so it must also run the runtime-provider capability gate
+  // — createAgent runs it on the create-with-client path. Without it an agent
+  // could be bound to a client that does not report its provider (e.g. create
+  // an unbound `codex` agent, then bind it to a client reporting codex
+  // missing/error).
   if (data.clientId !== undefined && data.clientId !== null && agent.clientId === null) {
     const resolvedClientId = await resolveAgentClient(db, {
       clientId: data.clientId,
@@ -904,6 +912,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
       type: agent.type,
     });
     if (resolvedClientId !== null) {
+      // `agents.runtime_provider` is a text column (typed `string`); narrow it
+      // back to the RuntimeProvider union before the capability check.
+      await ensureClientSupportsRuntimeProvider(
+        db,
+        resolvedClientId,
+        runtimeProviderSchema.parse(agent.runtimeProvider),
+      );
       updates.clientId = resolvedClientId;
     }
   }

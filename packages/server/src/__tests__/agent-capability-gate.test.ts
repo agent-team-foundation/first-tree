@@ -2,7 +2,7 @@ import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
-import { createAgent } from "../services/agent.js";
+import { createAgent, updateAgent } from "../services/agent.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
 /**
@@ -14,9 +14,10 @@ import { createAdminContext, useTestApp } from "./helpers.js";
  *     i.e. `state` ∈ {ok, unauthenticated}. `missing` / `error` blocks
  *     unless `force: true`.
  *
- * The gate is invoked from `createAgent` (creation pre-flight): one happy /
- * one blocked / one forced case so a regression at that call site fails this
- * suite.
+ * The gate is invoked from `createAgent` (creation pre-flight) and from the
+ * `updateAgent` first-bind path (NULL → ID) — the only way an unbound agent
+ * gets a computer now that re-bind is removed. A regression at either call
+ * site fails this suite.
  */
 
 function entry(state: CapabilityEntry["state"]): CapabilityEntry {
@@ -163,5 +164,31 @@ describe("Agent capability gate (services/agent.ts)", () => {
       managerId: ctx.memberId,
     });
     expect(human.clientId).toBeNull();
+  });
+
+  it("enforces the gate on the updateAgent first-bind path (NULL → ID)", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    // Unbound agent whose provider is codex — created without a client, so the
+    // creation-time gate short-circuits (clientId null).
+    const agent = await createAgent(app.db, {
+      name: `cap-gate-firstbind-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      runtimeProvider: "codex",
+    });
+    expect(agent.clientId).toBeNull();
+
+    // The only client reports codex missing — first bind must be blocked.
+    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("missing") });
+    await expect(updateAgent(app.db, agent.uuid, { clientId: ctx.clientId })).rejects.toThrow(
+      /does not have runtime provider "codex" available/i,
+    );
+
+    // Once the client reports codex available, the same first bind succeeds.
+    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("unauthenticated") });
+    const bound = await updateAgent(app.db, agent.uuid, { clientId: ctx.clientId });
+    expect(bound.clientId).toBe(ctx.clientId);
+    expect(bound.runtimeProvider).toBe("codex");
   });
 });
