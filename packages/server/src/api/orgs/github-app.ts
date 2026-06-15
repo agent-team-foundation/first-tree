@@ -47,6 +47,10 @@ export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([
   // installs in a popup and lands the popup here so it can auto-close while the
   // original tab keeps polling.
   "/onboarding/connected",
+  // Build-tree recovery surface: its connect-code step passes itself as `next`
+  // when the install popup is blocked (the full-page redirect must return to
+  // the recovery flow, not Settings — see step-connect-code.tsx).
+  "/build-tree",
 ]);
 
 /**
@@ -231,13 +235,17 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
     // `targetOrganizationId` rides inside the signed state so the OAuth
     // callback binds the install to *this* org rather than the caller's
     // primary org (codex P1-3) — an admin in org B installing the App must
-    // end up bound to org B. The callback re-checks the caller is still an
-    // admin of that org before honoring it.
+    // end up bound to org B. `kickoffUserId` rides alongside it so the
+    // callback can rest the bind on THIS admin's (re-checked) authority
+    // even when the browser's github.com session resolves to a different
+    // GitHub identity — the github.com session and the First Tree session
+    // are independent, and a mismatch must not strand the install unbound.
     const { token, nonce } = await signOAuthState(
       app.config.secrets.jwtSecret,
       resolvePostInstallNext(request.query.next),
       {
         targetOrganizationId: scope.organizationId,
+        kickoffUserId: scope.userId,
       },
     );
     reply.header(

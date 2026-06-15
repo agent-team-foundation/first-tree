@@ -11,9 +11,13 @@ import { organizations } from "./organizations.js";
  * tables — their entity models differ enough that a generic table would slip
  * back into untyped jsonb.
  *
- * `bound_via` distinguishes the first-touch row (`direct`) from a row written
- * by the `Fixes #N` linker (`fixes_link`). Routing logic ignores the
- * distinction; it exists for audit and future strategy tweaks.
+ * `bound_via` records how the row came to exist — webhook first-touch
+ * (`direct`), `Fixes #N` linker (`fixes_link`), human-scoped fallback
+ * (`human_fallback`), or an explicit `github follow` (`agent_declared` /
+ * `human_declared`). Routing logic ignores the distinction; it exists for
+ * audit and the narrow `pull_request.opened` carve-out in
+ * `services/github-audience.ts`. Canonical value docs: `BoundVia` in
+ * `services/github-entity-chat.ts`.
  *
  * `entity_state` (added 0048) tracks the upstream PR/Issue lifecycle so the
  * auto-archive sweeper can decide whether a chat's bound entities are all
@@ -41,7 +45,7 @@ export const githubEntityChatMappings = pgTable(
       .notNull()
       .references(() => chats.id, { onDelete: "cascade" }),
     boundAt: timestamp("bound_at", { withTimezone: true }).notNull().defaultNow(),
-    /** "direct" | "fixes_link" — see file header. */
+    /** See file header — canonical value list lives on `BoundVia`. */
     boundVia: text("bound_via").notNull(),
     /** "open" (default) | "closed" | "merged". See file header. */
     entityState: text("entity_state").notNull().default("open"),

@@ -325,8 +325,14 @@ describe("daemon start command", () => {
     const client = await import("@first-tree/client");
     runtimeInstance.start.mockRejectedValueOnce(new client.ClientUserMismatchError("wrong user"));
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
-    expect(output()).toContain("client.yaml is owned by a different user");
-    expect(output()).toContain("login <token> --override");
+    const mismatchText = output();
+    expect(mismatchText).toContain("client.yaml is owned by a different user");
+    expect(mismatchText).toContain("login <token> --override");
+    // Fresh-client takeover model — must NOT resurrect the removed
+    // server-side transfer/unpin language.
+    expect(mismatchText).toContain("fresh client identity");
+    expect(mismatchText).not.toContain("transfer ownership");
+    expect(mismatchText).not.toContain("unpinned");
 
     stderrSpy.mockClear();
     coreMocks.ClientRuntime.mockClear();

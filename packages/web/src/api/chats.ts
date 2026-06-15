@@ -172,6 +172,7 @@ export function sendFileMessageBatch(
   chatId: string,
   content: SendFileMessageBatchBody,
   metadata?: SendFileMessageMetadata,
+  opts?: { inReplyTo?: string },
 ): Promise<Message> {
   // Project explicit fields rather than spreading `metadata` whole so future
   // additions to SendFileMessageMetadata don't ride out on the `mentions`
@@ -182,6 +183,10 @@ export function sendFileMessageBatch(
     format: "file",
     content,
     ...(hasMentions ? { metadata: { mentions } } : {}),
+    // `inReplyTo` is format-agnostic threading (`sendMessageSchema`) — a
+    // captioned image answering a docked question threads under it just like
+    // a text reply.
+    ...(opts?.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
   });
 }
 

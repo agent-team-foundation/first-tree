@@ -17,7 +17,7 @@ export type AckEntryResult =
   | {
       ok: true;
       throughEntry: typeof inboxEntries.$inferSelect;
-      disposition: "acked" | "already_acked";
+      disposition: "acked" | "already_acked" | "accepted_from_pending";
       ackedCount: number;
       ackedEntryIds: number[];
     }
@@ -37,8 +37,8 @@ type WideTxLike = PgDatabase<PgQueryResultHKT, any, any>;
  * Caps for the silent-context replay attached to an active delivery (proposal
  * §1). The window keeps stale chatter out of the prompt; the cap protects
  * against runaway batches if a chat is very chatty between two mentions of
- * the same agent. Older / overflow silent rows are still bulk-acked so they
- * don't accumulate forever.
+ * the same agent. Older / overflow silent rows are excluded from the prompt
+ * window but drained later when ACK-through commits the notify delivery.
  *
  * Exported (test-only) so the cap-overflow test doesn't have to spam 50+
  * silent messages — it pins the invariant by reading the constant.
@@ -131,7 +131,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
             .where(
               and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)),
             )
-            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .orderBy(asc(inboxEntries.id))
             .limit(limit)
             .for("update", { skipLocked: true })
         : tx
@@ -145,7 +145,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
                 eq(inboxEntries.notify, true),
               ),
             )
-            .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+            .orderBy(asc(inboxEntries.id))
             .limit(limit)
             .for("update", { skipLocked: true });
 
@@ -169,8 +169,8 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
  * hub-inbox-ws-data-plane §3.2 risk #1).
  *
  * Steps:
- *   1. Sort by `createdAt` ASC (PG `RETURNING` does not guarantee order).
- *   2. For each trigger, collect silent context & bulk-ack stale silent rows.
+ *   1. Sort by inbox `id` ASC (PG `RETURNING` does not guarantee order).
+ *   2. For each trigger, collect silent context without consuming silent rows.
  *   3. Fetch the trigger messages.
  *   4. Build wire payloads via the single dispatcher.
  *
@@ -183,11 +183,10 @@ export async function bundleDeliveryWithSilentContext(
 ): Promise<InboxEntryWithMessage[]> {
   if (claimed.length === 0) return [];
 
-  // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so we sort
-  // by createdAt/id (ascending) before assembling the response. Downstream
-  // consumers — and silent-context bundling in particular — depend on
-  // chronological order to split context windows correctly.
-  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
+  // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so sort by
+  // the delivery cursor. ACK-through uses `id <= cursor`; delivery cannot use
+  // `createdAt` as a separate prefix order without making that cursor unsafe.
+  claimed.sort((a, b) => a.id - b.id);
 
   const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed);
 
@@ -248,19 +247,18 @@ export async function bundleDeliveryWithSilentContext(
  * that target.
  *
  * Production WS delivery no longer exact-claims NOTIFY message ids; it treats
- * NOTIFY as a wake-up hint and drains backlog oldest-first through
- * `claimBacklogForPush()`. This helper remains for direct tests and any
- * explicit exact-message claim callers that need the same ack-through prefix
- * safety.
+ * NOTIFY as a wake-up hint and drains backlog through `claimBacklogForPushFair`.
+ * This helper remains for direct tests and any explicit exact-message claim
+ * callers that need the same ack-through prefix safety.
  *
  * Returns `[]` if no row matches — benign race with another server instance
  * (or the debug `GET /inbox` endpoint) that already claimed the entry.
  * NOTIFY is fire-and-forget (proposal §3.2).
  *
- * Ack-through safety depends on this prefix behavior: a newer entry must not
- * be claimed/sent while an older same-chat pending entry remains invisible to
- * the client attempt. Callers that send the returned frames must preserve the
- * returned oldest-first order.
+ * Ack-through safety depends on this prefix behavior: a higher-id entry must
+ * not be claimed/sent while a lower-id same-chat pending entry remains
+ * invisible to the client attempt. Callers that send the returned frames must
+ * preserve the returned id order.
  */
 export async function claimAndBuildForPush(
   db: Database,
@@ -280,7 +278,7 @@ export async function claimAndBuildForPush(
             eq(inboxEntries.notify, true),
           ),
         )
-        .orderBy(asc(inboxEntries.createdAt), asc(inboxEntries.id))
+        .orderBy(asc(inboxEntries.id))
         .for("update")
         .limit(1);
       if (!target) return [];
@@ -314,11 +312,9 @@ export async function claimAndBuildForPush(
 }
 
 /**
- * WS-push backlog path: on agent rebind (or once an in-flight slot frees up
- * after an ack), drain up to `limit` pending `notify=true` entries oldest-
- * first and assemble wire payloads. Identical claim shape to `pollInbox` —
- * they are intentionally interchangeable so a hot-path bug fixed in one
- * shows up in the other (proposal §3.3 / §3.5).
+ * Oldest-first backlog path. Kept for debug parity with `pollInbox` and
+ * direct service tests; normal WS delivery uses `claimBacklogForPushFair` so a
+ * single chat cannot consume the agent's whole in-flight window.
  */
 export async function claimBacklogForPush(
   db: Database,
@@ -348,16 +344,120 @@ export async function claimBacklogForPushForChat(
   );
 }
 
+export type ClaimBacklogForPushFairChatBudget = {
+  chatId: string | null;
+  remaining: number;
+};
+
+function fairBudgetKey(chatId: string | null): string {
+  return chatId === null ? "null" : `chat:${chatId}`;
+}
+
+/**
+ * Fair WS backlog path for normal agent drains. It keeps the old backlog
+ * helper's same-chat id order, but chooses across chats by chat-local rank so
+ * one noisy/stuck chat cannot consume every delivered-but-unacked slot.
+ *
+ * `chatBudgets` only needs entries for chats whose current in-flight count
+ * reduces their remaining budget. Chats absent from the list receive
+ * `defaultPerChatLimit`.
+ */
+export async function claimBacklogForPushFair(
+  db: Database,
+  inboxId: string,
+  opts: {
+    limit: number;
+    defaultPerChatLimit: number;
+    chatBudgets: readonly ClaimBacklogForPushFairChatBudget[];
+  },
+): Promise<InboxEntryWithMessage[]> {
+  if (opts.limit <= 0 || opts.defaultPerChatLimit <= 0) return [];
+
+  const normalizedBudgets = new Map<string, { chat_id: string | null; remaining: number }>();
+  for (const budget of opts.chatBudgets) {
+    normalizedBudgets.set(fairBudgetKey(budget.chatId), {
+      chat_id: budget.chatId,
+      remaining: Math.max(0, Math.floor(budget.remaining)),
+    });
+  }
+  const budgetJson = JSON.stringify([...normalizedBudgets.values()]);
+
+  return withSpan(
+    "inbox.deliver.backlog.fair",
+    {
+      "inbox.id": inboxId,
+      "inbox.backlog.limit": opts.limit,
+      "inbox.backlog.per_chat_limit": opts.defaultPerChatLimit,
+    },
+    () =>
+      db.transaction(async (tx) => {
+        const selected = await tx.execute<{ id: number | string }>(sql`
+          WITH chat_budget AS (
+            SELECT budget.chat_id, budget.remaining
+              FROM jsonb_to_recordset(${budgetJson}::jsonb) AS budget(chat_id text, remaining integer)
+          ),
+          ranked AS (
+            SELECT
+              e.id,
+              e.chat_id,
+              row_number() OVER (PARTITION BY e.chat_id ORDER BY e.id) AS chat_rank
+            FROM inbox_entries e
+            WHERE e.inbox_id = ${inboxId}
+              AND e.status = 'pending'
+              AND e.notify = true
+          ),
+          eligible AS (
+            SELECT ranked.id, ranked.chat_rank
+              FROM ranked
+              LEFT JOIN chat_budget
+                ON ranked.chat_id IS NOT DISTINCT FROM chat_budget.chat_id
+             WHERE ranked.chat_rank <= COALESCE(chat_budget.remaining, ${opts.defaultPerChatLimit})
+             ORDER BY ranked.chat_rank, ranked.id
+             LIMIT ${opts.limit}
+          ),
+          locked AS (
+            SELECT e.id, eligible.chat_rank
+              FROM inbox_entries e
+              INNER JOIN eligible ON eligible.id = e.id
+             WHERE e.inbox_id = ${inboxId}
+               AND e.status = 'pending'
+               AND e.notify = true
+             ORDER BY eligible.chat_rank, e.id
+             FOR UPDATE OF e SKIP LOCKED
+          )
+          SELECT locked.id
+            FROM locked
+           ORDER BY locked.chat_rank, locked.id
+        `);
+
+        const targetIds = selected.map((row) => {
+          const id = typeof row.id === "number" ? row.id : Number(row.id);
+          if (!Number.isSafeInteger(id)) throw new Error(`Unexpected inbox entry id from fair claim: ${row.id}`);
+          return id;
+        });
+        if (targetIds.length === 0) return [];
+
+        const claimed = await tx
+          .update(inboxEntries)
+          .set({ status: "delivered", deliveredAt: new Date() })
+          .where(inArray(inboxEntries.id, targetIds))
+          .returning();
+
+        return bundleDeliveryWithSilentContext(tx, inboxId, claimed);
+      }),
+  );
+}
+
 /**
  * Per claimed trigger: SELECT silent (notify=false) pending rows in the same
  * chat that occurred between the previous trigger in this batch (or beginning
  * of time) and this trigger, capped by `PRECEDING_CONTEXT_MAX_ENTRIES` and
  * `PRECEDING_CONTEXT_WINDOW_SECONDS`. Returned messages are oldest-first.
  *
- * Side effect: bulk-ack ALL silent pending rows in each chat with
- * createdAt < latest_trigger.createdAt — including ones that fell outside
- * the window/cap. Otherwise stale silent rows would accumulate and re-load
- * on every poll.
+ * This function intentionally does not ACK silent rows. Bundling is not
+ * consumption: recovery must be able to reset the notify trigger and rebuild
+ * the same trigger-relative context window. Silent rows are drained only when
+ * the client ACKs the consumed notify entry.
  */
 async function collectPrecedingContext(
   tx: TxLike,
@@ -376,18 +476,35 @@ async function collectPrecedingContext(
   }
 
   for (const [chatId, chatTriggers] of byChat) {
-    chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
+    chatTriggers.sort((a, b) => a.id - b.id);
+
+    const firstTrigger = chatTriggers[0];
+    if (!firstTrigger) continue;
+    const [previousNotify] = await tx
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, inboxId),
+          eq(inboxEntries.chatId, chatId),
+          eq(inboxEntries.notify, true),
+          lt(inboxEntries.id, firstTrigger.id),
+        ),
+      )
+      .orderBy(desc(inboxEntries.id))
+      .limit(1);
 
     // For each trigger, fetch silent context strictly before it (and after
-    // the previous trigger in this batch). Window: 24h before the trigger.
+    // the previous notify trigger cursor, even if that trigger was delivered
+    // in an earlier unacked batch). Window: 24h before the trigger.
     //
     // Order matters: when there are MORE than `PRECEDING_CONTEXT_MAX_ENTRIES`
     // candidates, we want to keep the rows CLOSEST to the trigger (most
     // contextually relevant) and drop the oldest. So select DESC + LIMIT,
     // then reverse in JS to get chronological prompt-ready output. Selecting
-    // ASC + LIMIT would drop the recent rows — and the bulk-ack below would
-    // mark them acked anyway, so the agent would silently lose the messages
-    // that mattered most.
+    // ASC + LIMIT would drop the recent rows; ACK-through later drains every
+    // silent row behind the consumed notify cursor, including rows excluded by
+    // this cap, so this delivery must choose the most relevant window now.
     //
     // We sort by `messages.createdAt` rather than `inboxEntries.createdAt`
     // because `addParticipant`'s backfill writes 50 inbox rows in one
@@ -403,8 +520,9 @@ async function collectPrecedingContext(
     // (T2 > T1) would both include silent rows < T1 in their preceding
     // context. With SKIP LOCKED, the second poll skips the rows the first
     // has reserved.
-    let prevCreatedAt: Date | null = null;
+    let previousNotifyId: number | null = previousNotify?.id ?? null;
     for (const trigger of chatTriggers) {
+      const windowStart = new Date(trigger.createdAt.getTime() - PRECEDING_CONTEXT_WINDOW_SECONDS * 1000);
       const rows = await tx
         .select({
           messageId: messages.id,
@@ -422,9 +540,9 @@ async function collectPrecedingContext(
             eq(inboxEntries.chatId, chatId),
             eq(inboxEntries.status, "pending"),
             eq(inboxEntries.notify, false),
-            lt(inboxEntries.createdAt, trigger.createdAt),
-            prevCreatedAt === null ? undefined : gt(inboxEntries.createdAt, prevCreatedAt),
-            sql`${inboxEntries.createdAt} > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})`,
+            lt(inboxEntries.id, trigger.id),
+            previousNotifyId === null ? undefined : gt(inboxEntries.id, previousNotifyId),
+            gt(inboxEntries.createdAt, windowStart),
           ),
         )
         .orderBy(desc(messages.createdAt))
@@ -443,27 +561,7 @@ async function collectPrecedingContext(
         }))
         .reverse();
       result.set(trigger.id, preceding);
-      prevCreatedAt = trigger.createdAt;
-    }
-
-    // Bulk-ack ALL silent pending rows in this chat strictly before the
-    // latest trigger — covers both "included in preceding" and "dropped due
-    // to cap/window". Without this the cap-overflow rows would re-attach to
-    // the next trigger and grow forever.
-    const latestTrigger = chatTriggers[chatTriggers.length - 1];
-    if (latestTrigger) {
-      await tx
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
-        .where(
-          and(
-            eq(inboxEntries.inboxId, inboxId),
-            eq(inboxEntries.chatId, chatId),
-            eq(inboxEntries.status, "pending"),
-            eq(inboxEntries.notify, false),
-            lt(inboxEntries.createdAt, latestTrigger.createdAt),
-          ),
-        );
+      previousNotifyId = trigger.id;
     }
   }
 
@@ -515,12 +613,32 @@ export async function ackThroughEntryIdForBoundAgents(
         .orderBy(asc(inboxEntries.id))
         .for("update");
 
-      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered")) {
+      const isResetDeliveredRow = (row: ClaimedEntry): boolean => row.status === "pending" && row.deliveredAt !== null;
+      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered" && !isResetDeliveredRow(row))) {
         return { ok: false, reason: "prefix_gap" };
       }
 
       const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
-      if (deliveredIds.length === 0) {
+      const resetPendingIds = prefixRows.filter(isResetDeliveredRow).map((row) => row.id);
+      const committableIds = [...deliveredIds, ...resetPendingIds];
+      const ackedAt = new Date();
+      const drainPendingSilentRows = async (): Promise<void> => {
+        await tx
+          .update(inboxEntries)
+          .set({ status: "acked", ackedAt })
+          .where(
+            and(
+              eq(inboxEntries.inboxId, entry.inboxId),
+              chatPredicate,
+              eq(inboxEntries.status, "pending"),
+              eq(inboxEntries.notify, false),
+              sql`${inboxEntries.id} <= ${entryId}`,
+            ),
+          );
+      };
+
+      if (committableIds.length === 0) {
+        await drainPendingSilentRows();
         return {
           ok: true,
           throughEntry: entry,
@@ -532,14 +650,15 @@ export async function ackThroughEntryIdForBoundAgents(
 
       const updated = await tx
         .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
-        .where(and(inArray(inboxEntries.id, deliveredIds), eq(inboxEntries.status, "delivered")))
+        .set({ status: "acked", ackedAt })
+        .where(and(inArray(inboxEntries.id, committableIds), inArray(inboxEntries.status, ["delivered", "pending"])))
         .returning();
+      await drainPendingSilentRows();
       const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
         throughEntry: updatedThroughEntry,
-        disposition: "acked",
+        disposition: resetPendingIds.length > 0 ? "accepted_from_pending" : "acked",
         ackedCount: updated.length,
         ackedEntryIds: updated.map((row) => row.id),
       };
@@ -619,8 +738,7 @@ export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
  * Two cleanup paths:
  *
  *   1. `notify=false AND status='acked'` of any age — these are fully
- *      consumed (either bundled into a previous trigger or aged out via the
- *      bulk-ack in `collectPrecedingContext`); keep them only as long as
+ *      consumed by ACK-through after a notify trigger commits); keep them only as long as
  *      the corresponding message rows we link to. The unique constraint
  *      `(inbox_id, message_id, chat_id)` means leaving them around blocks
  *      legitimate retries with the same key.

@@ -213,6 +213,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         createdAt: new Date(Date.now() - 12 * 60_000).toISOString(),
       },
     ],
+    skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
   },
   nodes: [
     node("root", null, "/", "Context Tree", "root", null),

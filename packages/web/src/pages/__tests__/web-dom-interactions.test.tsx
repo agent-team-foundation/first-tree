@@ -86,6 +86,7 @@ const onboardingEventMocks = vi.hoisted(() => ({
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
   createMeChat: vi.fn(),
+  createMeTaskChat: vi.fn(),
 }));
 
 const clientApiMocks = vi.hoisted(() => ({
@@ -681,6 +682,7 @@ beforeEach(() => {
   ]);
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   meChatMocks.createMeChat.mockResolvedValue({ chatId: "chat-created" });
+  meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
   orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
     repo: "https://github.com/acme/context-tree",
@@ -854,12 +856,23 @@ describe("web DOM interaction coverage", () => {
     await setValue(textarea, "hello");
     await click(first.container.querySelector('button[aria-label="Send"]'));
 
-    expect(meChatMocks.createMeChat).toHaveBeenCalledWith({ participantIds: ["agent-1"] });
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-created", "hello", ["agent-1"]);
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "hello",
+        source: "web",
+      },
+    });
+    expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith("chat-created");
     await unmountRoot(first.root);
 
-    meChatMocks.createMeChat.mockClear();
+    meChatMocks.createMeTaskChat.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
     const second = await renderDom(<NewChatDraft onCreated={() => undefined} />);
     await waitForText("Nova", second.container);
@@ -876,8 +889,19 @@ describe("web DOM interaction coverage", () => {
     await setValue(groupTextarea, "please review @design");
     await click(second.container.querySelector('button[aria-label="Send"]'));
 
-    expect(meChatMocks.createMeChat).toHaveBeenCalledWith({ participantIds: ["agent-1", "agent-2"] });
-    expect(chatApiMocks.sendChatMessage).toHaveBeenCalledWith("chat-created", "please review @design", ["agent-2"]);
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-2"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: ["agent-1"],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "please review @design",
+        source: "web",
+      },
+    });
+    expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
   });
 
   it("drives NewChatDraft participants, mention autocomplete, image send, and error paths", async () => {
@@ -970,28 +994,36 @@ describe("web DOM interaction coverage", () => {
     expect(rendered.container.querySelector('img[alt="dropped.png"]')).toBeTruthy();
     await setValue(textarea, "@design image attached");
     await keyDown(textarea, "Enter");
-    await waitForCondition(() => chatApiMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image batch send");
+    await waitForCondition(() => meChatMocks.createMeTaskChat.mock.calls.length > 0, "Expected image task create");
     expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(dropped);
     expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
       imageId: "uploaded-image",
       base64: "base64",
       mimeType: "image/png",
     });
-    expect(chatApiMocks.sendFileMessageBatch).toHaveBeenCalledWith(
-      "chat-created",
-      {
-        caption: "@design image attached",
-        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "dropped.png", size: 3 }],
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-2"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: ["agent-1"],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "file",
+        content: {
+          caption: "@design image attached",
+          attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "dropped.png", size: 3 }],
+        },
+        source: "web",
       },
-      { mentions: ["agent-2"] },
-    );
+    });
     expect(onCreated).toHaveBeenCalledWith("chat-created");
 
     await unmountRoot(rendered.root);
 
     chatApiMocks.sendFileMessageBatch.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
-    meChatMocks.createMeChat.mockResolvedValueOnce({ chatId: "image-only-chat" });
+    meChatMocks.createMeTaskChat.mockClear();
+    meChatMocks.createMeTaskChat.mockResolvedValueOnce({ chatId: "image-only-chat" });
     const imageOnly = await renderDom(<NewChatDraft onCreated={onCreated} initialParticipantIds={["agent-1"]} />);
     await waitForText("Nova", imageOnly.container);
     const imageOnlyInput = imageOnly.container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -999,14 +1031,22 @@ describe("web DOM interaction coverage", () => {
     const imageOnlyFile = new File(["ghi"], "only.png", { type: "image/png" });
     await changeFiles(imageOnlyInput, [imageOnlyFile]);
     await click(imageOnly.container.querySelector('button[aria-label="Send"]'));
-    await waitForCondition(() => chatApiMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image-only send");
-    expect(chatApiMocks.sendFileMessageBatch).toHaveBeenCalledWith(
-      "image-only-chat",
-      {
-        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "only.png", size: 3 }],
+    await waitForCondition(() => meChatMocks.createMeTaskChat.mock.calls.length > 0, "Expected image-only task create");
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "file",
+        content: {
+          attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "only.png", size: 3 }],
+        },
+        source: "web",
       },
-      { mentions: ["agent-1"] },
-    );
+    });
+    expect(onCreated).toHaveBeenCalledWith("image-only-chat");
     await unmountRoot(imageOnly.root);
   });
 
@@ -1115,6 +1155,39 @@ describe("web DOM interaction coverage", () => {
     });
     const failure = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
     await waitForText("Sign-in did not complete", failure.container);
+  });
+
+  it("renders friendly copy for callback error fragments", async () => {
+    const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const replaceState = vi.fn();
+    Object.defineProperty(window, "history", { configurable: true, value: { replaceState } });
+
+    // Expired/consumed state — the most common real-world trigger is the
+    // user spending >10min on GitHub's repo picker.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=state-expired&next=/settings/github",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const expired = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("took too long or was already used", expired.container);
+    const back = expired.container.querySelector<HTMLAnchorElement>("a");
+    expect(back?.getAttribute("href")).toBe("/settings/github");
+    await unmountRoot(expired.root);
+
+    // Install refused: kickoff admin's authority no longer holds.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, hash: "#error=install-not-admin", pathname: "/auth/github/complete" },
+    });
+    const notAdmin = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("admin of the First Tree team", notAdmin.container);
+    // No `next` in the fragment → the way out defaults to the app root.
+    expect(notAdmin.container.querySelector<HTMLAnchorElement>("a")?.getAttribute("href")).toBe("/");
+    await unmountRoot(notAdmin.root);
   });
 
   it("renders SettingsOnboardingPage resume, hide, disabled, and completed states", async () => {

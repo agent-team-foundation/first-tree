@@ -58,6 +58,9 @@ const MEMBERSHIPS: MeMembership[] = [
     agentId: "human-agent-1",
     orgHasOtherMembers: true,
     hasUsableAgent: true,
+    onboardingSuppressedAt: null,
+    onboardingSuppressedReason: null,
+    onboardingCompletedAt: null,
   },
   {
     id: "member-2",
@@ -67,6 +70,9 @@ const MEMBERSHIPS: MeMembership[] = [
     agentId: "human-agent-2",
     orgHasOtherMembers: false,
     hasUsableAgent: false,
+    onboardingSuppressedAt: null,
+    onboardingSuppressedReason: null,
+    onboardingCompletedAt: null,
   },
 ];
 
@@ -170,6 +176,35 @@ describe("AuthProvider", () => {
     expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
     expect(latestAuth?.role).toBe("member");
     expect(flagsMocks.clearOnboardingJoinPath).toHaveBeenCalled();
+  });
+
+  it("does not fall back to another membership's onboarding stamps when selected membership stamps are null", async () => {
+    localStorage.setItem("first-tree:selectedOrganizationId", "org-2");
+    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
+    apiMocks.apiGet.mockResolvedValueOnce({
+      user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
+      memberships: [
+        {
+          ...MEMBERSHIPS[0],
+          onboardingSuppressedAt: "2026-05-28T00:00:00.000Z",
+          onboardingSuppressedReason: "completed",
+          onboardingCompletedAt: "2026-05-28T00:00:00.000Z",
+        },
+        MEMBERSHIPS[1],
+      ],
+      defaultOrganizationId: "org-1",
+      onboarding: {
+        step: "create_agent",
+        dismissedAt: "2026-05-28T00:00:00.000Z",
+        completedAt: "2026-05-28T00:00:00.000Z",
+      },
+    });
+
+    await renderAuth();
+
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
+    expect(latestAuth?.onboardingDismissedAt).toBeNull();
+    expect(latestAuth?.onboardingCompletedAt).toBeNull();
   });
 
   it("logs in, switches organizations, and clears auth state on logout events", async () => {

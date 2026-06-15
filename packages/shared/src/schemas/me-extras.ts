@@ -31,15 +31,20 @@ export const createOrgFromMeSchema = z.object({
 export type CreateOrgFromMe = z.infer<typeof createOrgFromMeSchema>;
 
 /**
- * Body for `PATCH /me/onboarding`. v1 only mutates `dismissed` — true to
- * hide the onboarding stepper (server stamps `users.onboarding_dismissed_at
- * = NOW()`), false to restore it. See first-tree-context:agent-hub/onboarding.md
- * §8.4.
+ * Body for `PATCH /me/onboarding`. `dismissed=true` is the "finish later"
+ * action: it suppresses future auto-open for the selected membership only.
  */
 export const patchOnboardingSchema = z.object({
   dismissed: z.boolean().optional(),
+  organizationId: z.string().optional(),
 });
 export type PatchOnboarding = z.infer<typeof patchOnboardingSchema>;
+
+/** Body for `POST /me/onboarding-completed`. */
+export const completeOnboardingSchema = z.object({
+  organizationId: z.string().optional(),
+});
+export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
 
 /**
  * Body for `POST /me/onboarding/events`. The web SPA reports key
@@ -98,5 +103,8 @@ export const meMembershipSchema = z.object({
   agentId: z.string(),
   orgHasOtherMembers: z.boolean(),
   hasUsableAgent: z.boolean(),
+  onboardingSuppressedAt: z.string().nullable(),
+  onboardingSuppressedReason: z.enum(["finish_later", "completed", "invitee_skip"]).nullable(),
+  onboardingCompletedAt: z.string().nullable(),
 });
 export type MeMembership = z.infer<typeof meMembershipSchema>;

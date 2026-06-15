@@ -34,9 +34,9 @@ export async function reportOnboardingEvent(
  * means the sidebar entry lingers until /me refetches — not worth
  * surfacing.
  */
-export async function markOnboardingCompleted(): Promise<void> {
+export async function markOnboardingCompleted(organizationId?: string): Promise<void> {
   try {
-    await api.post<{ ok: true }>("/me/onboarding-completed", {});
+    await api.post<{ ok: true }>("/me/onboarding-completed", organizationId ? { organizationId } : {});
   } catch {
     // intentionally swallowed — see jsdoc
   }

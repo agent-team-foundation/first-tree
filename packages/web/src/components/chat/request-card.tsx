@@ -27,15 +27,16 @@ import { type ComponentType, type KeyboardEvent, type ReactNode, useMemo, useSta
 import { sendChatMessage } from "../../api/chats.js";
 import { Button } from "../ui/button.js";
 import { OptionCard } from "../ui/option-card.js";
+import { QuestionPrompt } from "./question-prompt.js";
 import {
   defaultExpanded,
   deriveRequestState,
   isRelatedViewer,
-  parseAnswerSelections,
   type RequestState,
   readCloseReason,
   readMentions,
   readRequestPayload,
+  recoverAnswerSelections,
 } from "./request-state.js";
 
 type ChipSpec = { label: string; Icon: ComponentType<{ size?: number }>; bg: string; fg: string };
@@ -93,6 +94,7 @@ export function RequestCard({
   bodyShowsTarget = false,
   resolveAgentName,
   onSent,
+  suppressAnswerBlock = false,
 }: {
   message: Message;
   thread: readonly Message[];
@@ -110,6 +112,13 @@ export function RequestCard({
   resolveAgentName: (agentId: string) => string;
   /** Called after a successful answer send so the parent can refresh. */
   onSent?: () => void;
+  /**
+   * True when this request is the one pinned in the composer dock
+   * (`RequestDock`) — the dock owns the answering surface, so the timeline
+   * card drops its inline answer block to keep that surface unique. Header,
+   * body, and the resolved/closed read-only states render unchanged.
+   */
+  suppressAnswerBlock?: boolean;
 }) {
   const state = useMemo(() => deriveRequestState(message, thread), [message, thread]);
   const payload = useMemo(() => readRequestPayload(message.metadata), [message.metadata]);
@@ -145,12 +154,7 @@ export function RequestCard({
         (raw as { kind?: unknown }).kind === "answered"
       );
     });
-    return reply
-      ? parseAnswerSelections(
-          reply.content,
-          payload.questions.map((q) => q.prompt),
-        )
-      : {};
+    return reply ? recoverAnswerSelections(reply.content, payload.questions) : {};
   }, [state, payload, thread, message.id]);
 
   const mut = useMutation({
@@ -270,8 +274,10 @@ export function RequestCard({
 
       {/* state-specific block: `open` keeps interactive card chrome; `resolved`
           / `closed` are read-only and render as plain labeled content — no
-          filled/bordered card (DESIGN.md pillar 5). */}
-      {answerable && payload ? (
+          filled/bordered card (DESIGN.md pillar 5). When the composer dock owns
+          this request (`suppressAnswerBlock`), the inline block is dropped so
+          the answering surface exists exactly once. */}
+      {answerable && payload && !suppressAnswerBlock ? (
         <div
           style={{
             marginTop: "var(--sp-3)",
@@ -292,11 +298,13 @@ export function RequestCard({
 
           {payload.questions.map((q, i) => (
             <div key={q.id} style={{ marginTop: i === 0 ? 0 : "var(--sp-3)" }}>
-              <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                <span className="mono text-caption" style={{ color: "var(--fg-4)", marginRight: "var(--sp-1_5)" }}>
+              <div style={{ display: "flex", gap: "var(--sp-1_5)", alignItems: "baseline" }}>
+                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
                   {`Q${i + 1}`}
                 </span>
-                {q.prompt}
+                <div className="text-body font-medium" style={{ color: "var(--fg)", flex: 1, minWidth: 0 }}>
+                  <QuestionPrompt prompt={q.prompt} />
+                </div>
               </div>
               {q.kind === "single" ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-1_5)", marginTop: "var(--sp-1_5)" }}>

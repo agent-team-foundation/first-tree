@@ -1,11 +1,14 @@
 import type { MeChatRow } from "@first-tree/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_GROUP_MODE,
   groupRows,
   parseGroupMode,
+  readStoredGroupMode,
   rowAttentionReason,
   rowIsFailed,
   splitAttentionRows,
+  storeGroupMode,
 } from "../conversations/group-rows.js";
 
 // Fixed reference "now" — picked to be mid-week so the
@@ -48,12 +51,40 @@ function offsetIso(hours: number): string {
 }
 
 describe("parseGroupMode", () => {
-  it("supports only source and recency", () => {
+  it("supports only source and recency; unknown values yield null", () => {
     expect(parseGroupMode("source")).toBe("source");
     expect(parseGroupMode("recency")).toBe("recency");
-    expect(parseGroupMode("type")).toBe("source");
-    expect(parseGroupMode("none")).toBe("source");
-    expect(parseGroupMode(null)).toBe("source");
+    expect(parseGroupMode("type")).toBeNull();
+    expect(parseGroupMode("none")).toBeNull();
+    expect(parseGroupMode(null)).toBeNull();
+  });
+
+  it("round-trips the stored preference and defaults to recency", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => void store.set(key, value),
+      },
+    });
+    try {
+      expect(readStoredGroupMode()).toBe(DEFAULT_GROUP_MODE);
+      storeGroupMode("source");
+      expect(readStoredGroupMode()).toBe("source");
+      storeGroupMode("recency");
+      expect(readStoredGroupMode()).toBe("recency");
+      // Corrupt / legacy values fall back to the default.
+      store.set("first-tree:chat-list-group", "bogus");
+      expect(readStoredGroupMode()).toBe(DEFAULT_GROUP_MODE);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to the default when localStorage is unavailable", () => {
+    // Node test env has no `window` at all — the helpers must not throw.
+    expect(readStoredGroupMode()).toBe(DEFAULT_GROUP_MODE);
+    expect(() => storeGroupMode("source")).not.toThrow();
   });
 
   it("returns an empty single bucket when there are no rows", () => {
@@ -134,13 +165,19 @@ describe("groupRows — source", () => {
       row({ id: "g1", source: "github", entityType: "issue", lastMessageAt: offsetIso(-1) }),
       row({ id: "m", source: "manual", lastMessageAt: offsetIso(-1) }),
       row({ id: "mine", source: "manual", createdByMe: true, lastMessageAt: offsetIso(-1) }),
+      row({ id: "agent", source: "agent", lastMessageAt: offsetIso(-1) }),
       row({ id: "g2", source: "github", entityType: "pull_request", lastMessageAt: offsetIso(-1) }),
     ];
     const buckets = groupRows(rows, "source", NOW);
     // Canonical order is the one declared inside `group-rows.ts`:
-    // created-by-me → manual → github.
-    expect(buckets.map((b) => b.key)).toEqual(["created-by-me", "manual", "github"]);
-    expect(buckets.map((b) => b.label)).toEqual(["MINE", "MANUAL", "GITHUB"]);
+    // created-by-me -> manual -> agent -> github.
+    expect(buckets.map((b) => b.key)).toEqual(["created-by-me", "manual", "agent", "github"]);
+    expect(buckets.map((b) => b.label)).toEqual([
+      "Started by me",
+      "Started by teammates",
+      "Started by agents",
+      "From GitHub",
+    ]);
     // Both github rows land in the single `github` bucket regardless
     // of inner entityType — the popover collapse is a per-origin axis,
     // not a per-entity one.

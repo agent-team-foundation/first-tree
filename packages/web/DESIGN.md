@@ -220,8 +220,9 @@ Three marketing tiers for the public landing page only.
 **Spacing** — Tailwind utilities first; for compound inline `padding`/`gap`
 strings that can't be classes, use the `--sp-*` ladder (mirror of Tailwind:
 `--sp-N ≈ N × 0.25rem`, with 2/6/10/14px half-steps), range `--sp-0` →
-`--sp-75` (300px). Hairlines: `--hairline` (1px) / `--hairline-bold` (2px) —
-never write `"1px"`.
+`--sp-95` (380px) — dense through `--sp-12`, then sparse wider rungs
+(`--sp-16/20/35/45/60/70/75/95`) for panel / card widths. Hairlines:
+`--hairline` (1px) / `--hairline-bold` (2px) — never write `"1px"`.
 
 **Radius** — semantic, ascending with surface importance, plus one fully-round token:
 | Token | Value | Use |
@@ -288,11 +289,11 @@ const buttonVariants = cva("…base classes…", {
 
 **Selection state** (`OptionCard` and any radio/option cards): selected and
 unselected share the **same faint `--border` hairline** — selection is signalled
-by a **filled neutral dot (`--fg`) plus a very light `--fg` tint (~5%)**, never a
-heavier or colored border and never a saturated dot. Both cues are
-hue-independent (filled vs hollow dot, presence of tint), so it reads without
-relying on color. The real `<input>` is `sr-only`; focus follows the §13
-bordered-control rule (deepen the card's own border on `:focus-within`).
+by a **filled neutral dot (`--fg`) plus a light `--fg` tint (~10%) plus medium
+label weight**, never a heavier or colored border and never a saturated dot.
+Both cues are hue-independent (filled vs hollow dot, presence of tint), so it
+reads without relying on color. The real `<input>` is `sr-only`; focus follows
+the §13 bordered-control rule (deepen the card's own border on `:focus-within`).
 
 ---
 

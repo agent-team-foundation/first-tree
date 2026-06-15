@@ -1,12 +1,28 @@
-import { addParticipantSchema, createChatSchema, paginationQuerySchema, updateChatSchema } from "@first-tree/shared";
+import {
+  addParticipantSchema,
+  createTaskChatSchema,
+  followGithubEntityRequestSchema,
+  legacyCreateChatSchema,
+  paginationQuerySchema,
+  updateChatSchema,
+} from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chats } from "../../db/schema/chats.js";
+import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
+import { resolveBindingPair } from "../../services/github-entity-chat.js";
+import {
+  declareEntityFollow,
+  listChatGithubEntities,
+  removeEntityFollow,
+} from "../../services/github-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
+import { notifyRecipients } from "../../services/notifier.js";
+import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -21,7 +37,44 @@ function serializeChat(chat: { createdAt: Date; updatedAt: Date; [key: string]: 
 export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.post("/", async (request, reply) => {
     const identity = requireAgent(request);
-    const body = createChatSchema.parse(request.body);
+    const rawBody = request.body;
+    if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
+      const body = createTaskChatSchema.parse(rawBody);
+      const initialRecipientAgentIds = [
+        ...body.initialRecipientAgentIds,
+        ...(await chatService.resolveAgentIdsByNameInOrg(app.db, identity.organizationId, body.initialRecipientNames)),
+      ];
+      const contextParticipantAgentIds = [
+        ...body.contextParticipantAgentIds,
+        ...(await chatService.resolveAgentIdsByNameInOrg(
+          app.db,
+          identity.organizationId,
+          body.contextParticipantNames,
+        )),
+      ];
+      const result = await chatService.createChat(app.db, {
+        mode: "task",
+        initiatorAgentId: identity.uuid,
+        organizationId: identity.organizationId,
+        initialRecipientAgentIds,
+        contextParticipantAgentIds,
+        topic: body.topic ?? null,
+        description: body.description ?? null,
+        initialMessage: body.initialMessage,
+        source: "agent",
+      });
+      notifyRecipients(app.notifier, result.recipients, result.message.id);
+      return reply.status(201).send({
+        chatId: result.chat.id,
+        messageId: result.message.id,
+        topic: result.chat.topic,
+        effectiveSenderId: result.effectiveSenderId,
+        initialRecipientAgentIds: result.initialRecipientAgentIds,
+        contextParticipantAgentIds: result.contextParticipantAgentIds,
+      });
+    }
+
+    const body = legacyCreateChatSchema.parse(rawBody);
     const result = await chatService.createChat(app.db, identity.uuid, body);
     return reply.status(201).send({
       ...serializeChat(result),
@@ -143,6 +196,76 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       const identity = requireAgent(request);
       await chatService.removeParticipant(app.db, request.params.chatId, identity.uuid, request.params.agentId);
       return reply.status(204).send();
+    },
+  );
+
+  // ── GitHub entity follow / unfollow (`first-tree github …`) ─────────────
+  //
+  // The agent-side wiring surface. Creating a PR/Issue never auto-follows;
+  // an agent that wants the entity's events in this chat declares it here,
+  // immediately after creation. The human side of the binding pair is the
+  // chat's representative human (see `resolveBindingPair`); the caller is
+  // the delegate side.
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    const [chat] = await app.db
+      .select({ organizationId: chats.organizationId })
+      .from(chats)
+      .where(eq(chats.id, request.params.chatId))
+      .limit(1);
+    if (!chat) throw new BadRequestError("Chat not found");
+    return listChatGithubEntities(
+      app.db,
+      { appCredentials: app.config.oauth?.githubApp },
+      { chatId: request.params.chatId, organizationId: chat.organizationId },
+    );
+  });
+
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/github-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const body = followGithubEntityRequestSchema.parse(request.body);
+
+      const pair = await resolveBindingPair(app.db, request.params.chatId, identity.uuid);
+      if (!pair) {
+        throw new BadRequestError(
+          "No eligible (human, delegate) binding pair: following from an agent session needs at least one " +
+            "active human member in the chat (and a non-human caller). Humans follow via the web UI instead.",
+        );
+      }
+
+      const result = await declareEntityFollow(
+        app.db,
+        { appCredentials: app.config.oauth?.githubApp },
+        {
+          chatId: request.params.chatId,
+          organizationId: pair.organizationId,
+          humanAgentId: pair.humanAgentId,
+          delegateAgentId: pair.delegateAgentId,
+          boundVia: "agent_declared",
+          entity: body.entity,
+          rebind: body.rebind,
+        },
+      );
+      return sendFollowResult(reply, result, body.entity);
+    },
+  );
+
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string } }>(
+    "/:chatId/github-entities",
+    async (request) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const entity = request.query.entity;
+      if (!entity) {
+        throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
+      }
+      return removeEntityFollow(app.db, { chatId: request.params.chatId, entity });
     },
   );
 }

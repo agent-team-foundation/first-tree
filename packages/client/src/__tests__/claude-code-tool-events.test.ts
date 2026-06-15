@@ -1,6 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude-code.js";
+import type { ContextTreeGitWriteTracker } from "../runtime/context-tree-git-status.js";
+import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.js";
 
 /**
  * S11 (NC2 client handler) — tool-call processor fixtures.
@@ -435,6 +441,55 @@ describe("createToolCallProcessor — Context Tree file refs", () => {
     expect(usageEventCount(emit)).toBe(0);
   });
 
+  it("adds git status delta refs to successful tool calls", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const gitWriteTracker: ContextTreeGitWriteTracker = {
+      captureBaseline: vi.fn(),
+      refsForSuccessfulToolCall: vi.fn(() => [
+        {
+          origin: "git_status_delta" as const,
+          localPath: `${TREE}/NODE.md`,
+          repoUrl: "https://github.com/example/tree",
+          repoRelativePath: "NODE.md",
+          pathKind: "file" as const,
+          metadata: {
+            gitStatus: " M",
+            toolName: "Bash",
+            toolUseId: "r7-write",
+          },
+        },
+      ]),
+    };
+    const processor = createToolCallProcessor(emit, binding, { cwd: "/home/op/project", gitWriteTracker });
+
+    processor.onMessage(assistantToolUse("r7-write", "Bash", { command: `cat <<'EOF' > ${TREE}/NODE.md\nx\nEOF` }));
+    processor.onMessage(userToolResult("r7-write", "wrote"));
+
+    expect(gitWriteTracker.captureBaseline).toHaveBeenCalledTimes(1);
+    expect(gitWriteTracker.refsForSuccessfulToolCall).toHaveBeenCalledWith({
+      toolName: "Bash",
+      toolUseId: "r7-write",
+      existingRefs: [],
+    });
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r7-write" && event.payload.status === "ok",
+    );
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "git_status_delta",
+        localPath: `${TREE}/NODE.md`,
+        repoUrl: "https://github.com/example/tree",
+        repoRelativePath: "NODE.md",
+        pathKind: "file",
+        metadata: {
+          gitStatus: " M",
+          toolName: "Bash",
+          toolUseId: "r7-write",
+        },
+      },
+    ]);
+  });
+
   it("does NOT attach Bash file refs when the shell command fails", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit, binding, { cwd: "/home/op/project" });
@@ -447,6 +502,25 @@ describe("createToolCallProcessor — Context Tree file refs", () => {
     );
     expect(final?.payload.toolFileRefs).toBeUndefined();
     expect(usageEventCount(emit)).toBe(0);
+  });
+
+  it("advances git status baseline without refs when a tool call fails", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const gitWriteTracker: ContextTreeGitWriteTracker = {
+      captureBaseline: vi.fn(),
+      refsForSuccessfulToolCall: vi.fn(() => []),
+    };
+    const processor = createToolCallProcessor(emit, binding, { cwd: "/home/op/project", gitWriteTracker });
+
+    processor.onMessage(assistantToolUse("r7-failed-write", "Bash", { command: `echo x > ${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r7-failed-write", "failed", true));
+
+    expect(gitWriteTracker.captureBaseline).toHaveBeenCalledTimes(2);
+    expect(gitWriteTracker.refsForSuccessfulToolCall).not.toHaveBeenCalled();
+    const final = toolCallEvents(emit).find(
+      (event) => event.payload.toolUseId === "r7-failed-write" && event.payload.status === "error",
+    );
+    expect(final?.payload.toolFileRefs).toBeUndefined();
   });
 
   it("does NOT attach file refs for unsupported tools even if an arg path is under the tree", () => {
@@ -560,6 +634,182 @@ describe("createToolCallProcessor — Context Tree file refs", () => {
   });
 });
 
+/**
+ * W1 cloud layout: the shared external tree clone is exposed inside the agent
+ * home as a `<workspace>/context-tree` symlink (runtime/workspace-manifest.ts),
+ * while the binding carries the external clone's real path. Refs must map
+ * regardless of which spelling the tool call used.
+ */
+describe("createToolCallProcessor — symlinked Context Tree (W1 cloud layout)", () => {
+  let root: string;
+  let realTree: string;
+  let link: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "first-tree-symlink-refs-"));
+    realTree = join(root, "context-tree-repos", "abc123");
+    mkdirSync(join(realTree, "members"), { recursive: true });
+    writeFileSync(join(realTree, "NODE.md"), "root");
+    writeFileSync(join(realTree, "members", "NODE.md"), "members");
+    const workspace = join(root, "workspaces", "agent-home");
+    mkdirSync(workspace, { recursive: true });
+    link = join(workspace, "context-tree");
+    symlinkSync(realTree, link);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function bindingFor(path: string) {
+    return { path, repoUrl: "https://github.com/example/tree", branch: "main" } as const;
+  }
+
+  function finalRefs(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>, id: string) {
+    const final = emit.mock.calls
+      .map((c) => c[0])
+      .filter((ev) => ev.kind === "tool_call")
+      .find((event) => event.payload.toolUseId === id && event.payload.status === "ok");
+    return final?.payload.toolFileRefs;
+  }
+
+  it("maps a Read through the workspace symlink to the real-clone binding", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s1", "Read", { file_path: join(link, "members", "NODE.md") }));
+    processor.onMessage(userToolResult("s1", "contents"));
+
+    expect(finalRefs(emit, "s1")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: join(link, "members", "NODE.md"),
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "members/NODE.md",
+        pathKind: "file",
+      },
+    ]);
+  });
+
+  it("maps a Write creating a NEW file through the symlink (no existing path to realpath)", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(
+      assistantToolUse("s2", "Write", { file_path: join(link, "domains", "new-leaf.md"), content: "x" }),
+    );
+    processor.onMessage(userToolResult("s2", "created"));
+
+    expect(finalRefs(emit, "s2")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "domains/new-leaf.md",
+    });
+  });
+
+  it("maps a Read of the real clone path when the binding is spelled as the symlink", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(link));
+
+    processor.onMessage(assistantToolUse("s3", "Read", { file_path: join(realTree, "NODE.md") }));
+    processor.onMessage(userToolResult("s3", "contents"));
+
+    expect(finalRefs(emit, "s3")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "NODE.md",
+    });
+  });
+
+  it("attaches a write ref for NotebookEdit via its notebook_path argument", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(
+      assistantToolUse("s4", "NotebookEdit", { notebook_path: join(realTree, "members", "NODE.md") }),
+    );
+    processor.onMessage(userToolResult("s4", "edited"));
+
+    expect(finalRefs(emit, "s4")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "members/NODE.md",
+      pathKind: "file",
+    });
+  });
+
+  it("attaches a directory-level ref for Grep with an explicit tree path", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s5", "Grep", { pattern: "owners", path: join(link, "members") }));
+    processor.onMessage(userToolResult("s5", "matches"));
+
+    expect(finalRefs(emit, "s5")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: join(link, "members"),
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "members",
+        pathKind: "directory",
+      },
+    ]);
+  });
+
+  it("attaches a repo-level ref for Glob rooted at the tree itself", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+
+    processor.onMessage(assistantToolUse("s6", "Glob", { pattern: "**/*.md", path: realTree }));
+    processor.onMessage(userToolResult("s6", "files"));
+
+    expect(finalRefs(emit, "s6")?.[0]).toMatchObject({
+      repoRelativePath: "/",
+      pathKind: "repo",
+    });
+  });
+
+  it("does NOT attach refs for Grep without an explicit path argument", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree), { cwd: realTree });
+
+    processor.onMessage(assistantToolUse("s7", "Grep", { pattern: "owners" }));
+    processor.onMessage(userToolResult("s7", "matches"));
+
+    expect(finalRefs(emit, "s7")).toBeUndefined();
+  });
+
+  it("attaches a local-only ref for Grep over a non-tree directory", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree));
+    const outside = join(root, "workspaces", "agent-home");
+
+    processor.onMessage(assistantToolUse("s8", "Grep", { pattern: "x", path: outside }));
+    processor.onMessage(userToolResult("s8", "matches"));
+
+    expect(finalRefs(emit, "s8")).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: outside,
+        pathKind: "directory",
+      },
+    ]);
+  });
+
+  it("maps a Bash read through the workspace symlink", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, bindingFor(realTree), { cwd: root });
+
+    processor.onMessage(assistantToolUse("s9", "Bash", { command: `cat ${join(link, "NODE.md")}` }));
+    processor.onMessage(userToolResult("s9", "contents"));
+
+    expect(finalRefs(emit, "s9")?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/tree",
+      repoRelativePath: "NODE.md",
+      pathKind: "file",
+    });
+  });
+});
+
 describe("treeNodePathOf", () => {
   const TREE = "/home/op/.first-tree/tree";
 
@@ -586,5 +836,76 @@ describe("treeNodePathOf", () => {
   it("returns null on empty inputs", () => {
     expect(treeNodePathOf("", TREE)).toBeNull();
     expect(treeNodePathOf(`${TREE}/NODE.md`, "")).toBeNull();
+  });
+});
+
+/**
+ * Repo-identity attribution: tree PRs are authored in `worktrees/<task>`
+ * checkouts of the Context Tree repo, not in the bound shared clone. A Write
+ * there must still carry repo evidence — this is where real tree writes live.
+ */
+describe("createToolCallProcessor — tree PR worktree attribution", () => {
+  let root: string;
+  let sharedClone: string;
+  let treeWorktree: string;
+
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", ["-C", cwd, ...args])
+      .toString("utf8")
+      .trim();
+  }
+
+  beforeEach(() => {
+    clearGitRepoIdentityCacheForTests();
+    root = mkdtempSync(join(tmpdir(), "first-tree-worktree-refs-"));
+    sharedClone = join(root, "context-tree-repos", "abc123");
+    mkdirSync(sharedClone, { recursive: true });
+    git(join(root, "context-tree-repos"), "init", "abc123");
+    git(sharedClone, "config", "user.email", "agent@example.com");
+    git(sharedClone, "config", "user.name", "Agent");
+    git(sharedClone, "remote", "add", "origin", "git@github.com:example/tree.git");
+    writeFileSync(join(sharedClone, "NODE.md"), "root");
+    git(sharedClone, "add", ".");
+    git(sharedClone, "commit", "-m", "initial");
+    treeWorktree = join(root, "worktrees", "task-tree");
+    mkdirSync(join(root, "worktrees"), { recursive: true });
+    git(sharedClone, "worktree", "add", treeWorktree, "-b", "task-branch");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    clearGitRepoIdentityCacheForTests();
+  });
+
+  it("attaches repo evidence when Write targets a tree PR worktree file", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, {
+      path: sharedClone,
+      repoUrl: "https://github.com/example/tree",
+      branch: "main",
+    });
+
+    processor.onMessage(
+      assistantToolUse("wt1", "Write", {
+        file_path: join(treeWorktree, "system", "new-node.md"),
+        content: "x",
+      }),
+    );
+    processor.onMessage(userToolResult("wt1", "created"));
+
+    const final = emit.mock.calls
+      .map((c) => c[0])
+      .filter((ev) => ev.kind === "tool_call")
+      .find((event) => event.payload.toolUseId === "wt1" && event.payload.status === "ok");
+    expect(final?.payload.toolFileRefs).toEqual([
+      {
+        origin: "tool_arg",
+        localPath: join(treeWorktree, "system", "new-node.md"),
+        repoUrl: "https://github.com/example/tree",
+        repoBranch: "main",
+        repoRelativePath: "system/new-node.md",
+        pathKind: "file",
+      },
+    ]);
   });
 });

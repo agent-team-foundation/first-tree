@@ -91,8 +91,7 @@ describe("claude-code handler — turn_end emission", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-1",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: () => {},
+      recordProviderActivity: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
       emitEvent: (e) => emitted.push(e),
     };
@@ -132,8 +131,7 @@ describe("claude-code handler — turn_end emission", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-1",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: () => {},
+      recordProviderActivity: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
       emitEvent: (e) => {
         if (e.kind === "turn_end") order.push(`turn_end:${e.payload.status}`);

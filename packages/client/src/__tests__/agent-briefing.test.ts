@@ -77,6 +77,7 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Worktrees",
       "## Communication",
       "## Workspace Collaboration",
+      "## GitHub Entity Attention",
       "## Asking Humans",
       "## Chat Topic & Description",
       "## CLI Overview",
@@ -579,6 +580,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/\*\*Reaching a human in this chat\*\*/);
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
+    expect(briefing).toContain("chat invite <name>");
+    expect(briefing).toContain("stage or role handoff inside the same task stays in this chat");
+    expect(briefing).toMatch(/\*\*Starting separate work\*\*/);
+    expect(briefing).toMatch(/chat create --to <name>/);
     expect(briefing).toContain("After an agent handoff, continue only independent work");
     expect(briefing).toContain("do not poll status");
     expect(briefing).toContain("Don't fire a courtesy");
@@ -608,6 +613,36 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // BOTTOM of the briefing (not "above" as in the pre-restructure
     // copy).
     expect(briefing).toContain("at the\nbottom of this briefing");
+  });
+
+  it("emits the GitHub Entity Attention block with the follow-after-create default inline (not skill-gated)", () => {
+    // Why inline: see the githubAttentionBlock comment in agent-briefing.ts.
+    const briefing = buildAgentBriefing(makeOpts()); // tree-less default
+    expect(briefing).toContain("## GitHub Entity Attention");
+    // Default posture: follow what you create, immediately.
+    expect(briefing).toContain("**Default: follow what you create.**");
+    expect(briefing).toContain("first-tree github follow <url>");
+    // The single exception: clearly unrelated to the chat's task.
+    expect(briefing).toMatch(/clearly unrelated to this\s+chat's task/);
+    // Unfollow is human-explicit-stop or closed attention span.
+    expect(briefing).toContain("first-tree github unfollow <entity>");
+    expect(briefing).toMatch(/human explicitly asks to stop tracking/);
+    // Creation never auto-follows — the extractor is gone (#979).
+    expect(briefing).toMatch(/there\s+is no auto-binding/);
+  });
+
+  it("gates the GitHub Entity Attention full-guide pointer: skill for tree-bound, --help for tree-less", () => {
+    // Tree-less agents have no First Tree skill payloads on disk
+    // (`installFirstTreeIntegration` is tree-gated), so the block must not
+    // point them at `first-tree-github` — same discipline as the gated
+    // # Required Reading and First Tree Family map.
+    const treeless = buildAgentBriefing(makeOpts());
+    expect(treeless).not.toContain("`first-tree-github` skill");
+    expect(treeless).toContain("first-tree github follow --help");
+
+    const treeBound = buildAgentBriefing(makeOpts({ contextTreePath: "/var/lib/context-trees/example" }));
+    expect(treeBound).toContain("`first-tree-github` skill");
+    expect(treeBound).not.toContain("github follow --help");
   });
 
   it("uses the channel-resolved binary name in the surviving chat-send invariant", () => {
@@ -642,6 +677,7 @@ describe("buildAgentBriefing — ## CLI Overview accuracy", () => {
     expect(overview).toContain("first-tree chat …");
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
+    expect(overview).toContain("first-tree github …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
 
@@ -721,12 +757,15 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(briefing).toContain("eagerly, not lazily");
 
     // Writing discipline anchors — fresh vs persistent context framing and
-    // the tree-PR-before-code-PR ordering rule. The prose wraps the
-    // emphasised phrases across lines, so allow either single-line or
-    // wrapped forms.
+    // the co-open + cross-link PR coordination rule (the tree PR need not
+    // merge before the code PR). The prose wraps the emphasised phrases
+    // across lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
-    expect(briefing).toMatch(/tree PR opens first, then the code[\s\n]+PR/);
+    expect(briefing).toMatch(
+      /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
+    );
+    expect(briefing).toMatch(/with[\s\n]+the code PR or shortly after/);
     expect(briefing).toContain("Implementation-only changes skip the tree");
 
     // Tree path interpolated under Tree Location.

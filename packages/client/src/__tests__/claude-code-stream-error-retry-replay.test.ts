@@ -130,8 +130,7 @@ describe("claude-code handler — transient stream-error retry replays user mess
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const logs: string[] = [];
-    const runtimeStates: string[] = [];
-    const markCompleted = vi.fn();
+    const finishTurnCalled = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -150,12 +149,12 @@ describe("claude-code handler — transient stream-error retry replays user mess
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-stream-retry",
       log: (m) => logs.push(m),
-      touch: () => {},
-      setRuntimeState: (state) => runtimeStates.push(state),
+      recordProviderActivity: () => {},
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-stream-retry"),
-      markCompleted,
-      markMessagesCompleted: () => markCompleted(),
+      finishTurn: async () => {
+        finishTurnCalled();
+      },
     };
 
     await handler.start(
@@ -193,7 +192,7 @@ describe("claude-code handler — transient stream-error retry replays user mess
     // After both retries fail transient (same wrapped API error every
     // time), the handler must end in the retry-exhausted / permanent
     // branch and ack — per PR #612 § "permanent → ack".
-    expect(markCompleted).toHaveBeenCalledTimes(1);
+    expect(finishTurnCalled).toHaveBeenCalledTimes(1);
 
     // A user-visible error must be surfaced on retry-exhaustion (so the
     // chat timeline shows what happened), AND the turn must be closed

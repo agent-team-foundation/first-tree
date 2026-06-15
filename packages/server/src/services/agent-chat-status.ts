@@ -8,6 +8,7 @@ import {
   type LiveActivity,
   RUNTIME_STALE_MS,
   type RuntimeState,
+  stripShellCommandDisplayWrapper,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
@@ -55,7 +56,7 @@ const ARG_PREVIEW_MAX = 32;
  * truncated to {@link ARG_PREVIEW_MAX}. Returns undefined when there's nothing
  * useful to show. Exported for unit testing.
  */
-export function previewToolArgs(args: unknown): string | undefined {
+export function previewToolArgs(args: unknown, opts?: { stripShellCommandWrapper?: boolean }): string | undefined {
   let raw: string | undefined;
   if (typeof args === "string") {
     raw = args;
@@ -68,6 +69,7 @@ export function previewToolArgs(args: unknown): string | undefined {
     if (typeof pick === "string") raw = pick;
     else if (Object.keys(o).length > 0) raw = JSON.stringify(o); // empty {} → no detail
   }
+  if (raw && opts?.stripShellCommandWrapper) raw = stripShellCommandDisplayWrapper(raw);
   if (!raw) return undefined;
   const oneLine = raw.replace(/\s+/g, " ").trim();
   if (oneLine.length === 0) return undefined;
@@ -100,6 +102,7 @@ export function toLiveActivity(row: {
   kind: string;
   payload: unknown;
   created_at: Date | string;
+  runtime_provider?: string | null;
 }): LiveActivity | null {
   const startedAt = new Date(row.created_at).toISOString();
   // Expiry the client uses to self-clear a lingering chip (matches the read-time
@@ -109,7 +112,9 @@ export function toLiveActivity(row: {
     case "tool_call": {
       const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
       const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
-      const detail = previewToolArgs(payload.args);
+      const detail = previewToolArgs(payload.args, {
+        stripShellCommandWrapper: row.runtime_provider === "codex" && payload.name === "command",
+      });
       return { agentId: row.agent_id, kind: "tool_call", label, startedAt, staleAt, ...(detail ? { detail } : {}) };
     }
     case "thinking":
@@ -212,9 +217,11 @@ async function deriveActivities(
            acs.chat_id         AS chat_id,
            e.kind              AS kind,
            e.payload           AS payload,
-           e.created_at        AS created_at
+           e.created_at        AS created_at,
+           a.runtime_provider  AS runtime_provider
            ${turnTextSelect}
       FROM agent_chat_sessions acs
+      INNER JOIN agents a ON a.uuid = acs.agent_id
       CROSS JOIN LATERAL (
         SELECT kind, payload, created_at, seq
           FROM session_events se
@@ -232,6 +239,7 @@ async function deriveActivities(
     kind: string;
     payload: unknown;
     created_at: Date | string;
+    runtime_provider: string | null;
     turn_text: string | null;
   }>;
 
@@ -244,6 +252,7 @@ async function deriveActivities(
       kind: r.kind,
       payload: r.payload,
       created_at: r.created_at,
+      runtime_provider: r.runtime_provider,
     });
     const activity = withTurnNarration(base, r.turn_text);
     if (!activity) continue;

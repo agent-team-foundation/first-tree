@@ -22,9 +22,9 @@ export type TurnDisposition = {
   /** Status reported on the `turn_end` event. */
   status: "success" | "error";
   /**
-   * Whether to `markCompleted` (ack the triggering inbox entries). The runtime
-   * never auto-acks on turn_end, so a false here leaves the entries in-flight
-   * for at-least-once redelivery.
+   * Whether to finish the triggering inbox entries. The runtime never
+   * auto-acks on turn_end, so a false here leaves the entries in-flight for
+   * at-least-once redelivery.
    */
   ack: boolean;
   /**
@@ -34,8 +34,6 @@ export type TurnDisposition = {
    * double-posts once the replay produces the real answer.
    */
   forward: boolean;
-  /** Runtime state to settle into after the turn. */
-  runtimeState: "idle" | "error";
 };
 
 /**
@@ -45,9 +43,8 @@ export type TurnDisposition = {
  * is NOT a success. claude was interrupted before reaching idle, so we cannot
  * confirm the work completed. Acking it would silently consume the user's
  * message with no replay path — exactly the bug this function guards. So a
- * timeout reports `turn_end: error`, leaves the inbox entries un-acked (the
- * server redelivers them on reconnect/restart for a genuine retry), and surfaces
- * an `error` runtime state.
+ * timeout reports `turn_end: error` and leaves the inbox entries un-acked (the
+ * server redelivers them on reconnect/restart for a genuine retry).
  *
  * Ack policy otherwise mirrors the SDK handler's `ackTurnClose`: a clean close
  * acks even on a plain forward failure (claude finished; re-running yields the
@@ -68,8 +65,5 @@ export function resolveTurnDisposition(outcome: TurnOutcome): TurnDisposition {
     status: turnFailed || forwardFailed || timedOut ? "error" : "success",
     ack: consume,
     forward: consume,
-    // A broken (turnFailed) or interrupted (timedOut) session is advertised as
-    // error; a forward-only failure leaves the session healthy, so it stays idle.
-    runtimeState: turnFailed || timedOut ? "error" : "idle",
   };
 }

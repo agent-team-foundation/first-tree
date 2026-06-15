@@ -37,8 +37,6 @@ export type FakeTuiAgentKnobs = {
   hang?: boolean;
   /** Exit non-zero after N completed turns (FAKE_TUI_CRASH_AFTER_TURNS). */
   crashAfterTurns?: number;
-  /** First turn emits AskUserQuestion + paints the menu (FAKE_TUI_EMIT_ASKUSER=1). */
-  emitAskUser?: boolean;
   /** First turn emits a Bash tool_use (FAKE_TUI_TOOL_CALL=1). */
   emitToolCall?: boolean;
 };
@@ -95,7 +93,6 @@ function knobsToEnvEntries(knobs: FakeTuiAgentKnobs, logPath: string): Array<{ k
   if (knobs.crashAfterTurns !== undefined && knobs.crashAfterTurns > 0) {
     env.push({ key: "FAKE_TUI_CRASH_AFTER_TURNS", value: String(knobs.crashAfterTurns) });
   }
-  if (knobs.emitAskUser) env.push({ key: "FAKE_TUI_EMIT_ASKUSER", value: "1" });
   if (knobs.emitToolCall) env.push({ key: "FAKE_TUI_TOOL_CALL", value: "1" });
   return env;
 }

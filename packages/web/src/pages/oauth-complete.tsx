@@ -5,8 +5,31 @@ import { useAuth } from "../auth/auth-context.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
+ * Friendly copy for the `#error=<code>` fragment the server's GitHub
+ * callback redirects to on failure (it is a full-page browser navigation,
+ * so a raw JSON error would strand the user on the API URL). Codes are
+ * minted in `packages/server/src/api/auth/github.ts` — keep in sync.
+ */
+const CALLBACK_ERROR_COPY: Record<string, string> = {
+  "state-expired":
+    "This GitHub connection took too long or was already used. Head back and start the connection again.",
+  "github-exchange-failed": "GitHub didn't accept the sign-in handshake. Head back and try again in a moment.",
+  "install-not-admin":
+    "The GitHub App was installed, but connecting it needs an admin of the First Tree team it was started from. Ask a team admin to finish the connection from Settings → GitHub.",
+  "install-not-verified":
+    "The GitHub App install couldn't be verified, so nothing was connected to your team. Start the install again from the app.",
+  "install-bind-failed":
+    "The GitHub App was installed, but it couldn't be connected to your team — it may already be connected to a different team. Try again from Settings → GitHub.",
+  "invite-invalid": "This invitation link is no longer valid. Ask your team for a fresh invite.",
+  "invite-not-allowed": "This invitation isn't allowed on this server.",
+  "invite-required": "This server requires an invitation link to join. Ask your team for an invite.",
+  "membership-unresolved": "Sign-in did not complete. Please try again.",
+};
+
+/**
  * Consumes the `#access=…&refresh=…&next=…` fragment that the server
- * appends after a successful GitHub callback. The fragment is ideal here:
+ * appends after a successful GitHub callback — or the `#error=<code>`
+ * fragment it appends on failure. The fragment is ideal here:
  *   - browsers do NOT include it in the Referer header
  *   - it never enters server-side request logs
  *   - SPA can `replaceState` to wipe it from the URL bar
@@ -18,6 +41,7 @@ export function OAuthCompletePage() {
   const navigate = useNavigate();
   const { adoptTokens, selectOrganization } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [errorNext, setErrorNext] = useState<string>("/");
 
   useEffect(() => {
     const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
@@ -31,6 +55,13 @@ export function OAuthCompletePage() {
     // localStorage so an invitee lands in the org they just joined, not a
     // previously-used one.
     const org = params.get("org");
+    const errorCode = params.get("error");
+
+    if (errorCode) {
+      setError(CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again.");
+      setErrorNext(next);
+      return;
+    }
 
     if (!accessToken || !refreshToken) {
       setError("Sign-in did not complete. Please try again.");
@@ -57,9 +88,22 @@ export function OAuthCompletePage() {
     })();
   }, [adoptTokens, selectOrganization, navigate]);
 
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
+          <p className="text-body text-muted-foreground">{error}</p>
+          <a className="text-body text-primary underline underline-offset-4" href={errorNext}>
+            Back to First Tree
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background text-body text-muted-foreground">
-      {error ?? "Signing you in…"}
+      Signing you in…
     </div>
   );
 }

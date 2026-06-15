@@ -95,7 +95,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
         writeOnboardingAgentUuid(agentUuid);
         void reportOnboardingEvent("agent_created", { runtimeProvider: args.runtimeProvider });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create your agent");
+        setError(err instanceof Error ? err.message : "Failed to add your agent to the team");
         setPhase("idle");
         return;
       }

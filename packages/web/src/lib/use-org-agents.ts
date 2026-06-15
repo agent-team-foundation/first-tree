@@ -32,12 +32,13 @@ type PaginatedAgents = Awaited<ReturnType<typeof listAgents>>;
  * above that threshold reach agents past the first page via
  * {@link useOrgAgentsSearch} (issue 494).
  */
-export function useOrgAgents(): UseQueryResult<PaginatedAgents> {
+export function useOrgAgents(options?: { enabled?: boolean }): UseQueryResult<PaginatedAgents> {
   return useQuery({
     queryKey: ["agents", "org-list"],
     queryFn: () => listAgents({ limit: 100 }),
     refetchInterval: 30_000,
     staleTime: 30_000,
+    enabled: options?.enabled ?? true,
   });
 }
 

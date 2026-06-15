@@ -19,6 +19,14 @@ const eventMock = vi.hoisted(() => ({
 
 const authMock = vi.hoisted(() => ({
   logout: vi.fn(),
+  // Shell only reads memberships.length; keep the shape minimal.
+  memberships: [] as Array<{ organizationId: string }>,
+}));
+
+const userMenuMock = vi.hoisted(() => ({
+  // The real UserMenu has its own DOM tests (layout-dom); here we only assert
+  // the shell's conditional mounting, so a marker stub keeps this test focused.
+  UserMenu: () => <div data-testid="user-menu-stub" />,
 }));
 
 const toastMock = vi.hoisted(() => ({
@@ -52,6 +60,8 @@ vi.mock("../../../auth/auth-context.js", () => ({
 vi.mock("../../../components/ui/toast.js", () => ({
   useToast: () => toastMock,
 }));
+
+vi.mock("../../../components/user-menu.js", () => userMenuMock);
 
 vi.mock("../onboarding-flow.js", () => ({
   useOnboardingFlow: () => flowMock.value,
@@ -114,6 +124,7 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authMock.memberships = [];
   document.body.innerHTML = "";
   flowMock.value = {
     activeStep: "team",
@@ -150,7 +161,7 @@ describe("onboarding shell and team step", () => {
     expect(container.textContent).toContain("First Tree");
     // config step → top segmented progress shows position (admin has 3)
     expect(container.textContent).toContain("Step 1 of 3");
-    expect(container.textContent).toContain("Set up where your agent runs");
+    expect(container.textContent).toContain("Connect your coding agent");
     expect(container.textContent).toContain("Step body");
 
     await click(
@@ -181,6 +192,31 @@ describe("onboarding shell and team step", () => {
     expect(container.textContent).not.toContain("I'll finish later");
     // invitee has 2 config steps → connect-computer is step 1 of 2
     expect(container.textContent).toContain("Step 1 of 2");
+  });
+
+  it("mounts the full UserMenu for multi-team users in place of the bare sign-out link", async () => {
+    // The trapped-user scenario: routed into onboarding for a second org with
+    // no agent here (finish-later hidden) — the workspace UserMenu is the way
+    // back to their other team.
+    flowMock.value = { ...flowMock.value, activeStep: "connect-computer", hasAgent: false, organizationId: "org-2" };
+    authMock.memberships = [{ organizationId: "org-2" }, { organizationId: "org-1" }];
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
+
+    expect(container.querySelector("[data-testid='user-menu-stub']")).not.toBeNull();
+    expect(container.textContent).not.toContain("Sign out");
+  });
+
+  it("keeps the minimal sign-out chrome for first-run single-team users", async () => {
+    flowMock.value = { ...flowMock.value, activeStep: "connect-computer", hasAgent: false };
+    authMock.memberships = [{ organizationId: "org-1" }];
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
+
+    expect(container.querySelector("[data-testid='user-menu-stub']")).toBeNull();
+    expect(container.textContent).toContain("Sign out");
   });
 
   it("loads the team name, saves changes, and skips unchanged submissions", async () => {

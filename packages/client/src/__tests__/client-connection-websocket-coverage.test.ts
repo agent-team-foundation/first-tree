@@ -233,6 +233,106 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     expect(plainSocket.closeCalls.length).toBe(1);
   });
 
+  it("does not send post-auth frames before the auth frame during open", async () => {
+    let resolveToken!: (token: string) => void;
+    const tokenPromise = new Promise<string>((resolve) => {
+      resolveToken = resolve;
+    });
+    const connection = await makeConnection({
+      getAccessToken: async () => tokenPromise,
+    });
+    const internal = priv(connection);
+
+    const openPromise = internal.openWebSocket();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error("missing fake socket");
+
+    socket.emitOpen();
+    await flushMicrotasks();
+
+    connection.reportSessionState("agent-1", "chat-1", "active");
+    connection.reportRuntimeState("agent-1", "working");
+    connection.reportSessionRuntime("agent-1", "chat-1", "working");
+    connection.reportSessionEvent("agent-1", "chat-1", {
+      kind: "error",
+      payload: { source: "runtime", message: "still handshaking" },
+    });
+    connection.sendSessionReconcile("agent-1", ["chat-1"]);
+    await connection.unbindAgent("agent-1");
+    await expect(connection.sendInboxAck(50, "agent-1")).resolves.toBeUndefined();
+
+    expect(socket.sent).toEqual([]);
+
+    resolveToken(makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }));
+    await flushMicrotasks();
+    expect(parseSent(socket, 0)).toMatchObject({ type: "auth" });
+
+    socket.emitMessage({ type: "auth:ok" });
+    socket.emitMessage({ type: "client:registered" });
+    await openPromise;
+
+    internal.clearTimers();
+  });
+
+  it("does not send agent data-plane frames before the agent is bound on the current socket", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection);
+    const start = socket.sent.length;
+
+    connection.reportSessionState("agent-1", "chat-1", "active");
+    connection.reportRuntimeState("agent-1", "working");
+    connection.reportSessionRuntime("agent-1", "chat-1", "working");
+    connection.reportSessionEvent("agent-1", "chat-1", {
+      kind: "error",
+      payload: { source: "runtime", message: "before bind" },
+    });
+    connection.sendSessionReconcile("agent-1", ["chat-1"]);
+    await connection.unbindAgent("agent-1");
+    await expect(connection.sendInboxAck(50, "agent-1")).resolves.toBeUndefined();
+
+    expect(socket.sent.slice(start)).toEqual([]);
+
+    priv(connection).clearTimers();
+  });
+
+  it("sends agent data-plane frames after the agent is bound on the current socket", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const start = socket.sent.length;
+    connection.reportSessionState("agent-1", "chat-1", "active");
+    connection.reportRuntimeState("agent-1", "working");
+    connection.reportSessionRuntime("agent-1", "chat-1", "working");
+    connection.reportSessionEvent("agent-1", "chat-1", {
+      kind: "error",
+      payload: { source: "runtime", message: "after bind" },
+    });
+    connection.sendSessionReconcile("agent-1", ["chat-1"]);
+    await connection.unbindAgent("agent-1");
+
+    const sentTypes = socket.sent.slice(start).map((raw) => (JSON.parse(raw) as { type?: string }).type);
+    expect(sentTypes).toEqual([
+      "session:state",
+      "runtime:state",
+      "session:runtime",
+      "session:event",
+      "session:reconcile",
+      "agent:unbind",
+    ]);
+  });
+
   it("covers non-Error initial connect failures and paused-after-backoff exit", async () => {
     vi.useFakeTimers();
     const connection = await makeConnection();

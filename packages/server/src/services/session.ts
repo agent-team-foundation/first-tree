@@ -1,5 +1,5 @@
 import { MENTION_REGEX, type SessionState, stripCode } from "@first-tree/shared";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -8,7 +8,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { NotFoundError } from "../errors.js";
+import { BadRequestError, NotFoundError } from "../errors.js";
 import type { Notifier } from "./notifier.js";
 
 export const SUMMARY_MAX_LENGTH = 50;
@@ -66,6 +66,61 @@ export type SessionListItem = {
   summary: string | null;
   topic: string | null;
 };
+
+export type OrgSessionListViewer = {
+  role: "admin" | "member";
+  memberId: string;
+  humanAgentId: string;
+};
+
+function chatAccessPredicate(viewer: OrgSessionListViewer) {
+  return sql`(
+    EXISTS (
+      SELECT 1
+      FROM chat_membership direct_cm
+      WHERE direct_cm.chat_id = ${chats.id}
+        AND direct_cm.agent_id = ${viewer.humanAgentId}
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM chat_membership managed_cm
+      INNER JOIN agents managed_agent ON managed_agent.uuid = managed_cm.agent_id
+      WHERE managed_cm.chat_id = ${chats.id}
+        AND managed_cm.access_mode = 'speaker'
+        AND managed_agent.manager_id = ${viewer.memberId}
+    )
+  )`;
+}
+
+async function accessibleChatIdSet(
+  db: Database,
+  viewer: OrgSessionListViewer,
+  chatIds: string[],
+): Promise<Set<string>> {
+  const accessible = new Set<string>();
+  if (chatIds.length === 0) return accessible;
+
+  const directRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
+  for (const row of directRows) accessible.add(row.chatId);
+
+  const supervisedRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.managerId, viewer.memberId),
+      ),
+    );
+  for (const row of supervisedRows) accessible.add(row.chatId);
+
+  return accessible;
+}
 
 /** List sessions for a specific agent, with optional state filters. */
 export async function listAgentSessions(
@@ -216,14 +271,30 @@ export async function getSession(db: Database, agentId: string, chatId: string):
   };
 }
 
-/** List all sessions across all agents, with pagination. Scoped to organization. */
+/**
+ * List all sessions across all agents in one organization, with pagination.
+ *
+ * `organizationId` is a required positional parameter, not an optional
+ * filter: it is the tenant boundary, and an omitted boundary must be a
+ * compile error rather than a silently unscoped query.
+ */
 export async function listAllSessions(
   db: Database,
+  organizationId: string,
+  viewer: OrgSessionListViewer,
   limit: number,
   cursor?: string,
-  filters?: { state?: string; agentId?: string; organizationId?: string },
+  filters?: { state?: string; agentId?: string },
 ): Promise<{ items: SessionListItem[]; nextCursor: string | null }> {
-  const conditions = [];
+  // The boundary applies to BOTH tenant-owned tables this query exposes:
+  // agent_chat_sessions has independent FKs to agents and chats with no DB
+  // constraint tying their orgs together, so a stale or malicious client
+  // reporting session:state for a foreign chatId could otherwise leak that
+  // chat's topic/summary through the unconstrained chats join.
+  const conditions = [eq(agents.organizationId, organizationId), eq(chats.organizationId, organizationId)];
+  if (viewer.role !== "admin") {
+    conditions.push(chatAccessPredicate(viewer));
+  }
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
   } else {
@@ -233,11 +304,16 @@ export async function listAllSessions(
   if (filters?.agentId) {
     conditions.push(eq(agentChatSessions.agentId, filters.agentId));
   }
-  if (filters?.organizationId) {
-    conditions.push(eq(agents.organizationId, filters.organizationId));
-  }
   if (cursor) {
-    conditions.push(sql`${agentChatSessions.updatedAt} < ${new Date(cursor)}`);
+    const cursorDate = new Date(cursor);
+    if (Number.isNaN(cursorDate.getTime())) {
+      // An Invalid Date would otherwise reach Postgres as a malformed
+      // timestamp parameter and surface as a 500.
+      throw new BadRequestError(`Invalid cursor: ${cursor}`);
+    }
+    // `lt()` (not a raw sql`` fragment) so the Date goes through the
+    // column's driver mapping — postgres-js rejects raw Date parameters.
+    conditions.push(lt(agentChatSessions.updatedAt, cursorDate));
   }
 
   const rows = await db
@@ -252,7 +328,7 @@ export async function listAllSessions(
     .from(agentChatSessions)
     .innerJoin(chats, eq(agentChatSessions.chatId, chats.id))
     .innerJoin(agents, eq(agentChatSessions.agentId, agents.uuid))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(desc(agentChatSessions.updatedAt))
     .limit(limit + 1);
 
@@ -272,12 +348,14 @@ export async function listAllSessions(
 
   // Batch-fetch first message per chat for summary (parity with listAgentSessions)
   const chatIds = [...new Set(items.map((r) => r.chatId))];
+  const accessibleChatIds = await accessibleChatIdSet(db, viewer, chatIds);
+  const visibleSummaryChatIds = chatIds.filter((chatId) => accessibleChatIds.has(chatId));
   const firstMessages =
-    chatIds.length > 0
+    visibleSummaryChatIds.length > 0
       ? await db
           .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
           .from(messages)
-          .where(inArray(messages.chatId, chatIds))
+          .where(inArray(messages.chatId, visibleSummaryChatIds))
           .orderBy(messages.chatId, messages.createdAt)
       : [];
   const summaryMap = new Map<string, string>();
@@ -290,17 +368,20 @@ export async function listAllSessions(
   const nextCursor = hasMore && last ? last.updatedAt.toISOString() : null;
 
   return {
-    items: items.map((r) => ({
-      agentId: r.agentId,
-      chatId: r.chatId,
-      state: r.state,
-      runtimeState: runtimeMap.get(r.agentId) ?? null,
-      startedAt: r.chatCreatedAt.toISOString(),
-      lastActivityAt: r.updatedAt.toISOString(),
-      messageCount: 0, // Omit per-session message count in global list for performance
-      summary: summaryMap.get(r.chatId) ?? null,
-      topic: r.chatTopic ?? null,
-    })),
+    items: items.map((r) => {
+      const canSeeChat = accessibleChatIds.has(r.chatId);
+      return {
+        agentId: r.agentId,
+        chatId: r.chatId,
+        state: r.state,
+        runtimeState: runtimeMap.get(r.agentId) ?? null,
+        startedAt: r.chatCreatedAt.toISOString(),
+        lastActivityAt: r.updatedAt.toISOString(),
+        messageCount: 0, // Omit per-session message count in global list for performance
+        summary: canSeeChat ? (summaryMap.get(r.chatId) ?? null) : null,
+        topic: canSeeChat ? (r.chatTopic ?? null) : null,
+      };
+    }),
     nextCursor,
   };
 }

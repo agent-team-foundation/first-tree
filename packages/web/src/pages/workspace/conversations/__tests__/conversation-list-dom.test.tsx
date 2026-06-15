@@ -273,7 +273,7 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("Broken deploy");
     expect(container.textContent).toContain("Waiting approval");
     expect(container.textContent).toContain("Manual");
-    expect(container.textContent).toContain("GITHUB");
+    expect(container.textContent).toContain("From GitHub");
     expect(container.querySelector('[aria-label="watching"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="failed, 3 unread"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="1 unread"]')).toBeTruthy();
@@ -307,13 +307,13 @@ describe("ConversationList", () => {
 
     await click(container.querySelector('button[aria-label="Filter"]'));
     await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Manual")) ?? null,
+      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Human")) ?? null,
     );
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("GitHub")) ?? null,
     );
     expect(container.textContent).toContain("Filters");
-    expect(container.textContent).toContain("Manual");
+    expect(container.textContent).toContain("Human");
     expect(container.textContent).toContain("GitHub");
 
     await click(buttonByText(container, "Unread"));

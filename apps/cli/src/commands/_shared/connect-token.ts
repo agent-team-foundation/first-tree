@@ -9,6 +9,8 @@
 
 type ConnectJwt = {
   iss?: unknown;
+  /** Owning user id. Present on access/refresh/connect tokens alike. */
+  sub?: unknown;
   memberId?: unknown;
   organizationId?: unknown;
 };

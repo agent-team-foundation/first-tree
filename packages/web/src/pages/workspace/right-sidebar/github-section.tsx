@@ -131,11 +131,11 @@ function iconColor(state: GithubEntityLiveState | null): string {
 
 /**
  * Map the wire-level `bound_via` enum (`direct` / `fixes_link` /
- * `agent_created`) to a self-contained sentence — the row doesn't
- * prepend "via " anymore, so each label has to read as a complete
- * provenance hint on its own. Falling back to the raw key preserves
- * forward-compatibility for any new boundVia value the server might
- * emit before this map catches up.
+ * `human_fallback` / `agent_declared` / `human_declared`) to a
+ * self-contained sentence — the row doesn't prepend "via " anymore, so
+ * each label has to read as a complete provenance hint on its own.
+ * Falling back to the raw key preserves forward-compatibility for any
+ * new boundVia value the server might emit before this map catches up.
  */
 function humanizeBoundVia(boundVia: string): string {
   switch (boundVia) {
@@ -143,8 +143,12 @@ function humanizeBoundVia(boundVia: string): string {
       return "Mentioned in chat";
     case "fixes_link":
       return 'Auto-linked from "Fixes #…"';
-    case "agent_created":
-      return "Created by an agent";
+    case "human_fallback":
+      return "Routed to your existing chat";
+    case "agent_declared":
+      return "Followed by an agent";
+    case "human_declared":
+      return "Followed by you";
     default:
       return boundVia;
   }

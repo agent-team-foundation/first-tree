@@ -206,6 +206,7 @@ function unavailableSnapshot(detail: string): ContextTreeSnapshot {
       },
       agents: [],
       recentEvents: [],
+      skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
     },
     updates: [],
     nodes: [],

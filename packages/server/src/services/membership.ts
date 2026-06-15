@@ -39,12 +39,33 @@ export async function ensureMembership(db: Database, data: CreateMembershipForUs
       // Re-activate the prior soft-deleted row. The human agent associated
       // with it may be in any state — leave it alone; it gets refreshed
       // implicitly when the member starts using the team again.
-      await db.update(members).set({ status: "active" }).where(eq(members.id, existing.id));
+      //
+      // Rejoin starts a FRESH onboarding lifecycle for this membership: clear
+      // the prior suppress/completion stamps so the auto-entry gate treats
+      // the rejoined member as first-need again. A stale suppress stamp
+      // would otherwise hide setup for what is effectively a newly joined
+      // team — the exact failure mode the membership-scoped gate exists to
+      // prevent.
+      await db
+        .update(members)
+        .set({
+          status: "active",
+          onboardingSuppressedAt: null,
+          onboardingSuppressedReason: null,
+          onboardingCompletedAt: null,
+        })
+        .where(eq(members.id, existing.id));
       // Watcher rows: re-activated member regains visibility into chats
       // where their managed non-human agents speak. recompute restores
       // the rows that were dropped on the prior `left` flip.
       await recomputeWatchersForMember(db, existing.id);
-      return { ...existing, status: "active" as const };
+      return {
+        ...existing,
+        status: "active" as const,
+        onboardingSuppressedAt: null,
+        onboardingSuppressedReason: null,
+        onboardingCompletedAt: null,
+      };
     }
     return existing;
   }
@@ -189,6 +210,9 @@ export async function listActiveMemberships(db: Database, userId: string) {
       organizationId: members.organizationId,
       role: members.role,
       agentId: members.agentId,
+      onboardingSuppressedAt: members.onboardingSuppressedAt,
+      onboardingSuppressedReason: members.onboardingSuppressedReason,
+      onboardingCompletedAt: members.onboardingCompletedAt,
       orgName: organizations.name,
       orgDisplayName: organizations.displayName,
       createdAt: members.createdAt,

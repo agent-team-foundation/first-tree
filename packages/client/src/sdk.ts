@@ -7,11 +7,17 @@ import {
   ATTACHMENT_MIME_HEADER,
   type Chat,
   type ChatDetail,
+  type ChatGithubEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type CreateTaskChat,
+  type FollowGithubEntityConflict,
+  type FollowGithubEntityResponse,
+  followGithubEntityConflictSchema,
   type Message,
   type RuntimeProvider,
   type SendMessage,
+  type UnfollowGithubEntityResponse,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
@@ -103,7 +109,7 @@ const STARTUP_FETCH_TIMEOUT_MS = 5_000;
  * `sendMessage` / `listMessages` paths); startup-critical GETs override
  * with `STARTUP_FETCH_TIMEOUT_MS`.
  */
-type SdkCallOptions = { timeoutMs?: number };
+type SdkCallOptions = { timeoutMs?: number; retry?: boolean };
 
 /**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
@@ -290,6 +296,24 @@ export class FirstTreeHubSDK {
     });
   }
 
+  async createTaskChat(data: CreateTaskChat): Promise<{
+    chatId: string;
+    messageId: string;
+    topic: string | null;
+    effectiveSenderId: string;
+    initialRecipientAgentIds: string[];
+    contextParticipantAgentIds: string[];
+  }> {
+    return this.requestJson(
+      "/api/v1/agent/chats",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+      { retry: false },
+    );
+  }
+
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
@@ -315,6 +339,59 @@ export class FirstTreeHubSDK {
    */
   async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
+  }
+
+  /**
+   * Follow a GitHub entity: wire its webhook event stream into the chat.
+   *
+   * Returns a discriminated result instead of throwing on 409 — the conflict
+   * body ("this line already lives in chat X") is decision input for the
+   * caller, not an error: the CLI relays it with a `--rebind` hint. All
+   * other non-2xx statuses throw `SdkError` as usual (404 entity missing,
+   * 422 no App installation, 503 GitHub unreachable).
+   */
+  async followGithubEntity(
+    chatId: string,
+    body: { entity: string; rebind?: boolean },
+  ): Promise<{ ok: true; result: FollowGithubEntityResponse } | { ok: false; conflict: FollowGithubEntityConflict }> {
+    const response = await this.doFetch(`/api/v1/agent/chats/${chatId}/github-entities`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (response.status === 409) {
+      // Guard the body read: a proxy or middleware can answer 409 with a
+      // non-JSON page, and an unguarded .json() would surface as an opaque
+      // SyntaxError instead of the conflict contract.
+      let conflictBody: unknown;
+      try {
+        conflictBody = await response.json();
+      } catch {
+        throw new SdkError(409, "Entity already followed in another chat (non-JSON conflict body)");
+      }
+      const parsed = followGithubEntityConflictSchema.safeParse(conflictBody);
+      if (parsed.success) return { ok: false, conflict: parsed.data };
+      throw new SdkError(409, "Entity already followed in another chat (malformed conflict body)");
+    }
+    if (!response.ok) {
+      throw await this.toSdkError(response);
+    }
+    return { ok: true, result: (await response.json()) as FollowGithubEntityResponse };
+  }
+
+  /**
+   * Unfollow a GitHub entity: sever every line wired into this chat for it.
+   * Idempotent — `removed: 0` means the chat wasn't following (success).
+   */
+  async unfollowGithubEntity(chatId: string, entity: string): Promise<UnfollowGithubEntityResponse> {
+    return this.requestJson<UnfollowGithubEntityResponse>(
+      `/api/v1/agent/chats/${chatId}/github-entities?entity=${encodeURIComponent(entity)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /** List the GitHub entities currently wired into a chat (live title/state included). */
+  async listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
+    return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
 
   /**
@@ -455,7 +532,7 @@ export class FirstTreeHubSDK {
    * same error type on terminal failure.
    */
   private async doFetch(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<Response> {
-    const delays = [0, 500, 1000];
+    const delays = opts?.retry === false ? [0] : [0, 500, 1000];
     let lastErr: unknown;
     for (let attempt = 0; attempt < delays.length; attempt++) {
       const delay = delays[attempt];

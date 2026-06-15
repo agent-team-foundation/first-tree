@@ -39,6 +39,13 @@ export type ResolveOutcome =
       binary?: string;
       /** Provider version as reported by the real binary/package, if known. */
       version: string | null;
+      /**
+       * Extra provider-specific entry fields learned during resolve (e.g.
+       * codex's `runtimeSource` / `runtimePath`). Merged into every
+       * post-resolve entry (`ok` / `unauthenticated` / smoke outcomes) so the
+       * runtime-binary provenance is reported regardless of auth state.
+       */
+      meta?: Partial<CapabilityEntry>;
     }
   | { ok: false; error: string };
 
@@ -103,9 +110,14 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
       });
     }
 
+    // Provenance learned during resolve (e.g. runtimeSource/runtimePath) is
+    // reported on every post-resolve entry, independent of auth/smoke outcome.
+    const meta = resolved.meta ?? {};
+
     const auth = await stages.authPrecheck(resolved);
     if (!auth.ok) {
       return done({
+        ...meta,
         state: "unauthenticated",
         available: true,
         authenticated: false,
@@ -121,6 +133,7 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
     switch (smoke.state) {
       case "ok":
         return done({
+          ...meta,
           state: "ok",
           available: true,
           authenticated: true,
@@ -130,6 +143,7 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
         });
       case "unauthenticated":
         return done({
+          ...meta,
           state: "unauthenticated",
           available: true,
           authenticated: false,
@@ -139,6 +153,7 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
         });
       case "missing":
         return done({
+          ...meta,
           state: "missing",
           available: false,
           authenticated: false,
@@ -148,6 +163,7 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
         });
       case "error":
         return done({
+          ...meta,
           state: "error",
           available: false,
           authenticated: false,

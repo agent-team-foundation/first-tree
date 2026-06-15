@@ -6,9 +6,9 @@ import { z } from "zod";
 
 /**
  * Why a local alias is no longer usable from this client. Surfaced to
- * operators in `client doctor`, `agent prune`, and the post-claim cleanup
- * — knowing *why* a dir is stale changes the next action (delete vs. go
- * run it on the other machine).
+ * operators in `client doctor`, `agent prune`, and the post-rotation
+ * cleanup after `login --override` — knowing *why* a dir is stale changes
+ * the next action (delete vs. go run it on the other machine).
  *
  * - `unreadable`        — agent.yaml missing, malformed, or has no agentId.
  * - `unowned`           — server doesn't return this agentId at all under
@@ -140,7 +140,7 @@ export function formatStaleReason(reason: StaleAliasReason): string {
  * Remove an agent's local footprint: the YAML alias dir, the workspace
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
- * separately so prune and claim can share it.
+ * separately so prune and the post-rotation override cleanup can share it.
  */
 export function removeLocalAgent(name: string): void {
   rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });

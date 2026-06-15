@@ -146,4 +146,88 @@ describe("Agent WS — inbox delivery ordering", () => {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     }
   }, 15000);
+
+  it("keeps other chats moving when one chat fills its per-chat in-flight window", async () => {
+    const admin = await createAdminContext(app, { username: `ws-fair-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `ws-fair-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+      organizationId: admin.organizationId,
+    });
+    const chatA = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const chatB = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const ws = await openBoundSocket({
+      accessToken: admin.accessToken,
+      clientId: admin.clientId,
+      agentId: agent.uuid,
+      runtimeProvider: agent.runtimeProvider,
+    });
+
+    try {
+      const chatAMessageIds: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const sent = await sendMessage(app.db, chatA.id, admin.humanAgentUuid, {
+          source: "api",
+          format: "text",
+          content: `A${i + 1}`,
+          metadata: { mentions: [agent.uuid] },
+        });
+        chatAMessageIds.push(sent.message.id);
+      }
+
+      const initialFramesPromise = collectDeliverFrames(ws, 8);
+      const lastChatAMessageId = chatAMessageIds.at(-1);
+      if (!lastChatAMessageId) throw new Error("expected chat A messages");
+      await app.notifier.notify(agent.inboxId, lastChatAMessageId);
+      const initialFrames = await initialFramesPromise;
+      expect(initialFrames.map((frame) => frame.message.content)).toEqual([
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6",
+        "A7",
+        "A8",
+      ]);
+
+      const b1 = await sendMessage(app.db, chatB.id, admin.humanAgentUuid, {
+        source: "api",
+        format: "text",
+        content: "B1",
+        metadata: { mentions: [agent.uuid] },
+      });
+      const b1FramePromise = collectDeliverFrames(ws, 1);
+      await app.notifier.notify(agent.inboxId, b1.message.id);
+      const [b1Frame] = await b1FramePromise;
+      expect(b1Frame?.message.content).toBe("B1");
+
+      const b2 = await sendMessage(app.db, chatB.id, admin.humanAgentUuid, {
+        source: "api",
+        format: "text",
+        content: "B2",
+        metadata: { mentions: [agent.uuid] },
+      });
+
+      const postAckFramesPromise = collectDeliverFrames(ws, 2);
+      const firstChatAFrame = initialFrames[0];
+      if (!firstChatAFrame) throw new Error("expected initial chat A delivery");
+      ws.send(JSON.stringify({ type: "inbox:ack", entryId: firstChatAFrame.entryId, ref: "ack-a1" }));
+      const postAckFrames = await postAckFramesPromise;
+
+      expect(postAckFrames.map((frame) => frame.message.id).sort()).toEqual([lastChatAMessageId, b2.message.id].sort());
+      expect(postAckFrames.map((frame) => frame.message.content).sort()).toEqual(["A9", "B2"]);
+    } finally {
+      ws.close();
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+  }, 15000);
 });

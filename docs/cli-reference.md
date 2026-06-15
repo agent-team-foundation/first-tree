@@ -41,7 +41,7 @@ first-tree
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
-├── chat ...                 Chats and messaging (send, list, history, open)
+├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor)
 ├── config ...               View/modify this machine's client.yaml
@@ -63,7 +63,7 @@ and switching to a different deployment only requires a fresh token.
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
-| `--override` | Transfer ownership of this client from a different account (folds in what the retired `client claim` did). |
+| `--override` | Take over this machine from a different account: rotates the local client identity (backs up `client.yaml`) and registers a fresh clientId. No server-side ownership transfer happens; the previous account's client entry stays until that account removes it. |
 
 ## logout
 
@@ -252,12 +252,17 @@ Day-to-day messaging.
 
 ```
 first-tree chat
+├── create [message]                               # create a separate task chat and write its first message
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
+│     --with <name>                                #   context participant; added silently, not woken by the first message
+│     --topic <text> / --description <text>        #   initial chat self-description
+│     --request / --subject / --question / --option #  first message is a tracked ask; exactly one --to human
 ├── send <name> [message]                            # recipient is any participant (agent or human)
-│     --request / --question / --option              #   structured ask directed at a human
+│     --request / --subject / --question / --option  #   structured ask directed at a human
 │     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
 │     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
-├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
+├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
 ├── set-topic [topic]                                # set/clear topic + description (chat self-description)
@@ -268,18 +273,54 @@ first-tree chat
 ```
 
 ```bash
+# Split off separate work into a new task chat and write the first message.
+# --to recipients are mentioned and woken; --with participants are added for
+# context but receive only silent initial history. This is not an empty-chat or
+# same-task handoff tool.
+first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
+  --topic "rollout review" \
+  --description "reviewing rollout plan; waiting on code-agent"
+
+# Start a new task chat with a tracked question. The first request must target
+# exactly one human. The message body is the background/context; --subject is
+# the dock/card headline (≤80 chars), and --question is only the ask (≤200 chars).
+first-tree chat create --to alice --request \
+  "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
+  --question "Ship the destructive migration?" \
+  --option "Ship" --option "Hold"
+
 # Inline
 first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)
 echo "long body" | first-tree chat send code-agent -f markdown
 
+# Inline bodies must carry REAL newlines. A one-line quoted body written with
+# `\n` escapes — chat send code-agent "line1\n\n**title**" — is rejected
+# BEFORE anything is sent (ESCAPED_NEWLINES, exit 2): shells do not expand
+# `\n` inside quotes, so the literal backslash-n would be stored and the
+# message would render as one long unformatted line. The error prints a
+# copyable heredoc retry form on stderr; resend via stdin:
+cat <<'EOF' | first-tree chat send code-agent -f markdown
+first line
+
+**second** line
+EOF
+# Stdin bodies are never checked — piping is also the escape hatch for
+# intentionally sending literal `\n` text.
+
 # Ask a human a tracked question (red-dot until answered). --request must
-# target a single human; the body carries context, --question carries the ask.
+# target a single human; the body carries context, --subject is the headline
+# (≤80 chars), and --question carries only the ask (≤200 chars).
 first-tree chat send alice --request \
   "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
+
+# If --question exceeds 200 chars, the CLI exits with QUESTION_TOO_LONG.
+# If --subject exceeds 80 chars, the CLI exits with SUBJECT_TOO_LONG.
 
 # Thread a reply under a message (pure threading; does NOT resolve a question)
 first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
@@ -290,7 +331,8 @@ first-tree chat send alice "Ship it — go ahead with migration 0021." --answer 
 # Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
 first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
 
-# Pull a non-member into the current chat first, then send normally.
+# Pull a non-member into the current chat first, then send normally. Use this
+# for same-task stage / role handoffs.
 first-tree chat invite code-agent
 first-tree chat send code-agent "now we can talk"
 
@@ -318,6 +360,56 @@ first-tree chat open code-agent
 `FIRST_TREE_CHAT_ID`, which the runtime injects into the agent's session
 environment. The recipient must be a participant of that chat; if not,
 `invite` first.
+
+`chat create` is different: it creates a new task chat and writes the first
+message in one command. Use it to split genuinely new work into a fresh chat.
+Use `chat send` for replies/status in the current chat, and `chat invite` when
+you want to add a non-member to the current chat before sending there. A
+same-task handoff, such as architect to developer or developer to reviewer,
+stays in the current chat; invite the next agent and send the handoff there.
+
+Task creation is intentionally not idempotent. There is no operation id, and
+the CLI does not automatically retry a create request. If the command reports
+an unknown result after a network/server failure, check `chat list` or the Web
+UI before running it again; the chat may already exist.
+
+If a non-human agent includes itself in `chat create --to`, the server records
+the originating agent in metadata and uses that agent's manager human as the
+effective sender so the first message can wake the agent normally.
+
+---
+
+## github
+
+GitHub entity attention for the current chat. `follow` wires an entity's
+webhook event stream into the chat (one routing line, chat-scoped);
+`unfollow` declares the task's attention over and severs every line wired
+into the chat for that entity, however it was created. Creating a PR or
+issue never follows it automatically — declare the dependency explicitly,
+immediately after creation. Decision guidance (when to follow / not
+follow / unfollow, 409 handling) lives in the `first-tree-github` skill.
+
+```
+first-tree github
+├── follow <entity> [--chat <chatId>] [--rebind]    # route the entity's events into the chat
+├── unfollow <entity> [--chat <chatId>]             # sever all of the chat's lines for the entity
+└── following [--chat <chatId>] [--json]            # list entities wired into the chat
+```
+
+```bash
+# Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
+first-tree github follow https://github.com/acme/api/pull/42
+first-tree github follow acme/api#42        # issue vs PR resolved automatically
+first-tree github follow acme/api@3f2a91c   # commit
+first-tree github following
+first-tree github unfollow acme/api#42
+```
+
+`<entity>` accepts a full GitHub URL, `owner/repo#N`, or `owner/repo@<sha>`.
+A `409` means the same (human, delegate) line already lives in another chat
+— `--rebind` MOVES it here (a line is never duplicated). `unfollow` is
+idempotent: `removed: 0` is success, not an error. Requires the org's
+GitHub App installation to cover the repo (`422` otherwise).
 
 ---
 

@@ -347,7 +347,10 @@ describe("onboarding hooks and flow", () => {
     expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
 
     await act(async () => expectHookValue(latest.current).completeAndEnterChat("chat 1"));
-    expect(authMock.value.dismissOnboarding).toHaveBeenCalledTimes(2);
+    // Completing must stamp completed WITHOUT dismissing: the account-level
+    // dismissal would short-circuit shouldEnterOnboarding's org-level gate
+    // forever, so only the explicit finishLater above may have called it.
+    expect(authMock.value.dismissOnboarding).toHaveBeenCalledTimes(1);
     expect(authMock.value.markOnboardingCompleted).toHaveBeenCalled();
     expect(sessionStorage.getItem("onboarding:stepIndex:admin")).toBeNull();
   });

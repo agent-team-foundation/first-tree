@@ -81,7 +81,7 @@ export function redactErrorPreview(input: string, maxLen: number = DEFAULT_MAX_L
   //    non-empty and a colon between them, which let (b) and (c) slip
   //    through with credentials intact — caught by Codex on PR #975's
   //    `d30e8926` and now pinned by negative-toContain regression tests.
-  s = s.replace(/\b([a-z][a-z0-9+.\-]{0,30}:\/\/)[^\s@/]+@/gi, "$1[REDACTED]@");
+  s = s.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s@/]+@/gi, "$1[REDACTED]@");
 
   // 2. Vendor-prefixed token shapes. Order matters: longest / most-specific
   //    first so we don't half-redact a `github_pat_…` to a `gh…` shape.

@@ -97,7 +97,12 @@ const CommandItem = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
     <CommandPrimitive.Item
       ref={ref}
       className={cn(
-        "relative flex cursor-default select-none items-center rounded-[var(--radius-input)] px-2 py-1.5 text-body outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        // `data-[disabled=true]`, NOT `data-[disabled]`: cmdk ≥1.0 sets
+        // `data-disabled="false"` on every enabled item (the attribute is
+        // always present), so the presence-matching selector dimmed the
+        // whole list to 50% opacity. Value-matching is the upstream
+        // shadcn/ui fix for the same bug.
+        "relative flex cursor-default select-none items-center rounded-[var(--radius-input)] px-2 py-1.5 text-body outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
         className,
       )}
       {...props}
@@ -106,4 +111,24 @@ const CommandItem = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
 );
 CommandItem.displayName = CommandPrimitive.Item.displayName;
 
-export { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator };
+/**
+ * Async-source pending state. cmdk renders this only while
+ * `<Command.Loading>` is mounted AND keeps it outside filtering, so it
+ * never competes with real items for selection.
+ */
+const CommandLoading = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof CommandPrimitive.Loading>>(
+  ({ className, ...props }, ref) => <CommandPrimitive.Loading ref={ref} className={cn("py-2", className)} {...props} />,
+);
+CommandLoading.displayName = CommandPrimitive.Loading.displayName;
+
+export {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandLoading,
+  CommandSeparator,
+};

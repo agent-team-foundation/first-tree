@@ -2,7 +2,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CapabilityEntry } from "@first-tree/shared";
+import type { CapabilityEntry, CapabilityRuntimeSource } from "@first-tree/shared";
+import { findCodexExecutableOnPath, formatCodexBinaryMissingMessage, verifyCodexExecutable } from "../codex-binary.js";
 import {
   type AuthPrecheckOutcome,
   commandFailureDigest,
@@ -19,8 +20,8 @@ export const CODEX_DOCTOR_TIMEOUT_MS = 60_000;
 /**
  * Platform-package map mirrored from `@openai/codex-sdk`'s own binary
  * resolution (src/exec.ts). The probe must launch the SAME binary the runtime
- * spawns — the handler constructs `new Codex()` without an executablePath, so
- * the SDK always uses its bundled vendor binary, never `codex` on PATH.
+ * spawns — the handler prefers the SDK-bundled vendor binary and only falls
+ * back to a system `codex` on PATH when the bundle is missing.
  */
 const CODEX_PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
   "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
@@ -114,6 +115,65 @@ export async function resolveBundledCodexBinary(): Promise<
   const legacyPath = join(packageRoot, "codex", binaryName);
   if (existsSync(legacyPath)) return { ok: true, binary: legacyPath };
   return { ok: false, error: `codex binary not found under ${packageRoot}` };
+}
+
+/** Resolved runtime binary + provenance — mirrors the handler's bundled-first,
+ * system-PATH-fallback order (PR #1054 `codex-binary.ts`). */
+export type CodexBinaryResolution =
+  | {
+      ok: true;
+      binary: string;
+      runtimeSource: CapabilityRuntimeSource;
+      runtimePath: string | null;
+      version: string | null;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Resolve the codex binary the runtime would actually spawn, in the same
+ * order as the handler: prefer the SDK-bundled vendor binary; if it is
+ * missing or not launchable, fall back to a validated system `codex` on
+ * PATH. Returns the binary path (for the login-status precheck + doctor
+ * smoke) plus the `runtimeSource`/`runtimePath` provenance reported to the UI.
+ */
+export async function resolveCodexRuntimeBinary(env: NodeJS.ProcessEnv = process.env): Promise<CodexBinaryResolution> {
+  const bundled = await resolveBundledCodexBinary();
+  if (bundled.ok) {
+    const verified = await verifyLaunchable("codex", bundled.binary);
+    if (verified.ok) {
+      return {
+        ok: true,
+        binary: bundled.binary,
+        runtimeSource: "bundled",
+        runtimePath: null,
+        version: verified.version,
+      };
+    }
+    // Bundled binary present but not launchable — fall through to the system
+    // PATH fallback (matches the handler's "validate before use" contract).
+  }
+
+  const pathBinary = findCodexExecutableOnPath(env);
+  if (pathBinary) {
+    const verification = verifyCodexExecutable(pathBinary, env);
+    if (verification.ok) {
+      const match = (verification.output ?? "").match(/\d+\.\d+(?:\.\d+)?/);
+      return {
+        ok: true,
+        binary: pathBinary,
+        runtimeSource: "path",
+        runtimePath: pathBinary,
+        version: match ? match[0] : null,
+      };
+    }
+    return {
+      ok: false,
+      error: formatCodexBinaryMissingMessage(`PATH codex failed validation: ${verification.reason}`),
+    };
+  }
+
+  const reason = bundled.ok ? "the SDK-bundled codex binary is present but not launchable" : bundled.error;
+  return { ok: false, error: formatCodexBinaryMissingMessage(reason) };
 }
 
 /** Minimal slice of the `codex doctor --json` report the classifier reads. */
@@ -254,8 +314,7 @@ async function defaultLoginStatus(binary: string): Promise<AuthPrecheckOutcome> 
 
 /** Injectable seams — production callers pass nothing. */
 export type CodexProbeDeps = {
-  resolveBinary?: () => Promise<{ ok: true; binary: string } | { ok: false; error: string }>;
-  verifyBinary?: (binary: string) => Promise<{ ok: true; version: string | null } | { ok: false; error: string }>;
+  resolveRuntimeBinary?: (env?: NodeJS.ProcessEnv) => Promise<CodexBinaryResolution>;
   loginStatus?: (binary: string) => Promise<AuthPrecheckOutcome>;
   runSmoke?: (binary: string) => Promise<SmokeOutcome>;
   env?: NodeJS.ProcessEnv;
@@ -265,30 +324,33 @@ export type CodexProbeDeps = {
  * Launch-verified probe for the `codex` runtime.
  *
  * Stage map:
- *   1. resolve — locate the SDK's bundled vendor binary (the exact binary the
- *      runtime spawns) and launch-verify it with `--version`.
+ *   1. resolve — locate the binary the runtime spawns, in the handler's order
+ *      (SDK-bundled vendor binary first, then a validated system `codex` on
+ *      PATH) and launch-verify it. Reports `runtimeSource` / `runtimePath`.
  *   2. auth precheck — `codex login status` (free). CODEX_API_KEY short-cuts
  *      it: an explicit key overrides whatever login state auth.json carries.
  *   3. smoke — `codex doctor --json`: real authenticated handshake against
  *      the provider endpoint; the only path to a non-degraded `ok`.
  */
 export async function probeCodexCapability(deps: CodexProbeDeps = {}): Promise<CapabilityEntry> {
-  const resolveBinary = deps.resolveBinary ?? resolveBundledCodexBinary;
-  const verifyBinary = deps.verifyBinary ?? ((binary: string) => verifyLaunchable("codex", binary));
+  const env = deps.env ?? process.env;
+  const resolveRuntimeBinary = deps.resolveRuntimeBinary ?? resolveCodexRuntimeBinary;
   const loginStatus = deps.loginStatus ?? defaultLoginStatus;
   const runSmoke = deps.runSmoke ?? defaultCodexDoctorSmoke;
-  const env = deps.env ?? process.env;
 
   let resolvedBinary: string | undefined;
 
   return runLaunchProbe({
     resolve: async (): Promise<ResolveOutcome> => {
-      const located = await resolveBinary();
-      if (!located.ok) return { ok: false, error: located.error };
-      const verified = await verifyBinary(located.binary);
-      if (!verified.ok) return { ok: false, error: verified.error };
-      resolvedBinary = located.binary;
-      return { ok: true, binary: located.binary, version: verified.version };
+      const resolution = await resolveRuntimeBinary(env);
+      if (!resolution.ok) return { ok: false, error: resolution.error };
+      resolvedBinary = resolution.binary;
+      return {
+        ok: true,
+        binary: resolution.binary,
+        version: resolution.version,
+        meta: { runtimeSource: resolution.runtimeSource, runtimePath: resolution.runtimePath },
+      };
     },
     authPrecheck: async (): Promise<AuthPrecheckOutcome> => {
       if (env.CODEX_API_KEY && env.CODEX_API_KEY.length > 0) {

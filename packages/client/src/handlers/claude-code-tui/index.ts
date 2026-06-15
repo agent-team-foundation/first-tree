@@ -7,6 +7,7 @@ import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
+import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
 import type { GitMirrorManager } from "../../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../../runtime/handler.js";
 import {
@@ -304,7 +305,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       turnProcessor = createToolCallProcessor(
         (event) => sessionCtx.emitEvent(event),
         contextTreePath ? { path: contextTreePath, repoUrl: contextTreeRepoUrl, branch: contextTreeBranch } : undefined,
-        { cwd },
+        {
+          cwd,
+          gitWriteTracker: createContextTreeGitWriteTracker({
+            contextTreePath,
+            contextTreeRepoUrl,
+            contextTreeBranch,
+            log: (message) => sessionCtx.log(message),
+          }),
+        },
       );
     }
     return turnProcessor;
@@ -326,7 +335,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       throw new Error("runTurn called before session was prepared");
     }
     sessionCtx.markMessagesConsumed(messages);
-    sessionCtx.setRuntimeState("working");
     turnAborted = false;
 
     const state: TurnState = { finalTexts: [] };
@@ -341,12 +349,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       transcriptTailer.drainEntries();
 
       await pasteText(tmuxSessionName, text);
-      sessionCtx.touch();
+      sessionCtx.recordProviderActivity();
 
       const startTs = Date.now();
       while (Date.now() - startTs < TURN_TIMEOUT_MS) {
         if (turnAborted) break;
-        sessionCtx.touch();
+        sessionCtx.recordProviderActivity();
 
         await drainAndConsume(sessionCtx, state);
 
@@ -445,12 +453,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
     if (disposition.ack) {
-      sessionCtx.markMessagesCompleted(messages);
+      await sessionCtx.finishTurn(messages, { status: disposition.status, terminal: true });
     } else {
       const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
-      sessionCtx.markMessagesRetryable(messages, reason);
+      sessionCtx.retryTurn(messages, reason);
     }
-    sessionCtx.setRuntimeState(disposition.runtimeState);
     resetProcessor();
   }
 
@@ -478,7 +485,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         }
       }
       if (inputs.length === 0) {
-        sessionCtx.markMessagesCompleted(drained);
+        await sessionCtx.finishTurn(drained, { status: "error", terminal: true, errorKind: "deterministic" });
         return;
       }
       await runTurn(inputs.join("\n\n"), sessionCtx, drained);

@@ -20,7 +20,7 @@ the Context Tree.
 | **M1** | doctor + env validation, per-run isolated PG via `docker compose` (tmpfs, random port), spawned `server` + `client --foreground`, smoke against `/healthz` + `/api/v1/health`. | `smoke.e2e.test.ts` |
 | **M2** | `github-mock` (signs + delivers webhooks, stubs outbound `/api/*`), human-agent credentials helper (`framework/credentials.ts`), `ws-listener.ts` for `agent:ws` frames, real `chat-send` over HTTP. | `messaging`, `github-webhook`, `agent-runtime` |
 | **M2.5** | GitHub PR → chat delivery (server self-creates chat + mapping), PG NOTIFY → server WS push → `inbox:deliver` frame on a parallel client. | `github-pr-delivery`, `ws-inbox-push` |
-| **TUI** | `claude-code-tui` runtime coverage: a fake `claude` TUI driven through real tmux (`mocks/fake-claude-tui.mjs`), a tmux-observer driver, a per-agent fixture, and worker-owned worlds for daemon-restart scenarios. Run with `pnpm e2e:tui` (own config, isolated from the SDK suite). One-shot local bring-up: `pnpm e2e:tui:bootstrap`. | `tui-runtime-basic`, `tui-runtime-tool-call`, `tui-askuser-degrade`, `tui-crash-recovery`, `tui-orphan-sweep`, `tui-restart-resume`, `tui-tmux-lifecycle`, `tui-capability-probe` |
+| **TUI** | `claude-code-tui` runtime coverage: a fake `claude` TUI driven through real tmux (`mocks/fake-claude-tui.mjs`), a tmux-observer driver, a per-agent fixture, and worker-owned worlds for daemon-restart scenarios. Run with `pnpm e2e:tui` (own config, isolated from the SDK suite). One-shot local bring-up: `pnpm e2e:tui:bootstrap`. | `tui-runtime-basic`, `tui-runtime-tool-call`, `tui-askuser-disallowed`, `tui-crash-recovery`, `tui-orphan-sweep`, `tui-restart-resume`, `tui-tmux-lifecycle`, `tui-capability-probe` |
 
 The TUI suite needs a real `tmux` (≥ 3.0) on the runner. The fake binary
 speaks the pane-marker + transcript-JSONL contract the handler observes (not
@@ -146,9 +146,7 @@ packages/e2e/
     │   ├── agent-lifecycle.e2e.test.ts             # POST → PATCH → suspend → reactivate → DELETE
     │   ├── session-control.e2e.test.ts             # server → client session:suspend / session:terminate WS push
     │   ├── heartbeat-stale.e2e.test.ts             # heartbeat + runtime:state + 30s background tick stale-detection
-    │   ├── client-claim.e2e.test.ts                # POST /clients/:id/claim transfers ownership + unpins agents
     │   ├── inbox-pull-resume.e2e.test.ts           # at-least-once redelivery on WS reconnect
-    │   ├── pr-url-binding-from-stdout.e2e.test.ts  # session:event tool_call → github_entity_chat_mappings agent_created
     │   └── cli-chat-send.e2e.test.ts               # spawn dist CLI `chat send …` and verify the message lands
     ├── mocks/
     │   └── fake-claude-code.mjs # offline replacement for @anthropic-ai/claude-agent-sdk

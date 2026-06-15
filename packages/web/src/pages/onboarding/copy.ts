@@ -3,12 +3,19 @@
  *
  * Goal: a near-beginner can read these and know what to do and why. The
  * vocabulary is deliberately small: "team", "a computer", "agent", "Context
- * Tree". Two implementation words are used DELIBERATELY where the step's
- * audience already knows them and a softer word would be vaguer: "agent
- * runtime" in connect-computer (the user just ran a terminal command) and
- * "repo" in connect-computer's sibling connect-code / kickoff (they're
- * installing a GitHub App — and "project" is ambiguous next to GitHub's own
- * "Projects" feature). "binding" and other deep internals still never leak.
+ * Tree".
+ *
+ * Core framing: the user's coding agent (Claude Code, Codex, …) ALREADY
+ * exists on their computer — onboarding *connects* it to the team, it does
+ * not conjure a new abstract entity. So the tool names are first-class
+ * vocabulary: we say "coding agent" as the category word and name the
+ * concrete tool ("Claude Code") directly once it's detected. The verb chain
+ * is Connect (link the tool) → Add (give it a team identity). "runtime" is NO
+ * LONGER used in UI copy — it was once a sanctioned exception in
+ * connect-computer, but "coding agent" / the tool's own name reads truer to
+ * how the user already thinks about it. "repo" stays (connect-code / kickoff
+ * install a GitHub App, and "project" is ambiguous next to GitHub's own
+ * "Projects"). "binding" and other deep internals still never leak.
  * We distinguish people from AI: human members are
  * "teammates", the AI workers are "agents" (matching the rest of the product;
  * "AI agent" on first mention, then just "agent"). "Context Tree" is the one
@@ -58,22 +65,13 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "Connect a repo so your agent can learn your codebase and work on it. It never changes your code without your okay.",
   },
   "connect-computer": {
-    // Names where the *agent* runs, not a bare "Connect your computer" — the
-    // latter read as an unmotivated demand ("why am I connecting my computer?")
-    // as the first hands-on step. We frame it around the agent (the flow's
-    // spine) but via its *place/role* ("where your agent runs"), not possession
-    // ("your agent's computer"): this step precedes create-agent, so a
-    // possessive would claim the agent before it exists. "Set up" (not "Connect"):
-    // the action is provisioning a machine — running a command, readying a runtime —
-    // not wiring it to something. We say "where your agent runs", NOT "the computer
-    // your agent runs on": the per-state subtitle already names the concrete noun
-    // ("…on a computer you pick. Run the command below.") and the screen visibly
-    // concerns a computer, so repeating it in the title is redundant and just makes
-    // the title the longest in the flow. Title carries the place/why; subtitle carries
-    // the concrete what. "runs" is plain English, deliberately not the banned
-    // implementation word "runtime"; rhymes with the connected subtitle "This is
-    // where your agent will run".
-    title: "Set up where your agent runs",
+    // The user's coding agent already exists on their computer (Claude Code,
+    // Codex, …) — this step CONNECTS it, so the title names that act directly
+    // rather than the old "set up where your agent runs", which implied an
+    // abstract agent living somewhere the user couldn't see. "coding agent" is
+    // the category word; the concrete tool gets named once detected. First verb
+    // in the Connect → Add chain.
+    title: "Connect your coding agent",
     // why is rendered per-state by StepConnectComputer (the "run the command
     // below" line is only true while waiting — once connected there's no
     // command shown, so a static shell subtitle would read as stale). The
@@ -81,14 +79,14 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "",
   },
   "create-agent": {
-    // "your first agent": warmer + a milestone framing that fits building out a team
-    // of agents ("first" implies more to come). We re-introduce "your" — earlier copy
-    // deliberately said "an agent" to avoid over-claiming private ownership (the agent
-    // can be team-visible) — but "first" reframes "your" as a creation milestone (the
-    // first one you make) rather than exclusive possession, which reads honestly even
-    // for a team-visible agent. NOT "your AI teammate": the vocabulary reserves
-    // "teammate" for humans and "agent" for AI. No `why` — title + form self-explain.
-    title: "Create your first agent",
+    // The agent was connected in the previous step; here it joins the team — so
+    // the title is "Add … to the team", not "Create …" (nothing is created; an
+    // existing tool gets a team identity). This step is name + visibility (+
+    // future settings), i.e. join-the-team registration. Second verb in the
+    // Connect → Add chain. NOT "your AI teammate": the vocabulary reserves
+    // "teammate" for humans and "agent" for AI. No `why` — title + form
+    // self-explain.
+    title: "Add your agent to the team",
     why: "",
   },
   kickoff: {
@@ -224,37 +222,35 @@ export const COPY = {
     // command-pointing line only holds while waiting; once connected we swap
     // to a neutral confirmation so it doesn't tell the user to "run the
     // command below" when no command is shown.
-    // "does its work" (not "does real work" / "gets work done"): answers "why
-    // connect a computer?" by naming the mechanism — the agent runs and does its
-    // work on the machine you pick. Stays general (the agent's work isn't only
-    // code: research, docs, Context Tree, tasks), so we avoid narrowing examples
-    // like "writes code". The trailing "to connect one" gives the bare command a
-    // purpose (closes the loop).
-    whyWaiting: "Your agent does its work on a computer you pick. Run the command below to connect one.",
-    whyConnected: "Your computer's connected — this is where your agent will run.",
+    // whyWaiting names the tools (Claude Code / Codex) and points the command
+    // at the machine where they're installed — the user's coding agent already
+    // lives there, so running the command connects it. The "— that connects it
+    // to your team" tail gives the bare command its purpose.
+    whyWaiting:
+      "Run this command on the computer where you installed Claude Code, Codex, or other coding agents — that connects it to your team.",
+    whyConnected: "Your computer's connected.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
-      "Your computer is connected, but no agent runtime is ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
-    detecting: "Checking what's installed…",
+      "Your computer is connected, but we didn't find a coding agent on it. Install one (like Claude Code) and sign in — it'll show up here automatically.",
+    detecting: "Looking for coding agents on it…",
     /**
-     * Ready · exactly one runtime detected — nothing to choose, so name the
-     * tool and confirm. `name` is the friendly PROVIDER_LABEL (e.g. "Claude
-     * Code"). We say "runtime" deliberately here (and in `runtimesReady` /
-     * noRuntime): by this step the user has run a terminal command, so the
-     * precise word reads better than a vaguer "tool", and it stays consistent
-     * across all three runtime states.
+     * Ready · exactly one coding agent detected — nothing to choose, so name
+     * the tool and bridge into the next step. `name` is the friendly
+     * PROVIDER_LABEL (e.g. "Claude Code").
      */
-    runtimeReady: (name: string) => `${name} runtime is ready — your agent will use it.`,
+    runtimeReady: (name: string) => `${name} is ready on this computer. Next, add it to your team.`,
     /**
-     * Ready · two or more runtimes detected — state the count and prompt the
-     * user to pick which one powers the agent (a single-select list follows).
+     * Ready · two or more coding agents detected — state the count and prompt
+     * the user to pick which one to connect first (a single-select list
+     * follows).
      */
-    runtimesReady: (count: number) => `${count} agent runtimes are ready — pick which one runs your agent.`,
+    runtimesReady: (count: number) =>
+      `We found ${count} coding agents on this computer — pick which one to connect first.`,
     stuckTitle: "Taking a while? A few common reasons:",
     stuckReasons: [
       "If you saw “command not found”, your computer needs Node.js first — it's a free install. Get it, then run the command again.",
-      "Make sure you ran it on the computer you want your agent to use.",
+      "Make sure you ran it on the computer where your coding agent is installed.",
       "A company firewall or VPN can sometimes block the connection.",
     ],
     nodeLinkLabel: "Install Node.js (free)",
@@ -272,18 +268,24 @@ export const COPY = {
   },
   /** create-agent states */
   createAgent: {
-    nameLabel: "What should we call your agent?",
-    // "Bringing your agent online…" (not "Setting up…"): the step creates the
-    // agent then polls until it comes online, and "set up" echoed step1's title
-    // ("Set up where your agent runs"). Pairs with timeout's "isn't online yet".
+    // Dynamic opener at the top of the step: names the connected tool + the
+    // machine it's on, grounding the abstract "agent" in the concrete coding
+    // agent the user already runs (e.g. "Claude Code on gandys-macbook is about
+    // to join your team."). Rendered only when both are known.
+    joining: (toolLabel: string, hostname: string) => `${toolLabel} on ${hostname} is about to join your team.`,
+    nameLabel: "What should your team call it?",
+    // "Bringing your agent online…" (not "Setting up…"): the step registers the
+    // agent then polls until it comes online. Pairs with timeout's "isn't online
+    // yet".
     creating: "Bringing your agent online…",
     creatingHint: "This usually takes a few seconds.",
-    // Timeout: created but didn't report online within 30s. ONE paragraph, no
-    // separate bold title — the shell already renders the step h1 ("Create your
-    // first agent"), so a second heading read as a stacked double-title. Leads
-    // with the situation, then causes + fix. "agent runtime" matches connect-computer.
+    // Timeout: added but didn't report online within 30s. ONE paragraph, no
+    // separate bold title — the shell already renders the step h1 ("Add your
+    // agent to the team"), so a second heading read as a stacked double-title.
+    // Leads with the situation, then causes + fix. "coding agent" matches
+    // connect-computer.
     timeoutBody:
-      "Your agent isn't online yet — it was created, but the computer it runs on may have gone to sleep, lost its connection, or its agent runtime didn't start. Check that computer, then try again.",
+      "Your agent isn't online yet — the computer it runs on may have gone to sleep, lost its connection, or the coding agent didn't start. Check that computer, then try again.",
     retry: "Try again",
     /** Shown on the form when the computer isn't connected (Create is disabled).
         Rendered as one line with an inline "reconnect it" link (→ connect-computer)
@@ -291,7 +293,7 @@ export const COPY = {
     computerDisconnected: {
       pre: "Your computer isn't connected — ",
       link: "reconnect it",
-      post: " to create your agent.",
+      post: " to add your agent to the team.",
     },
   },
   /** kickoff — one unified "launch" finale across every path. Titles/bodies are
@@ -362,8 +364,8 @@ export const COPY = {
   errors: {
     generic: "Something went wrong. Try again in a moment.",
     chatFailed: "Couldn't start the first task. Try again.",
-    agentFailed: "Couldn't create your agent — please try again.",
-    noAgent: "We couldn't find your agent. Go back a step and create one.",
+    agentFailed: "Couldn't add your agent to the team — please try again.",
+    noAgent: "We couldn't find your agent. Go back a step and add one.",
   },
   /**
    * Human-readable messages for Context Tree provisioning failures at kickoff.

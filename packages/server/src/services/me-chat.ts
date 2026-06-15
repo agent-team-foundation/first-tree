@@ -5,8 +5,7 @@
  * Responsibilities:
  *   - Cursor-paginated conversation list (single-stream JOIN over the
  *     unified `chat_membership` + `chat_user_state` tables).
- *   - Create a new chat (delegates participant writes — and the derived
- *     watcher recompute — to `addChatParticipants`).
+ *   - Create a legacy empty Web chat via `chat.ts::createChat`.
  *   - Add participants (delegates to `inviteParticipantsToChat`).
  *   - Mark-read (UPSERT into `chat_user_state`).
  *   - Join → watcher to speaker (delegates to `watcher.ts`).
@@ -16,7 +15,6 @@
  * and §11.1 (per-route mapping).
  */
 
-import { randomUUID } from "node:crypto";
 import {
   type AddMeChatParticipants,
   CHAT_ENGAGEMENT_STATUSES,
@@ -41,18 +39,13 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
-import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, CallerNotSpeakerError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, CallerNotSpeakerError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
+import { createChat } from "./chat.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import {
-  assertChatVisibleInOrgOrNotFound,
-  inviteParticipantsToChat,
-  rejectedPrivateTargets,
-} from "./participant-invite.js";
-import { addChatParticipants } from "./participant-mode.js";
+import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "./participant-invite.js";
 import { extractSummary } from "./session.js";
 import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMembership } from "./watcher.js";
 
@@ -160,8 +153,8 @@ export async function getCallerEngagement(
 // ---------------------------------------------------------------------------
 //
 // The conversation-list filter popover splits chats by coarse-grained
-// origin — Manual / GitHub (one per integration, not one per entity
-// type within an integration). The per-entity GitHub granularity
+// origin — Manual / GitHub / Agent (one per integration/workflow, not one
+// per entity type within an integration). The per-entity GitHub granularity
 // (PR / Issue / Discussion / Commit) is preserved on the row via the
 // separate `entity_type` SELECT so the rail's leading icon can still
 // render the right glyph.
@@ -170,18 +163,19 @@ export async function getCallerEngagement(
 //   - `chatSourceSqlExpression` — CASE projected into the response row
 //     and shared with `listMeChatSourceCounts` for the aggregate GROUP BY.
 //
-// Invariant: every row that `chatSourceSqlExpression` labels `github`
-// MUST also match `sourceFilterSql("github")`, and vice versa. The
+// Invariant: every row that `chatSourceSqlExpression` labels `github` or
+// `agent` MUST also match the matching `sourceFilterSql(...)`, and vice versa. The
 // classifier collapses any GitHub metadata into `github` regardless of
 // the inner `entityType`, so a malformed row like
 // `{source:"github", entityType:"some-new-thing"}` still lands in the
 // `github` bucket — by design, since the popover-level filter doesn't
 // care about the entity sub-type.
 
-const KNOWN_NON_MANUAL_PREDICATE = sql`(c.metadata->>'source' = 'github')`;
+const KNOWN_NON_MANUAL_PREDICATE = sql`(c.metadata->>'source' IN ('github', 'agent'))`;
 
 const chatSourceSqlExpression = sql`CASE
     WHEN c.metadata->>'source' = 'github' THEN 'github'
+    WHEN c.metadata->>'source' = 'agent' THEN 'agent'
     ELSE 'manual'
   END`;
 
@@ -210,6 +204,8 @@ function sourceFilterSql(source: ChatSource): SQL {
       return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
     case "github":
       return sql`(c.metadata->>'source' = 'github')`;
+    case "agent":
+      return sql`(c.metadata->>'source' = 'agent')`;
   }
 }
 
@@ -619,91 +615,15 @@ export async function createMeChat(
   if (distinctIds.length === 0) {
     throw new BadRequestError("At least one non-self participant required");
   }
-
-  const allIds = [humanAgentId, ...distinctIds];
-  const found = await db
-    .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      visibility: agents.visibility,
-      managerId: agents.managerId,
-    })
-    .from(agents)
-    .where(inArray(agents.uuid, allIds));
-
-  if (found.length !== allIds.length) {
-    const foundSet = new Set(found.map((a) => a.uuid));
-    const missing = allIds.filter((id) => !foundSet.has(id));
-    throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
-  }
-  const crossOrg = found.filter((a) => a.organizationId !== organizationId);
-  if (crossOrg.length > 0) {
-    throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.uuid).join(", ")}`);
-  }
-
-  // Owner-exclusive for private targets (RFC §4.5, shared-owner reading).
-  // The route pins `humanAgentId = scope.humanAgentId`, so the caller's
-  // owning member is the route caller's own member; the predicate refuses
-  // any private target whose `managerId` doesn't match. Routing through
-  // the shared `rejectedPrivateTargets` keeps the rule in exactly one
-  // place — same discipline as `inviteParticipantsToChat` and
-  // `chat.ts::createChat`. See that predicate's comment for the strict-
-  // vs-shared history (PR #601 / #608).
-  const caller = found.find((a) => a.uuid === humanAgentId);
-  if (!caller) {
-    throw new BadRequestError("Caller agent not found in the chat's organization");
-  }
-  const rejected = rejectedPrivateTargets(
-    { agentId: humanAgentId, memberId: caller.managerId },
-    found
-      .filter((a) => a.uuid !== humanAgentId)
-      .map((a) => ({ uuid: a.uuid, visibility: a.visibility, managerId: a.managerId })),
-  );
-  if (rejected.length > 0) {
-    throw new ForbiddenError(
-      `Only the owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
-    );
-  }
-
-  // First Tree keeps a single group-chat model (see first-tree-context PR #281).
-  // New chats are always `group`, regardless of participant count — the
-  // historical `direct` write path is gone. Reads still derive 1:1 / agent-
-  // only behaviour from membership shape (see Task 1.F), so existing
-  // `type='direct'` rows continue to behave correctly.
-  const chatType = "group";
-
-  const chatId = randomUUID();
-  const topic = body.topic ?? null;
-
-  await db.transaction(async (tx) => {
-    await tx.insert(chats).values({
-      id: chatId,
-      organizationId,
-      type: chatType,
-      topic,
-    });
-
-    // v2: mode is decision-inert; `addChatParticipants` writes the constant
-    // `'mention_only'` for every speaker row. The helper also encloses the
-    // derived watcher recompute (so managers of any non-human participant
-    // land as watchers) and the silent-context backfill (no-op here — the
-    // chat has no messages yet). Don't call `recomputeChatWatchers` again.
-    // See proposals/hub-chat-message-v2-simplify-mode.20260520.md.
-    await addChatParticipants(
-      tx,
-      chatId,
-      allIds.map((agentId) => ({
-        agentId,
-        role: agentId === humanAgentId ? ("owner" as const) : ("member" as const),
-      })),
-    );
+  const result = await createChat(db, {
+    mode: "legacy-empty-web",
+    creatorAgentId: humanAgentId,
+    organizationId,
+    participantAgentIds: distinctIds,
+    topic: body.topic ?? null,
   });
-
-  // Fresh chat — no cache entry exists yet, but populate consistency
-  // for the rare case a `chat:message` dispatch races with creation.
-  invalidateChatAudience(chatId);
-  return { chatId };
+  invalidateChatAudience(result.id);
+  return { chatId: result.id };
 }
 
 // ---------------------------------------------------------------------------

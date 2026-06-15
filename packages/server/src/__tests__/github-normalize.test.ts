@@ -370,6 +370,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
       },
     });
     expect(event?.entity.type).toBe("discussion");
+    expect(event?.entity.key).toBe("owner/repo#9");
     expect(event?.kind).toBe("opened");
     expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
   });
@@ -382,6 +383,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
       discussion: { number: 9, title: "RFC", html_url: "https://github.com/owner/repo/discussions/9" },
       comment: { body: "yes", html_url: "https://github.com/owner/repo/discussions/9#discussioncomment-1" },
     });
+    expect(event?.entity).toMatchObject({ type: "discussion", key: "owner/repo#9" });
     expect(event?.kind).toBe("commented");
   });
 

@@ -4,12 +4,11 @@ import { resolveTurnDisposition } from "../handlers/claude-code-tui/turn-disposi
 const CLEAN = { aborted: false, timedOut: false, turnFailed: false, forwardFailed: false };
 
 describe("resolveTurnDisposition", () => {
-  it("a clean turn reports success, acks, forwards, and goes idle", () => {
+  it("a clean turn reports success, acks, and forwards", () => {
     expect(resolveTurnDisposition(CLEAN)).toEqual({
       status: "success",
       ack: true,
       forward: true,
-      runtimeState: "idle",
     });
   });
 
@@ -21,32 +20,29 @@ describe("resolveTurnDisposition", () => {
    * the no-ack decision — so the chat got a partial message while the entry
    * stayed un-acked and re-ran on reconnect, double-posting. A timeout must
    * report error, must NOT ack AND must NOT forward (so the redelivered retry
-   * is the single source of output), and must surface an error runtime state.
+   * is the single source of output).
    */
-  it("a timed-out turn reports error, does NOT ack, does NOT forward, and surfaces error state", () => {
+  it("a timed-out turn reports error and does NOT ack or forward", () => {
     expect(resolveTurnDisposition({ ...CLEAN, timedOut: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
     });
   });
 
-  it("a body failure reports error, acks + forwards (clean close, avoid storm), and surfaces error state", () => {
+  it("a body failure reports error, acks, and forwards (clean close, avoid storm)", () => {
     expect(resolveTurnDisposition({ ...CLEAN, turnFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "error",
     });
   });
 
-  it("a forward-only failure reports error and acks but keeps the session idle", () => {
+  it("a forward-only failure reports error but still consumes the turn", () => {
     expect(resolveTurnDisposition({ ...CLEAN, forwardFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "idle",
     });
   });
 
@@ -55,7 +51,6 @@ describe("resolveTurnDisposition", () => {
       status: "success",
       ack: false,
       forward: false,
-      runtimeState: "idle",
     });
   });
 
@@ -64,7 +59,6 @@ describe("resolveTurnDisposition", () => {
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
     });
   });
 

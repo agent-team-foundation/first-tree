@@ -1,34 +1,13 @@
-import { RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { STUCK_AFTER_MS } from "../../../components/connect-stuck-panel.js";
 import { Button } from "../../../components/ui/button.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
-import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
+import { asRuntimeProvider, PROVIDER_LABEL, runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, StatusRow } from "../flow-ui.js";
 import { ConnectTroubleshooting, ShowMeHow, TerminalGuide } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
-
-const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
-
-/**
- * Narrow a wire-string provider to the shared `RuntimeProvider` enum before
- * handing it to `PROVIDER_LABEL`. Mirrors the guard in
- * `clients/cards/shared/bound-agents-list.tsx` — recognised providers get the
- * shared display, anything truly unknown is dropped rather than leaked raw.
- */
-function asRuntimeProvider(provider: string): RuntimeProvider | null {
-  // Single `as` after an includes-guard, matching the accepted pattern in
-  // bound-agents-list / new-agent-dialog (the enum has no runtime type guard).
-  return KNOWN_RUNTIME_PROVIDERS.includes(provider) ? (provider as RuntimeProvider) : null;
-}
-
-/** Friendly runtime label, falling back to the raw id if it's not a known one. */
-function runtimeLabel(provider: string): string {
-  const known = asRuntimeProvider(provider);
-  return known ? PROVIDER_LABEL[known] : provider;
-}
 
 /**
  * Connect the computer the agent will run on. The user pastes a one-liner into
@@ -141,7 +120,7 @@ export function StepConnectComputer({ initialStuck = false }: { initialStuck?: b
             // Exactly one runtime detected — nothing to choose, so name it and
             // confirm the agent will use it.
             <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-              {COPY.connectComputer.runtimeReady(runtimeLabel(selectedRuntime ?? okRuntimes[0] ?? ""))}
+              {COPY.connectComputer.runtimeReady(runtimeProviderLabel(selectedRuntime ?? okRuntimes[0] ?? ""))}
             </p>
           ) : (
             // Two or more — count + a single-select list. Defaults to the

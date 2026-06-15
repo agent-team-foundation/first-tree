@@ -4,28 +4,17 @@ import { existsSync, readFileSync } from "node:fs";
  * Reader for the side-channel log written by `mocks/fake-claude-tui.mjs`.
  *
  * The fake binary appends a JSON object per event (start, ready, turn:start,
- * turn:end, askuser:opened, askuser:cancelled, escape:idle, eof, crash,
- * fatal). Tests assert on the timeline (e.g. "the AskUser menu was opened
- * and immediately cancelled", "two turns ran in this session") without
- * having to parse the transcript file format the handler also consumes.
+ * turn:end, escape:idle, eof, crash, fatal). Tests assert on the timeline
+ * (e.g. "two turns ran in this session", "the spawn argv carried the
+ * expected flags") without having to parse the transcript file format the
+ * handler also consumes.
  *
  * Path is chosen by the test fixture and exported into the daemon via
  * `FAKE_TUI_LOG_PATH`; one path per fixture instance keeps logs from
  * different agents disjoint.
  */
 export type FakeTuiEvent = {
-  kind:
-    | "start"
-    | "ready"
-    | "turn:start"
-    | "turn:end"
-    | "turn:hang"
-    | "askuser:opened"
-    | "askuser:cancelled"
-    | "escape:idle"
-    | "eof"
-    | "crash"
-    | "fatal";
+  kind: "start" | "ready" | "turn:start" | "turn:end" | "turn:hang" | "escape:idle" | "eof" | "crash" | "fatal";
   sessionId: string;
   resumeId: string | null;
   ts: string;

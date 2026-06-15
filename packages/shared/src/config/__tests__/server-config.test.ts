@@ -27,6 +27,12 @@ describe("server config", () => {
     return dir;
   }
 
+  function stubRequiredProductionConfig(): void {
+    vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
+    vi.stubEnv("FIRST_TREE_JWT_SECRET", "operator-jwt-secret");
+    vi.stubEnv("FIRST_TREE_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  }
+
   it("returns the initialized server config object", () => {
     const config = { channel: "dev" };
     setConfig(config);
@@ -102,6 +108,29 @@ describe("server config", () => {
     expect(config.rateLimit).toEqual({ max: 1234 });
   });
 
+  it("uses inbox delivery fairness defaults when the inbox group is active", () => {
+    expect(serverConfigSchema.inbox.shape.maxInFlightPerAgent.schema.parse(undefined)).toBe(8192);
+    expect(serverConfigSchema.inbox.shape.maxInFlightPerAgentChat.schema.parse(undefined)).toBe(8);
+  });
+
+  it("resolves inbox delivery fairness env overrides", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT", "4096");
+    vi.stubEnv("FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT", "12");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.inbox).toEqual({
+      maxInFlightPerAgent: 4096,
+      maxInFlightPerAgentChat: 12,
+    });
+  });
+
   it("ignores removed per-route rate-limit env vars", async () => {
     const configDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
@@ -137,5 +166,58 @@ describe("server config", () => {
 
     expect(config.secrets).toEqual({ jwtSecret, encryptionKey });
     expect(existsSync(join(configDir, "server.yaml"))).toBe(false);
+  });
+
+  it("does not enable feedback from LLM_API_KEY alone", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.feedback).toBeUndefined();
+  });
+
+  it("rejects half-configured feedback when the feedback repo activates the group", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/feedback\.githubToken/);
+  });
+
+  it("resolves feedback LLM settings only after feedback is configured", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
+    vi.stubEnv("HEARBACK_GITHUB_TOKEN", "ghp_feedback");
+    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
+    vi.stubEnv("LLM_MODEL", "gpt-test");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.feedback).toEqual({
+      repo: "agent-team-foundation/feedback",
+      githubToken: "ghp_feedback",
+      llm: {
+        apiKey: "sk-feedback-test",
+        model: "gpt-test",
+      },
+      trustProxyHeaders: false,
+    });
   });
 });

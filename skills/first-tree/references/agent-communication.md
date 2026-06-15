@@ -1,4 +1,4 @@
-# Agent-to-Agent Communication — `chat send` / `chat invite`
+# Agent-to-Agent Communication — `chat create` / `chat send` / `chat invite`
 
 The CLI for an agent talking to another agent (or to a chat). Read this
 after the top-level `first-tree` SKILL.md's Communication Principles
@@ -19,6 +19,52 @@ binary into every example; substitute when running:
 
 A running agent inherits its channel from the daemon that started it; the
 runtime sets `$FIRST_TREE_HOME` so you can check with `echo $FIRST_TREE_HOME`.
+
+## Creating Task Chats
+
+Use `chat create` when a real new task, offshoot, or review thread needs its
+own conversation boundary. It creates a task chat and writes the first message
+in one operation. A stage or role handoff inside the same task does not get a
+new chat: invite the next agent into the current chat, then send the handoff
+there.
+
+```bash
+first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent
+
+cat <<'EOF' | first-tree chat create --to alice --request \
+  --question "Ship the migration?" \
+  --option "Ship" --option "Hold"
+Migration 0021 drops the legacy column and cannot be rolled back cleanly.
+EOF
+```
+
+Rules:
+
+- `--to <name>` is required and repeatable. These recipients are added to the
+  new chat, recorded as the first message's mentions, and woken by that first
+  message.
+- `--with <name>` is repeatable. These participants are added as speakers for
+  context but are not mentioned or woken by the first message; they receive
+  only silent initial history.
+- `--request` makes the first message a tracked question and must have exactly
+  one `--to` human plus `--question`. The body is context; `--question` is the
+  bare ask.
+- A non-human agent may target itself with `--to`. In that case the server uses
+  the agent's manager human as the effective sender and records
+  `initiatedByAgentId` plus `effectiveSenderReason` in metadata.
+- `chat create` is not an empty-chat porcelain and not a courtesy-message tool.
+  Do not use it to acknowledge a wake-up or to create a blank room.
+- `chat create` is not the same-task handoff path. If the task is continuing
+  in a new phase (for example architect -> developer), keep the existing chat,
+  run `chat invite <agentName>` if needed, then `chat send <agentName> "..."`.
+- First Tree v1 does not make create idempotent: there is no operation id, DB
+  ledger, or CLI retry. If the result is unknown after a network/server error,
+  check `chat list` or the Web UI before running the command again.
+
+Use `chat send` for replies, status, handoffs, and tracked asks inside the
+current chat. Use `chat invite` when the right action is to add an agent to the
+current chat and continue there. Use `chat create` only when the work itself is
+splitting into a separate task conversation.
 
 ## Sending Messages
 
@@ -44,7 +90,8 @@ echo "long body" | first-tree chat send <name>
 
 ## Modes of `chat send`
 
-`chat send` is the primary channel for reaching teammates (humans included).
+`chat send` is the primary channel for reaching teammates (humans included)
+inside the current chat.
 Pick the mode by what you need back:
 
 | Mode | Command | Use for |
@@ -99,17 +146,23 @@ question is moot), explicitly resolve it with `chat send ... --answer <requestId
 ## Reaching another agent
 
 - **Already a member of this chat** → `chat send <name> "..."`. The
-  message lands in the current chat and the recipient is woken if they were
-  `@<name>`-mentioned (or — for two-speaker chats — implicitly).
+  message lands in the current chat and wakes the named recipient.
 - **Not a member of this chat** → first `chat invite <agentName>` to bring
   the agent in, then `chat send <name> "..."` like normal. First Tree keeps
   a single group-chat model — there is no side-conversation escape hatch.
   `@<name>` in content always resolves against the current chat's
   participants, so naming someone who is not a member is rejected.
+- **Same task, new stage or role** → stay in this chat. An architect to
+  developer or developer to reviewer handoff is a participant change plus a
+  message, not a new task boundary.
+- **New task, separate from this chat** → `chat create --to <agentName>
+  "..."`. This creates a new task chat and wakes the `--to` recipients with
+  the first message. Add observers or reviewers with `--with` only when they
+  need context but should not be woken immediately.
 
-The CLI addresses **participants by name** — agents and humans alike, resolved
-against the current chat. You cannot route by chat-id from the `chat send`
-command.
+For `chat send`, the CLI addresses **participants by name** — agents and
+humans alike, resolved against the current chat. You cannot route by chat-id
+from the `chat send` command.
 
 ## Content rules (anti-double-encode)
 
@@ -119,6 +172,13 @@ break markdown rendering downstream.
 - Pass content as a **raw string** — never `JSON.stringify` it first.
   Wrapping in outer quotes + `\n` escapes produces a literal
   `"@x ...\n..."` row that the UI cannot render as markdown.
+- Never write the body as a one-line quoted argument with `\n` escapes
+  (`chat send <name> "line1\n\n**line2**"`) — POSIX shells do not expand
+  `\n` inside quotes, so the literal backslash-n reaches the server and
+  the row renders as one long unformatted line. The CLI **rejects** this
+  shape (`ESCAPED_NEWLINES`, exit 2) before anything is sent; retry via
+  the stdin form below. Stdin bodies are not checked — pipe the body if
+  literal `\n` text is intentional.
 - For multi-line / markdown / special chars (quotes, `$`, backticks,
   newlines), use **stdin** with real newlines, plus `-f markdown`:
 
@@ -137,6 +197,10 @@ participant set applies to both the positional `<name>` argument of
 `chat send` and every `@<name>` token in the message body — there is no
 side-channel flag; non-member agents must be added with `chat invite` first.
 
+`chat create --to/--with` resolves names in the organization while creating a
+new participant set. After creation, normal `chat send` mention resolution is
+scoped to that new chat.
+
 ## When to use chat send
 
 See the SKILL.md Communication Principles' Decision guide table and the
@@ -152,7 +216,12 @@ See the SKILL.md Communication Principles' Decision guide table and the
 - **Agent** → `chat send <name> "..."`. After the handoff, continue only
   independent work; if their reply is the only remaining input, end the
   turn and wait to be woken. Do not poll status or escalate on delayed
-  replies alone.
+  replies alone. If that agent is not yet a participant and the work is still
+  the same task, invite them into the current chat first.
+- **New task chat** → `chat create --to <name> "..."`. Use only when the
+  work should live in a separate task chat. Do not use it for same-task stage
+  handoffs. `--to` wakes, `--with` adds silent context, and the command is
+  non-idempotent/no-retry.
 
 Your output stream is your reasoning trace — think, plan, narrate there
 freely. The list above is exhaustive for the *send* side: when nothing

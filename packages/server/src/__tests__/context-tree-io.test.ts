@@ -6,6 +6,7 @@ import {
   explainContextTreeIoDecision,
   recordFromSessionEvent,
   summarizeContextTreeIo,
+  summarizeContextTreeIoSkippedEvents,
 } from "../services/context-tree-io.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { appendEvent } from "../services/session-event.js";
@@ -467,5 +468,272 @@ describe("context-tree IO service", () => {
         bindingRepo: TREE_REPO,
       }),
     ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
+  });
+
+  it("derives Claude search and notebook IO at the granularity the refs carry", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const grep = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-grep",
+        name: "Grep",
+        args: { pattern: "owners", path: "/tmp/context-tree/members" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "members",
+            pathKind: "directory",
+          },
+        ],
+      },
+    });
+    const glob = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-glob",
+        name: "Glob",
+        args: { pattern: "**/*.md", path: "/tmp/context-tree" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "/",
+            pathKind: "repo",
+          },
+        ],
+      },
+    });
+    const notebookEdit = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-notebook-edit",
+        name: "NotebookEdit",
+        args: { notebook_path: "/tmp/context-tree/designs/spike.ipynb" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "designs/spike.ipynb",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    for (const sessionEvent of [grep, glob, notebookEdit]) {
+      await recordFromSessionEvent(app.db, {
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        runtimeProvider: "claude-code",
+        sessionEvent,
+      });
+    }
+
+    const grepRows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, grep.id));
+    expect(grepRows).toHaveLength(1);
+    expect(grepRows[0]).toMatchObject({
+      action: "read",
+      source: "claude_read_tool",
+      targetKind: "directory",
+      targetPath: "members",
+    });
+
+    const globRows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, glob.id));
+    expect(globRows[0]).toMatchObject({ action: "read", targetKind: "repo", targetPath: "/" });
+
+    const notebookRows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, notebookEdit.id));
+    expect(notebookRows[0]).toMatchObject({
+      action: "write",
+      source: "claude_write_tool",
+      targetPath: "designs/spike.ipynb",
+    });
+
+    // A search call whose client attached no refs (no explicit path argument)
+    // stays unrecordable — fail-safe under-counting, not cwd guessing.
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu-grep-norefs", name: "Grep", args: { pattern: "owners" }, status: "ok" },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "no_tool_file_refs" });
+  });
+
+  it("summarizes skipped context-tree IO candidates by reason", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "assistant_text",
+      payload: { text: "not a tool call" },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-no-refs",
+        name: "Bash",
+        args: { command: "cat /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-repo-mismatch",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: "https://github.com/acme/other.git",
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-valid",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7);
+
+    expect(skipped.totalEventCount).toBe(3);
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_tool_file_refs", eventCount: 1 },
+      { reason: "ref_repo_mismatch", eventCount: 1 },
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(skipped.reasons.find((row) => row.reason === "unsupported_shell_command")).toMatchObject({
+      agentCount: 1,
+      runtimeProviders: [{ runtimeProvider: "claude-code", eventCount: 1 }],
+      toolNames: [{ toolName: "Bash", eventCount: 1 }],
+    });
+
+    const io = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
+    expect(io.skipped).toEqual(skipped);
+  });
+
+  it("records git status delta refs as synthetic writes for unsupported shell commands", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const shellWrite = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write",
+        name: "Bash",
+        args: { command: "cat <<'EOF' > context-tree/NODE.md\nupdated\nEOF" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "git_status_delta",
+            localPath: "/context-tree/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+            metadata: {
+              origin: "spoofed_origin",
+              localPath: "/spoofed/NODE.md",
+              toolName: "Bash",
+              toolUseId: "tu-shell-write",
+              gitStatus: " M",
+            },
+          },
+        ],
+      },
+    });
+
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "claude-code",
+      sessionEvent: shellWrite,
+    });
+
+    const rows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, shellWrite.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "write",
+      source: "git_status_delta",
+      targetKind: "file",
+      targetPath: "NODE.md",
+      metadata: {
+        origin: "git_status_delta",
+        localPath: "/context-tree/NODE.md",
+        toolName: "Bash",
+        toolUseId: "tu-shell-write",
+        gitStatus: " M",
+      },
+    });
+
+    const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
+    expect(summary.recentEvents[0]).toMatchObject({
+      action: "write",
+      source: "git_status_delta",
+      targetPath: "NODE.md",
+    });
   });
 });

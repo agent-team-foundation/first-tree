@@ -4,7 +4,7 @@
  * Pins two pieces of behavior:
  *
  *   1. `listMeChats({ origin })` filters down to one or more ChatSource
- *      values — `manual` / `github` — by inspecting `chats.metadata`
+ *      values — `manual` / `github` / `agent` — by inspecting `chats.metadata`
  *      (no schema migration; the field already existed and was only
  *      written by the github-entity-chat path). Phase C collapsed the
  *      GitHub entity types (PR / Issue / Discussion / Commit) into a
@@ -88,11 +88,11 @@ describe("conversation-list source tags", () => {
     return ids as { -readonly [K in keyof Specs]: string };
   }
 
-  it("listMeChats filters by source.manual / github", async () => {
+  it("listMeChats filters by source.manual / github / agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    const [manualChatId, issueChatId, prChatId] = await seedChats(
+    const [manualChatId, issueChatId, prChatId, agentChatId] = await seedChats(
       app,
       admin.organizationId,
       admin.memberId,
@@ -107,16 +107,20 @@ describe("conversation-list source tags", () => {
           metadata: { source: "github", entityType: "pull_request", entityKey: "owner/repo#2" },
           topic: "pr chat",
         },
+        {
+          metadata: { source: "agent", initiatedByAgentId: "agent-self" },
+          topic: "agent-created task chat",
+        },
       ],
     );
 
-    // Default (no source param) returns all three.
+    // Default (no source param) returns all chats across sources.
     const all = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
     });
-    expect(all.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId].sort());
+    expect(all.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId, agentChatId].sort());
 
     // manual: must NOT leak github chats — that was the regression
     // risk when this filter was first wired.
@@ -145,6 +149,16 @@ describe("conversation-list source tags", () => {
     const issueRow = githubOnly.rows.find((r) => r.chatId === issueChatId);
     expect(prRow?.entityType).toBe("pull_request");
     expect(issueRow?.entityType).toBe("issue");
+
+    const agentOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "active",
+      origin: ["agent"],
+    });
+    expect(agentOnly.rows.map((r) => r.chatId)).toEqual([agentChatId]);
+    expect(agentOnly.rows[0]?.source).toBe("agent");
+    expect(agentOnly.rows[0]?.entityType).toBeNull();
   });
 
   it("projects createdByMe from the caller's chat membership role", async () => {
@@ -201,22 +215,32 @@ describe("conversation-list source tags", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    const [, , prA, prB] = await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
-      { metadata: {}, topic: "m1" },
-      { metadata: {}, topic: "m2" },
-      {
-        metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#10" },
-        topic: "pr1",
-      },
-      {
-        metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#11" },
-        topic: "pr2",
-      },
-      {
-        metadata: { source: "github", entityType: "issue", entityKey: "o/r#12" },
-        topic: "is1",
-      },
-    ]);
+    const [, , prA, prB, , agentTask] = await seedChats(
+      app,
+      admin.organizationId,
+      admin.memberId,
+      admin.humanAgentUuid,
+      [
+        { metadata: {}, topic: "m1" },
+        { metadata: {}, topic: "m2" },
+        {
+          metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#10" },
+          topic: "pr1",
+        },
+        {
+          metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#11" },
+          topic: "pr2",
+        },
+        {
+          metadata: { source: "github", entityType: "issue", entityKey: "o/r#12" },
+          topic: "is1",
+        },
+        {
+          metadata: { source: "agent", initiatedByAgentId: "agent-self" },
+          topic: "agent-task",
+        },
+      ],
+    );
 
     // Plant unread mentions on TWO PR chats with different counts.
     // `unreadChatCount` is the count of unread chats (semantics match the
@@ -225,6 +249,7 @@ describe("conversation-list source tags", () => {
     await app.db.insert(chatUserState).values([
       { chatId: prA, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
       { chatId: prB, agentId: admin.humanAgentUuid, unreadMentionCount: 3 },
+      { chatId: agentTask, agentId: admin.humanAgentUuid, unreadMentionCount: 2 },
     ]);
 
     const { counts } = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
@@ -236,6 +261,7 @@ describe("conversation-list source tags", () => {
     // single `github` bucket. Two PRs (both unread) + one Issue (read)
     // all count under `github` — 3 chats, 2 unread.
     expect(counts.github).toEqual({ chatCount: 3, unreadChatCount: 2 });
+    expect(counts.agent).toEqual({ chatCount: 1, unreadChatCount: 1 });
   });
 
   it("listMeChatSourceCounts: empty workspace still surfaces manual at zero", async () => {

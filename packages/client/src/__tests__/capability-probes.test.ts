@@ -7,10 +7,12 @@ import {
 } from "../runtime/capabilities/claude-code.js";
 import { parseTmuxVersion, probeClaudeCodeTuiCapability } from "../runtime/capabilities/claude-code-tui.js";
 import {
+  type CodexBinaryResolution,
   classifyDoctorReport,
   parseDoctorReport,
   probeCodexCapability,
   resolveBundledCodexBinary,
+  resolveCodexRuntimeBinary,
 } from "../runtime/capabilities/codex.js";
 import {
   type AuthPrecheckOutcome,
@@ -685,16 +687,27 @@ describe("parseDoctorReport / classifyDoctorReport", () => {
 });
 
 describe("probeCodexCapability", () => {
-  const located = async (): Promise<{ ok: true; binary: string }> => ({ ok: true, binary: "/vendor/bin/codex" });
-  const verifyOk = async (): Promise<{ ok: true; version: string | null }> => ({ ok: true, version: "0.134.0" });
+  const bundled = async (): Promise<CodexBinaryResolution> => ({
+    ok: true,
+    binary: "/vendor/bin/codex",
+    runtimeSource: "bundled",
+    runtimePath: null,
+    version: "0.134.0",
+  });
+  const onPath = async (): Promise<CodexBinaryResolution> => ({
+    ok: true,
+    binary: "/usr/local/bin/codex",
+    runtimeSource: "path",
+    runtimePath: "/usr/local/bin/codex",
+    version: "0.134.0",
+  });
   const loggedIn = async (): Promise<AuthPrecheckOutcome> => ({ ok: true, method: "auth_json" });
   const smokeOk = async (): Promise<SmokeOutcome> => ({ state: "ok", version: "0.134.0" });
 
-  it("`ok` only after the doctor smoke; binary is the SDK's bundled vendor binary", async () => {
+  it("`ok` only after the doctor smoke; reports the bundled runtime source", async () => {
     const runSmoke = vi.fn(smokeOk);
     const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: verifyOk,
+      resolveRuntimeBinary: bundled,
       loginStatus: loggedIn,
       runSmoke,
       env: {},
@@ -706,39 +719,51 @@ describe("probeCodexCapability", () => {
       authMethod: "auth_json",
       sdkVersion: "0.134.0",
       probeKind: "launch",
+      runtimeSource: "bundled",
+      runtimePath: null,
     });
+    // The smoke must target the binary the runtime would spawn.
     expect(runSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
   });
 
-  it("`missing` when the bundled binary cannot be located, with the chain's own error", async () => {
-    const entry = await probeCodexCapability({
-      resolveBinary: async () => ({ ok: false, error: "@openai/codex-sdk failed to resolve: not installed" }),
-      env: {},
-    });
-    expect(entry.state).toBe("missing");
-    expect(entry.error).toContain("@openai/codex-sdk failed to resolve");
-  });
-
-  it("`missing` when the located binary fails its real `--version` launch", async () => {
-    const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: async () => ({ ok: false, error: "codex --version: spawn EACCES" }),
-      env: {},
-    });
-    expect(entry.state).toBe("missing");
-    expect(entry.error).toBe("codex --version: spawn EACCES");
-  });
-
-  it("`unauthenticated` when `codex login status` fails — no smoke spent", async () => {
+  it("reports the system-PATH fallback source + path when the bundle is missing", async () => {
     const runSmoke = vi.fn(smokeOk);
     const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: verifyOk,
+      resolveRuntimeBinary: onPath,
+      loginStatus: loggedIn,
+      runSmoke,
+      env: {},
+    });
+    expect(entry).toMatchObject({
+      state: "ok",
+      runtimeSource: "path",
+      runtimePath: "/usr/local/bin/codex",
+    });
+    expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/codex");
+  });
+
+  it("`missing` when neither bundled nor PATH codex resolves, with the binary-missing message", async () => {
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: async () => ({
+        ok: false,
+        error: "Codex runtime binary is missing on this machine. Original error: unable to locate codex CLI binaries.",
+      }),
+      env: {},
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toContain("Codex runtime binary is missing");
+  });
+
+  it("runtime source is reported even on the unauthenticated path (no smoke spent)", async () => {
+    const runSmoke = vi.fn(smokeOk);
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: bundled,
       loginStatus: async () => ({ ok: false, error: "`codex login status`: Not logged in" }),
       runSmoke,
       env: {},
     });
-    expect(entry.state).toBe("unauthenticated");
+    expect(entry).toMatchObject({ state: "unauthenticated", runtimeSource: "bundled" });
     expect(entry.error).toContain("Not logged in");
     expect(runSmoke).not.toHaveBeenCalled();
   });
@@ -746,8 +771,7 @@ describe("probeCodexCapability", () => {
   it("CODEX_API_KEY short-circuits the login-status precheck (api_key method)", async () => {
     const loginStatus = vi.fn(loggedIn);
     const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: verifyOk,
+      resolveRuntimeBinary: bundled,
       loginStatus,
       runSmoke: smokeOk,
       env: { CODEX_API_KEY: "ck-test" },
@@ -759,8 +783,7 @@ describe("probeCodexCapability", () => {
 
   it("a logged-in precheck does NOT yield ok — the doctor's 401 still wins", async () => {
     const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: verifyOk,
+      resolveRuntimeBinary: bundled,
       loginStatus: loggedIn,
       runSmoke: async () => ({
         state: "unauthenticated",
@@ -774,8 +797,7 @@ describe("probeCodexCapability", () => {
 
   it("an old codex without `doctor` degrades to a weaker ok instead of failing", async () => {
     const entry = await probeCodexCapability({
-      resolveBinary: located,
-      verifyBinary: verifyOk,
+      resolveRuntimeBinary: bundled,
       loginStatus: loggedIn,
       runSmoke: async () => ({ state: "ok", degraded: true }),
       env: {},
@@ -786,13 +808,25 @@ describe("probeCodexCapability", () => {
   });
 });
 
-describe("resolveBundledCodexBinary (real node_modules)", () => {
+describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modules)", () => {
   it("replays the SDK's resolution chain to an existing vendor binary", async () => {
     // The repo depends on @openai/codex-sdk with optional platform packages,
     // so on any supported dev/CI machine the chain should land on a real file.
     const res = await resolveBundledCodexBinary();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.binary).toMatch(/[/\\]codex(\.exe)?$/);
+  });
+
+  it("resolves a launchable runtime binary and reports its source (bundled-first)", async () => {
+    // End-to-end guard for the integrated resolver: on dev/CI the bundled
+    // vendor binary exists and launch-verifies, so the source is "bundled".
+    const res = await resolveCodexRuntimeBinary();
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.runtimeSource).toBe("bundled");
+      expect(res.binary).toMatch(/[/\\]codex(\.exe)?$/);
+      expect(res.runtimePath).toBeNull();
+    }
   });
 });
 

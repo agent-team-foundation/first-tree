@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type {
   EffortLevel,
   McpServerConfig,
@@ -22,7 +22,11 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import {
+  type ContextTreeGitWriteTracker,
+  createContextTreeGitWriteTracker,
+} from "../runtime/context-tree-git-status.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -312,18 +316,26 @@ function extractToolResultText(content: unknown): string {
   return parts.join("\n");
 }
 
-/**
- * Tools whose `file_path` argument names a single file. Search tools
- * (Grep/Glob) are excluded because they need server-side command/query
- * semantics before they can be treated as an explicit file IO fact.
- */
+/** Tools whose `file_path` / `notebook_path` argument names a single file. */
 const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
-const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
+const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+/**
+ * Search/discovery tools scan a search root rather than open one file. They
+ * carry directory-level evidence (the explicit `path` argument), deliberately
+ * NOT one ref per matched file — a recursive search "touching" every node
+ * would drown the Context tab feed in noise.
+ */
+const TREE_SEARCH_TOOL_NAMES: ReadonlySet<string> = new Set(["Grep", "Glob"]);
 
-/** Extract a string `file_path` argument from a tool_use input, if present. */
+/**
+ * Extract a string `file_path` argument from a tool_use input, if present.
+ * Notebook tools (NotebookRead / NotebookEdit) spell the same argument
+ * `notebook_path`; accept either so notebook IO carries refs too.
+ */
 function readFilePathArg(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
-  const fp = (input as { file_path?: unknown }).file_path;
+  const record = input as { file_path?: unknown; notebook_path?: unknown };
+  const fp = record.file_path ?? record.notebook_path;
   return typeof fp === "string" ? fp : null;
 }
 
@@ -337,6 +349,11 @@ function readFilePathArg(input: unknown): string | null {
  * Invariant: both `filePath` and `contextTreePath` are expected to be
  * absolute. A relative `filePath` will not match the absolute root and returns
  * null — i.e. it silently under-counts (fails safe) rather than mis-attributing.
+ *
+ * Callers that may receive symlink aliases of the tree (the W1 cloud layout
+ * exposes the shared clone as a `<workspace>/context-tree` link) must pass
+ * both arguments through `canonicalizeFsPath` first — this function compares
+ * strings only.
  */
 export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
   if (!filePath || !contextTreePath) return null;
@@ -353,11 +370,74 @@ function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTree
   if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  const repoRelativePath = contextTree?.path ? treeNodePathOf(filePath, contextTree.path) : null;
+  // Containment (canonical, symlink-safe) or repo identity (tree PR
+  // worktrees — any checkout whose origin remote IS the Context Tree repo).
+  // Relative paths keep the fail-safe null mapping — canonicalizing them
+  // would resolve against the daemon's cwd and risk mis-attribution.
+  const repoRelativePath =
+    contextTree && isAbsolute(filePath)
+      ? resolveContextTreeRelativePath(filePath, {
+          contextTreePath: contextTree.path,
+          contextTreeRepoUrl: contextTree.repoUrl,
+        })
+      : null;
   return {
     origin: "tool_arg",
     localPath: filePath,
     pathKind: "file",
+    ...(contextTree?.repoUrl && repoRelativePath !== null
+      ? {
+          repoUrl: contextTree.repoUrl,
+          ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
+          repoRelativePath,
+        }
+      : {}),
+  };
+}
+
+function statIsFile(absolutePath: string): boolean {
+  try {
+    return statSync(absolutePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Extract a string `path` argument from a search tool_use input, if present. */
+function searchPathArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const p = (input as { path?: unknown }).path;
+  return typeof p === "string" ? p : null;
+}
+
+/**
+ * Directory-level ref for a Grep/Glob call whose explicit `path` argument
+ * targets the Context Tree. Calls without a `path` argument default to the
+ * session cwd (the workspace root, not the tree) and carry no ref — fail-safe
+ * under-counting over mis-attribution, same stance as `toolFileRef`.
+ */
+function searchToolFileRef(
+  toolName: string,
+  input: unknown,
+  contextTree: ContextTreeBinding | undefined,
+  cwd: string | null | undefined,
+): ToolFileRef | null {
+  if (!TREE_SEARCH_TOOL_NAMES.has(toolName)) return null;
+  const rawPath = searchPathArg(input);
+  if (rawPath === null) return null;
+  if (!isAbsolute(rawPath) && !cwd) return null;
+  const absolutePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? "", rawPath);
+  const repoRelativePath = contextTree
+    ? resolveContextTreeRelativePath(absolutePath, {
+        contextTreePath: contextTree.path,
+        contextTreeRepoUrl: contextTree.repoUrl,
+      })
+    : null;
+  return {
+    origin: "tool_arg",
+    localPath: absolutePath,
+    // Grep accepts a file as its search root; everything else is a directory.
+    pathKind: repoRelativePath === "/" ? "repo" : statIsFile(absolutePath) ? "file" : "directory",
     ...(contextTree?.repoUrl && repoRelativePath !== null
       ? {
           repoUrl: contextTree.repoUrl,
@@ -382,6 +462,8 @@ function toolFileRefs(
 ): ToolFileRef[] {
   const directRef = toolFileRef(toolName, input, contextTree);
   if (directRef) return [directRef];
+  const searchRef = searchToolFileRef(toolName, input, contextTree, cwd);
+  if (searchRef) return [searchRef];
   if (toolName !== "Bash" || !cwd) return [];
   const command = readCommandArg(input);
   if (command === null) return [];
@@ -411,7 +493,7 @@ export type ToolCallProcessor = {
 export function createToolCallProcessor(
   emit: (event: SessionEvent) => void,
   contextTree?: ContextTreeBinding,
-  options: { cwd?: string | null } = {},
+  options: { cwd?: string | null; gitWriteTracker?: ContextTreeGitWriteTracker } = {},
 ): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
@@ -423,7 +505,17 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    if (status === "error") options.gitWriteTracker?.captureBaseline();
     const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
+    const gitStatusRefs =
+      status === "ok"
+        ? (options.gitWriteTracker?.refsForSuccessfulToolCall({
+            toolName: entry.name,
+            toolUseId: entry.toolUseId,
+            existingRefs: refs,
+          }) ?? [])
+        : [];
+    const allRefs = [...refs, ...gitStatusRefs];
 
     emit({
       kind: "tool_call",
@@ -434,7 +526,7 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(refs.length > 0 ? { toolFileRefs: refs } : {}),
+        ...(allRefs.length > 0 ? { toolFileRefs: allRefs } : {}),
       },
     });
 
@@ -448,6 +540,7 @@ export function createToolCallProcessor(
       if (type === "assistant") {
         for (const block of extractContentBlocks(message)) {
           if (isToolUseBlock(block)) {
+            options.gitWriteTracker?.captureBaseline();
             pending.set(block.id, {
               toolUseId: block.id,
               name: block.name,
@@ -831,22 +924,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Single helper for "turn closed → ack the pending inbox message AND
+   * Single helper for "turn closed → finish the pending inbox message AND
    * drop the replay stash". The two operations are paired everywhere a
    * turn finishes (success / sniff-permanent / forward-error / no-result /
    * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
    * one call keeps the invariant "stash lives only as long as the turn
    * still might need a replay" enforced in one place. Use the raw
-   * `markMessagesCompleted(message)` directly for per-message terminal
+   * `finishTurn(message, ...)` directly for per-message terminal
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
-  function ackTurnClose(sessionCtx: SessionContext): void {
+  async function ackTurnClose(sessionCtx: SessionContext, status: "success" | "error"): Promise<void> {
     const message = pendingAckMessages.shift();
     if (message) {
-      sessionCtx.markMessagesCompleted(message);
-    } else {
-      sessionCtx.markCompleted();
+      await sessionCtx.finishTurn(message, { status, terminal: true });
     }
     markCurrentPendingMessageConsumed(sessionCtx);
     stashedSdkMessage = null;
@@ -886,7 +977,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // entry with an SDK result. Ack here — re-handling on
       // redelivery would re-hit the same conversion error
       // (permanent failure semantics, design §4).
-      sessionCtx.markMessagesCompleted(message);
+      await sessionCtx.finishTurn(message, { status: "error", terminal: true, errorKind: "deterministic" });
     }
   }
 
@@ -1072,7 +1163,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         repoUrl: contextTreeRepoUrl,
         branch: contextTreeBranch,
       },
-      { cwd },
+      {
+        cwd,
+        gitWriteTracker: createContextTreeGitWriteTracker({
+          contextTreePath,
+          contextTreeRepoUrl,
+          contextTreeBranch,
+          log: (message) => sessionCtx.log(message),
+        }),
+      },
     );
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted
@@ -1094,11 +1193,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (!currentQuery) return;
 
         try {
-          sessionCtx.setRuntimeState("working");
-
           for await (const message of currentQuery) {
             // Every message refreshes lastActivity to prevent idle timeout
-            sessionCtx.touch();
+            sessionCtx.recordProviderActivity();
 
             toolCallProcessor.onMessage(message);
 
@@ -1176,7 +1273,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    ackTurnClose(sessionCtx);
+                    await ackTurnClose(sessionCtx, "error");
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1193,7 +1290,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      ackTurnClose(sessionCtx);
+                      await ackTurnClose(sessionCtx, "success");
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -1218,7 +1315,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      ackTurnClose(sessionCtx);
+                      await ackTurnClose(sessionCtx, "error");
                     }
                   }
                 } else {
@@ -1226,7 +1323,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // Same reset rationale as the forward-success branch above.
                   retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  ackTurnClose(sessionCtx);
+                  await ackTurnClose(sessionCtx, "success");
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -1243,9 +1340,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                ackTurnClose(sessionCtx);
+                await ackTurnClose(sessionCtx, "error");
               }
-              sessionCtx.setRuntimeState("idle");
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
               // working, while suppressing a duplicate hint when the next
@@ -1257,7 +1353,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               }
             }
           }
-          sessionCtx.setRuntimeState("idle");
           return;
         } catch (err) {
           // Process crash, OOM, or unexpected termination
@@ -1283,9 +1378,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // would just go quiet.
             //
             // Wrap the emits so a broken `onSessionEvent` callback can't
-            // short-circuit the `setRuntimeState("error")` call below —
-            // if that one is skipped the SessionManager keeps the slot
-            // counted as `working` and never reclaims it.
+            // short-circuit turn cleanup below.
             try {
               const preview = errMsg.slice(0, 800);
               const reason = claudeSessionId
@@ -1298,13 +1391,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 `Failed to emit retry-exhaustion error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Ack the in-flight entry for this turn. Without this the row
             // stays `delivered` server-side forever: the in-process
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await ackTurnClose(sessionCtx, "error");
             return;
           }
 
@@ -1337,11 +1429,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           } catch (resumeErr) {
             const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
             sessionCtx.log(`Auto-resume failed: ${resumeMsg}`);
-            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
-            // `working` would block the SessionManager's idle-suspend grace
-            // window from ever firing on this session, so the slot would
-            // never be reclaimed. Wrap the emits defensively so the
-            // setRuntimeState call still runs if the callback throws.
+            // Mirror the MAX_RETRIES branch above and close the turn
+            // deterministically so the slot can be reclaimed.
             try {
               sessionCtx.emitEvent({
                 kind: "error",
@@ -1353,11 +1442,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 `Failed to emit auto-resume error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await ackTurnClose(sessionCtx, "error");
             return;
           }
         }

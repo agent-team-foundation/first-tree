@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ClientOrgMismatchError } from "@first-tree/client";
 import {
@@ -30,10 +31,11 @@ import {
   migrateLocalAgentDirs,
   promptUpdate,
   refreshServerUpdateTarget,
+  rotateClientIdWithBackup,
   saveCredentials,
 } from "../core/index.js";
 import { print } from "../core/output.js";
-import { cleanupStaleAliasesAfterClaim, postClaim } from "./_shared/account-transfer.js";
+import { cleanupStaleLocalAliases } from "./_shared/account-transfer.js";
 import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "./_shared/connect-token.js";
 
 async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "cancel"> {
@@ -59,8 +61,9 @@ async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "
   print.line(`       Server:            ${existing.serverUrl}\n`);
   print.line(`       Background service: ${serviceLine}\n\n`);
   print.line("     Replacing only affects THIS computer. Server-side data is untouched.\n");
-  print.line("     If the other account legitimately still owns this machine and you want to\n");
-  print.line("     take it over (unpinning their agents), re-run with `--override` instead.\n\n");
+  print.line("     To take this machine over for your account, re-run with `--override`: it\n");
+  print.line("     registers a fresh client identity here. The other account keeps its own\n");
+  print.line("     client entry and agents server-side (they show offline until removed).\n\n");
 
   const choice = await select<"replace" | "cancel">({
     message: "How would you like to continue?",
@@ -71,6 +74,13 @@ async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "
   });
 
   return choice === "replace" ? "proceed" : "cancel";
+}
+
+/** Owning user id (`sub`) from a server-issued JWT, or null if undecodable. */
+function readOwnerSub(token: string | undefined): string | null {
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.sub === "string" ? payload.sub : null;
 }
 
 async function exchangeToken(url: string, token: string): Promise<{ accessToken: string; refreshToken: string }> {
@@ -100,17 +110,17 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
  *     fresh), and (unless `--no-start`) installs+starts the background
  *     daemon.
  *
- *   - **`--override`**: opts out of the "replace or cancel" prompt and
- *     POSTs to `/clients/:id/claim`, transferring ownership of this
- *     machine to the new member (unpinning the previous owner's agents).
- *     Replaces the old `client claim` top-level command.
+ *   - **`--override`**: opts out of the "replace or cancel" prompt, rotates
+ *     the machine's local client identity (client.yaml backed up), and
+ *     registers a fresh clientId under the new account. The previous
+ *     account's client row and pinned agents are left untouched server-side.
  */
 export function registerLoginCommand(program: Command): void {
   program
     .command("login <token>")
     .description("Sign this computer into First Tree using a token from the web console")
     .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
-    .option("--override", "Transfer ownership of this client from a different account (replaces `client claim`)")
+    .option("--override", "Take over this machine from a different account by registering a fresh client identity")
     .action(async (token: string, options: { start?: boolean; override?: boolean }) => {
       try {
         let url: string;
@@ -127,8 +137,9 @@ export function registerLoginCommand(program: Command): void {
         const newMemberId = typeof payload?.memberId === "string" ? payload.memberId : null;
 
         // `--override` skips the local replace-or-cancel prompt because the
-        // operator has explicitly asked to take over the machine. The
-        // ownership-transfer POST below is the server-side counterpart.
+        // operator has explicitly asked to take over the machine. The local
+        // identity rotation below is what actually performs the takeover —
+        // there is no server-side transfer.
         if (!options.override && newMemberId) {
           const decision = await promptReplaceOrCancel(newMemberId);
           if (decision === "cancel") {
@@ -137,30 +148,64 @@ export function registerLoginCommand(program: Command): void {
           }
         }
 
+        // Capture the previous owner BEFORE saveCredentials overwrites the
+        // file, so we can tell a genuine cross-account takeover from a
+        // same-account reauth/retry.
+        const previousOwnerSub = readOwnerSub(loadCredentials()?.accessToken);
+
         const tokens = await exchangeToken(url, token);
+        const newOwnerSub = readOwnerSub(tokens.accessToken);
 
         const clientConfigPath = join(defaultConfigDir(), "client.yaml");
+        // Captured before setConfigValue creates the file on fresh machines —
+        // only a pre-existing client.yaml carries an identity worth rotating.
+        const hadExistingClientConfig = existsSync(clientConfigPath);
+
+        // Rotate the client identity ONLY on a real cross-account handover.
+        // Same-account `--override` (a reauth or retry) must stay idempotent
+        // for the client identity: abandoning a clientId we still own would
+        // orphan the server row AND make our own local agent aliases look
+        // `pinned-elsewhere`, deleting their mirrors during cleanup below.
+        // Treat an undecodable previous owner as "unknown" → rotate, since we
+        // can't prove it's the same account.
+        const crossAccountOverride =
+          options.override === true && (previousOwnerSub === null || previousOwnerSub !== newOwnerSub);
+
         setConfigValue(clientConfigPath, "server.url", url);
         print.line(`\n  ✓ Server: ${url}\n`);
 
         saveCredentials({ ...tokens, serverUrl: url });
         print.line("  ✓ Authenticated\n");
 
+        // Cross-account `--override`: abandon the machine's previous client
+        // identity instead of transferring it. There is no server-side
+        // ownership transfer (a clientId is org-visible, so it must not double
+        // as a transfer capability); rotating the local id and registering
+        // fresh achieves the same handover. The previous account's client row
+        // and its pinned agents stay untouched server-side — they show offline
+        // until that account removes them.
+        let rotatedFromId: string | null = null;
+        if (crossAccountOverride && hadExistingClientConfig) {
+          const rotation = rotateClientIdWithBackup(defaultConfigDir());
+          rotatedFromId = rotation.oldId;
+          print.line("  ✓ Rotated local client identity for account takeover\n");
+          print.line(`      previous id: ${rotation.oldId ?? "(unset)"} (backup: ${rotation.backupPath})\n`);
+        }
+
         resetConfig();
         resetConfigMeta();
         const config = await initConfig({ schema: clientConfigSchema, role: "client" });
         print.line(`  ✓ Computer registered (id: ${config.client.id})\n`);
 
-        // `--override` mode: ownership transfer + stale-alias cleanup. Folds
-        // in what the retired `client claim` command did. `--override` was
-        // the explicit consent — propagate it to the cleanup prompt so the
-        // single flag covers both steps.
-        if (options.override) {
-          print.line("\n  Transferring ownership of this machine to your account.\n");
-          print.line("  This will unpin the previous owner's agents from this client.\n\n");
-          const result = await postClaim(config.server.url, config.client.id);
-          print.line(`  ✓ Ownership transferred. ${result.unpinnedAgentCount} agent(s) unpinned.\n`);
-          await cleanupStaleAliasesAfterClaim({
+        // Stale-alias cleanup is meaningful only after a rotation — the local
+        // aliases are "stale" precisely because they were pinned to the
+        // now-abandoned clientId. A same-account override leaves the clientId
+        // unchanged, so there is nothing stale to prune.
+        if (rotatedFromId) {
+          print.line("\n  This machine now runs under a fresh client identity.\n");
+          print.line("  The previous account keeps its client entry and agents server-side;\n");
+          print.line("  they appear offline until that account cleans them up.\n\n");
+          await cleanupStaleLocalAliases({
             serverUrl: config.server.url,
             clientId: config.client.id,
             nonInteractive: true,

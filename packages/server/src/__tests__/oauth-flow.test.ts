@@ -330,16 +330,28 @@ describe("GitHub OAuth invite-only single-org entry gate", () => {
 describe("OAuth callback rejects malformed state", () => {
   const getApp = useTestApp();
 
-  it("returns 401 when state JWT is gibberish", async () => {
+  // The /callback route is a full-page browser navigation, so state
+  // rejections redirect to the SPA's friendly error surface (the most
+  // common trigger is a user spending >10min on GitHub's repo picker,
+  // expiring the 10-minute state JWT) instead of stranding the browser
+  // on a raw JSON 401.
+  function expectStateRejectedRedirect(res: { statusCode: number; headers: { location?: string } }) {
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toContain("/auth/github/complete#");
+    expect(res.headers.location).toContain("error=state-expired");
+    expect(res.headers.location).not.toContain("access=");
+  }
+
+  it("redirects to the SPA error surface when state JWT is gibberish", async () => {
     const app = getApp();
     const res = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/callback?code=abc&state=not-a-jwt",
     });
-    expect(res.statusCode).toBe(401);
+    expectStateRejectedRedirect(res);
   });
 
-  it("returns 401 when state cookie is absent", async () => {
+  it("redirects to the SPA error surface when state cookie is absent", async () => {
     const app = getApp();
     // Sign a real state token but omit the cookie — should fail nonce check.
     const { signOAuthState } = await import("../services/oauth-state.js");
@@ -348,10 +360,10 @@ describe("OAuth callback rejects malformed state", () => {
       method: "GET",
       url: `/api/v1/auth/github/callback?code=abc&state=${token}`,
     });
-    expect(res.statusCode).toBe(401);
+    expectStateRejectedRedirect(res);
   });
 
-  it("returns 401 when cookie nonce mismatches", async () => {
+  it("redirects to the SPA error surface when cookie nonce mismatches", async () => {
     const app = getApp();
     const { signOAuthState } = await import("../services/oauth-state.js");
     const { token } = await signOAuthState(app.config.secrets.jwtSecret, "/welcome");
@@ -360,7 +372,7 @@ describe("OAuth callback rejects malformed state", () => {
       url: `/api/v1/auth/github/callback?code=abc&state=${token}`,
       headers: { cookie: "oauth_state_nonce=wrong" },
     });
-    expect(res.statusCode).toBe(401);
+    expectStateRejectedRedirect(res);
   });
 
   it("dev-callback ignores open-redirect bypasses in `next`", async () => {
