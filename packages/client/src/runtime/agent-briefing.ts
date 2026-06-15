@@ -678,21 +678,27 @@ function chatTopicBlock(bin: string): string {
   return `## Chat Topic & Description
 
 Each chat carries two pieces of self-describing metadata, both set
-through the **same** \`chat set-topic\` command:
+through the **\`chat update\`** command — topic and description update
+independently:
 
 - **topic** — a short (≤ 30 chars) label the workspace chat list shows,
   e.g. "调研 chat rename 方案" or "本周 ship 计划".
-- **description** — a longer running summary of **what this piece of
-  work is and where it currently stands**: the paragraph you (after a
-  context reset) or a teammate reads to reconstruct the thread.
+- **description** — the chat's work summary **and** status report. It
+  serves two readers at once: you (or a teammate) reconstructing what the
+  task is and where it stands, **and** the human reading the current task
+  status. It carries the task's **background + plan + progress**, renders
+  as **Markdown**, and shows by default at the top of the chat's right
+  sidebar.
 
 Both current values appear in the "Current Chat Context" block at the
 bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
 <value>\` or the sentinel \`(unset ...)\`.
 
-    ${bin} chat set-topic "<short label>"
-    ${bin} chat set-topic --description "<current state>"
-    ${bin} chat set-topic "<label>" --description "<state>"
+    ${bin} chat update --topic "<short label>"
+    ${bin} chat update --description "<task background + plan + progress>"
+    ${bin} chat update --topic "<label>" --description "<state>"
+
+(\`chat set-topic\` is a retained deprecated alias — prefer \`chat update\`.)
 
 **Only the chat's owner maintains these — and you count as the owner in
 two cases:** (a) you created the chat, or (b) no agent owner is present —
@@ -718,15 +724,18 @@ everyone (reading a description to self-locate needs no ownership).
    subject itself changed — never to track progress or reflect a passing
    focus. Progress belongs in the description, not the topic.
 
-2. **(Owner) Description unset or stale → write or refresh it before ending
-   this turn.** Unlike the topic, the description is **meant to move with
-   the work** — refresh it freely as the state changes. It is the
-   **present** state, not a log — rewrite it in
-   place (the message history is the log), keep it within ~500
-   characters. It must **name the current task** so anyone scanning
-   \`${bin} chat list\` can tell from the description alone whether this
-   chat is the one their task belongs to — lead with the concrete work
-   ("reviewing PR #X"), not a vague restatement of the topic.
+2. **(Owner) Description → keep it current as a status report.** The
+   description is **meant to move with the work**, but refresh it only on
+   **substantive progress** — rewrite it in place (the message history is
+   the log), not as busywork. **If nothing substantive changed this turn,
+   keep working rather than re-touching the description.** Keep it within
+   **1500 characters** and cover the task's **background + plan +
+   progress**, leading with the concrete current task ("reviewing PR #X")
+   so anyone scanning \`${bin} chat list\` — and the human reading it as a
+   status report — knows what this is and where it stands. **Keep blockers
+   and decisions OUT of the description**: when you need a human decision,
+   sign-off, or answer, raise a \`${bin} chat send <human> --request\`
+   instead. Markdown is supported (bullets, bold, links).
 
 3. **Language follows the session's working language** — Chinese
    session, Chinese description; English session, English.
@@ -758,7 +767,7 @@ to people and other agents) and **context management** (the Context Tree):
 
 | Namespace | What it owns |
 |---|---|
-| \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
+| \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`update\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
 | \`${bin} github …\` | GitHub entity attention — \`follow\` / \`unfollow\` / \`following\` an entity's event stream for the current chat |

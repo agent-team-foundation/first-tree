@@ -639,11 +639,14 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("--question");
 
     expect(briefing).toContain("## Chat Topic & Description");
-    expect(briefing).toContain("first-tree chat set-topic");
-    // The combined block documents setting the description through the same
-    // command, and carries the description discipline keys.
-    expect(briefing).toContain("set-topic --description");
-    expect(briefing).toMatch(/name the current task/);
+    expect(briefing).toContain("first-tree chat update");
+    // The block documents updating the description independently through
+    // `chat update`, and carries the upgraded description discipline keys
+    // (human-facing status report + Markdown), with set-topic kept as a
+    // deprecated alias.
+    expect(briefing).toContain("chat update --description");
+    expect(briefing).toMatch(/status report/);
+    expect(briefing).toMatch(/deprecated alias/);
     expect(briefing).toMatch(/Self-locate/);
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure

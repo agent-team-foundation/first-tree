@@ -1,4 +1,5 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
+import { DescriptionSection } from "./description-section.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -10,9 +11,11 @@ import { ParticipantsSection } from "./participants-section.js";
  * straight from the first eyebrow.
  *
  * Sections, top-to-bottom:
- *   1. Participants — humans + agents with per-agent Suspend (matches the
+ *   1. Description — the chat's running work summary, rendered as markdown.
+ *      Hidden entirely when no description is set.
+ *   2. Participants — humans + agents with per-agent Suspend (matches the
  *      legacy AgentRow capability).
- *   2. GitHub bindings — read-only list of PRs / Issues bound to this
+ *   3. GitHub bindings — read-only list of PRs / Issues bound to this
  *      chat. Hidden entirely when there are no bindings.
  *
  * Archive / Delete are intentionally NOT in this rail — the
@@ -22,6 +25,7 @@ import { ParticipantsSection } from "./participants-section.js";
  */
 export function ChatRightSidebar({
   chatId,
+  description,
   participants,
   participantsLoading,
   managedByMe,
@@ -30,6 +34,9 @@ export function ChatRightSidebar({
   width = 320,
 }: {
   chatId: string;
+  /** The chat's running work summary, rendered as markdown in the top
+   *  DescriptionSection. Null / empty hides that section. */
+  description: string | null;
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
@@ -53,6 +60,7 @@ export function ChatRightSidebar({
       }}
     >
       <div className="flex-1 overflow-y-auto">
+        <DescriptionSection description={description} />
         <ParticipantsSection
           chatId={chatId}
           participants={participants}
