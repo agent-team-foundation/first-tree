@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import type { WebSocket } from "ws";
+import { describe, expect, it, vi } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
+import { bindAgentToClient, removeClientConnection, setClientConnection } from "../services/connection-manager.js";
 import { sendMessage } from "../services/message.js";
 import * as sessionService from "../services/session.js";
 import * as sessionEventService from "../services/session-event.js";
@@ -181,7 +183,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(res.statusCode).toBe(404);
   });
 
-  it("Resume on a suspended row transitions to active and returns 200", async () => {
+  it("Resume on a disconnected suspended row fails delivery and leaves the row suspended", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `resume-x-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
@@ -199,9 +201,43 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/resume`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ state: "active", transitioned: true });
-    expect(await readState(app, agent.uuid, chat.id)).toBe("active");
+    expect(res.statusCode).toBe(503);
+    expect(await readState(app, agent.uuid, chat.id)).toBe("suspended");
+  });
+
+  it("Resume command delivery does not mark active before the client reports session state", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `resume-y-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `resume-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Resume target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+    await seedSession(app, agent.uuid, chat.id, "suspended");
+
+    const ws = {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    setClientConnection(admin.clientId, ws as unknown as WebSocket);
+    bindAgentToClient(admin.clientId, agent.uuid);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/resume`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ state: "suspended", transitioned: false });
+      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "session:resume", chatId: chat.id, agentId: agent.uuid }));
+      expect(await readState(app, agent.uuid, chat.id)).toBe("suspended");
+    } finally {
+      removeClientConnection(admin.clientId, ws as unknown as WebSocket);
+    }
   });
 
   it("allows an evicted row to be overwritten when the client starts a fresh runtime session", async () => {

@@ -86,12 +86,12 @@ type SessionEntry = {
 };
 
 type PendingMessage = {
-  message: SessionMessage;
+  message: SessionMessage | null;
   chatId: string;
   deliveryKind: SlotDeliveryKind;
 };
 
-type SlotDeliveryKind = "fresh" | "recovery";
+type SlotDeliveryKind = "fresh" | "recovery" | "control";
 
 type SessionCommandType = "session:suspend" | "session:resume" | "session:terminate";
 
@@ -778,7 +778,7 @@ export class SessionManager {
   private bufferForManualPause(chatId: string, message: SessionMessage, deliveryKind: SlotDeliveryKind): void {
     if (
       message.inboxEntryId !== undefined &&
-      this.pendingQueue.some((queued) => queued.message.inboxEntryId === message.inboxEntryId)
+      this.pendingQueue.some((queued) => queued.message?.inboxEntryId === message.inboxEntryId)
     ) {
       return;
     }
@@ -1040,18 +1040,10 @@ export class SessionManager {
       await entry.suspending;
     }
 
-    // For admin-triggered resume (no message), synthesize a minimal stub for slot acquisition only
-    const slotMessage: SessionMessage = message ?? {
-      id: "",
-      chatId: entry.chatId,
-      senderId: "",
-      format: "text",
-      content: "",
-      metadata: {},
-    };
-
-    // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, slotMessage, deliveryKind)) return;
+    // Admin-triggered resume has no provider input. It may use idle capacity,
+    // but it must not preempt unrelated working turns.
+    const slotKind: SlotDeliveryKind = message ? deliveryKind : "control";
+    if (!this.acquireActiveSlot(entry.chatId, message ?? null, slotKind)) return;
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
@@ -1438,7 +1430,7 @@ export class SessionManager {
    */
   private acquireActiveSlot(
     chatId: string,
-    message: SessionMessage,
+    message: SessionMessage | null,
     deliveryKind: SlotDeliveryKind = "fresh",
   ): boolean {
     if (this._activeCount < this.config.concurrency) return true;
@@ -1494,7 +1486,7 @@ export class SessionManager {
 
   private queueForSlot(
     chatId: string,
-    message: SessionMessage,
+    message: SessionMessage | null,
     deliveryKind: SlotDeliveryKind,
     reason: "concurrency_limit" | "max_sessions_all_working",
   ): void {
@@ -1567,13 +1559,24 @@ export class SessionManager {
     }
 
     this.pendingQueue.splice(nextIndex, 1);
+    if (!next.message) {
+      const session = this.sessions.get(next.chatId);
+      if (session && session.status !== "active") {
+        this.resumeSession(session, undefined, next.deliveryKind).catch((err) => {
+          this.config.log.warn({ chatId: next.chatId, err }, "pending resume drain error");
+          this.pendingQueue.unshift(next);
+        });
+      }
+      return;
+    }
     // Route asynchronously — the delivery work is already tracked by the
     // coordinator from the original `dispatch`.
-    this.routeMessage(next.chatId, next.message, next.deliveryKind).catch((err) => {
-      const hasInboxEntryId = next.message.inboxEntryId !== undefined;
+    const message = next.message;
+    this.routeMessage(next.chatId, message, next.deliveryKind).catch((err) => {
+      const hasInboxEntryId = message.inboxEntryId !== undefined;
       this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
       if (hasInboxEntryId) {
-        this.inboxDelivery.retryTurn(next.chatId, next.message, "pending_drain_failed");
+        this.inboxDelivery.retryTurn(next.chatId, message, "pending_drain_failed");
       } else {
         this.pendingQueue.unshift(next);
       }
