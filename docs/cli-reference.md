@@ -399,11 +399,12 @@ effective sender so the first message can wake the agent normally.
 
 GitHub entity attention for the current chat. `follow` wires an entity's
 webhook event stream into the chat (one routing line, chat-scoped);
-`unfollow` declares the task's attention over and severs every line wired
-into the chat for that entity, however it was created. Creating a PR or
-issue never follows it automatically — declare the dependency explicitly,
-immediately after creation. Decision guidance (when to follow / not
-follow / unfollow, 409 handling) lives in the `first-tree-github` skill.
+`unfollow` explicitly stops this chat from tracking the entity and severs
+every line wired into the chat for that entity, however it was created.
+Creating a PR or issue never follows it automatically — declare the
+dependency explicitly, immediately after creation. Decision guidance
+(when to follow / not follow / unfollow, 409 handling) lives in the
+`first-tree-github` skill.
 
 ```
 first-tree github

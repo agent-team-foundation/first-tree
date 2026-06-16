@@ -773,9 +773,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree github follow <url>");
     // The single exception: clearly unrelated to the chat's task.
     expect(briefing).toMatch(/clearly unrelated to this\s+chat's task/);
-    // Unfollow is human-explicit-stop or closed attention span.
+    // Unfollow is human-explicit-stop only, not a PR/Issue completion ritual.
     expect(briefing).toContain("first-tree github unfollow <entity>");
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
+    expect(briefing).toMatch(/Do not proactively unfollow\s+merely because a PR or Issue completed/);
     // Creation never auto-follows — the extractor is gone (#979).
     expect(briefing).toMatch(/there\s+is no auto-binding/);
   });
