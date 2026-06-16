@@ -14,9 +14,8 @@
  *      rows are sticky and intentionally untouched.
  *
  *   3. Unread counter propagation: increment `unread_mention_count` via a
- *      single UNION'd UPSERT. Branches: mentioned speakers (≠ sender),
- *      watchers whose managed non-human agent was mentioned, plus —
- *      when `bumpForAgentFinalText` is set — human speakers (≠ sender)
+ *      single UNION'd UPSERT. Branches: mentioned HUMAN speakers (≠ sender),
+ *      plus — when `bumpForAgentFinalText` is set — human speakers (≠ sender)
  *      and watchers whose managed agent IS the sender. UNION dedupes any
  *      target row that satisfies more than one branch so the counter
  *      advances by exactly +1 per message. The final-text branch
@@ -155,12 +154,12 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   // the UPSERT to keep `+1 per message` semantics intact:
   //
   //   A. Mention propagation (always on when the message has explicit
-  //      mentions). Speaker branch: mentioned ∩ chat speakers, sender
-  //      excluded, HUMAN targets only — the unread-mention red dot is a
-  //      human-attention signal, so mentioning a non-human agent (a delegate,
-  //      a routed GitHub card target) wakes it via the inbox notify path but
-  //      raises no red dot. Watcher branch: watchers whose managed non-human
-  //      agent was mentioned.
+  //      mentions). Single branch: mentioned ∩ chat speakers, sender excluded,
+  //      HUMAN targets only — the unread-mention red dot is a human-attention
+  //      signal, so mentioning a non-human agent (a delegate, a routed GitHub
+  //      card target) wakes it via the inbox notify path but raises no red dot,
+  //      and neither does the agent's human manager-watcher. Red dots are
+  //      reserved for a human called directly by name.
   //
   //   B. Agent-final-text bump (only when `bumpForAgentFinalText`).
   //      `purpose === "agent-final-text"` carries empty mentions by
@@ -192,6 +191,12 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
       mentionedAgentIds.map((id) => sql`${id}`),
       sql`, `,
     );
+    // Unread-mention red dots fire ONLY for a directly-@-mentioned human
+    // speaker. Mentioning a non-human agent (a delegate, a routed card target)
+    // wakes that agent via the inbox notify path but raises no red dot — and
+    // neither does the agent's human manager-watcher. Red dots are reserved
+    // for a human being called by name; a managed agent being mentioned is not
+    // that signal.
     branches.push(sql`
       SELECT cm.chat_id, cm.agent_id
         FROM chat_membership cm
@@ -201,17 +206,6 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
          AND cm.agent_id    IN (${mentionedList})
          AND cm.agent_id   <> ${senderId}
          AND a.type         = 'human'
-    `);
-    branches.push(sql`
-      SELECT cm.chat_id, cm.agent_id
-        FROM chat_membership cm
-        JOIN members m  ON m.agent_id    = cm.agent_id
-        JOIN agents  a  ON a.manager_id  = m.id
-       WHERE cm.chat_id     = ${chatId}
-         AND cm.access_mode = 'watcher'
-         AND a.uuid         IN (${mentionedList})
-         AND a.type        <> 'human'
-         AND m.status       = 'active'
     `);
   }
 

@@ -280,13 +280,14 @@ describe("chat-first workspace service layer", () => {
       participantIds: [managed.uuid],
     });
 
-    // Direct send via sendMessage (which itself calls applyAfterFanOut), with
-    // an explicit mention of `managed` to trigger watcher propagation.
-    await sendMessage(app.db, chatId, peer.agent.uuid, {
+    // The watcher (admin, manager of `managed`) red dot now bumps only via an
+    // agent-final-text send by the managed agent — a non-human mention no
+    // longer raises a watcher red dot. applyAfterFanOut still runs.
+    await sendMessage(app.db, chatId, managed.uuid, {
       source: "api",
       format: "text",
-      content: `@${managed.name} Please review`,
-      metadata: { mentions: [managed.uuid] },
+      content: "Please review",
+      purpose: "agent-final-text",
     });
 
     // chats projection updated. Raw `db.execute` returns timestamptz as
@@ -327,11 +328,11 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
       participantIds: [managed.uuid],
     });
-    await sendMessage(app.db, chatId, peer.agent.uuid, {
+    await sendMessage(app.db, chatId, managed.uuid, {
       source: "api",
       format: "text",
-      content: `@${managed.name} hi`,
-      metadata: { mentions: [managed.uuid] },
+      content: "hi",
+      purpose: "agent-final-text",
     });
 
     // Pre: counter is 1+
@@ -483,13 +484,13 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
       participantIds: [managed.uuid],
     });
-    // Bump the watcher's unread counter via an explicit mention of the
-    // managed agent.
-    await sendMessage(app.db, chatId, peer.agent.uuid, {
+    // Bump the watcher's unread counter via an agent-final-text send by the
+    // managed agent (mentioning a managed agent no longer bumps the watcher).
+    await sendMessage(app.db, chatId, managed.uuid, {
       source: "api",
       format: "text",
-      content: `@${managed.name} ping`,
-      metadata: { mentions: [managed.uuid] },
+      content: "ping",
+      purpose: "agent-final-text",
     });
 
     // Pre-state: admin's chat_user_state row has unread_mention_count >= 1.
