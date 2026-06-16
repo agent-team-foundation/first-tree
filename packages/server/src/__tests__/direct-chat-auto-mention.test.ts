@@ -81,7 +81,7 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     return typeof row?.content === "string" ? row.content : "";
   }
 
-  it("human → agent DM with explicit mentions wakes the agent and bumps the unread counter", async () => {
+  it("human → agent DM with explicit mentions wakes the agent but raises no unread red dot (non-human mention)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `dmh2a-${crypto.randomUUID().slice(0, 6)}` });
@@ -98,8 +98,11 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
       metadata: { mentions: [peer.agent.uuid] },
     });
 
+    // The agent is still woken via the inbox notify path…
     expect(await notifyInboxRows(chatId, peer.agent.uuid)).toHaveLength(1);
-    expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBeGreaterThanOrEqual(1);
+    // …but the unread-mention red dot is a human-attention signal, so
+    // mentioning a non-human agent raises no red dot for that agent.
+    expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBe(0);
   });
 
   it("agent → human DM with explicit mentions wakes the human and bumps the unread counter", async () => {
@@ -140,8 +143,10 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
       metadata: { mentions: [a2.uuid] },
     });
 
+    // a2 is woken via the inbox, but as a non-human mention target it gets
+    // no unread red dot — red dots are a human-attention signal.
     expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
-    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBe(0);
   });
 
   it("DM without explicit mentions does NOT wake the peer (the retired 1:1 implicit-wake regression guard)", async () => {
@@ -214,7 +219,8 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
 
     expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
     expect(await notifyInboxRows(chat.id, a3.uuid)).toHaveLength(0);
-    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
+    // a2 is woken but, as a non-human mention target, gets no unread red dot.
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBe(0);
     expect(await loadUnread(chat.id, a3.uuid, a1.memberId, a1.organizationId)).toBe(0);
   });
 });
