@@ -1,0 +1,1 @@
+CREATE INDEX "idx_agent_chat_sessions_chat_agent" ON "agent_chat_sessions" USING btree ("chat_id","agent_id");

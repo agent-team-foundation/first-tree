@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatDetail, ChatParticipantDetail } from "@first-tree/shared";
+import type { ChatDetail, ChatParticipantDetail, ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -35,6 +35,7 @@ const chatViewMocks = vi.hoisted(() => ({
     agentId: string;
     chatId: string;
     readOnly?: boolean;
+    initialChatDetail?: ChatDetail;
     titleFallback?: string | null;
     joinAction?: {
       onJoin: () => void;
@@ -147,6 +148,47 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
   };
 }
 
+function meChatRow(overrides: Partial<MeChatRow> & { chatId: string }): MeChatRow {
+  return {
+    chatId: overrides.chatId,
+    type: overrides.type ?? "group",
+    membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
+    source: overrides.source ?? "manual",
+    entityType: overrides.entityType ?? null,
+    title: overrides.title ?? "Launch chat",
+    topic: overrides.topic ?? "Launch",
+    description: overrides.description ?? null,
+    participants: overrides.participants ?? [
+      {
+        agentId: "human-agent-self",
+        displayName: "Gandy",
+        type: "human",
+        avatarColorToken: null,
+        avatarImageUrl: null,
+      },
+      {
+        agentId: "agent-1",
+        displayName: "Nova",
+        type: "agent",
+        avatarColorToken: null,
+        avatarImageUrl: null,
+      },
+    ],
+    participantCount: overrides.participantCount ?? 2,
+    lastMessageAt: overrides.lastMessageAt ?? NOW,
+    lastMessagePreview: overrides.lastMessagePreview ?? "Latest",
+    unreadMentionCount: overrides.unreadMentionCount ?? 0,
+    openRequestCount: overrides.openRequestCount ?? 0,
+    canReply: overrides.canReply ?? true,
+    engagementStatus: overrides.engagementStatus ?? "active",
+    liveActivity: overrides.liveActivity ?? null,
+    failedAgentIds: overrides.failedAgentIds ?? [],
+    busyAgentIds: overrides.busyAgentIds ?? [],
+    chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+  };
+}
+
 function createClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -164,15 +206,18 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderDom(element: ReactElement): Promise<{ container: HTMLElement; root: Root }> {
+async function renderDom(
+  element: ReactElement,
+  queryClient: QueryClient = createClient(),
+): Promise<{ container: HTMLElement; queryClient: QueryClient; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<QueryClientProvider client={createClient()}>{element}</QueryClientProvider>);
+    root.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
   });
   await flush();
-  return { container, root };
+  return { container, queryClient, root };
 }
 
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
@@ -200,7 +245,11 @@ beforeEach(() => {
   draftMocks.props.length = 0;
   authMock.value = { agentId: "human-agent-self", organizationId: "org-1" };
   chatMocks.getChat.mockResolvedValue(chatDetail());
-  meChatMocks.markMeChatRead.mockResolvedValue({});
+  meChatMocks.markMeChatRead.mockResolvedValue({
+    chatId: "chat-1",
+    lastReadAt: NOW,
+    unreadMentionCount: 0,
+  });
   meChatMocks.joinMeChat.mockResolvedValue(undefined);
 });
 
@@ -213,16 +262,48 @@ describe("ChatByIdView and CenterPanel", () => {
   it("picks the first non-human non-self agent and marks readable chats on mount and websocket frames", async () => {
     const { ChatByIdView } = await import("../chat-by-id.js");
     const onShowConversations = vi.fn();
+    const queryClient = createClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const allKey = ["me", "chats", "all", "active", false, null, null];
+    const unreadKey = ["me", "chats", "unread", "active", false, null, null];
+    const currentUnread = meChatRow({
+      chatId: "chat-1",
+      unreadMentionCount: 2,
+      chatHasExplicitMentionToMe: true,
+    });
+    const otherUnread = meChatRow({
+      chatId: "chat-2",
+      title: "Other chat",
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+    });
+    queryClient.setQueryData<ListMeChatsResponse>(allKey, { rows: [currentUnread, otherUnread], nextCursor: null });
+    queryClient.setQueryData<ListMeChatsResponse>(unreadKey, { rows: [currentUnread, otherUnread], nextCursor: null });
+
     const { container, root } = await renderDom(
       <ChatByIdView chatId="chat-1" narrow onShowConversations={onShowConversations} />,
+      queryClient,
     );
 
     await waitForText(container, "ChatView agent-1 chat-1");
     expect(chatMocks.getChat).toHaveBeenCalledWith("chat-1");
     expect(meChatMocks.markMeChatRead).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    const patchedAll = queryClient.getQueryData<ListMeChatsResponse>(allKey);
+    expect(patchedAll?.rows.find((row) => row.chatId === "chat-1")).toMatchObject({
+      unreadMentionCount: 0,
+      chatHasExplicitMentionToMe: false,
+    });
+    expect(patchedAll?.rows.find((row) => row.chatId === "chat-2")).toMatchObject({
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+    });
+    const patchedUnread = queryClient.getQueryData<ListMeChatsResponse>(unreadKey);
+    expect(patchedUnread?.rows.map((row) => row.chatId)).toEqual(["chat-2"]);
     expect(chatViewMocks.props.at(-1)).toMatchObject({
       agentId: "agent-1",
       chatId: "chat-1",
+      initialChatDetail: expect.objectContaining({ id: "chat-1" }),
       narrow: true,
       onShowConversations,
     });

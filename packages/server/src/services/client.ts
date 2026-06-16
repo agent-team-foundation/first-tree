@@ -183,6 +183,15 @@ export function extractCapabilities(metadata: unknown): ClientCapabilities {
   return parsed.success ? parsed.data : {};
 }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  return `{${Object.entries(value)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
 /**
  * List the active agents currently pinned to a client. Used by the WS
  * registration handshake to backfill `agent:pinned` notifications missed while
@@ -261,6 +270,10 @@ export async function updateClientCapabilities(
   }
 
   const baseMetadata = (client.metadata ?? {}) as Record<string, unknown>;
+  const existingCapabilities = clientCapabilitiesSchema.safeParse(baseMetadata.capabilities);
+  if (existingCapabilities.success && stableJson(existingCapabilities.data) === stableJson(parsed.data)) {
+    return;
+  }
   const merged = { ...baseMetadata, capabilities: parsed.data };
 
   await db.update(clients).set({ metadata: merged }).where(eq(clients.id, clientId));

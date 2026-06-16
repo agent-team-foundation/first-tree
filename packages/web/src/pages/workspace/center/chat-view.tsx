@@ -2,6 +2,7 @@ import {
   type AttachmentRef,
   attachmentRefsFromMetadata,
   CHAT_ENGAGEMENT_STATUSES,
+  type ChatDetail,
   type ChatParticipantDetail,
   type DocSnapshotFailReason,
   documentContextSchema,
@@ -1059,6 +1060,7 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
 export function ChatView({
   agentId,
   chatId,
+  initialChatDetail,
   readOnly = false,
   titleFallback,
   joinAction,
@@ -1067,6 +1069,9 @@ export function ChatView({
 }: {
   agentId: string;
   chatId: string;
+  /** Chat detail already fetched by the chat-id shell. Used to avoid an
+   * immediate same-key refetch when ChatView mounts for the same chat. */
+  initialChatDetail?: ChatDetail;
   /** When true, render watching mode: timeline only, no rename, no [+] participant,
    *  composer slot replaced with a Join panel. */
   readOnly?: boolean;
@@ -1317,6 +1322,8 @@ export function ChatView({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
+    initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
+    staleTime: 10_000,
   });
 
   // Apply the description-driven right-rail default once per chat, after that
