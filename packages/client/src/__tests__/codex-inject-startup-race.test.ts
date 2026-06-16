@@ -114,7 +114,11 @@ type SendMessageMock = ReturnType<typeof vi.fn<(chatId: string, body: Record<str
 
 function makeContext(
   onFinishTurn: (count?: number) => void,
-  opts: { sendMessage?: SendMessageMock; emitEvent?: SessionContext["emitEvent"] } = {},
+  opts: {
+    sendMessage?: SendMessageMock;
+    emitEvent?: SessionContext["emitEvent"];
+    formatInboundContent?: SessionContext["formatInboundContent"];
+  } = {},
 ): SessionContext {
   const sendMessage =
     opts.sendMessage ??
@@ -135,10 +139,19 @@ function makeContext(
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-startup-race"),
+    ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
     finishTurn: async (messages) => {
       onFinishTurn(Array.isArray(messages) ? messages.length : 1);
     },
   };
+}
+
+async function waitFor(assertion: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!assertion()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for assertion");
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 beforeEach(() => {
@@ -319,6 +332,95 @@ describe("codex handler startup inject queue", () => {
     ).toBe(true);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
     expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("retries queued injects when all inbound formatting fails before provider custody", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (message.id === "m2") throw new Error("format failed");
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+    ctx.retryTurn = retryTurn;
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    handler.inject(makeMessage("m2", "bad"));
+
+    await waitFor(() => retryTurn.mock.calls.length === 1);
+
+    expect(state.runInputs).toHaveLength(1);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).toHaveBeenCalledWith(makeMessage("m2", "bad"), "codex_queued_turn_format_failed");
+
+    await handler.shutdown();
+  });
+
+  it.each([
+    {
+      name: "first failed and second succeeded",
+      failingIds: new Set(["m2"]),
+      messages: [makeMessage("m2", "bad"), makeMessage("m3", "good")],
+    },
+    {
+      name: "first succeeded and second failed",
+      failingIds: new Set(["m3"]),
+      messages: [makeMessage("m2", "good"), makeMessage("m3", "bad")],
+    },
+  ])("retries the whole queued batch when mixed formatting occurs: $name", async ({ failingIds, messages }) => {
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (failingIds.has(message.id)) throw new Error(`format failed for ${message.id}`);
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+    ctx.retryTurn = retryTurn;
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    for (const message of messages) handler.inject(message);
+
+    await waitFor(() => retryTurn.mock.calls.length === messages.length);
+
+    expect(state.runInputs).toHaveLength(1);
+    expect(completedCounts).toEqual([1]);
+    for (const message of messages) {
+      expect(retryTurn).toHaveBeenCalledWith(message, "codex_queued_turn_format_failed");
+    }
 
     await handler.shutdown();
   });

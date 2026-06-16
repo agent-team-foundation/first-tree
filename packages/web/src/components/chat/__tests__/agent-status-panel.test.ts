@@ -1,6 +1,6 @@
 import { type AgentChatStatusInput, buildAgentChatStatus } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { canPauseStatus } from "../agent-status-panel.js";
+import { canPauseStatus, canResumeStatus } from "../agent-status-panel.js";
 
 const base: AgentChatStatusInput = {
   agentId: "a",
@@ -31,5 +31,19 @@ describe("canPauseStatus — Pause only for an actively-working live session", (
 
   it("null status → false", () => {
     expect(canPauseStatus(null)).toBe(false);
+  });
+});
+
+describe("canResumeStatus — Resume only for suspended sessions", () => {
+  it("suspended session → true", () => {
+    expect(canResumeStatus(mk({ engagement: "suspended" }))).toBe(true);
+  });
+
+  it("active session → false", () => {
+    expect(canResumeStatus(mk({ engagement: "active" }))).toBe(false);
+  });
+
+  it("null status → false", () => {
+    expect(canResumeStatus(null)).toBe(false);
   });
 });

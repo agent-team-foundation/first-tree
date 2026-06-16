@@ -258,6 +258,7 @@ describe("api wrapper paths", () => {
     await sessions.getSession("agent/id", "chat/id");
     await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
     await sessions.suspendSession("agent/id", "chat/id");
+    await sessions.resumeSession("agent/id", "chat/id");
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");

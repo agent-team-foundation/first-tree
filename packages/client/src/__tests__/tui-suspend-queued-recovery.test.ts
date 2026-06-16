@@ -166,7 +166,8 @@ describe("claude-code-tui suspend queued recovery", () => {
 
     handler.inject(recovered);
     await handler.suspend();
-    const sessionId = await start;
+    const startResult = await start;
+    const sessionId = typeof startResult === "string" ? startResult : startResult.sessionId;
 
     await handler.resume(recovered, sessionId, ctx);
     await new Promise((resolve) => setImmediate(resolve));
@@ -216,7 +217,66 @@ describe("claude-code-tui suspend queued recovery", () => {
 
     expect(state.pasteTexts.some((text) => text.includes("format-held queued turn"))).toBe(false);
     expect(ctx.finishTurn).not.toHaveBeenCalled();
-    expect(ctx.retryTurn).toHaveBeenCalledWith([queued], "queued_turn_stopped_before_paste");
+    expect(ctx.retryTurn).toHaveBeenCalledWith(queued, "queued_turn_stopped_before_paste");
+
+    await handler.shutdown();
+  });
+
+  it("retries a queued batch when all inbound formatting fails before paste", async () => {
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const queued = makeMessage("m3", "format-fail queued turn");
+    const ctx = makeContext({
+      formatInboundContent: async (message) => {
+        if (message.id === queued.id) throw new Error("format failed");
+        const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        return `[From: ${message.senderId}]\n\n${raw}`;
+      },
+    });
+
+    await handler.resume(undefined, "existing-session", ctx);
+    handler.inject(queued);
+
+    await waitFor(() => vi.mocked(ctx.retryTurn).mock.calls.length > 0);
+
+    expect(state.pasteTexts.some((text) => text.includes("format-fail queued turn"))).toBe(false);
+    expect(ctx.finishTurn).not.toHaveBeenCalled();
+    expect(ctx.retryTurn).toHaveBeenCalledWith(queued, "tui_queued_turn_format_failed");
+
+    await handler.shutdown();
+  });
+
+  it.each([
+    {
+      name: "first failed and second succeeded",
+      failingIds: new Set(["m4"]),
+      messages: [makeMessage("m4", "bad first"), makeMessage("m5", "good second")],
+    },
+    {
+      name: "first succeeded and second failed",
+      failingIds: new Set(["m5"]),
+      messages: [makeMessage("m4", "good first"), makeMessage("m5", "bad second")],
+    },
+  ])("retries the whole queued batch when mixed formatting occurs: $name", async ({ failingIds, messages }) => {
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext({
+      formatInboundContent: async (message) => {
+        if (failingIds.has(message.id)) throw new Error(`format failed for ${message.id}`);
+        const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        return `[From: ${message.senderId}]\n\n${raw}`;
+      },
+    });
+
+    await handler.resume(undefined, "existing-session", ctx);
+    for (const message of messages) handler.inject(message);
+
+    await waitFor(() => vi.mocked(ctx.retryTurn).mock.calls.length >= messages.length);
+
+    expect(state.pasteTexts.some((text) => text.includes("bad first") || text.includes("good first"))).toBe(false);
+    expect(state.pasteTexts.some((text) => text.includes("bad second") || text.includes("good second"))).toBe(false);
+    expect(ctx.finishTurn).not.toHaveBeenCalled();
+    for (const message of messages) {
+      expect(ctx.retryTurn).toHaveBeenCalledWith(message, "tui_queued_turn_format_failed");
+    }
 
     await handler.shutdown();
   });

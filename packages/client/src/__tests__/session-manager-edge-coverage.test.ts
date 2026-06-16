@@ -10,6 +10,7 @@ import type {
 } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import type { DeliveryDecision, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -33,9 +34,14 @@ type SessionRecord = {
 type SessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
   evictedMappings: Map<string, { claudeSessionId: string; lastActivity: number }>;
-  pendingQueue: Array<{ message: SessionMessage; chatId: string }>;
+  pendingQueue: Array<{ message: SessionMessage | null; chatId: string; deliveryKind: string }>;
+  inboxDelivery: {
+    receive(entry: InboxEntryWithMessage): DeliveryDecision;
+    markOwned(work: DeliveryWork): boolean;
+    markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void;
+  };
   _activeCount: number;
-  acquireActiveSlot(chatId: string, message: SessionMessage): boolean;
+  acquireActiveSlot(chatId: string, message: SessionMessage | null): boolean;
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
   resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined): Promise<void>;
   runRetry(chatId: string): Promise<void>;
@@ -73,7 +79,7 @@ function handler(overrides: Partial<AgentHandler> = {}): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue("session-id"),
     resume: vi.fn().mockResolvedValue("session-id"),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -193,6 +199,19 @@ function makeMessage(chatId: string): SessionMessage {
   };
 }
 
+function messageFromEntry(entry: InboxEntryWithMessage): SessionMessage {
+  return {
+    inboxEntryId: entry.id,
+    id: entry.message.id,
+    chatId: entry.chatId ?? entry.message.chatId,
+    senderId: entry.message.senderId,
+    format: entry.message.format,
+    content: entry.message.content as string,
+    metadata: entry.message.metadata,
+    precedingMessages: entry.message.precedingMessages ?? [],
+  };
+}
+
 function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
     chatId,
@@ -280,7 +299,11 @@ describe("SessionManager edge coverage", () => {
     expect(recoverChat).toHaveBeenCalledTimes(1);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
-    internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-queued",
+      message: makeMessage("chat-queued"),
+      deliveryKind: "fresh",
+    });
     internals(sm).evictedMappings.set("chat-queued", { claudeSessionId: "queued-session", lastActivity: 1 });
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
 
@@ -331,7 +354,12 @@ describe("SessionManager edge coverage", () => {
     expect(sm.getEvictedChatIds()).toContain("chat-500");
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-500" }));
-    expect(resumed.resume).toHaveBeenCalledWith(expect.anything(), "persisted-500", expect.anything());
+    expect(resumed.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "persisted-500",
+      expect.anything(),
+      expect.anything(),
+    );
 
     internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "evicted-extra", lastActivity: 2_000 });
     internals(sm).persistRegistry();
@@ -499,7 +527,7 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
-  it("queues admin resume when no active slot can be acquired", async () => {
+  it("queues admin resume as a control item when no active slot can be acquired", async () => {
     const record = makeSessionRecord("chat-queued-resume", { status: "suspended" });
     const sm = makeManager({ concurrency: 1 });
     internals(sm).sessions.set("chat-queued-resume", record);
@@ -507,12 +535,88 @@ describe("SessionManager edge coverage", () => {
 
     await internals(sm).resumeSession(record, null);
 
-    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued-resume")).toBe(true);
+    expect(
+      internals(sm).pendingQueue.some(
+        (item) => item.chatId === "chat-queued-resume" && item.message === null && item.deliveryKind === "control",
+      ),
+    ).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("does not let message-less resume preempt an unrelated working session", async () => {
+    const workingSuspend = vi.fn().mockResolvedValue(undefined);
+    const working = makeSessionRecord("chat-working", {
+      status: "active",
+      lastActivity: 1,
+      handler: handler({ suspend: workingSuspend }),
+    });
+    const pausedResume = vi.fn().mockResolvedValue("resumed-paused");
+    const paused = makeSessionRecord("chat-paused", {
+      status: "suspended",
+      handler: handler({ resume: pausedResume }),
+    });
+    const sm = makeManager({ concurrency: 1 });
+    internals(sm).sessions.set("chat-working", working);
+    internals(sm).sessions.set("chat-paused", paused);
+    internals(sm)._activeCount = 1;
+
+    const workingEntry = mockEntry({ id: 99, chatId: "chat-working" });
+    const decision = internals(sm).inboxDelivery.receive(workingEntry);
+    expect(decision.kind).toBe("deliver");
+    if (decision.kind === "deliver") {
+      internals(sm).inboxDelivery.markOwned(decision.work);
+      internals(sm).inboxDelivery.markProcessingStarted("chat-working", messageFromEntry(workingEntry));
+    }
+
+    await sm.handleCommand("chat-paused", "session:resume");
+
+    expect(workingSuspend).not.toHaveBeenCalled();
+    expect(pausedResume).not.toHaveBeenCalled();
+    expect(
+      internals(sm).pendingQueue.some(
+        (item) => item.chatId === "chat-paused" && item.message === null && item.deliveryKind === "control",
+      ),
+    ).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("drains same-chat buffered delivery after explicit resume at the concurrency limit", async () => {
+    const resume = vi.fn().mockResolvedValue("resumed-paused");
+    const inject = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
+    const paused = makeSessionRecord("chat-paused", {
+      status: "suspended",
+      claudeSessionId: "old-paused-session",
+      handler: handler({ resume, inject }),
+    });
+    const sm = makeManager({ concurrency: 1 });
+    internals(sm).sessions.set("chat-paused", paused);
+
+    await sm.handleCommand("chat-paused", "session:suspend");
+
+    const entry = mockEntry({ id: 101, chatId: "chat-paused" });
+    await sm.dispatch(entry);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused" && item.message)).toBe(true);
+
+    await sm.handleCommand("chat-paused", "session:resume");
+    await Promise.resolve();
+
+    expect(resume).toHaveBeenCalledWith(undefined, "old-paused-session", expect.anything());
+    expect(inject).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxEntryId: 101, chatId: "chat-paused" }),
+      expect.anything(),
+    );
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused")).toBe(false);
+    expect(sm.activeCount).toBe(1);
     await sm.shutdown();
   });
 
   it("queues recovery redelivery instead of preempting a working session", async () => {
-    const working = handler();
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
     const recovered = handler();
     const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
     const sm = makeManager({
@@ -537,7 +641,12 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("keeps the recovery window open across multiple queued recovered frames", async () => {
-    const working = handler();
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
     const recovered = handler();
     const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
     const sm = makeManager({
@@ -566,8 +675,9 @@ describe("SessionManager edge coverage", () => {
     const lifecycles: Array<{ chatId: string; phase: "start" | "resume" }> = [];
     const makeTrackedHandler = () =>
       handler({
-        async start(message) {
+        async start(message, ctx) {
           lifecycles.push({ chatId: message.chatId, phase: "start" });
+          if (message.chatId === "chat-working") ctx.markMessagesConsumed(message);
           return `session-${message.chatId}`;
         },
         async resume(message) {
@@ -618,6 +728,7 @@ describe("SessionManager edge coverage", () => {
           async start(message, ctx) {
             firstMessage = message;
             firstContext = ctx;
+            ctx.markMessagesConsumed(message);
             return "session-chat-working";
           },
         });
@@ -833,7 +944,12 @@ describe("SessionManager edge coverage", () => {
 
     await internals(sm).runRetry("chat-retry-from-evicted");
 
-    expect(resumeFails.resume).toHaveBeenCalledWith(expect.anything(), "evicted-session", expect.anything());
+    expect(resumeFails.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "evicted-session",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(retrying.retryAttempt).toBeGreaterThan(1);
     await sm.shutdown();
   });
@@ -897,7 +1013,7 @@ describe("SessionManager edge coverage", () => {
   it("covers drainPendingQueue return and edge branches", async () => {
     const sm = makeManager({ concurrency: 1, handlers: [handler()] });
 
-    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held") });
+    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held"), deliveryKind: "fresh" });
     internals(sm)._activeCount = 1;
     internals(sm).drainPendingQueue();
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-held")).toBe(true);
@@ -908,7 +1024,11 @@ describe("SessionManager edge coverage", () => {
     expect(internals(sm).sessions.has("chat-held")).toBe(true);
 
     const emptyShift = internals(makeManager());
-    emptyShift.pendingQueue.push({ chatId: "chat-empty-shift", message: makeMessage("chat-empty-shift") });
+    emptyShift.pendingQueue.push({
+      chatId: "chat-empty-shift",
+      message: makeMessage("chat-empty-shift"),
+      deliveryKind: "fresh",
+    });
     emptyShift.pendingQueue.shift = () => undefined;
     emptyShift.drainPendingQueue();
     await (emptyShift as unknown as SessionManager).shutdown();
@@ -922,7 +1042,11 @@ describe("SessionManager edge coverage", () => {
         throw new Error("factory failed during drain");
       },
     });
-    internals(sm).pendingQueue.push({ chatId: "chat-drain", message: makeMessage("chat-drain") });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-drain",
+      message: makeMessage("chat-drain"),
+      deliveryKind: "fresh",
+    });
     internals(sm).drainPendingQueue();
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
@@ -1044,8 +1168,9 @@ describe("SessionManager edge coverage", () => {
     const sm = makeManager({
       handlers: [
         handler({
-          async start(_message, ctx) {
+          async start(message, ctx) {
             captured = ctx;
+            ctx.markMessagesConsumed(message);
             return "runtime-session";
           },
         }),

@@ -247,4 +247,42 @@ describe("claude-code handler startup inject queue", () => {
 
     await handler.shutdown();
   });
+
+  it("retries active injects whose SDK message conversion fails before provider custody", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn();
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (message.id === "m2") throw new Error("format failed");
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+    ctx.retryTurn = retryTurn;
+
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    handler.inject(makeMessage("m2", "bad"));
+
+    await waitFor(() => retryTurn.mock.calls.length === 1);
+
+    expect(state.observedInputs).toHaveLength(1);
+    expect(completedCounts).toEqual([undefined]);
+    expect(retryTurn).toHaveBeenCalledWith(makeMessage("m2", "bad"), "claude_inject_format_failed");
+
+    await handler.shutdown();
+  });
 });

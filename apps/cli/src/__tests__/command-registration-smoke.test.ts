@@ -109,7 +109,7 @@ describe("CLI command registration", () => {
 
     const agent = command(root, "agent");
     expect(subcommands(agent, "bind")).toEqual(["client"]);
-    expect(subcommands(agent, "session")).toEqual(["list", "suspend", "terminate"]);
+    expect(subcommands(agent, "session")).toEqual(["list", "resume", "suspend", "terminate"]);
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 
     const tree = command(root, "tree");

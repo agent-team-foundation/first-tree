@@ -269,6 +269,7 @@ describe("SessionManager: transient retry on session start", () => {
       resume: vi.fn().mockResolvedValue("session-after-retry"),
       inject: vi.fn((message) => {
         injected.push(message);
+        return { kind: "owned", mode: "queued" } as const;
       }),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
