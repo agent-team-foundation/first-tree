@@ -65,6 +65,60 @@ export function isCreationEvent(eventType: string, action: string): boolean {
 }
 
 /**
+ * Reviewer-reuse routing (S9, deliver-once-per-chat). When an involved
+ * `(human, delegate)` pair is NOT yet mapped to this entity but the entity
+ * already has a **single** bound chat where BOTH the human and the delegate
+ * are already speakers, the event routes into that chat instead of minting a
+ * sibling one — and **no mapping row is written**. The pair sees the entity's
+ * events through chat membership, and `deliverNormalizedEvent` dedups so the
+ * chat receives one card whose wake-set includes this delegate.
+ *
+ * Returns the chat id when exactly one such chat exists; null when there is
+ * none, or when the candidate is ambiguous (≥2 bound chats both speak in),
+ * in which case the caller mints a fresh chat via `resolveTargetChat` (the
+ * strict per-`(human, delegate)` path — we never guess). Preserves S1 (the
+ * chat follows, not the person) and S7 (no followed chat is dropped).
+ */
+export async function findReuseChatForInvolved(
+  db: Database,
+  organizationId: string,
+  entity: GithubEntity,
+  humanAgentId: string,
+  delegateAgentId: string,
+): Promise<string | null> {
+  const candidateKeys = githubEntityKeyCandidates(entity.type, entity.key);
+  const boundChats = await db
+    .selectDistinct({ chatId: githubEntityChatMappings.chatId })
+    .from(githubEntityChatMappings)
+    .where(
+      and(
+        eq(githubEntityChatMappings.organizationId, organizationId),
+        eq(githubEntityChatMappings.entityType, entity.type),
+        inArray(githubEntityChatMappings.entityKey, candidateKeys),
+      ),
+    );
+  if (boundChats.length === 0) return null;
+
+  const reusable: string[] = [];
+  for (const { chatId } of boundChats) {
+    const speakerRows = await db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, chatId),
+          eq(chatMembership.accessMode, "speaker"),
+          inArray(chatMembership.agentId, [humanAgentId, delegateAgentId]),
+        ),
+      );
+    const ids = new Set(speakerRows.map((r) => r.agentId));
+    if (ids.has(humanAgentId) && ids.has(delegateAgentId)) reusable.push(chatId);
+    if (reusable.length > 1) break;
+  }
+  return reusable.length === 1 ? (reusable[0] ?? null) : null;
+}
+
+/**
  * Resolve which chat a GitHub event for (human, delegate, entity) belongs to.
  *
  * Three-step strategy from docs/webhook-routing-design.md §4.4:

@@ -1,9 +1,9 @@
-import type { GithubEventCard, NormalizedEvent } from "@first-tree/shared";
+import type { GithubEventCard, InvolveReason, NormalizedEvent } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
 import type { AudienceTarget } from "./github-audience.js";
-import { refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
+import { findReuseChatForInvolved, refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
 import type { EntityStateSeed } from "./github-entity-state.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
@@ -11,16 +11,16 @@ import { notifyRecipients } from "./notifier.js";
 const log = createLogger("GithubDelivery");
 
 export type DeliveryStats = {
-  /** Number of audience targets that received a card. */
+  /** Number of chats that received a card (one card per chat). */
   delivered: number;
   /** Number of fresh chats created (involved-new path). */
   newChats: number;
   /**
-   * Number of audience targets whose delivery threw and was caught by the
-   * per-target guard. These targets did NOT receive a card; the webhook
-   * has already been claimed in `processed_events`, so GitHub will not
-   * retry. Surfaced in the response + metric so a regression in single-
-   * target reliability becomes observable instead of silent.
+   * Number of chats whose delivery threw and was caught by the per-chat
+   * guard. These chats did NOT receive a card; the webhook has already been
+   * claimed in `processed_events`, so GitHub will not retry. Surfaced in the
+   * response + metric so a regression in single-chat reliability becomes
+   * observable instead of silent.
    */
   failed: number;
 };
@@ -30,18 +30,35 @@ type DeliveryOptions = {
 };
 
 /**
- * Stage 3 — actually emit one card per audience target.
+ * Per-chat delivery accumulator. "Deliver once per chat" (S7/S9): multiple
+ * audience targets (subscribed and/or involved) that resolve to the same chat
+ * collapse into a single card whose wake-set is the union of their delegates.
+ */
+type ChatDelivery = {
+  chatId: string;
+  created: boolean;
+  /** Native mention / wake-set — the delegates to notify in this chat. */
+  delegateIds: Set<string>;
+  /** Echo suppress-set — actor agents excluded from notify (still get a silent row). */
+  actorIds: Set<string>;
+  /** Card framing: an involved target's reason/login wins over plain subscribed. */
+  involveReason: InvolveReason | null;
+  involveLogin: string | null;
+  /** Chat-local representative human used as `senderId` (rendered as the GitHub system sender). */
+  humanAgentId: string;
+};
+
+/**
+ * Stage 3 — emit exactly one card per chat.
  *
- * `existing` targets carry their chatId and short-circuit straight to the
- * send. `new` targets go through `resolveTargetChat` which performs the
- * §4.4 direct / fixes_link / fresh-chat lookup and writes the mapping row.
- * Each target's row is delivered + dispatched independently so a single
- * failure (e.g. cross-org rejection on chat creation) doesn't poison the
- * whole audience — the loop logs and continues.
- *
- * The card `reason` is `subscribed` for existing rows and the new target's
- * `involveReason` for involved rows; the surface event payload is the same
- * either way.
+ * Two phases. Phase 1 resolves every audience target to a chat (subscribed
+ * targets short-circuit; involved targets reuse the entity's existing chat
+ * when the involved human+delegate are already speakers, else mint a fresh
+ * one) and accumulates the per-chat wake-set / suppress-set / card framing.
+ * Phase 2 delivers one card per chat, waking the union of delegates via native
+ * `metadata.mentions` and suppressing the actor via `suppressNotifyAgentIds`.
+ * Each chat is delivered independently so a single failure doesn't poison the
+ * rest — the loop logs and continues.
  */
 export async function deliverNormalizedEvent(
   app: FastifyInstance,
@@ -51,132 +68,18 @@ export async function deliverNormalizedEvent(
 ): Promise<DeliveryStats> {
   const stats: DeliveryStats = { delivered: 0, newChats: 0, failed: 0 };
 
+  // Phase 1 — resolve each target to a chat and merge into per-chat deliveries.
+  const byChat = new Map<string, ChatDelivery>();
   for (const target of audience) {
+    let resolved: ResolvedChat | null;
     try {
-      const resolved = await resolveChatFor(app, event, target, options);
-      if (!resolved) {
-        // Creation-event guard fired: opened webhook had no existing mapping
-        // and no explicit mention for this target, so we drop the event for
-        // this target rather than inventing a chat. Other targets in the
-        // audience may still receive the card.
-        log.info(
-          {
-            humanAgent: target.humanAgentId,
-            delegateAgent: target.delegateAgentId,
-            entityType: event.entity.type,
-            entityKey: event.entity.key,
-            eventType: event.rawEventType,
-            action: event.rawAction,
-            reason: "creation_event_no_mapping_no_mention",
-          },
-          "webhook_dropped_creation",
-        );
-        continue;
-      }
-      if (resolved.created) stats.newChats += 1;
-
-      // Existing github-sourced chats: refresh the topic so PR / issue
-      // title edits on GitHub propagate into the workspace chat list. The
-      // helper only touches a chat whose own `direct` anchor entity matches
-      // this event (never a linked fixes_link entity), preserves the original
-      // prefix, and no-ops when the payload carries no title — keeping the
-      // refresh scoped to chats First Tree originally minted from this entity.
-      if (!resolved.created) {
-        const entity: GithubEntity = {
-          type: event.entity.type,
-          key: event.entity.key,
-          title: event.entity.title,
-          url: event.entity.url,
-        };
-        await refreshGithubChatTopic(app.db, resolved.chatId, entity);
-      }
-
-      const card = buildCard(event, target);
-      const mentionedUser = card.mentionedUser ?? undefined;
-      // The audience row resolved a specific (human, delegate) pair as the
-      // structural target of this event. Address the delegate explicitly so
-      // a bound chat that has been expanded to ≥3 speakers still wakes the
-      // agent — without this, card-format messages produce no mentionSet
-      // and the multi-speaker fan-out collapses to notify=false for
-      // everyone. Same pattern as any system-routed delivery (see
-      // SendMessageOptions `addressedToAgentIds`).
-      //
-      // Echo suppression (#942) is decoupled from addressing (S2 / D1): the
-      // delegate is always the structural addressing target; the actor (when
-      // it resolved to an org agent) is passed separately as
-      // `suppressNotifyAgentIds` so it is never *woken* by its own action
-      // while the card still lands in its inbox as a silent context row.
-      // The old `.filter(id !== actor)` conflated "who is the structural
-      // target" with "who gets woken"; keeping them separate also keeps echo
-      // off `senderId` — the actor is frequently not a speaker of this chat,
-      // so it must never become the chat-local sender. See
-      // system/cloud/github/github-entity-chat-binding.md S2.
-      const addressedToAgentIds = [target.delegateAgentId];
-      const suppressNotifyAgentIds = target.actorAgentId ? [target.actorAgentId] : [];
-      const { message, recipients } = await sendMessage(
-        app.db,
-        resolved.chatId,
-        target.humanAgentId,
-        {
-          format: "card",
-          content: card,
-          source: "github",
-          metadata: {
-            source: "github",
-            event: event.rawEventType,
-            action: event.rawAction,
-            entityType: event.entity.type,
-            entityKey: event.entity.key,
-            reason: card.reason,
-            // Tells the web UI to render this card with a synthetic
-            // "GitHub" sender (icon + name) in place of the human-agent
-            // row whose id we still store as `senderId`. Keeping the DB
-            // senderId as the human agent preserves multi-speaker
-            // fan-out / read-receipts / mention-resolution; only the
-            // visual attribution shifts. Scoped to GitHub cards so an
-            // arbitrary client cannot impersonate other sources.
-            systemSender: "github",
-            ...(mentionedUser ? { mentionedUser } : {}),
-          },
-        },
-        {
-          addressedToAgentIds,
-          // Echo suppression target (S2 / D1): the event's actor agent, when it
-          // resolved to one. Decoupled from `senderId` and from the addressing
-          // set — the actor still gets a silent inbox row, it is just not woken.
-          suppressNotifyAgentIds,
-          // Opt in to writing `metadata.systemSender` — the message service
-          // strips that key from every other caller (web / agent SDK POST)
-          // so HTTP boundaries cannot impersonate the GitHub sender in the
-          // chat UI. This is the one trusted-internal path.
-          allowSystemSender: true,
-          // Opt out of the default explicit-recipient guard. This trusted
-          // system delivery owns and validates its own addressing
-          // (`addressedToAgentIds` derived from the resolved audience row),
-          // but on some events the addressing resolves to no live recipient:
-          // the delegate may not be a speaker of the bound chat. Such a card
-          // is still a valid history/context row for human observers; without
-          // this opt-out the default guard would make this trusted path start
-          // throwing. (The echo case — delegate IS the actor — no longer
-          // empties the addressing: the delegate stays the structural target
-          // and is silenced via `suppressNotifyAgentIds`, so the card lands as
-          // a silent row rather than relying on this opt-out. A delegate that
-          // IS a speaker but suspended/deleted is rejected earlier by the
-          // addressed-recipient status check — a separate, intentional guard.)
-          // See SendMessageOptions docs.
-          allowRecipientlessSend: true,
-        },
-      );
-      notifyRecipients(app.notifier, recipients, message.id);
-      stats.delivered += 1;
+      resolved = await resolveChatFor(app, event, target, options);
     } catch (err) {
+      // A single target's chat resolution failing (e.g. cross-org rejection
+      // on mint, or a malformed audience row) must not abort the rest. Count
+      // it and move on — the webhook is already claimed, so GitHub won't
+      // retry; the metric makes the drop observable. See #507.
       stats.failed += 1;
-      // Per-target failures are isolated so one bad target doesn't poison
-      // the audience, but the webhook is already claimed in
-      // `processed_events` — GitHub will not retry. Emit a structured
-      // metric line so a regression in single-target reliability is
-      // observable in logs (and dashboardable by the operator) instead
-      // of being silently swallowed by `continue`. See #507.
       log.error(
         {
           err,
@@ -189,7 +92,147 @@ export async function deliverNormalizedEvent(
           eventType: event.rawEventType,
           action: event.rawAction,
         },
-        "failed to deliver normalized github event to target",
+        "failed to resolve chat for normalized github target",
+      );
+      continue;
+    }
+    if (!resolved) {
+      // Creation-event guard fired: opened webhook had no existing mapping
+      // and no explicit mention for this target, so we drop it rather than
+      // inventing a chat. Other targets may still resolve to a chat.
+      log.info(
+        {
+          humanAgent: target.humanAgentId,
+          delegateAgent: target.delegateAgentId,
+          entityType: event.entity.type,
+          entityKey: event.entity.key,
+          eventType: event.rawEventType,
+          action: event.rawAction,
+          reason: "creation_event_no_mapping_no_mention",
+        },
+        "webhook_dropped_creation",
+      );
+      continue;
+    }
+    let delivery = byChat.get(resolved.chatId);
+    if (!delivery) {
+      delivery = {
+        chatId: resolved.chatId,
+        created: resolved.created,
+        delegateIds: new Set(),
+        actorIds: new Set(),
+        involveReason: null,
+        involveLogin: null,
+        humanAgentId: target.humanAgentId,
+      };
+      byChat.set(resolved.chatId, delivery);
+    } else if (resolved.created) {
+      delivery.created = true;
+    }
+    delivery.delegateIds.add(target.delegateAgentId);
+    if (target.actorAgentId) delivery.actorIds.add(target.actorAgentId);
+    // Prefer an involved target's reason/login for the (single) card framing.
+    if (target.kind === "new" && target.involveReason && !delivery.involveReason) {
+      delivery.involveReason = target.involveReason;
+      delivery.involveLogin = target.involveLogin;
+    }
+  }
+
+  // Phase 2 — one card per chat.
+  for (const delivery of byChat.values()) {
+    try {
+      if (delivery.created) stats.newChats += 1;
+      else {
+        // Existing github-sourced chats: refresh the topic so PR / issue title
+        // edits propagate into the chat list. The helper only touches a chat
+        // whose own `direct` anchor entity matches this event, preserves the
+        // original prefix, and no-ops when the payload carries no title.
+        const entity: GithubEntity = {
+          type: event.entity.type,
+          key: event.entity.key,
+          title: event.entity.title,
+          url: event.entity.url,
+        };
+        await refreshGithubChatTopic(app.db, delivery.chatId, entity);
+      }
+
+      const card = buildCard(event, delivery.involveReason, delivery.involveLogin);
+      const mentionedUser = card.mentionedUser ?? undefined;
+      // Native wake-set (S8): the delegates are passed as `metadata.mentions`,
+      // so the generic fan-out wakes them — no GitHub-specific addressing
+      // override. A mention that is not a live speaker of the chat is filtered
+      // out by the message service (the card still lands as a silent row via
+      // `allowRecipientlessSend`). The unread-mention red dot stays off because
+      // delegates are non-human mention targets.
+      const mentions = [...delivery.delegateIds].sort();
+      // Echo suppression (S2 / D1): the event's actor agent(s), decoupled from
+      // `senderId` and from the wake-set. A suppressed agent still gets a
+      // silent (notify=false) inbox row — the card lands, it just doesn't wake.
+      const suppressNotifyAgentIds = [...delivery.actorIds];
+      const { message, recipients } = await sendMessage(
+        app.db,
+        delivery.chatId,
+        delivery.humanAgentId,
+        {
+          format: "card",
+          content: card,
+          source: "github",
+          metadata: {
+            source: "github",
+            event: event.rawEventType,
+            action: event.rawAction,
+            entityType: event.entity.type,
+            entityKey: event.entity.key,
+            reason: card.reason,
+            // Native mention wake-set — see above.
+            mentions,
+            // Render this card with a synthetic "GitHub" sender in place of the
+            // chat-local human row stored as `senderId`. Keeping the DB
+            // senderId chat-local preserves fan-out / read-receipts; only the
+            // visual attribution shifts. Scoped to GitHub cards so an arbitrary
+            // client cannot impersonate other sources.
+            systemSender: "github",
+            ...(mentionedUser ? { mentionedUser } : {}),
+          },
+        },
+        {
+          suppressNotifyAgentIds,
+          // Opt in to writing `metadata.systemSender` — the message service
+          // strips that key from every untrusted caller (web / agent SDK POST)
+          // so HTTP boundaries cannot impersonate the GitHub sender. This is
+          // the one trusted-internal path.
+          allowSystemSender: true,
+          // Opt out of the default explicit-recipient guard. This trusted
+          // system delivery owns its own routing, but on some events the
+          // wake-set resolves to no live speaker (every delegate is a
+          // non-speaker, or the only addressable agent is the suppressed
+          // actor). Such a card is still a valid history/context row for human
+          // observers; without this opt-out the default guard would make this
+          // trusted path start throwing.
+          allowRecipientlessSend: true,
+        },
+      );
+      notifyRecipients(app.notifier, recipients, message.id);
+      stats.delivered += 1;
+    } catch (err) {
+      stats.failed += 1;
+      // Per-chat failures are isolated so one bad chat doesn't poison the rest,
+      // but the webhook is already claimed in `processed_events` — GitHub will
+      // not retry. Emit a structured metric line so a regression in single-chat
+      // reliability is observable instead of silently swallowed. See #507.
+      log.error(
+        {
+          err,
+          metric: "github_delivery_failed_total",
+          errorClass: err instanceof Error ? err.name : "Unknown",
+          chatId: delivery.chatId,
+          delegateAgents: [...delivery.delegateIds],
+          entityType: event.entity.type,
+          entityKey: event.entity.key,
+          eventType: event.rawEventType,
+          action: event.rawAction,
+        },
+        "failed to deliver normalized github event to chat",
       );
     }
   }
@@ -217,6 +260,20 @@ async function resolveChatFor(
     title: event.entity.title,
     url: event.entity.url,
   };
+  // Reviewer-reuse (S9, deliver-once-per-chat): if the entity already has a
+  // single bound chat where this involved (human, delegate) are both speakers,
+  // route there instead of minting a sibling chat — and write NO mapping row.
+  // The pair sees the entity's events through chat membership, and Phase 2
+  // dedups so the chat gets one card whose wake-set includes this delegate.
+  const reuseChatId = await findReuseChatForInvolved(
+    app.db,
+    event.source.organizationId,
+    entity,
+    target.humanAgentId,
+    target.delegateAgentId,
+  );
+  if (reuseChatId) return { chatId: reuseChatId, created: false };
+
   const relatedEntities: GithubEntity[] = event.relatedRefs.map((ref) => ({
     type: "issue",
     key: ref.key,
@@ -230,10 +287,9 @@ async function resolveChatFor(
     eventType: event.rawEventType,
     action: event.rawAction ?? "",
     entityStateSeed: options.entityStateSeed ?? null,
-    // `kind: "new"` audience targets come from explicit mentions / involves
-    // in the event payload — these are the only path allowed to mint a fresh
-    // chat for an opened creation event. Subscription targets never reach
-    // resolveTargetChat (`kind: "existing"` short-circuits above), but the
+    // `kind: "new"` audience targets come from explicit mentions / involves in
+    // the event payload — the only path allowed to mint a fresh chat for an
+    // opened creation event. Subscription targets short-circuit above; the
     // guard is still wired so any future caller is safe by default.
     isMentionMatched: true,
   });
@@ -241,9 +297,18 @@ async function resolveChatFor(
   return { chatId: resolved.chatId, created: resolved.created };
 }
 
-function buildCard(event: NormalizedEvent, target: AudienceTarget): GithubEventCard {
-  const reason: GithubEventCard["reason"] =
-    target.kind === "existing" ? "subscribed" : (target.involveReason ?? "mentioned");
+/**
+ * Build the per-chat card. `involveReason`/`involveLogin` come from an involved
+ * target routed to this chat (review_requested / mentioned / assigned); when a
+ * chat is reached only through subscription they are null and the card reads as
+ * `subscribed`.
+ */
+function buildCard(
+  event: NormalizedEvent,
+  involveReason: InvolveReason | null,
+  involveLogin: string | null,
+): GithubEventCard {
+  const reason: GithubEventCard["reason"] = involveReason ?? "subscribed";
   const card: GithubEventCard = {
     type: "github_event",
     reason,
@@ -261,6 +326,6 @@ function buildCard(event: NormalizedEvent, target: AudienceTarget): GithubEventC
       url: event.entity.url ?? null,
     },
   };
-  if (target.involveLogin) card.mentionedUser = target.involveLogin;
+  if (involveLogin) card.mentionedUser = involveLogin;
   return card;
 }
