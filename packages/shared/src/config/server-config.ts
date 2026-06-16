@@ -371,9 +371,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
     }),
     /**
-     * Idle threshold for chats bound to GitHub PRs/Issues. Once every
-     * bound entity is closed/merged AND the chat has been silent this
-     * long, the sweeper flips every mapped human's view to `archived`.
+     * Idle threshold for source=github chats. Mapped chats require every bound
+     * entity to be closed/merged; no-mapping source=github chats use this same
+     * threshold as an orphan/no-binding cleanup.
      */
     archiveMappedIdleSeconds: field(
       z.coerce
@@ -383,21 +383,6 @@ export const serverConfigSchema = defineConfig({
         .default(60 * 60),
       {
         env: "FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS",
-      },
-    ),
-    /**
-     * Idle threshold for chats with no GitHub mapping and no human owner.
-     * Per (chat, user) — users with unread mentions are skipped; users
-     * without an unread stay archived after this much silence.
-     */
-    archiveUnmappedIdleSeconds: field(
-      z.coerce
-        .number()
-        .int()
-        .positive()
-        .default(12 * 60 * 60),
-      {
-        env: "FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS",
       },
     ),
     /**

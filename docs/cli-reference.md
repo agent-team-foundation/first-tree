@@ -678,10 +678,10 @@ Old per-route rate-limit env vars are no longer read.
 | `FIRST_TREE_WS_MAX_PAYLOAD` | `262144` (256 KiB) |
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
-| `FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` | `43200` |
 
-`FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` applies only to chats with no
-GitHub mapping and no human owner.
+`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the GitHub-source archive idle
+threshold. Mapped chats also require all bound entities to be closed/merged;
+source=github chats with no mapping use the same idle threshold.
 
 **Observability:**
 

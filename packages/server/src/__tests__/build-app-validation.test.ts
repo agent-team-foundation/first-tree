@@ -31,7 +31,6 @@ const baseConfig: Config = {
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,
     archiveMappedIdleSeconds: 60 * 60,
-    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
   },
   update: {

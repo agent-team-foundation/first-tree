@@ -144,7 +144,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // timer would only add nondeterminism.
       archiveSweepIntervalSeconds: 0,
       archiveMappedIdleSeconds: 60 * 60,
-      archiveUnmappedIdleSeconds: 12 * 60 * 60,
       notificationWebhookUrl: undefined,
     },
     update: {
