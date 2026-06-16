@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { resolveTurnDisposition } from "../handlers/claude-code-tui/turn-disposition.js";
+import { resolveTuiTurnSettlement } from "../handlers/turn-settlement.js";
 
 const CLEAN = { aborted: false, timedOut: false, turnFailed: false, forwardFailed: false };
 
-describe("resolveTurnDisposition", () => {
+describe("resolveTuiTurnSettlement", () => {
   it("a clean turn reports success, acks, and forwards", () => {
-    expect(resolveTurnDisposition(CLEAN)).toEqual({
+    expect(resolveTuiTurnSettlement(CLEAN)).toEqual({
       status: "success",
       ack: true,
       forward: true,
+      action: { kind: "complete", outcome: { status: "success", terminal: true } },
     });
   });
 
@@ -23,42 +24,53 @@ describe("resolveTurnDisposition", () => {
    * is the single source of output).
    */
   it("a timed-out turn reports error and does NOT ack or forward", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, timedOut: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, timedOut: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
+      action: { kind: "retry", reason: "turn_timeout" },
     });
   });
 
   it("a body failure reports error, acks, and forwards (clean close, avoid storm)", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, turnFailed: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, turnFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
+      action: {
+        kind: "complete",
+        outcome: { status: "error", terminal: true, completion: "consumed", reason: "provider_clean_error" },
+      },
     });
   });
 
   it("a forward-only failure reports error but still consumes the turn", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, forwardFailed: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, forwardFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
+      action: {
+        kind: "complete",
+        outcome: { status: "error", terminal: true, completion: "consumed", reason: "forward_failed" },
+      },
     });
   });
 
   it("an aborted (suspended) turn does NOT ack or forward so it re-runs cleanly on resume", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, aborted: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, aborted: true })).toEqual({
       status: "success",
       ack: false,
       forward: false,
+      action: { kind: "retry", reason: "turn_aborted" },
     });
   });
 
   it("timeout dominates: a timed-out turn that also failed to forward still withholds ack + forward", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, timedOut: true, forwardFailed: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, timedOut: true, forwardFailed: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
+      action: { kind: "retry", reason: "turn_timeout" },
     });
   });
 
@@ -67,8 +79,9 @@ describe("resolveTurnDisposition", () => {
       for (const timedOut of [false, true]) {
         for (const turnFailed of [false, true]) {
           for (const forwardFailed of [false, true]) {
-            const d = resolveTurnDisposition({ aborted, timedOut, turnFailed, forwardFailed });
+            const d = resolveTuiTurnSettlement({ aborted, timedOut, turnFailed, forwardFailed });
             expect(d.ack).toBe(d.forward);
+            expect(d.ack).toBe(d.action.kind === "complete");
           }
         }
       }

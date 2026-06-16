@@ -34,6 +34,7 @@ import type {
   SessionContext,
   SessionMessage,
   StartResult,
+  TurnOutcome,
 } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
 import { InboxDeliveryCoordinator } from "./inbox-delivery-coordinator.js";
@@ -824,6 +825,44 @@ export class SessionManager {
     this.projectSessionRuntime(chatId);
   }
 
+  private errorCompletionRetryReason(outcome: TurnOutcome): string | null {
+    if (outcome.status === "success") return null;
+    if (outcome.completion === "consumed") return null;
+    if (outcome.errorKind === "deterministic") return "complete_requires_terminal_rejected";
+    if (outcome.errorKind === "transient") return "complete_transient_error_requires_retry";
+    if (outcome.errorKind === "unknown") return "complete_unknown_error_requires_retry";
+    return "complete_error_missing_classification";
+  }
+
+  private warnRejectedErrorCompletion(chatId: string, outcome: TurnOutcome, reason: string): void {
+    if (outcome.status !== "error") return;
+    this.config.log.warn(
+      {
+        chatId,
+        errorKind: outcome.errorKind,
+        completion: outcome.completion,
+        reason,
+      },
+      "delivery error completion is not ACK-eligible; retrying instead",
+    );
+  }
+
+  private async completeDeliveryTurn(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: TurnOutcome,
+  ): Promise<void> {
+    const retryReason = this.errorCompletionRetryReason(outcome);
+    if (retryReason) {
+      this.warnRejectedErrorCompletion(chatId, outcome, retryReason);
+      this.inboxDelivery.retryTurn(chatId, messages, retryReason);
+      this.projectSessionRuntime(chatId);
+      return;
+    }
+    await this.inboxDelivery.finishTurn(chatId, messages, outcome);
+    this.projectSessionRuntime(chatId);
+  }
+
   private createDeliveryToken(chatId: string): DeliveryToken {
     let terminalReported = false;
     const claimTerminal = (action: string): boolean => {
@@ -841,19 +880,8 @@ export class SessionManager {
         this.projectSessionRuntime(chatId);
       },
       complete: async (messages, outcome) => {
-        if (outcome.status === "error" && outcome.errorKind === "deterministic") {
-          if (!claimTerminal("complete_requires_terminalRejected")) return;
-          this.config.log.warn(
-            { chatId, errorKind: outcome.errorKind },
-            "deterministic delivery completion requires terminalRejected evidence; retrying instead",
-          );
-          this.inboxDelivery.retryTurn(chatId, messages, "complete_requires_terminal_rejected");
-          this.projectSessionRuntime(chatId);
-          return;
-        }
         if (!claimTerminal("complete")) return;
-        await this.inboxDelivery.finishTurn(chatId, messages, outcome);
-        this.projectSessionRuntime(chatId);
+        await this.completeDeliveryTurn(chatId, messages, outcome);
       },
       retry: (messages, reason) => {
         if (!claimTerminal("retry")) return;
@@ -1862,10 +1890,11 @@ export class SessionManager {
         this.inboxDelivery.markProcessingStarted(chatId, messages);
       },
       finishTurn: (messages, outcome) => {
-        return this.inboxDelivery.finishTurn(chatId, messages, outcome);
+        return this.completeDeliveryTurn(chatId, messages, outcome);
       },
       retryTurn: (messages, reason) => {
         this.inboxDelivery.retryTurn(chatId, messages, reason);
+        this.projectSessionRuntime(chatId);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),

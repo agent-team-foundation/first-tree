@@ -502,11 +502,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     // withholds the ack so the message gets a real retry.
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
-    if (disposition.ack) {
-      await token.complete(messages, { status: disposition.status, terminal: true });
+    if (disposition.action.kind === "complete") {
+      await token.complete(messages, disposition.action.outcome);
     } else {
-      const reason = timedOut ? "turn_timeout" : turnAborted ? "turn_aborted" : "turn_retryable";
-      token.retry(messages, reason);
+      token.retry(messages, disposition.action.reason);
     }
     resetProcessor();
   }
