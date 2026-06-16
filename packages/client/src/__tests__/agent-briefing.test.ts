@@ -605,6 +605,14 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("never reach into a sibling agent's");
     expect(briefing).toContain("merge-base --is-ancestor <wt-HEAD> origin/<default>");
     expect(briefing).toContain("rm -rf <legacy>");
+    // P1 (Codex, PR #1083): `git worktree remove` refuses a main working tree,
+    // so `rm -rf <legacy>` is the only way to drop the legacy checkout itself —
+    // the guidance must require clearing the SAME clean + already-merged bar on
+    // the checkout's own tree/HEAD before that delete, not just on linked
+    // worktrees.
+    expect(briefing).toContain("git -C <legacy> status --porcelain");
+    expect(briefing).toContain("merge-base --is-ancestor HEAD origin/<default>");
+    expect(briefing).toContain("only after BOTH checks pass");
     // The context-tree symlink case points at the existing Tree Location block.
     expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
   });
