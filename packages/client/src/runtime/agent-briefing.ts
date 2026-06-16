@@ -636,9 +636,10 @@ and there is no auto-binding. Declaring the dependency is your job:
 
   Skip the follow only when the entity is clearly unrelated to this
   chat's task.
-- **Unfollow when the human explicitly asks to stop tracking** the entity
-  (\`${bin} github unfollow <entity>\`), or when the task's attention span
-  on it has genuinely closed.
+- **Unfollow only when the human explicitly asks to stop tracking** the
+  entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow
+  merely because a PR or Issue completed, merged, or closed; terminal
+  entities may still carry aftermath this chat should hear.
 
 ${fullGuide}`;
 }

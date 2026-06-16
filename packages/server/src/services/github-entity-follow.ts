@@ -509,10 +509,10 @@ export async function declareEntityFollow(
 }
 
 /**
- * Unfollow: the task's attention span on the entity is over. Deletes EVERY
- * mapping row pointing at this chat for the entity — whatever pair or
- * `bound_via` wrote it (R10) — and reports the count. Never touches the
- * GitHub API; always succeeds (R4: `removed: 0` is terminal success).
+ * Unfollow: explicit stop-tracking for this chat. Deletes EVERY mapping row
+ * pointing at this chat for the entity — whatever pair or `bound_via` wrote
+ * it (R10) — and reports the count. Never touches the GitHub API; always
+ * succeeds (R4: `removed: 0` is terminal success).
  *
  * Matching is case-insensitive on the key (GitHub repo slugs are
  * case-insensitive) and prefix-based for commit shas so a short sha

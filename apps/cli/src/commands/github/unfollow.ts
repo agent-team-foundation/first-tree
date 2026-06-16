@@ -12,7 +12,7 @@ export function registerGithubUnfollowCommand(github: Command): void {
   github
     .command("unfollow <entity>")
     .description(
-      "Unfollow a GitHub entity: the task this chat carries no longer concerns it. Severs EVERY line wired " +
+      "Unfollow a GitHub entity when the human wants this chat to stop tracking it. Severs EVERY line wired " +
         "into this chat for the entity, however it was created (follow, mention, Fixes #N). An explicit " +
         "@mention of a team member still reaches them afterwards — in a NEW chat, never back into this one.",
     )
