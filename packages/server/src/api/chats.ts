@@ -171,23 +171,16 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * List GitHub entities bound to this chat. Reads the binding rows from
-   * `github_entity_chat_mappings`, then fetches the live `title` / `state`
-   * for each from the GitHub REST API at request time — nothing is
-   * persisted. Per the right-sidebar plan, we deliberately did NOT add
-   * cached columns; freshness wins over a low-cost cache.
+   * `github_entity_chat_mappings` and projects lifecycle state from the
+   * webhook-synced `entity_state` column. The route deliberately does not
+   * mint GitHub tokens or call GitHub; `title` remains nullable because the
+   * mapping table does not persist titles.
    *
-   * Returns an empty list when the chat has no bindings. When the org
-   * has no GitHub App installation (or token mint fails), rows are
-   * still returned with `title: null` and `state: null` so the row
-   * remains a working link to GitHub.
+   * Returns an empty list when the chat has no bindings.
    */
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
-    const { chat, scope } = await requireChatAccess(request, app.db);
-    return listChatGithubEntities(
-      app.db,
-      { appCredentials: app.config.oauth?.githubApp },
-      { chatId: chat.id, organizationId: scope.organizationId },
-    );
+    const { chat } = await requireChatAccess(request, app.db);
+    return listChatGithubEntities(app.db, { chatId: chat.id });
   });
 
   /**

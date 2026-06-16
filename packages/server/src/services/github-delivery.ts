@@ -4,6 +4,7 @@ import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
 import type { AudienceTarget } from "./github-audience.js";
 import { refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
+import type { EntityStateSeed } from "./github-entity-state.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 
@@ -24,6 +25,10 @@ export type DeliveryStats = {
   failed: number;
 };
 
+type DeliveryOptions = {
+  entityStateSeed?: EntityStateSeed | null;
+};
+
 /**
  * Stage 3 — actually emit one card per audience target.
  *
@@ -42,12 +47,13 @@ export async function deliverNormalizedEvent(
   app: FastifyInstance,
   event: NormalizedEvent,
   audience: AudienceTarget[],
+  options: DeliveryOptions = {},
 ): Promise<DeliveryStats> {
   const stats: DeliveryStats = { delivered: 0, newChats: 0, failed: 0 };
 
   for (const target of audience) {
     try {
-      const resolved = await resolveChatFor(app, event, target);
+      const resolved = await resolveChatFor(app, event, target, options);
       if (!resolved) {
         // Creation-event guard fired: opened webhook had no existing mapping
         // and no explicit mention for this target, so we drop the event for
@@ -188,6 +194,7 @@ async function resolveChatFor(
   app: FastifyInstance,
   event: NormalizedEvent,
   target: AudienceTarget,
+  options: DeliveryOptions,
 ): Promise<ResolvedChat | null> {
   if (target.kind === "existing") {
     if (!target.chatId) {
@@ -213,6 +220,7 @@ async function resolveChatFor(
     relatedEntities,
     eventType: event.rawEventType,
     action: event.rawAction ?? "",
+    entityStateSeed: options.entityStateSeed ?? null,
     // `kind: "new"` audience targets come from explicit mentions / involves
     // in the event payload — these are the only path allowed to mint a fresh
     // chat for an opened creation event. Subscription targets never reach

@@ -19,11 +19,10 @@ import { organizations } from "./organizations.js";
  * `services/github-audience.ts`. Canonical value docs: `BoundVia` in
  * `services/github-entity-chat.ts`.
  *
- * `entity_state` (added 0048) tracks the upstream PR/Issue lifecycle so the
- * auto-archive sweeper can decide whether a chat's bound entities are all
- * terminal (closed/merged) without making GitHub API calls. Updated by the
- * webhook handler on `pull_request.closed/merged/reopened` and
- * `issues.closed/reopened`. New rows default to `'open'`.
+ * `entity_state` (added 0048) tracks the upstream PR/Issue lifecycle so
+ * sidebar reads and the auto-archive sweeper can avoid GitHub API calls.
+ * Updated by the webhook handler on PR/Issue lifecycle actions, including
+ * PR draft transitions. New rows default to `'open'`.
  */
 export const githubEntityChatMappings = pgTable(
   "github_entity_chat_mappings",
@@ -47,7 +46,7 @@ export const githubEntityChatMappings = pgTable(
     boundAt: timestamp("bound_at", { withTimezone: true }).notNull().defaultNow(),
     /** See file header — canonical value list lives on `BoundVia`. */
     boundVia: text("bound_via").notNull(),
-    /** "open" (default) | "closed" | "merged". See file header. */
+    /** "open" (default) | "draft" | "closed" | "merged". See file header. */
     entityState: text("entity_state").notNull().default("open"),
     entityStateUpdatedAt: timestamp("entity_state_updated_at", { withTimezone: true }),
   },

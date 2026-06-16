@@ -451,6 +451,422 @@ describe("POST /webhooks/github-app", () => {
     expect(mappingRow?.entityState).toBe("open");
   });
 
+  it("late opened webhooks do not overwrite newer persisted entity_state", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100036;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#825",
+        chatId,
+        boundVia: "direct",
+        entityState: "draft",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#826",
+        chatId,
+        boundVia: "direct",
+        entityState: "merged",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "issue",
+        entityKey: "owner/repo#827",
+        chatId,
+        boundVia: "direct",
+        entityState: "closed",
+      },
+    ]);
+
+    for (const number of [825, 826]) {
+      const res = await postWebhook(app, "pull_request", {
+        action: "opened",
+        pull_request: {
+          number,
+          title: "Late opened",
+          html_url: `https://github.com/owner/repo/pull/${number}`,
+          body: "",
+          state: "open",
+          draft: false,
+          merged: false,
+        },
+        repository: { full_name: "owner/repo" },
+        sender: { login: "author", type: "User" },
+        installation: { id: installationId },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+
+    const issueRes = await postWebhook(app, "issues", {
+      action: "opened",
+      issue: {
+        number: 827,
+        title: "Late issue opened",
+        html_url: "https://github.com/owner/repo/issues/827",
+        body: "",
+        state: "open",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(issueRes.statusCode).toBe(200);
+
+    const rows = await app.db
+      .select({ entityKey: githubEntityChatMappings.entityKey, entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, chatId));
+    const stateByKey = new Map(rows.map((row) => [row.entityKey, row.entityState]));
+    expect(stateByKey.get("owner/repo#825")).toBe("draft");
+    expect(stateByKey.get("owner/repo#826")).toBe("merged");
+    expect(stateByKey.get("owner/repo#827")).toBe("closed");
+  });
+
+  it("pull_request.converted_to_draft → syncs entity_state to 'draft'", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100034;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#823",
+      chatId,
+      boundVia: "direct",
+      entityState: "open",
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "converted_to_draft",
+      pull_request: {
+        number: 823,
+        title: "Draft again",
+        html_url: "https://github.com/owner/repo/pull/823",
+        body: "",
+        draft: true,
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().handled).toBe(false);
+
+    const [mappingRow] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#823")))
+      .limit(1);
+    expect(mappingRow?.entityState).toBe("draft");
+  });
+
+  it("pull_request.ready_for_review → syncs entity_state to 'open' even when normalize drops the event", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100035;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#824",
+      chatId,
+      boundVia: "direct",
+      entityState: "draft",
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "ready_for_review",
+      pull_request: {
+        number: 824,
+        title: "Ready",
+        html_url: "https://github.com/owner/repo/pull/824",
+        body: "",
+        draft: false,
+        requested_reviewers: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().handled).toBe(false);
+
+    const [mappingRow] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#824")))
+      .limit(1);
+    expect(mappingRow?.entityState).toBe("open");
+  });
+
+  it("pull_request.review_requested seeds a new draft PR mapping from the payload state", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100037;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `reviewer-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "review_requested",
+      pull_request: {
+        number: 828,
+        title: "Draft review",
+        html_url: "https://github.com/owner/repo/pull/828",
+        body: "",
+        state: "open",
+        draft: true,
+        merged: false,
+      },
+      requested_reviewer: { login: humanName, type: "User" },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delivered: 1, newChats: 1, failed: 0 });
+
+    const [mappingRow] = await app.db
+      .select({
+        humanAgentId: githubEntityChatMappings.humanAgentId,
+        entityState: githubEntityChatMappings.entityState,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#828"))
+      .limit(1);
+    expect(mappingRow).toMatchObject({ humanAgentId: human, entityState: "draft" });
+  });
+
+  it("issue_comment.created seeds a new closed issue mapping from the issue payload state", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100038;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `issue-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const res = await postWebhook(app, "issue_comment", {
+      action: "created",
+      issue: {
+        number: 829,
+        title: "Closed issue",
+        html_url: "https://github.com/owner/repo/issues/829",
+        body: "",
+        state: "closed",
+      },
+      comment: {
+        body: `@${humanName} please verify`,
+        html_url: "https://github.com/owner/repo/issues/829#issuecomment-1",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delivered: 1, newChats: 1, failed: 0 });
+
+    const [mappingRow] = await app.db
+      .select({
+        humanAgentId: githubEntityChatMappings.humanAgentId,
+        entityType: githubEntityChatMappings.entityType,
+        entityState: githubEntityChatMappings.entityState,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#829"))
+      .limit(1);
+    expect(mappingRow).toMatchObject({ humanAgentId: human, entityType: "issue", entityState: "closed" });
+  });
+
+  it("issue_comment.created on a PR seeds a new closed PR mapping from the issue payload state", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100040;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `pr-issue-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const res = await postWebhook(app, "issue_comment", {
+      action: "created",
+      issue: {
+        number: 831,
+        title: "Closed PR thread",
+        html_url: "https://github.com/owner/repo/pull/831",
+        body: "",
+        state: "closed",
+        pull_request: { html_url: "https://github.com/owner/repo/pull/831", merged_at: null },
+      },
+      comment: {
+        body: `@${humanName} please verify`,
+        html_url: "https://github.com/owner/repo/pull/831#issuecomment-1",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delivered: 1, newChats: 1, failed: 0 });
+
+    const [mappingRow] = await app.db
+      .select({
+        humanAgentId: githubEntityChatMappings.humanAgentId,
+        entityType: githubEntityChatMappings.entityType,
+        entityState: githubEntityChatMappings.entityState,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#831"))
+      .limit(1);
+    expect(mappingRow).toMatchObject({ humanAgentId: human, entityType: "pull_request", entityState: "closed" });
+  });
+
+  it("pull_request_review_comment.created seeds a new draft PR mapping from the PR payload state", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100039;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `pr-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const res = await postWebhook(app, "pull_request_review_comment", {
+      action: "created",
+      pull_request: {
+        number: 830,
+        title: "Draft PR review comment",
+        html_url: "https://github.com/owner/repo/pull/830",
+        body: "",
+        state: "open",
+        draft: true,
+        merged: false,
+      },
+      comment: {
+        body: `@${humanName} please review`,
+        html_url: "https://github.com/owner/repo/pull/830#discussion_r1",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delivered: 1, newChats: 1, failed: 0 });
+
+    const [mappingRow] = await app.db
+      .select({
+        humanAgentId: githubEntityChatMappings.humanAgentId,
+        entityType: githubEntityChatMappings.entityType,
+        entityState: githubEntityChatMappings.entityState,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#830"))
+      .limit(1);
+    expect(mappingRow).toMatchObject({ humanAgentId: human, entityType: "pull_request", entityState: "draft" });
+  });
+
   it("issues.closed → syncs entity_state to 'closed' on the issue mapping", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

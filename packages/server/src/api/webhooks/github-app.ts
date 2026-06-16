@@ -14,7 +14,7 @@ import {
 } from "../../services/github-app-installations.js";
 import { resolveAudience } from "../../services/github-audience.js";
 import { deliverNormalizedEvent } from "../../services/github-delivery.js";
-import { setEntityState } from "../../services/github-entity-state.js";
+import { type EntityStateSeed, setEntityState } from "../../services/github-entity-state.js";
 import { normalizeGithubEvent } from "../../services/github-normalize.js";
 import { isRecord, readNumber, readString } from "./github-entity.js";
 
@@ -63,34 +63,97 @@ function parseInstallationMetadata(installation: Record<string, unknown>): AppIn
   };
 }
 
-type EntityStateUpdate = {
-  entityType: "pull_request" | "issue";
-  entityKey: string;
-  state: "open" | "closed" | "merged";
-};
+function pullRequestStateFromPayload(pr: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(pr.state);
+  if (action === "closed" || state === "closed") {
+    return pr.merged === true ? "merged" : "closed";
+  }
+  return pr.draft === true ? "draft" : "open";
+}
+
+function issueStateFromPayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(issue.state);
+  return action === "closed" || state === "closed" ? "closed" : "open";
+}
+
+function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(issue.state);
+  if (action === "closed" || state === "closed") {
+    const pr = isRecord(issue.pull_request) ? issue.pull_request : null;
+    return readString(pr?.merged_at) ? "merged" : "closed";
+  }
+  return issue.draft === true ? "draft" : "open";
+}
 
 /**
- * Map a PR/Issue lifecycle action to the persisted `entity_state` column.
- * Returns `null` for events that don't change lifecycle (e.g. comment, label).
+ * Derive the current PR/Issue state from any payload that carries the entity.
+ * This is used only as an INSERT seed for mappings created by the same
+ * webhook delivery; it must not update existing rows for non-transition
+ * events such as late `opened` deliveries.
+ */
+function resolveEntityStateSeed(
+  eventType: string,
+  action: string,
+  payload: Record<string, unknown>,
+  repoFullName: string,
+): EntityStateSeed | null {
+  if (
+    eventType === "pull_request" ||
+    eventType === "pull_request_review" ||
+    eventType === "pull_request_review_comment"
+  ) {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const number = readNumber(pr?.number);
+    if (!pr || number === null) return null;
+    return {
+      entityType: "pull_request",
+      entityKey: `${repoFullName}#${number}`,
+      state: pullRequestStateFromPayload(pr, action),
+    };
+  }
+  if (eventType === "issues" || eventType === "issue_comment") {
+    const issue = isRecord(payload.issue) ? payload.issue : null;
+    const number = readNumber(issue?.number);
+    if (!issue || number === null) return null;
+    if (isRecord(issue.pull_request)) {
+      return {
+        entityType: "pull_request",
+        entityKey: `${repoFullName}#${number}`,
+        state: pullRequestStateFromIssuePayload(issue, action),
+      };
+    }
+    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
+  }
+  return null;
+}
+
+/**
+ * Map lifecycle transitions to persisted `entity_state` updates for rows
+ * that already exist. Initial `opened` events are excluded on purpose: a
+ * retry or delayed opened delivery must not overwrite a newer draft/closed/
+ * merged state.
  */
 function resolveEntityStateUpdate(
   eventType: string,
   action: string,
   payload: Record<string, unknown>,
   repoFullName: string,
-): EntityStateUpdate | null {
+): EntityStateSeed | null {
   if (eventType === "pull_request") {
     const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
     const number = readNumber(pr?.number);
-    if (number === null) return null;
-    if (action === "closed") {
+    if (!pr || number === null) return null;
+    if (action === "closed" || action === "reopened") {
       return {
         entityType: "pull_request",
         entityKey: `${repoFullName}#${number}`,
-        state: pr?.merged === true ? "merged" : "closed",
+        state: pullRequestStateFromPayload(pr, action),
       };
     }
-    if (action === "reopened") {
+    if (action === "converted_to_draft") {
+      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "draft" };
+    }
+    if (action === "ready_for_review") {
       return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "open" };
     }
     return null;
@@ -98,14 +161,9 @@ function resolveEntityStateUpdate(
   if (eventType === "issues") {
     const issue = isRecord(payload.issue) ? payload.issue : null;
     const number = readNumber(issue?.number);
-    if (number === null) return null;
-    if (action === "closed") {
-      return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: "closed" };
-    }
-    if (action === "reopened") {
-      return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: "open" };
-    }
-    return null;
+    if (!issue || number === null) return null;
+    if (action !== "closed" && action !== "reopened") return null;
+    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
   }
   return null;
 }
@@ -253,11 +311,13 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     // archive. Idempotent under retries — sits before claimEvent on
     // purpose so a retry whose normalized event was already claimed
     // still gets its state column updated.
+    let entityStateSeed: EntityStateSeed | null = null;
     if (isRecord(payload)) {
       const repo = isRecord(payload.repository) ? payload.repository : null;
       const repoFullName = readString(repo?.full_name);
       const action = typeof payload.action === "string" ? payload.action : null;
       if (repoFullName && action) {
+        entityStateSeed = resolveEntityStateSeed(eventType, action, payload, repoFullName);
         const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
         if (stateUpdate) {
           try {
@@ -321,7 +381,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         );
         return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason });
       }
-      const stats = await deliverNormalizedEvent(app, event, audience);
+      const stats = await deliverNormalizedEvent(app, event, audience, { entityStateSeed });
       return reply.status(200).send({ ok: true, event: eventType, ...stats });
     } catch (err) {
       if (deliveryId) {

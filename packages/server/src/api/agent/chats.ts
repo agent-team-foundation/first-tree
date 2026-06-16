@@ -209,17 +209,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const [chat] = await app.db
-      .select({ organizationId: chats.organizationId })
-      .from(chats)
-      .where(eq(chats.id, request.params.chatId))
-      .limit(1);
-    if (!chat) throw new BadRequestError("Chat not found");
-    return listChatGithubEntities(
-      app.db,
-      { appCredentials: app.config.oauth?.githubApp },
-      { chatId: request.params.chatId, organizationId: chat.organizationId },
-    );
+    return listChatGithubEntities(app.db, { chatId: request.params.chatId });
   });
 
   app.post<{ Params: { chatId: string } }>(

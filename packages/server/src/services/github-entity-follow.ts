@@ -17,7 +17,8 @@ import { findInstallationByOrg } from "./github-app-installations.js";
 import { mintContextTreeInstallationToken } from "./github-app-token.js";
 import { insertMappingIfAbsent } from "./github-entity-chat.js";
 import { githubEntityDedupKey, githubEntityKeyCandidates, legacyDiscussionEntityKey } from "./github-entity-key.js";
-import { resolveChatGithubEntity } from "./github-entity-live.js";
+import { materializeChatGithubEntity } from "./github-entity-live.js";
+import type { EntityState } from "./github-entity-state.js";
 
 const log = createLogger("GithubEntityFollow");
 
@@ -133,9 +134,6 @@ function parseEntityReferenceOrThrow(raw: string): EntityReference {
 function escapeLikeLiteral(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
-
-/** Mapping-row lifecycle state (`entity_state` column). */
-type EntityState = "open" | "closed" | "merged";
 
 type ResolvedEntity = {
   entityType: GithubEntityType;
@@ -274,23 +272,28 @@ async function resolveEntityOnGithub(
   const htmlUrl = readStr(res.body.html_url);
 
   if (prInfo) {
-    const merged = readStr(prInfo.merged_at) !== null;
-    const draft = res.body.draft === true;
-    const entityState: EntityState = merged ? "merged" : rawState === "closed" ? "closed" : "open";
+    const pullRes = await ghGet(`/repos/${fullName}/pulls/${number}`, token, fetcher);
+    if (pullRes.kind === "unavailable") return { ok: false, reason: "github-unavailable" };
+    if (pullRes.kind === "forbidden") return { ok: false, reason: "repo-not-accessible" };
+    if (pullRes.kind !== "ok") return { ok: false, reason: "entity-not-found" };
+    const pullState = readStr(pullRes.body.state) ?? rawState;
+    const merged = pullRes.body.merged === true || readStr(pullRes.body.merged_at) !== null;
+    const draft = pullRes.body.draft === true;
+    const entityState: EntityState = merged ? "merged" : pullState === "closed" ? "closed" : draft ? "draft" : "open";
     const liveState: GithubEntityLiveState | null = merged
       ? "merged"
-      : draft && rawState === "open"
+      : draft && pullState === "open"
         ? "draft"
-        : rawState === "open" || rawState === "closed"
-          ? rawState
+        : pullState === "open" || pullState === "closed"
+          ? pullState
           : null;
     return {
       ok: true,
       entity: {
         entityType: "pull_request",
         entityKey: `${fullName}#${number}`,
-        htmlUrl: htmlUrl ?? `https://github.com/${fullName}/pull/${number}`,
-        title,
+        htmlUrl: readStr(pullRes.body.html_url) ?? htmlUrl ?? `https://github.com/${fullName}/pull/${number}`,
+        title: readStr(pullRes.body.title) ?? title,
         liveState,
         entityState,
         number,
@@ -583,20 +586,21 @@ export async function removeEntityFollow(
 
 /**
  * List the entities wired into a chat — shared by the user-scoped sidebar
- * route and the agent-scoped `github following` CLI. Reads the mapping
- * rows, dedups by entity (the pair axes are an audit detail), then fetches
- * live title/state per entity from the GitHub API; nothing is persisted.
+ * route and the agent-scoped `github following` CLI. Reads only the mapping
+ * rows, dedups by entity (the pair axes are an audit detail), and projects
+ * lifecycle state from the webhook-synced `entity_state` column. This hot
+ * read path deliberately does not mint GitHub tokens or call GitHub.
  */
 export async function listChatGithubEntities(
   db: Database,
-  deps: FollowDeps,
-  params: { chatId: string; organizationId: string },
+  params: { chatId: string },
 ): Promise<ChatGithubEntityListResponse> {
   const rows = await db
     .select({
       entityType: githubEntityChatMappings.entityType,
       entityKey: githubEntityChatMappings.entityKey,
       boundVia: githubEntityChatMappings.boundVia,
+      entityState: githubEntityChatMappings.entityState,
       boundAt: githubEntityChatMappings.boundAt,
     })
     .from(githubEntityChatMappings)
@@ -613,21 +617,6 @@ export async function listChatGithubEntities(
     if (!dedup.has(key)) dedup.set(key, r);
   }
 
-  // Mint one installation token and reuse it for every entity fetch — the
-  // ~1h TTL is well outside the request window.
-  const fetcher = deps.fetcher ?? fetch;
-  const installation = await findInstallationByOrg(db, params.organizationId);
-  const mintResult = await mintContextTreeInstallationToken(installation, deps.appCredentials, { fetcher });
-  const token = mintResult.ok ? mintResult.token : null;
-
-  const items = await Promise.all(
-    Array.from(dedup.values()).map((r) =>
-      resolveChatGithubEntity(
-        { entityType: r.entityType, entityKey: r.entityKey, boundVia: r.boundVia },
-        token,
-        fetcher,
-      ),
-    ),
-  );
+  const items = Array.from(dedup.values()).map((r) => materializeChatGithubEntity(r));
   return { items: items.filter((x): x is NonNullable<typeof x> => x !== null) };
 }
