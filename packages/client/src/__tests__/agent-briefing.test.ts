@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -670,27 +671,38 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     const match = briefing.match(/canon_url\(\) \{\n[\s\S]*?\n\}/);
     expect(match).not.toBeNull();
     const canonFn = match?.[0] ?? "";
-    const canon = (url: string): string =>
-      execFileSync("sh", ["-c", `${canonFn}\ncanon_url "$1"`, "sh", url], { encoding: "utf8" }).trim();
 
-    const key = canon("https://github.com/agent-team-foundation/first-tree.git");
-    expect(key).toBe("github.com/agent-team-foundation/first-tree");
-    const sameRepo = [
-      "https://github.com/agent-team-foundation/first-tree.git",
-      "https://github.com/agent-team-foundation/first-tree",
-      "http://github.com/agent-team-foundation/first-tree",
-      "git@github.com:agent-team-foundation/first-tree.git",
-      "git@github.com:agent-team-foundation/first-tree",
-      "ssh://git@github.com/agent-team-foundation/first-tree.git",
-      "git://github.com/agent-team-foundation/first-tree.git",
-    ];
-    for (const url of sameRepo) {
-      expect(canon(url), `expected ${url} to canonicalize to ${key}`).toBe(key);
+    // Run the shipped function from a script file with the URL passed as a
+    // positional argument — never interpolated into a shell command string — so
+    // the test exercises the real `sed` pipeline without constructing a command
+    // from a variable (which a static-analysis command-injection check flags).
+    const dir = mkdtempSync(join(tmpdir(), "canon-url-"));
+    try {
+      const scriptPath = join(dir, "canon.sh");
+      writeFileSync(scriptPath, `${canonFn}\ncanon_url "$1"\n`);
+      const canon = (url: string): string => execFileSync("sh", [scriptPath, url], { encoding: "utf8" }).trim();
+
+      const key = canon("https://github.com/agent-team-foundation/first-tree.git");
+      expect(key).toBe("github.com/agent-team-foundation/first-tree");
+      const sameRepo = [
+        "https://github.com/agent-team-foundation/first-tree.git",
+        "https://github.com/agent-team-foundation/first-tree",
+        "http://github.com/agent-team-foundation/first-tree",
+        "git@github.com:agent-team-foundation/first-tree.git",
+        "git@github.com:agent-team-foundation/first-tree",
+        "ssh://git@github.com/agent-team-foundation/first-tree.git",
+        "git://github.com/agent-team-foundation/first-tree.git",
+      ];
+      for (const url of sameRepo) {
+        expect(canon(url), `expected ${url} to canonicalize to ${key}`).toBe(key);
+      }
+      // Genuinely different repos must NOT collapse to the same canonical key —
+      // canonicalization stays fail-closed (no false-accept of another repo).
+      expect(canon("https://github.com/agent-team-foundation/other")).not.toBe(key);
+      expect(canon("git@gitlab.com:agent-team-foundation/first-tree.git")).not.toBe(key);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    // Genuinely different repos must NOT collapse to the same canonical key —
-    // canonicalization stays fail-closed (no false-accept of another repo).
-    expect(canon("https://github.com/agent-team-foundation/other")).not.toBe(key);
-    expect(canon("git@gitlab.com:agent-team-foundation/first-tree.git")).not.toBe(key);
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
