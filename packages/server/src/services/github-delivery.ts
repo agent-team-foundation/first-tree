@@ -101,14 +101,18 @@ export async function deliverNormalizedEvent(
       // everyone. Same pattern as any system-routed delivery (see
       // SendMessageOptions `addressedToAgentIds`).
       //
-      // Echo suppression (#942): when the event's actor resolved to an org
-      // agent, exclude it from the addressing — nobody is woken / red-dotted
-      // by their own action. The card itself is still written (public
-      // record); when the exclusion empties the addressing this reduces to
-      // the recipientless trusted send below. The actor on the *human* side
-      // needs no exclusion here: it is the card's senderId and the message
-      // fan-out never self-delivers.
-      const addressedToAgentIds = [target.delegateAgentId].filter((id) => id !== target.actorAgentId);
+      // Echo suppression (#942) is decoupled from addressing (S2 / D1): the
+      // delegate is always the structural addressing target; the actor (when
+      // it resolved to an org agent) is passed separately as
+      // `suppressNotifyAgentIds` so it is never *woken* by its own action
+      // while the card still lands in its inbox as a silent context row.
+      // The old `.filter(id !== actor)` conflated "who is the structural
+      // target" with "who gets woken"; keeping them separate also keeps echo
+      // off `senderId` — the actor is frequently not a speaker of this chat,
+      // so it must never become the chat-local sender. See
+      // system/cloud/github/github-entity-chat-binding.md S2.
+      const addressedToAgentIds = [target.delegateAgentId];
+      const suppressNotifyAgentIds = target.actorAgentId ? [target.actorAgentId] : [];
       const { message, recipients } = await sendMessage(
         app.db,
         resolved.chatId,
@@ -137,6 +141,10 @@ export async function deliverNormalizedEvent(
         },
         {
           addressedToAgentIds,
+          // Echo suppression target (S2 / D1): the event's actor agent, when it
+          // resolved to one. Decoupled from `senderId` and from the addressing
+          // set — the actor still gets a silent inbox row, it is just not woken.
+          suppressNotifyAgentIds,
           // Opt in to writing `metadata.systemSender` — the message service
           // strips that key from every other caller (web / agent SDK POST)
           // so HTTP boundaries cannot impersonate the GitHub sender in the
@@ -146,14 +154,15 @@ export async function deliverNormalizedEvent(
           // system delivery owns and validates its own addressing
           // (`addressedToAgentIds` derived from the resolved audience row),
           // but on some events the addressing resolves to no live recipient:
-          // the delegate may not be a speaker of the bound chat, or the
-          // delegate IS the event's actor and was excluded by echo
-          // suppression (#942, the empty-filter case above). Such a
-          // card is still a valid history/context row for human observers;
-          // without this opt-out the default guard would make this trusted path
-          // start throwing. (A delegate that IS a speaker but suspended/deleted
-          // is rejected earlier by the addressed-recipient status check — that
-          // is a separate, intentional guard, not covered by this opt-out.)
+          // the delegate may not be a speaker of the bound chat. Such a card
+          // is still a valid history/context row for human observers; without
+          // this opt-out the default guard would make this trusted path start
+          // throwing. (The echo case — delegate IS the actor — no longer
+          // empties the addressing: the delegate stays the structural target
+          // and is silenced via `suppressNotifyAgentIds`, so the card lands as
+          // a silent row rather than relying on this opt-out. A delegate that
+          // IS a speaker but suspended/deleted is rejected earlier by the
+          // addressed-recipient status check — a separate, intentional guard.)
           // See SendMessageOptions docs.
           allowRecipientlessSend: true,
         },
