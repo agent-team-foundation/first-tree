@@ -1290,8 +1290,8 @@ describe("ChatView", () => {
       await waitForCondition(() => sidebarOpen(container), "Expected rail to auto-open for a chat with a description");
       const aside = container.querySelector('aside[aria-label="Chat details"]');
       if (!aside) throw new Error("Sidebar aside missing");
-      // DescriptionSection eyebrow + markdown body (bold renders as <strong>).
-      expect(aside.textContent).toContain("Description");
+      // Summary section eyebrow (was "Description") + markdown body (bold renders as <strong>).
+      expect(aside.textContent).toContain("Summary");
       expect(aside.textContent).toContain("shipping");
       expect([...aside.querySelectorAll("strong")].some((el) => el.textContent === "DescBody")).toBe(true);
 
@@ -1452,7 +1452,7 @@ describe("ChatView", () => {
         "Expected the described chat's rail to auto-open after the doc-preview closed (regression: mark-before-docPreview-guard)",
       );
       const aside = container.querySelector('aside[aria-label="Chat details"]');
-      expect(aside?.textContent).toContain("Description");
+      expect(aside?.textContent).toContain("Summary");
       expect([...(aside?.querySelectorAll("strong") ?? [])].some((el) => el.textContent === "DescBody")).toBe(true);
 
       await act(async () => root.unmount());

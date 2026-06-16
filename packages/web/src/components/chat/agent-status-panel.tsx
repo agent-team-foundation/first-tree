@@ -30,6 +30,7 @@ export function AgentStatusPanel({
   agents,
   canManage,
   order = "fixed",
+  compact = false,
 }: {
   chatId: string;
   /** Non-human agent participants, in display order. */
@@ -39,6 +40,9 @@ export function AgentStatusPanel({
   /** `fixed` keeps `agents` order (sidebar); `priority` sorts by attention
    *  (compose) so the most urgent agent is on top. */
   order?: "fixed" | "priority";
+  /** Tighter row padding for the dense sidebar roster. The compose-bar usage
+   *  keeps the roomier default. */
+  compact?: boolean;
 }) {
   const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
@@ -71,6 +75,7 @@ export function AgentStatusPanel({
           status={byAgent.get(agent.agentId) ?? null}
           canManage={canManage(agent.agentId)}
           mounted={mounted}
+          compact={compact}
         />
       ))}
     </div>
@@ -98,12 +103,14 @@ function AgentStatusRow({
   status,
   canManage,
   mounted,
+  compact,
 }: {
   chatId: string;
   agent: ChatParticipantDetail;
   status: AgentChatStatus | null;
   canManage: boolean;
   mounted: ReadonlySet<string>;
+  compact: boolean;
 }) {
   const queryClient = useQueryClient();
   const suspendMut = useMutation({
@@ -130,7 +137,11 @@ function AgentStatusRow({
   return (
     <div
       className="flex items-center transition-colors hover:bg-[var(--bg-hover)]"
-      style={{ gap: "var(--sp-2_5)", padding: "var(--sp-1_75) var(--sp-2)", borderRadius: "var(--radius-input)" }}
+      style={{
+        gap: "var(--sp-2_5)",
+        padding: compact ? "var(--sp-1_25) var(--sp-2)" : "var(--sp-1_75) var(--sp-2)",
+        borderRadius: "var(--radius-input)",
+      }}
     >
       <AgentHovercard
         agentId={agent.agentId}

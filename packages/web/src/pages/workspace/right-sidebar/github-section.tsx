@@ -5,6 +5,24 @@ import { listChatGithubEntities } from "../../../api/chats.js";
 import { DenseBadge, type DenseBadgeTone } from "../../../components/ui/dense-badge.js";
 
 /**
+ * Shared query for a chat's bound GitHub entities. Used by GitHubSection to
+ * render the list AND by ChatRightSidebar to decide whether Summary is the last
+ * visible section (and therefore uncapped). Same query key → React Query
+ * dedupes the two call sites to a single request.
+ */
+export function useChatGithubEntities(chatId: string): { items: ChatGithubEntity[]; isLoading: boolean } {
+  const query = useQuery({
+    queryKey: ["chat-right-sidebar", "github-entities", chatId],
+    queryFn: () => listChatGithubEntities(chatId),
+    // Webhook-synced state can drift while the panel is open; refresh the
+    // cheap DB projection periodically and keep quick panel toggles warm.
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  return { items: query.data?.items ?? [], isLoading: query.isLoading };
+}
+
+/**
  * GitHub section — lists every PR / Issue / Discussion / Commit bound to
  * the current chat via `github_entity_chat_mappings`. State comes from the
  * server's webhook-synced projection; title may be null because the mapping
@@ -14,23 +32,19 @@ import { DenseBadge, type DenseBadgeTone } from "../../../components/ui/dense-ba
  * waste vertical space on chats that aren't sourced from GitHub.
  */
 export function GitHubSection({ chatId }: { chatId: string }) {
-  const query = useQuery({
-    queryKey: ["chat-right-sidebar", "github-entities", chatId],
-    queryFn: () => listChatGithubEntities(chatId),
-    // Webhook-synced state can drift while the panel is open; refresh the
-    // cheap DB projection periodically and keep quick panel toggles warm.
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
+  const { items, isLoading } = useChatGithubEntities(chatId);
 
-  const items = query.data?.items ?? [];
-
-  if (query.isLoading || items.length === 0) {
+  if (isLoading || items.length === 0) {
     // Loading / empty: render nothing. The Agents section already covered
     // the "right rail has content" cue; an extra spinner would just churn
     // the layout.
     return null;
   }
+
+  // Group by type so same-kind entities cluster — PRs (the primary work
+  // artifact) first, then issues, discussions, commits. Type is conveyed by
+  // the per-row icon alone (no subheaders).
+  const sorted = sortEntitiesByType(items);
 
   return (
     <section>
@@ -39,12 +53,34 @@ export function GitHubSection({ chatId }: { chatId: string }) {
       </div>
 
       <div className="flex flex-col" style={{ padding: "0 var(--sp-2) var(--sp-2)", gap: 2 }}>
-        {items.map((entity) => (
+        {sorted.map((entity) => (
           <GitHubRow key={`${entity.entityType}::${entity.entityKey}`} entity={entity} />
         ))}
       </div>
     </section>
   );
+}
+
+/** Group order for the GitHub list: PR → Issue → Discussion → Commit. */
+const TYPE_ORDER: Record<string, number> = {
+  pull_request: 0,
+  issue: 1,
+  discussion: 2,
+  commit: 3,
+};
+
+function typeRank(type: GithubEntityType): number {
+  return TYPE_ORDER[type] ?? 9;
+}
+
+/**
+ * Cluster entities by type (PR → Issue → Discussion → Commit) without
+ * subheaders — the per-row icon carries the type. `Array.prototype.sort` is
+ * stable, so server order is preserved within each type group. Pure + exported
+ * for unit testing (the panel itself needs live bindings to render).
+ */
+export function sortEntitiesByType(items: ChatGithubEntity[]): ChatGithubEntity[] {
+  return [...items].sort((a, b) => typeRank(a.entityType) - typeRank(b.entityType));
 }
 
 function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
@@ -59,7 +95,7 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
       className="group flex items-start transition-colors hover:bg-[var(--bg-hover)]"
       style={{
         gap: "var(--sp-2)",
-        padding: "var(--sp-2)",
+        padding: "var(--sp-1_5) var(--sp-2)",
         borderRadius: "var(--radius-input)",
         color: "inherit",
         textDecoration: "none",
@@ -91,9 +127,6 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
             {entity.title}
           </div>
         ) : null}
-        <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-          {humanizeBoundVia(entity.boundVia)}
-        </div>
       </div>
       <ExternalLink
         aria-hidden="true"
@@ -124,31 +157,6 @@ function iconColor(state: GithubEntityLiveState | null): string {
       return "var(--fg-success-strong)";
     default:
       return "var(--fg-3)";
-  }
-}
-
-/**
- * Map the wire-level `bound_via` enum (`direct` / `fixes_link` /
- * `human_fallback` / `agent_declared` / `human_declared`) to a
- * self-contained sentence — the row doesn't prepend "via " anymore, so
- * each label has to read as a complete provenance hint on its own.
- * Falling back to the raw key preserves forward-compatibility for any
- * new boundVia value the server might emit before this map catches up.
- */
-function humanizeBoundVia(boundVia: string): string {
-  switch (boundVia) {
-    case "direct":
-      return "Mentioned in chat";
-    case "fixes_link":
-      return 'Auto-linked from "Fixes #…"';
-    case "human_fallback":
-      return "Routed to your existing chat";
-    case "agent_declared":
-      return "Followed by an agent";
-    case "human_declared":
-      return "Followed by you";
-    default:
-      return boundVia;
   }
 }
 
