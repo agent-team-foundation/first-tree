@@ -2778,7 +2778,7 @@ export function ChatView({
           style={askOverlayActive ? { zIndex: 40 } : undefined}
         >
           {/* The ask pops up as a card INSIDE the workspace body — offset below
-              the (stable, single-row) 52px topic header so the header and the
+              the (stable, single-row) topic header so the header and the
               right rail stay visible. Owns answering: Reply resolves; Skip
               dismisses for this session (the red dot persists). Keyed by request
               id so its answer state resets when the blocking question changes. */}

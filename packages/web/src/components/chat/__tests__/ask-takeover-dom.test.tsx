@@ -153,7 +153,7 @@ describe("AskTakeover", () => {
     // Body region: the only scroller — flex-grows and clips with overflow-y auto.
     expect(scrollRegion.style.overflowY).toBe("auto");
     expect(scrollRegion.style.flex).toBe("1 1 auto");
-    expect(["0", "0px"]).toContain(scrollRegion.style.minHeight);
+    expect(scrollRegion.style.minHeight).toMatch(/^0(px)?$/);
     expect(scrollRegion.textContent).toContain("Paragraph line 0");
     expect(scrollRegion.textContent).toContain("Paragraph line 199");
 

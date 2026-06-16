@@ -82,7 +82,7 @@ export function AskTakeover({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: "clamp(10px, 2.5%, 28px)",
+        padding: "clamp(var(--sp-2_5), 2.5%, var(--sp-7))",
         background: "color-mix(in oklch, var(--fg) 10%, transparent)",
       }}
     >
@@ -92,8 +92,8 @@ export function AskTakeover({
         aria-label={askerName ? `Question from ${askerName}` : "Question awaiting your answer"}
         style={{
           // Slightly wider than the message reading column; height fits the
-          // content and is capped to the area.
-          width: "min(100%, 800px)",
+          // content and is capped to the area (50rem cap).
+          width: "min(100%, 50rem)",
           maxHeight: "100%",
           display: "flex",
           flexDirection: "column",
@@ -247,7 +247,7 @@ function OptionRow({
           height: 16,
           flexShrink: 0,
           marginTop: 1,
-          border: `1.5px solid ${selected ? "var(--fg)" : "var(--border-strong)"}`,
+          border: `var(--hairline-bold) solid ${selected ? "var(--fg)" : "var(--border-strong)"}`,
           borderRadius: multi ? "var(--radius-chip)" : "var(--radius-full)",
           background: selected ? "var(--fg)" : "transparent",
           display: "grid",
@@ -269,7 +269,7 @@ function OptionRow({
         <span className="text-body" style={{ color: "var(--fg)", display: "block" }}>
           {opt.label}
         </span>
-        <span className="text-body" style={{ color: "var(--fg-3)", display: "block", marginTop: 2, lineHeight: 1.5 }}>
+        <span className="text-body" style={{ color: "var(--fg-3)", display: "block", marginTop: 2 }}>
           {opt.description}
         </span>
         {selected && opt.preview ? (
